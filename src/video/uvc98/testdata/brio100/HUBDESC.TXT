@@ -1,0 +1,54 @@
+Original HUBDESC read-only diagnostic; target VID/PID 046D:094C only
+No strings, MAC, vendor controls, configuration changes, resets or driver installation
+Limits: 64 hubs,127 ports/hub,4096 config bytes,10s IOCTL+5s cancellation
+Old connection IOCTL LowSpeed cannot distinguish full/high speed
+Hub0 ports2
+Hub1 ports2
+Hub2 ports4
+Hub3 ports4
+Hub4 ports4
+Hub5 ports7
+Hub6 ports2
+Hub7 ports4
+Hub8 ports4
+MATCH hub8 port3 status1 LowSpeed0 configuration1 pipes1
+GET_DESCRIPTOR device bcdUSB=0200 configs=1
+GET_DESCRIPTOR config0 total=2453 returned=2453 interfaces=4
+Interface 0 alt0 class 0E/01/00 endpoints1
+Endpoint 87 type3 rawMaxPacket=0010 bytes=16 interval=8
+Interface 1 alt0 class 0E/02/00 endpoints0
+Interface 1 alt1 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=00C0 bytes=192 interval=1
+Interface 1 alt2 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0180 bytes=384 interval=1
+Interface 1 alt3 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0200 bytes=512 interval=1
+Interface 1 alt4 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0280 bytes=640 interval=1
+Interface 1 alt5 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0320 bytes=800 interval=1
+Interface 1 alt6 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=03B0 bytes=944 interval=1
+Interface 1 alt7 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0A80 bytes=640 interval=1
+Interface 1 alt8 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0B20 bytes=800 interval=1
+Interface 1 alt9 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0BE0 bytes=992 interval=1
+Interface 1 alt10 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=1380 bytes=896 interval=1
+Interface 1 alt11 class 0E/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=13FC bytes=1020 interval=1
+Interface 2 alt0 class 01/01/00 endpoints0
+Interface 3 alt0 class 01/02/00 endpoints0
+Interface 3 alt1 class 01/02/00 endpoints1
+Endpoint 86 type1 rawMaxPacket=0024 bytes=36 interval=4
+Interface 3 alt2 class 01/02/00 endpoints1
+Endpoint 86 type1 rawMaxPacket=0044 bytes=68 interval=4
+Interface 3 alt3 class 01/02/00 endpoints1
+Endpoint 86 type1 rawMaxPacket=0064 bytes=100 interval=4
+DEVICE.BIN: saved, 18 bytes
+CONFIG.BIN: saved, 2453 bytes
+Hub9 ports4
+Hub10 ports4
+RESULT hubs11 matches1 captured1

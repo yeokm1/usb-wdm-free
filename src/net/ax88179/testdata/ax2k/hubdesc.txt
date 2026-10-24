@@ -1,0 +1,18 @@
+Original HUBDESC read-only diagnostic; target VID/PID 0B95:1790 only
+No strings, MAC, vendor controls, configuration changes, resets or driver installation
+Limits: 64 hubs,127 ports/hub,4096 config bytes,10s IOCTL+5s cancellation
+Old connection IOCTL LowSpeed cannot distinguish full/high speed
+Hub0 ports6
+MATCH hub0 port1 status1 LowSpeed0 configuration0 pipes0
+GET_DESCRIPTOR device bcdUSB=0300 configs=1
+GET_DESCRIPTOR config0 total=57 returned=57 interfaces=1
+Interface 0 alt0 class FF/FF/00 endpoints3
+Endpoint 81 type3 rawMaxPacket=0008 bytes=8 interval=11
+SuperSpeed endpoint companion present at offset25
+Endpoint 82 type2 rawMaxPacket=0400 bytes=1024 interval=0
+SuperSpeed endpoint companion present at offset38
+Endpoint 03 type2 rawMaxPacket=0400 bytes=1024 interval=0
+SuperSpeed endpoint companion present at offset51
+AXDEV.BIN: saved, 18 bytes
+AXCFG.BIN: saved, 57 bytes
+RESULT hubs1 matches1 captured1

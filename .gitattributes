@@ -1,0 +1,21 @@
+# The released files under free/ are stored byte for byte, to hash as SHA256.TXT lists them.
+free/** -text
+SHA256.TXT -text
+# Windows command scripts and INFs need CRLF
+*.cmd text eol=crlf
+*.inf text eol=crlf
+
+# Raw USB descriptor captures are binary test data
+src/**/testdata/**/*.bin binary
+
+# Vendored libjpeg-turbo 3.2.0, byte for byte as released except the
+# MSVC 6.0 patches src/video/uvcdec/README.md lists
+src/video/uvcdec/turbo/** -text
+# MJPEG test frames
+src/video/uvcdec/vectors/*.jpg binary
+
+# Last, so no rule above (*.inf, *.cmd) converts a released file: free/ byte for byte.
+free/** -text
+
+# The test certificate: DER bytes as the owner made them.
+*.cer binary

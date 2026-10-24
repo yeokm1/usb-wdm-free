@@ -1,0 +1,96 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Observation-only EHCI isochronous OUT accounting: count the OUT iTD
+transactions EHCI executes, by device result. A failing OUT transaction is
+reported to the guest as success (EHCI 3.3.2 allows XACTERR only on IN), so
+its loss is otherwise silent. Traces: usb_ehci_iso_out_fail per failure and
+usb_ehci_iso_out_summary every 8000 transactions and at port detach.
+Apply AFTER qemu-iso, qemu-poll, qemu-wait, qemu-orphan and qemu-acct
+patches to QEMU v11.1.0 commit 84f07211cc5b4fc6a371559bf8a5de4fb068e648.
+The emulator as a whole remains GPL-2.0-or-later. hcd-ehci.c keeps its
+original upstream notice:
+/*
+ * QEMU USB EHCI Emulation
+ *
+ * Copyright(c) 2008  Emutex Ltd. (address@hidden)
+ * Copyright(c) 2011-2012 Red Hat, Inc.
+ *
+ * Red Hat Authors:
+ * Gerd Hoffmann <kraxel@redhat.com>
+ * Hans de Goede <hdegoede@redhat.com>
+ *
+ * EHCI project was started by Mark Burkley, with contributions by
+ * Niels de Vos.  David S. Ahern continued working on it.  Kevin Wolf,
+ * Jan Kiszka and Vincent Palatin contributed bugfixes.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
+--- a/hw/usb/hcd-ehci.c
++++ b/hw/usb/hcd-ehci.c
+@@ -722,6 +722,8 @@
+     const char *owner = (*portsc & PORTSC_POWNER) ? "comp" : "ehci";
+ 
+     trace_usb_ehci_port_detach(port->index, owner);
++    trace_usb_ehci_iso_out_summary(s->iso_out_ok, s->iso_out_ok_bytes,
++                                   s->iso_out_fail, s->iso_out_fail_bytes);
+ 
+     if (*portsc & PORTSC_POWNER) {
+         USBPort *companion = s->companion_ports[port->index];
+@@ -1476,6 +1478,23 @@
+                 }
+             }
+             qemu_sglist_destroy(&ehci->isgl);
++
++            /* Observation only: an OUT transaction that fails is reported to
++             * the guest as success (3.3.2), so its data loss is silent. */
++            if (!dir) {
++                if (ehci->ipacket.status == USB_RET_SUCCESS) {
++                    ehci->iso_out_ok++;
++                    ehci->iso_out_ok_bytes += len;
++                } else {
++                    ehci->iso_out_fail++;
++                    ehci->iso_out_fail_bytes += len;
++                    trace_usb_ehci_iso_out_fail(addr, i, ehci->ipacket.status, len);
++                }
++                if (!((ehci->iso_out_ok + ehci->iso_out_fail) % 8000)) {
++                    trace_usb_ehci_iso_out_summary(ehci->iso_out_ok, ehci->iso_out_ok_bytes,
++                                                   ehci->iso_out_fail, ehci->iso_out_fail_bytes);
++                }
++            }
+ 
+             switch (ehci->ipacket.status) {
+             case USB_RET_SUCCESS:
+--- a/hw/usb/hcd-ehci.h
++++ b/hw/usb/hcd-ehci.h
+@@ -299,6 +299,8 @@
+ 
+     USBPacket ipacket;
+     QEMUSGList isgl;
++    /* Observation only: OUT iTD transactions executed, by device result. */
++    uint64_t iso_out_ok, iso_out_ok_bytes, iso_out_fail, iso_out_fail_bytes;
+ 
+     uint64_t last_run_ns;
+     uint32_t async_stepdown;
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -115,6 +115,8 @@
+ usb_ehci_fetchqh_dbg(uint32_t qhaddr, uint32_t h, uint32_t halt, uint32_t active, uint32_t next) "QH 0x%08x (h 0x%x halt 0x%x active 0x%x) next 0x%08x"
+ usb_ehci_periodic_state_advance(uint32_t frame, uint32_t list, uint32_t entry) "frame=%d, list=0x%x, entry=0x%x"
+ usb_ehci_skipped_uframes(uint64_t skipped_uframes) "skipped %" PRIu64 " uframes"
++usb_ehci_iso_out_fail(uint32_t addr, uint32_t slot, int status, uint32_t len) "ITD @ 0x%08x uframe %u status %d len %u"
++usb_ehci_iso_out_summary(uint64_t ok, uint64_t ok_bytes, uint64_t fail, uint64_t fail_bytes) "ok %" PRIu64 " ok_bytes %" PRIu64 " fail %" PRIu64 " fail_bytes %" PRIu64 ""
+ usb_ehci_log(const char *msg) "%s"
+ 
+ # hcd-uhci.c

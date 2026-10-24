@@ -1,0 +1,111 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; AX179F.INF - usb-wdm-free AX179F: ASIX AX88179 / AX88178A USB Gigabit
+; Ethernet, Windows 2000 (ethernet.md sections 1 item 8, 7.2 and 7.4).
+; AX179F98.INF is the Windows 98 SE and ME INF. Written from the Windows
+; 2000 DDK network guide's INF pages; no DDK sample INF was read.
+;
+; Whole-device hardware ids: each is a dedicated network device (the
+; AX88179 has one configuration with one vendor interface). The ids are
+; those of Linux ax88179_178a.c at f47d2236. The ASIX reference id
+; 0B95:1790 is matched at revision 0100 only: the AX88179A/B share that
+; VID/PID and present CDC-NCM, which cdcnet serves (ethernet.md 2.2); a
+; revision-less match would take them from it.
+
+[Version]
+Signature="$Windows NT$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/22/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Ax88179%=AX,USB\VID_0B95&PID_1790&REV_0100
+%Ax88178a%=AX,USB\VID_0B95&PID_178A
+%Gx3%=AX,USB\VID_04B4&PID_3610
+%Dub1312%=AX,USB\VID_2001&PID_4A00
+%Sitecom%=AX,USB\VID_0DF6&PID_0072
+%Samsung%=AX,USB\VID_04E8&PID_A100
+%Lenovo%=AX,USB\VID_17EF&PID_304B
+%Belkin%=AX,USB\VID_050D&PID_0128
+%Toshiba%=AX,USB\VID_0930&PID_0A13
+%Mct%=AX,USB\VID_0711&PID_0179
+%Umc2000%=AX,USB\VID_07C9&PID_000E
+%Umc200%=AX,USB\VID_07C9&PID_000F
+%Umc2000sp%=AX,USB\VID_07C9&PID_0010
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+ax179f.sys=1
+
+[DestinationDirs]
+CopyNT=12
+
+[AX.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+
+[CopyNT]
+ax179f.sys
+
+[RegNT]
+HKR,Ndi,Service,,ax179f
+HKR,Ndi\Interfaces,UpperRange,,ndis5
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+
+[AX.NT.Services]
+AddService=ax179f,2,Service,EventLog
+
+[Service]
+DisplayName=%Service%
+ServiceType=1
+StartType=3
+ErrorControl=1
+LoadOrderGroup=NDIS
+ServiceBinary=%12%\ax179f.sys
+
+[EventLog]
+AddReg=EventLogReg
+
+[EventLogReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
+HKR,,TypesSupported,0x00010001,7
+
+; The Advanced tab: a locally administered address (ethernet.md 4.8).
+[Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="AX179F installation disk"
+Service="usb-wdm-free AX179F USB Gigabit Ethernet"
+AddressDesc="Network Address"
+Ax88179="ASIX AX88179 USB 3.0 Gigabit Ethernet (AX179F)"
+Ax88178a="ASIX AX88178A USB 2.0 Gigabit Ethernet (AX179F)"
+Gx3="Cypress GX3 SuperSpeed Gigabit Ethernet (AX179F)"
+Dub1312="D-Link DUB-1312 USB 3.0 Gigabit Ethernet (AX179F)"
+Sitecom="Sitecom USB 3.0 Gigabit Ethernet (AX179F)"
+Samsung="Samsung USB Ethernet Adapter (AX179F)"
+Lenovo="Lenovo OneLink Dock Gigabit LAN (AX179F)"
+Belkin="Belkin B2B128 USB 3.0 Hub + Gigabit Ethernet (AX179F)"
+Toshiba="Toshiba USB 3.0 Gigabit Ethernet (AX179F)"
+Mct="Magic Control Technology U3-A9003 Gigabit Ethernet (AX179F)"
+Umc2000="Allied Telesis AT-UMC2000 Gigabit Ethernet (AX179F)"
+Umc200="Allied Telesis AT-UMC200 Fast Ethernet (AX179F)"
+Umc2000sp="Allied Telesis AT-UMC2000/SP Gigabit Ethernet (AX179F)"

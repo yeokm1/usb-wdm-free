@@ -1,0 +1,48 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Original NT2000+ ROOT-only synthetic worker experiment. No USB match.
+[Version]
+Signature="$Windows NT$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/21/2026,0.0.0.2
+[Manufacturer]
+%Provider%=Models
+[Models]
+%Device%=Capture,ROOT\UVCSIM1
+[DestinationDirs]
+MiniFiles=12
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+uvcm1.sys=1
+[MiniFiles]
+uvcm1.sys
+[Capture.NT]
+Include=ks.inf,kscaptur.inf
+Needs=KS.Registration,KSCAPTUR.Registration.NT
+CopyFiles=MiniFiles
+[Capture.NT.Services]
+AddService=uvcm1,0x00000002,MiniService
+[MiniService]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\uvcm1.sys
+[Capture.NT.Interfaces]
+AddInterface=%Video%,GLOBAL,Interface
+AddInterface=%Capture%,GLOBAL,Interface
+[Interface]
+AddReg=InterfaceReg
+[InterfaceReg]
+HKR,,CLSID,,%KSProxy%
+HKR,,FriendlyName,,%Device%
+[Strings]
+Provider="usb-wdm-free"
+Device="SIMULATED YUY2 M1 worker source (no USB)"
+Disk="usb-wdm-free M1 experimental source"
+Video="{6994AD05-93EF-11D0-A3CC-00A0C9223196}"
+Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSProxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

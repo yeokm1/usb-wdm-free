@@ -1,0 +1,202 @@
+Subject: EXPERIMENTAL Windows libusb ISO accounting and compact packet buffers
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+
+Upstream host-libusb.c notices (retained in the source):
+/*
+ * Linux host USB redirector
+ *
+ * Copyright (c) 2005 Fabrice Bellard
+ *
+ * Copyright (c) 2008 Max Krasnyansky
+ *      Support for host device auto connect & disconnect
+ *      Major rewrite to support fully async operation
+ *
+ * Copyright 2008 TJ <linux@tjworld.net>
+ *      Added flexible support for /dev/bus/usb /sys/bus/usb/devices in addition
+ *      to the legacy /proc/bus/usb USB device discovery and handling
+ *
+ * (c) 2012 Gerd Hoffmann <kraxel@redhat.com>
+ *      Completely rewritten to use libusb instead of usbfs ioctls.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+diff --git a/hw/usb/host-libusb.c b/hw/usb/host-libusb.c
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -258,15 +258,21 @@
+ 
+ static QEMUTimer *poll_timer;
+ static uint32_t request_count;
++static uint32_t iso_request_count;
+ 
+ static void usb_host_timer_kick(void)
+ {
+     int64_t delay_ns;
+ 
+-    delay_ns = request_count
++    delay_ns = iso_request_count
++        ? (NANOSECONDS_PER_SECOND / 1000) /* 1 ms for active ISO rings */
++        : request_count
+         ? (NANOSECONDS_PER_SECOND / 100)  /* 10 ms interval with active req */
+         : (NANOSECONDS_PER_SECOND);       /* 1 sec interval otherwise */
+-    timer_mod(poll_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ns);
++    /* New work must not postpone an already earlier dispatch deadline.
++     * Keep VM-changing completion callbacks on the existing virtual clock. */
++    timer_mod_anticipate_ns(poll_timer,
++        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ns);
+ }
+ 
+ static void usb_host_timer(void *opaque)
+@@ -519,16 +525,57 @@
+ 
+ /* ------------------------------------------------------------------------ */
+ 
++static int usb_host_iso_submit(USBHostIsoXfer *xfer)
++{
++    int rc = libusb_submit_transfer(xfer->xfer);
++    USBHostDevice *s = xfer->ring->host;
++
++    trace_usb_host_iso_submit(s->bus_num, s->addr, xfer->ring->ep->nr,
++        xfer->xfer, qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
++        xfer->xfer->num_iso_packets, xfer->xfer->length, rc);
++
++#ifdef CONFIG_WIN32
++    if (rc == 0) {
++        iso_request_count++;
++        usb_host_timer_kick();
++    }
++#endif
++    return rc;
++}
++
+ static void LIBUSB_CALL
+ usb_host_req_complete_iso(struct libusb_transfer *transfer)
+ {
+     USBHostIsoXfer *xfer = transfer->user_data;
++
++#ifdef CONFIG_WIN32
++    assert(iso_request_count);
++    iso_request_count--;
++#endif
+ 
+     if (!xfer) {
+         /* USBHostIsoXfer released while inflight */
+         g_free(transfer->buffer);
+         libusb_free_transfer(transfer);
+         return;
++    }
++
++    {
++        USBHostDevice *s = xfer->ring->host;
++        int i, failed = 0, first = 0, actual = 0;
++
++        for (i = 0; i < transfer->num_iso_packets; i++) {
++            actual += transfer->iso_packet_desc[i].actual_length;
++            if (transfer->iso_packet_desc[i].status != LIBUSB_TRANSFER_COMPLETED) {
++                if (!failed) {
++                    first = transfer->iso_packet_desc[i].status;
++                }
++                failed++;
++            }
++        }
++        trace_usb_host_iso_callback(s->bus_num, s->addr, xfer->ring->ep->nr,
++            transfer, qemu_clock_get_ns(QEMU_CLOCK_REALTIME), transfer->status,
++            transfer->num_iso_packets, failed, first, actual);
+     }
+ 
+     QTAILQ_REMOVE(&xfer->ring->inflight, xfer, next);
+@@ -649,7 +696,9 @@
+     unsigned int psize;
+     unsigned char *buf;
+ 
+-    buf = libusb_get_iso_packet_buffer_simple(xfer->xfer, xfer->packet);
++    /* OUT lengths can vary with asynchronous audio feedback. The simple
++     * helper assumes packet0's stride and corrupts mixed-size payloads. */
++    buf = libusb_get_iso_packet_buffer(xfer->xfer, xfer->packet);
+     if (p->pid == USB_TOKEN_OUT) {
+         psize = p->iov.size;
+         if (psize > xfer->ring->ep->max_packet_size) {
+@@ -670,6 +719,18 @@
+     return xfer->copy_complete;
+ }
+ 
++static void usb_host_iso_set_out_length(USBHostIsoXfer *xfer)
++{
++    int i, length = 0;
++
++    /* The allocated MPS-sized capacity is not the compact OUT payload.
++     * KISO derives the last packet length from this aggregate length. */
++    for (i = 0; i < xfer->xfer->num_iso_packets; i++) {
++        length += xfer->xfer->iso_packet_desc[i].length;
++    }
++    xfer->xfer->length = length;
++}
++
+ static void usb_host_iso_data_in(USBHostDevice *s, USBPacket *p)
+ {
+     USBHostIsoRing *ring;
+@@ -695,7 +756,7 @@
+     while ((xfer = QTAILQ_FIRST(&ring->unused)) != NULL) {
+         QTAILQ_REMOVE(&ring->unused, xfer, next);
+         usb_host_iso_reset_xfer(xfer);
+-        rc = libusb_submit_transfer(xfer->xfer);
++        rc = usb_host_iso_submit(xfer);
+         if (rc != 0) {
+             usb_host_libusb_error("libusb_submit_transfer [iso]", rc);
+             QTAILQ_INSERT_TAIL(&ring->unused, xfer, next);
+@@ -757,7 +818,8 @@
+     while ((xfer = QTAILQ_FIRST(&ring->copy)) != NULL &&
+            xfer->copy_complete) {
+         QTAILQ_REMOVE(&ring->copy, xfer, next);
+-        rc = libusb_submit_transfer(xfer->xfer);
++        usb_host_iso_set_out_length(xfer);
++        rc = usb_host_iso_submit(xfer);
+         if (rc != 0) {
+             usb_host_libusb_error("libusb_submit_transfer [iso]", rc);
+             QTAILQ_INSERT_TAIL(&ring->unused, xfer, next);
+diff --git a/hw/usb/trace-events b/hw/usb/trace-events
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -339,6 +339,8 @@
+ usb_host_req_canceled(int bus, int addr, void *p) "dev %d:%d, packet %p"
+ usb_host_iso_start(int bus, int addr, int ep) "dev %d:%d, ep %d"
+ usb_host_iso_stop(int bus, int addr, int ep) "dev %d:%d, ep %d"
++usb_host_iso_submit(int bus, int addr, int ep, void *transfer, int64_t ns, int packets, int length, int result) "dev %d:%d, ep %d, transfer %p, ns %" PRId64 ", packets %d, length %d, result %d"
++usb_host_iso_callback(int bus, int addr, int ep, void *transfer, int64_t ns, int status, int packets, int failed, int first, int actual) "dev %d:%d, ep %d, transfer %p, ns %" PRId64 ", status %d, packets %d, failed %d, first %d, actual %d"
+ usb_host_iso_out_of_bufs(int bus, int addr, int ep) "dev %d:%d, ep %d"
+ usb_host_reset(int bus, int addr) "dev %d:%d"
+ usb_host_auto_scan_enabled(void)
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -15,7 +15,11 @@
+ add_test_setup('thorough',
+                env: ['G_TEST_SLOW=1', 'SPEED=thorough', 'RUST_BACKTRACE=1'])
+ 
+-meson.add_postconf_script(find_program('scripts/symlink-install-tree.py'))
++# Local headless Windows test build: no privileged symlinks or qemu-bundle.
++# Runtime supplies its explicit source pc-bios directory through -L.
++if host_machine.system() != 'windows'
++  meson.add_postconf_script(find_program('scripts/symlink-install-tree.py'))
++endif
+ 
+ ####################
+ # Global variables #

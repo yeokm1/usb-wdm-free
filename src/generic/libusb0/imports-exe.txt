@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Imports TESTLIBU.EXE may use (MODULE!name); LIBUSB0.DLL names must also be
+# exported by the DLL built alongside it.
+LIBUSB0.DLL!usb_close
+LIBUSB0.DLL!usb_find_busses
+LIBUSB0.DLL!usb_find_devices
+LIBUSB0.DLL!usb_get_busses
+LIBUSB0.DLL!usb_get_string_simple
+LIBUSB0.DLL!usb_init
+LIBUSB0.DLL!usb_open
+LIBUSB0.DLL!usb_set_debug
+MSVCRT.DLL!_XcptFilter
+MSVCRT.DLL!__getmainargs
+MSVCRT.DLL!__p___initenv
+MSVCRT.DLL!__p__commode
+MSVCRT.DLL!__p__fmode
+MSVCRT.DLL!__set_app_type
+MSVCRT.DLL!__setusermatherr
+MSVCRT.DLL!_adjust_fdiv
+MSVCRT.DLL!_controlfp
+MSVCRT.DLL!_except_handler3
+MSVCRT.DLL!_exit
+MSVCRT.DLL!_initterm
+MSVCRT.DLL!_snprintf
+MSVCRT.DLL!exit
+MSVCRT.DLL!printf
+# checked builds only (/Od: no intrinsics)
+MSVCRT.DLL!strcmp
+MSVCRT.DLL!strlen

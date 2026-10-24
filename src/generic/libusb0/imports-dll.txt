@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Imports LIBUSB0.DLL may use (MODULE!name). Being listed is the package's
+# declaration; the gate also requires each name in the Windows 98 SE DDK's
+# import library for its module (a declaration for 98, not proof of export).
+ADVAPI32.DLL!RegCloseKey
+ADVAPI32.DLL!RegQueryValueExA
+CFGMGR32.DLL!CM_Get_DevNode_Status
+KERNEL32.DLL!CloseHandle
+KERNEL32.DLL!CreateEventA
+KERNEL32.DLL!CreateFileA
+KERNEL32.DLL!DeviceIoControl
+KERNEL32.DLL!FormatMessageA
+KERNEL32.DLL!GetFullPathNameA
+KERNEL32.DLL!GetLastError
+KERNEL32.DLL!GetModuleHandleA
+KERNEL32.DLL!GetOverlappedResult
+KERNEL32.DLL!GetProcAddress
+KERNEL32.DLL!GetVersion
+KERNEL32.DLL!GetVersionExA
+KERNEL32.DLL!LoadLibraryA
+KERNEL32.DLL!OutputDebugStringA
+KERNEL32.DLL!ResetEvent
+KERNEL32.DLL!SetEnvironmentVariableA
+KERNEL32.DLL!WaitForSingleObject
+MSVCRT.DLL!_adjust_fdiv
+MSVCRT.DLL!_initterm
+MSVCRT.DLL!_iob
+MSVCRT.DLL!_snprintf
+MSVCRT.DLL!_strlwr
+MSVCRT.DLL!_vsnprintf
+MSVCRT.DLL!atoi
+MSVCRT.DLL!fclose
+MSVCRT.DLL!fflush
+MSVCRT.DLL!fgets
+MSVCRT.DLL!fgetws
+MSVCRT.DLL!fopen
+MSVCRT.DLL!fprintf
+MSVCRT.DLL!fputs
+MSVCRT.DLL!fputws
+MSVCRT.DLL!free
+MSVCRT.DLL!getenv
+MSVCRT.DLL!malloc
+MSVCRT.DLL!realloc
+MSVCRT.DLL!strerror
+MSVCRT.DLL!strstr
+MSVCRT.DLL!wcsstr
+SETUPAPI.DLL!SetupCloseInfFile
+SETUPAPI.DLL!SetupDiCallClassInstaller
+SETUPAPI.DLL!SetupDiDestroyDeviceInfoList
+SETUPAPI.DLL!SetupDiEnumDeviceInfo
+SETUPAPI.DLL!SetupDiGetClassDevsA
+SETUPAPI.DLL!SetupDiGetDeviceInstallParamsA
+SETUPAPI.DLL!SetupDiGetDeviceRegistryPropertyA
+SETUPAPI.DLL!SetupDiOpenDevRegKey
+SETUPAPI.DLL!SetupDiSetClassInstallParamsA
+SETUPAPI.DLL!SetupDiSetDeviceRegistryPropertyA
+SETUPAPI.DLL!SetupFindFirstLineA
+SETUPAPI.DLL!SetupFindNextLine
+SETUPAPI.DLL!SetupGetStringFieldA
+SETUPAPI.DLL!SetupOpenInfFileA
+# checked builds only (/Od: no intrinsics)
+MSVCRT.DLL!memcpy
+MSVCRT.DLL!memset
+MSVCRT.DLL!strcmp
+MSVCRT.DLL!strcpy
+MSVCRT.DLL!strlen

@@ -1,0 +1,673 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: two fixes to QEMU 11.1.0's qemu-xhci (hw/usb/hcd-xhci.c) that
+usbcom's split-cancel legs under xHCI98 found (2026-10-22-usbcom98-legs.md;
+xHCI98 task 43.64), with a qtest.
+1. Stop Endpoint saved QEMU's own fetch pointer as the TR Dequeue Pointer,
+   past every TD it had fetched and cancelled ("FIXME ... data might be
+   lost"), so after a driver rewrote a TD behind the head as a No Op and
+   rang the doorbell (xHCI 1.2c 4.6.9, option 3) the live TDs ahead of it
+   never ran again. xhci_stop_ep now saves the first TRB (and its cycle
+   state) of the oldest fetched, not-completed transfer, as xhci_stall_ep
+   already does for a halt (4.6.9: "pick up where it left off"). Stream
+   endpoints are unchanged.
+2. A No Op transfer TRB TD was handed to the device as a zero-length
+   packet. It now completes Success (event if IOC) with no packet
+   (4.11.7, 6.4.1.4).
+Trace events usb_xhci_ep_stop_dequeue and usb_xhci_xfer_noop record both.
+tests/qtest/usb-hcd-xhci-ring-test.c (qemu-xhci + usb-serial with no input,
+which NAKs every bulk IN, a zero-length one too) checks the saved dequeue,
+the No Op completion and the cancel-behind-head restart (with and without
+data reaching the head TD afterwards); registered in
+tests/qtest/meson.build for i386/x86_64. Applies to official QEMU v11.1.0
+(on its own or after qemu-usbnet-hs.patch). Build as in
+2026-10-23-qemu-xhci-cancel.md. The emulator remains GPL-2.0-or-later;
+the files keep their upstream notices.
+
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -1312,6 +1312,10 @@
+ {
+     XHCISlot *slot;
+     XHCIEPContext *epctx;
++    XHCITransfer *xfer;
++    dma_addr_t stopped_addr = 0;
++    bool stopped_ccs = false;
++    bool have_stopped = false;
+ 
+     trace_usb_xhci_ep_stop(slotid, epid);
+     assert(slotid >= 1 && slotid <= xhci->numslots);
+@@ -1328,12 +1332,38 @@
+         return CC_EP_NOT_ENABLED_ERROR;
+     }
+ 
++    epctx = slot->eps[epid-1];
++
++    /*
++     * xHCI 1.2c 4.6.9: the saved TR Dequeue Pointer is where the endpoint
++     * picks up when its doorbell is rung again, i.e. the first TD it has not
++     * completed.  The ring's dequeue is our fetch pointer, past every TD
++     * fetched and still in flight; those are cancelled below, so rewind to
++     * the first TRB of the oldest one, as xhci_stall_ep does for a halt.
++     * (Streams keep the old behaviour: their rings are reset below.)
++     */
++    if (!epctx->nr_pstreams) {
++        QTAILQ_FOREACH(xfer, &epctx->transfers, next) {
++            if (xfer->trbs && xfer->trb_count && !xfer->complete) {
++                stopped_addr = xfer->trbs[0].addr;
++                stopped_ccs = xfer->trbs[0].ccs;
++                have_stopped = true;
++                break;
++            }
++        }
++    }
++
+     if (xhci_ep_nuke_xfers(xhci, slotid, epid, CC_STOPPED) > 0) {
+-        DPRINTF("xhci: FIXME: endpoint stopped w/ xfers running, "
+-                "data might be lost\n");
++        DPRINTF("xhci: endpoint stopped w/ xfers running, "
++                "they restart from their first TRB\n");
+     }
+ 
+-    epctx = slot->eps[epid-1];
++    if (have_stopped) {
++        trace_usb_xhci_ep_stop_dequeue(slotid, epid, epctx->ring.dequeue,
++                                       stopped_addr);
++        epctx->ring.dequeue = stopped_addr;
++        epctx->ring.ccs = stopped_ccs;
++    }
+ 
+     xhci_set_ep_state(xhci, epctx, NULL, EP_STOPPED);
+ 
+@@ -1878,6 +1908,18 @@
+             xhci->slots[slotid - 1].uport->dev->attached);
+ }
+ 
++static bool xhci_xfer_is_noop(XHCITransfer *xfer)
++{
++    int i;
++
++    for (i = 0; i < xfer->trb_count; i++) {
++        if (TRB_TYPE(xfer->trbs[i]) != TR_NOOP) {
++            return false;
++        }
++    }
++    return xfer->trb_count > 0;
++}
++
+ static void xhci_kick_epctx(XHCIEPContext *epctx, unsigned int streamid)
+ {
+     XHCIState *xhci = epctx->xhci;
+@@ -1999,7 +2041,18 @@
+         }
+         xfer->streamid = streamid;
+ 
+-        if (epctx->epid == 1) {
++        if (xhci_xfer_is_noop(xfer)) {
++            /*
++             * xHCI 1.2c 4.11.7, 6.4.1.4: a No Op TD moves no data and
++             * causes no bus transaction; it completes as Success (with
++             * an event if IOC is set).  Do not hand the device a packet.
++             */
++            trace_usb_xhci_xfer_noop(xfer, epctx->slotid, epctx->epid,
++                                     xfer->trbs[0].addr);
++            xfer->status = CC_SUCCESS;
++            xfer->complete = 1;
++            xhci_xfer_report(xfer);
++        } else if (epctx->epid == 1) {
+             xhci_fire_ctl_transfer(xhci, xfer);
+         } else {
+             xhci_fire_transfer(xhci, xfer, epctx);
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -182,12 +182,14 @@
+ usb_xhci_ep_set_dequeue(uint32_t slotid, uint32_t epid, uint32_t streamid, uint64_t param) "slotid %d, epid %d, streamid %d, ptr 0x%016" PRIx64
+ usb_xhci_ep_kick(uint32_t slotid, uint32_t epid, uint32_t streamid) "slotid %d, epid %d, streamid %d"
+ usb_xhci_ep_stop(uint32_t slotid, uint32_t epid) "slotid %d, epid %d"
++usb_xhci_ep_stop_dequeue(uint32_t slotid, uint32_t epid, uint64_t fetch, uint64_t stopped) "slotid %d, epid %d, fetch 0x%" PRIx64 " -> stopped TD 0x%" PRIx64
+ usb_xhci_ep_reset(uint32_t slotid, uint32_t epid) "slotid %d, epid %d"
+ usb_xhci_ep_state(uint32_t slotid, uint32_t epid, const char *os, const char *ns) "slotid %d, epid %d, %s -> %s"
+ usb_xhci_xfer_start(void *xfer, uint32_t slotid, uint32_t epid, uint32_t streamid) "%p: slotid %d, epid %d, streamid %d"
+ usb_xhci_xfer_async(void *xfer) "%p"
+ usb_xhci_xfer_nak(void *xfer) "%p"
+ usb_xhci_xfer_retry(void *xfer) "%p"
++usb_xhci_xfer_noop(void *xfer, uint32_t slotid, uint32_t epid, uint64_t addr) "%p: slotid %d, epid %d, No Op TD at 0x%" PRIx64 ", no packet"
+ usb_xhci_xfer_success(void *xfer, uint32_t bytes) "%p: len %d"
+ usb_xhci_xfer_error(void *xfer, uint32_t ret) "%p: ret %d"
+ usb_xhci_unimplemented(const char *item, int nr) "%s (0x%x)"
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -83,6 +83,8 @@
+   (config_all_devices.has_key('CONFIG_USB_UHCI') and                                        \
+    config_all_devices.has_key('CONFIG_USB_EHCI') ? ['usb-hcd-ehci-test'] : []) +            \
+   (config_all_devices.has_key('CONFIG_USB_XHCI_NEC') ? ['usb-hcd-xhci-test'] : []) +        \
++  (config_all_devices.has_key('CONFIG_USB_XHCI_PCI') and                                    \
++   config_all_devices.has_key('CONFIG_USB_SERIAL') ? ['usb-hcd-xhci-ring-test'] : []) +     \
+   (config_all_devices.has_key('CONFIG_TPM_CRB') ? ['tpm-crb-test'] : []) +                  \
+   (config_all_devices.has_key('CONFIG_TPM_CRB') ? ['tpm-crb-swtpm-test'] : []) +            \
+   (config_all_devices.has_key('CONFIG_TPM_TIS_ISA') ? ['tpm-tis-test'] : []) +              \
+--- /dev/null
++++ b/tests/qtest/usb-hcd-xhci-ring-test.c
+@@ -0,0 +1,522 @@
++/*
++ * QTest testcase for qemu-xhci transfer ring semantics:
++ *  - Stop Endpoint saves the TR Dequeue Pointer of the TD the endpoint
++ *    stopped in (xHCI 1.2c 4.6.9), not the controller's fetch pointer.
++ *  - A No Op transfer TRB completes without a bus transaction
++ *    (xHCI 1.2c 4.11.7, 6.4.1.4).
++ *
++ * The device is usb-serial with no input pending: its bulk IN NAKs every
++ * data packet and also NAKs a zero-length one, so a No Op handed to it as
++ * a packet never completes.
++ *
++ * Copyright (C) 2026 Yeo Kheng Meng
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "libqos/pci-pc.h"
++
++/* Guest-physical layout (all below 64 MiB of guest RAM). */
++#define DCBAA       0x01000000ULL
++#define CMD_RING    0x01001000ULL
++#define EVT_RING    0x01002000ULL
++#define ERST        0x01003000ULL
++#define IN_CTX      0x01004000ULL
++#define OUT_CTX     0x01005000ULL
++#define EP0_RING    0x01006000ULL
++#define BULK_RING   0x01007000ULL
++#define DATA_BUF    0x01008000ULL
++
++#define RING_TRBS   16
++#define EVT_TRBS    64
++
++/* TRB types */
++#define T_NORMAL    1
++#define T_SETUP     2
++#define T_STATUS    4
++#define T_LINK      6
++#define T_NOOP      8
++#define T_EN_SLOT   9
++#define T_ADDR_DEV  11
++#define T_CFG_EP    12
++#define T_STOP_EP   15
++#define T_EV_XFER   32
++#define T_EV_CMD    33
++
++#define CC_SUCCESS  1
++#define CC_STOPPED  26
++
++#define BULK_IN_DCI 3       /* usb-serial endpoint 0x81 */
++
++typedef struct {
++    QTestState *qts;
++    QPCIBus *bus;
++    QPCIDevice *dev;
++    QPCIBar bar;
++    uint32_t op, rt, db;
++    uint32_t cmd_idx;
++    uint32_t evt_idx;
++    bool evt_ccs;
++    uint32_t ep0_idx;
++    uint32_t slot;
++    int feed;           /* host end of usb-serial's chardev, or -1 */
++    char *sock;
++} XhciT;
++
++typedef struct {
++    uint64_t ptr;
++    uint32_t status;
++    uint32_t control;
++} Evt;
++
++static uint32_t rd32(XhciT *x, uint32_t off)
++{
++    return qpci_io_readl(x->dev, x->bar, off);
++}
++
++static void wr32(XhciT *x, uint32_t off, uint32_t v)
++{
++    qpci_io_writel(x->dev, x->bar, off, v);
++}
++
++static void wr64(XhciT *x, uint32_t off, uint64_t v)
++{
++    qpci_io_writel(x->dev, x->bar, off, (uint32_t)v);
++    qpci_io_writel(x->dev, x->bar, off + 4, (uint32_t)(v >> 32));
++}
++
++static void put_trb(XhciT *x, uint64_t at, uint64_t param, uint32_t status,
++                    uint32_t control)
++{
++    qtest_writeq(x->qts, at, param);
++    qtest_writel(x->qts, at + 8, status);
++    qtest_writel(x->qts, at + 12, control);
++}
++
++static bool get_evt(XhciT *x, Evt *e)
++{
++    uint64_t at = EVT_RING + 16ULL * x->evt_idx;
++    uint32_t control = qtest_readl(x->qts, at + 12);
++
++    if ((control & 1) != x->evt_ccs) {
++        return false;
++    }
++    e->ptr = qtest_readq(x->qts, at);
++    e->status = qtest_readl(x->qts, at + 8);
++    e->control = control;
++    if (++x->evt_idx == EVT_TRBS) {
++        x->evt_idx = 0;
++        x->evt_ccs = !x->evt_ccs;
++    }
++    /* ERDP, with EHB cleared */
++    wr64(x, x->rt + 0x20 + 0x18, (EVT_RING + 16ULL * x->evt_idx) | 8);
++    return true;
++}
++
++static bool wait_evt(XhciT *x, Evt *e)
++{
++    int i;
++
++    for (i = 0; i < 200; i++) {
++        if (get_evt(x, e)) {
++            return true;
++        }
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    return false;
++}
++
++static Evt cmd(XhciT *x, uint64_t param, uint32_t control)
++{
++    Evt e;
++
++    put_trb(x, CMD_RING + 16ULL * x->cmd_idx, param, 0, control | 1);
++    x->cmd_idx++;
++    g_assert_cmpuint(x->cmd_idx, <, RING_TRBS - 1);
++    wr32(x, x->db, 0);
++    do {
++        g_assert_true(wait_evt(x, &e));
++    } while (((e.control >> 10) & 0x3f) != T_EV_CMD);
++    return e;
++}
++
++static int evt_cc(const Evt *e)
++{
++    return e->status >> 24;
++}
++
++static void ctx_clear(XhciT *x, uint64_t at)
++{
++    int i;
++
++    for (i = 0; i < 0x440; i += 4) {
++        qtest_writel(x->qts, at + i, 0);
++    }
++}
++
++static void xhci_bringup_feed(XhciT *x, bool feed)
++{
++    uint32_t caplen, portsc = 0, port = 0, nports, i;
++    Evt e;
++    int lfd = -1;
++
++    x->feed = -1;
++    if (feed) {
++        /* usb-serial's input: a socket the test writes into */
++        x->sock = g_strdup_printf("%s/xhci-ring-%d.sock", g_get_tmp_dir(),
++                                  getpid());
++        lfd = qtest_socket_server(x->sock);
++        g_assert_cmpint(lfd, >=, 0);
++        x->qts = qtest_initf("-machine pc -m 128 "
++                             "-device qemu-xhci,id=xhci,addr=04.0 "
++                             "-chardev socket,id=c0,path=%s "
++                             "-device usb-serial,bus=xhci.0,chardev=c0",
++                             x->sock);
++        x->feed = accept(lfd, NULL, NULL);
++        g_assert_cmpint(x->feed, >=, 0);
++        close(lfd);
++    } else {
++        x->qts = qtest_init("-machine pc -m 128 "
++                            "-device qemu-xhci,id=xhci,addr=04.0 "
++                            "-chardev ringbuf,id=c0 "
++                            "-device usb-serial,bus=xhci.0,chardev=c0");
++    }
++    x->bus = qpci_new_pc(x->qts, NULL);
++    x->dev = qpci_device_find(x->bus, QPCI_DEVFN(4, 0));
++    g_assert_nonnull(x->dev);
++    qpci_device_enable(x->dev);
++    x->bar = qpci_iomap(x->dev, 0, NULL);
++
++    caplen = rd32(x, 0) & 0xff;
++    nports = rd32(x, 4) >> 24;
++    x->op = caplen;
++    x->db = rd32(x, 0x14) & ~3u;
++    x->rt = rd32(x, 0x18) & ~0x1fu;
++
++    /* reset */
++    wr32(x, x->op + 0x00, 2);
++    for (i = 0; i < 100 && (rd32(x, x->op) & 2); i++) {
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    g_assert_cmpuint(rd32(x, x->op + 0x04) & (1 << 11), ==, 0);
++
++    wr32(x, x->op + 0x38, 1);                       /* CONFIG: 1 slot */
++    for (i = 0; i < 0x2000; i += 4) {
++        qtest_writel(x->qts, DCBAA + i, 0);         /* DCBAA, cmd, events */
++    }
++    wr64(x, x->op + 0x30, DCBAA);
++    wr64(x, x->op + 0x18, CMD_RING | 1);
++
++    qtest_writeq(x->qts, ERST, EVT_RING);
++    qtest_writel(x->qts, ERST + 8, EVT_TRBS);
++    qtest_writel(x->qts, ERST + 12, 0);
++    wr32(x, x->rt + 0x20 + 0x08, 1);                /* ERSTSZ */
++    wr64(x, x->rt + 0x20 + 0x18, EVT_RING);         /* ERDP */
++    wr64(x, x->rt + 0x20 + 0x10, ERST);             /* ERSTBA */
++    x->evt_ccs = 1;
++
++    wr32(x, x->op + 0x00, 1);                       /* RUN */
++
++    /* find the connected port, reset it */
++    for (i = 1; i <= nports; i++) {
++        portsc = rd32(x, x->op + 0x400 + 0x10 * (i - 1));
++        if (portsc & 1) {
++            port = i;
++            break;
++        }
++    }
++    g_assert_cmpuint(port, !=, 0);
++    wr32(x, x->op + 0x400 + 0x10 * (port - 1), (1 << 9) | (1 << 4));
++    for (i = 0; i < 100; i++) {
++        portsc = rd32(x, x->op + 0x400 + 0x10 * (port - 1));
++        if (portsc & 2) {
++            break;
++        }
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    g_assert_cmpuint(portsc & 2, ==, 2);
++    while (get_evt(x, &e)) {
++        /* port status change events */
++    }
++
++    e = cmd(x, 0, T_EN_SLOT << 10);
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    x->slot = e.control >> 24;
++    g_assert_cmpuint(x->slot, ==, 1);
++
++    /* Address Device: slot + EP0 */
++    ctx_clear(x, IN_CTX);
++    ctx_clear(x, OUT_CTX);
++    for (i = 0; i < 0x1000; i += 4) {
++        qtest_writel(x->qts, EP0_RING + i, 0);
++        qtest_writel(x->qts, BULK_RING + i, 0);
++    }
++    qtest_writel(x->qts, IN_CTX + 0x04, 3);                     /* A0|A1 */
++    qtest_writel(x->qts, IN_CTX + 0x20, (1u << 27) |
++                 (((portsc >> 10) & 0xf) << 20));
++    qtest_writel(x->qts, IN_CTX + 0x24, port << 16);
++    qtest_writel(x->qts, IN_CTX + 0x44, (64 << 16) | (4 << 3) | (3 << 1));
++    qtest_writeq(x->qts, IN_CTX + 0x48, EP0_RING | 1);
++    qtest_writel(x->qts, IN_CTX + 0x50, 8);
++    qtest_writeq(x->qts, DCBAA + 8 * x->slot, OUT_CTX);
++    e = cmd(x, IN_CTX, (T_ADDR_DEV << 10) | (x->slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++
++    /* SET_CONFIGURATION(1) on EP0: Setup (IDT, no data), Status IN */
++    put_trb(x, EP0_RING + 0, 0x0000000000010900ULL, 8,
++            (T_SETUP << 10) | (1 << 6) | 1);
++    put_trb(x, EP0_RING + 16, 0, 0, (T_STATUS << 10) | (1 << 16) |
++            (1 << 5) | 1);
++    x->ep0_idx = 2;
++    wr32(x, x->db + 4 * x->slot, 1);
++    g_assert_true(wait_evt(x, &e));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++
++    /* Configure Endpoint: bulk IN 0x81 (DCI 3) */
++    ctx_clear(x, IN_CTX);
++    qtest_writel(x->qts, IN_CTX + 0x04, 1 | (1 << BULK_IN_DCI));
++    qtest_writel(x->qts, IN_CTX + 0x20, (BULK_IN_DCI << 27) |
++                 (((portsc >> 10) & 0xf) << 20));
++    qtest_writel(x->qts, IN_CTX + 0x24, port << 16);
++    qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * BULK_IN_DCI + 4,
++                 (64 << 16) | (6 << 3) | (3 << 1));
++    qtest_writeq(x->qts, IN_CTX + 0x20 + 0x20 * BULK_IN_DCI + 8,
++                 BULK_RING | 1);
++    qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * BULK_IN_DCI + 16, 64);
++    e = cmd(x, IN_CTX, (T_CFG_EP << 10) | (x->slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++
++    /* Link TRB at the end of the bulk ring, back to its start, toggle */
++    put_trb(x, BULK_RING + 16ULL * (RING_TRBS - 1), BULK_RING, 0,
++            (T_LINK << 10) | 2 | 1);
++}
++
++static void xhci_bringup(XhciT *x)
++{
++    xhci_bringup_feed(x, false);
++}
++
++static void xhci_teardown(XhciT *x)
++{
++    if (x->feed >= 0) {
++        close(x->feed);
++        unlink(x->sock);
++        g_free(x->sock);
++    }
++    g_free(x->dev);
++    qpci_free_pc(x->bus);
++    qtest_quit(x->qts);
++}
++
++static uint64_t ep_dequeue(XhciT *x, int dci)
++{
++    return qtest_readq(x->qts, OUT_CTX + 0x20 * dci + 8);
++}
++
++static void put_normal(XhciT *x, int idx)
++{
++    put_trb(x, BULK_RING + 16ULL * idx, DATA_BUF + 0x100 * idx, 64,
++            (T_NORMAL << 10) | (1 << 5) | (1 << 2) | 1);    /* IOC|ISP|C */
++}
++
++static void put_noop(XhciT *x, int idx)
++{
++    put_trb(x, BULK_RING + 16ULL * idx, 0, 0, (T_NOOP << 10) | (1 << 5) | 1);
++}
++
++static void ring_bulk(XhciT *x)
++{
++    wr32(x, x->db + 4 * x->slot, BULK_IN_DCI);
++}
++
++/*
++ * Two bulk IN TDs; the device NAKs the first, so the controller has fetched
++ * it and holds it.  Stop Endpoint must report it Stopped and save its first
++ * TRB as the dequeue: the endpoint stopped in it.  Ringing the doorbell
++ * again must therefore fetch that TD again (seen by a third Stop).
++ */
++static void test_stop_saves_stopped_td(void)
++{
++    XhciT x = {};
++    Evt e;
++    bool saw_stopped = false;
++
++    xhci_bringup(&x);
++    put_normal(&x, 0);
++    put_normal(&x, 1);
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));                /* NAKed, in flight */
++
++    put_trb(&x, CMD_RING + 16ULL * x.cmd_idx, 0, 0,
++            (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24) | 1);
++    x.cmd_idx++;
++    wr32(&x, x.db, 0);
++    for (;;) {
++        g_assert_true(wait_evt(&x, &e));
++        if (((e.control >> 10) & 0x3f) == T_EV_XFER) {
++            g_assert_cmpint(evt_cc(&e), ==, CC_STOPPED);
++            g_assert_cmphex(e.ptr, ==, BULK_RING);
++            saw_stopped = true;
++            continue;
++        }
++        g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++        break;
++    }
++    g_assert_true(saw_stopped);
++    /* 4.6.9: the dequeue the endpoint picks up from is the stopped TD */
++    g_assert_cmphex(ep_dequeue(&x, BULK_IN_DCI) & ~0xfULL, ==, BULK_RING);
++    g_assert_cmphex(ep_dequeue(&x, BULK_IN_DCI) & 1, ==, 1);
++
++    /* restart: the same TD is fetched again and stops again */
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    e = cmd(&x, 0, (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    g_assert_cmphex(ep_dequeue(&x, BULK_IN_DCI) & ~0xfULL, ==, BULK_RING);
++
++    xhci_teardown(&x);
++}
++
++/*
++ * A No Op TD (IOC) at the head of a bulk IN ring completes Success at
++ * once, with no packet: the NAKing device would otherwise hold it forever.
++ * The Normal TD behind it is fetched next and is the one left pending.
++ */
++static void test_noop_no_packet(void)
++{
++    XhciT x = {};
++    Evt e;
++
++    xhci_bringup(&x);
++    put_noop(&x, 0);
++    put_normal(&x, 1);
++    ring_bulk(&x);
++    g_assert_true(wait_evt(&x, &e));
++    g_assert_cmpint((e.control >> 10) & 0x3f, ==, T_EV_XFER);
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    g_assert_cmphex(e.ptr, ==, BULK_RING);
++    g_assert_cmpint(e.status & 0xffffff, ==, 0);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));                /* Normal TD NAKed */
++
++    e = cmd(&x, 0, (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    g_assert_cmphex(ep_dequeue(&x, BULK_IN_DCI) & ~0xfULL, ==,
++                    BULK_RING + 16);
++
++    xhci_teardown(&x);
++}
++
++/*
++ * usbcom's case: the head TD stays live, the TD behind it is cancelled by
++ * rewriting it as a No Op while the endpoint is stopped, and only the
++ * doorbell restarts it (4.6.9 option 3).  The head must run again; the
++ * No Op must not reach the device.
++ */
++static void test_cancel_behind_head(void)
++{
++    XhciT x = {};
++    Evt e;
++
++    xhci_bringup(&x);
++    put_normal(&x, 0);
++    put_normal(&x, 1);
++    put_normal(&x, 2);
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++
++    e = cmd(&x, 0, (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    put_noop(&x, 1);                                /* cancel TD 1 */
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));                /* head NAKs again */
++
++    /* the head is what the endpoint is in: Stop names it again */
++    put_trb(&x, CMD_RING + 16ULL * x.cmd_idx, 0, 0,
++            (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24) | 1);
++    x.cmd_idx++;
++    wr32(&x, x.db, 0);
++    g_assert_true(wait_evt(&x, &e));
++    g_assert_cmpint((e.control >> 10) & 0x3f, ==, T_EV_XFER);
++    g_assert_cmpint(evt_cc(&e), ==, CC_STOPPED);
++    g_assert_cmphex(e.ptr, ==, BULK_RING);
++    g_assert_true(wait_evt(&x, &e));
++    g_assert_cmpint((e.control >> 10) & 0x3f, ==, T_EV_CMD);
++    g_assert_cmphex(ep_dequeue(&x, BULK_IN_DCI) & ~0xfULL, ==, BULK_RING);
++
++    xhci_teardown(&x);
++}
++
++/*
++ * The same, then the device gets data: the head TD, run again from the
++ * saved dequeue, completes with it (Short Packet, the bytes in its
++ * buffer); the No Op behind it completes Success with no packet; the TD
++ * after that is the one left pending.
++ */
++static void test_cancel_behind_head_data(void)
++{
++    XhciT x = {};
++    Evt e;
++    uint8_t buf[8];
++    int i;
++
++    xhci_bringup_feed(&x, true);
++    put_normal(&x, 0);
++    put_normal(&x, 1);
++    put_normal(&x, 2);
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++
++    e = cmd(&x, 0, (T_STOP_EP << 10) | (BULK_IN_DCI << 16) | (x.slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    put_noop(&x, 1);                                /* cancel TD 1 */
++    ring_bulk(&x);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));                /* head NAKs again */
++
++    g_assert_cmpint(send(x.feed, "hello", 5, 0), ==, 5);
++    for (i = 0; i < 200 && !get_evt(&x, &e); i++) {
++        qtest_clock_step(x.qts, 1000 * 1000);
++        ring_bulk(&x);
++    }
++    g_assert_cmpint(i, <, 200);
++    g_assert_cmpint((e.control >> 10) & 0x3f, ==, T_EV_XFER);
++    g_assert_cmphex(e.ptr, ==, BULK_RING);          /* the head TD */
++    g_assert_cmpint(evt_cc(&e), ==, 13);            /* Short Packet */
++    g_assert_cmpint(e.status & 0xffffff, ==, 64 - 7);
++    qtest_memread(x.qts, DATA_BUF, buf, 7);
++    g_assert_cmpmem(buf + 2, 5, "hello", 5);         /* after FTDI's header */
++
++    g_assert_true(wait_evt(&x, &e));
++    g_assert_cmpint((e.control >> 10) & 0x3f, ==, T_EV_XFER);
++    g_assert_cmphex(e.ptr, ==, BULK_RING + 16);     /* the No Op */
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    qtest_clock_step(x.qts, 10 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));                /* TD 2 pending */
++
++    xhci_teardown(&x);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    if (!qtest_has_device("qemu-xhci") || !qtest_has_device("usb-serial")) {
++        g_test_skip("qemu-xhci or usb-serial not available");
++        return g_test_run();
++    }
++    qtest_add_func("/xhci/ring/stop-saves-stopped-td",
++                   test_stop_saves_stopped_td);
++    qtest_add_func("/xhci/ring/noop-no-packet", test_noop_no_packet);
++    qtest_add_func("/xhci/ring/cancel-behind-head", test_cancel_behind_head);
++    qtest_add_func("/xhci/ring/cancel-behind-head-data",
++                   test_cancel_behind_head_data);
++    return g_test_run();
++}

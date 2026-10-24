@@ -1,0 +1,41 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Opt-in Windows 98 SE workaround (owner, 2026-10-23): binds no driver to
+; the USB Audio Class 1.0 function of the listed devices, so 98 SE's own
+; usbaudio.sys (matched by class in wdma_usb.inf) never loads on them: on
+; 98 SE its load can freeze Windows at the plug (docs/release-notes.md).
+; Install it by hand only (STAGE.TXT: COPY); the microphone is ignored.
+; The devnodes start with no function driver: no DevLoader, no NTMPDriver
+; on 98 SE / ME, and a null service (AddService with no name) on NT.
+; Per-device lines only, never a class match. The Brio 100's video
+; function (MI_00) stays on uvc98.
+; Written from Microsoft's INF documentation; no kit sample INF was used.
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/23/2026,1.0.0.0
+[Manufacturer]
+%Provider%=Models
+[Models]
+; QEMU usb-audio (Full Speed, UAC 1.0): interface 0 audio control,
+; interface 1 audio streaming (out).
+%QemuAC%=NoDriver,USB\VID_46F4&PID_0002&MI_00
+%QemuAS%=NoDriver,USB\VID_46F4&PID_0002&MI_01
+; Logitech Brio 100 microphone: interface 2 audio control, interface 3
+; audio streaming (in). xHCI98 on 98 SE splits the camera by IAD, the
+; microphone function being the MI_02 child.
+%BrioAC%=NoDriver,USB\VID_046D&PID_094C&MI_02
+%BrioAS%=NoDriver,USB\VID_046D&PID_094C&MI_03
+[NoDriver]
+; Nothing to copy and no loader: the devnode is configured with no driver.
+[NoDriver.NT]
+[NoDriver.NT.Services]
+AddService=,2
+[Strings]
+Provider="usb-wdm-free"
+QemuAC="QEMU USB Audio control (no driver)"
+QemuAS="QEMU USB Audio streaming (no driver)"
+BrioAC="Logitech Brio 100 microphone control (no driver)"
+BrioAS="Logitech Brio 100 microphone streaming (no driver)"

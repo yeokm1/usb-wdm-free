@@ -1,0 +1,97 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; CDC98.INF - usb-wdm-free USB Ethernet: CDC-ECM, CDC-NCM and RNDIS, for
+; Windows 98 SE and ME (ethernet.md sections 4.4 and 7.1). NDIS.VXD loads
+; the WDM miniport (DevLoader=*ndis, DeviceVxDs). Written from the Windows
+; 2000 DDK network guide's INF pages and the Windows 98 DDK documentation;
+; no DDK sample INF was read. CDCNET.INF is the Windows 2000 to 7 INF.
+;
+; Interface-level class ids, and one whole-device id (ethernet.md section
+; 5.1): USB\VID_0525&PID_A4A2, the Linux Ethernet gadget's default id and
+; QEMU usb-net's, a device of class 02 with no interface split, bound
+; whole to the same CDC install section as CDCT98.INF binds it.
+
+[Version]
+Signature="$Chicago$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Ecm%=CDC,USB\Class_02&SubClass_06&Prot_00
+%Ncm%=CDC,USB\Class_02&SubClass_0D&Prot_00
+%Rndis%=CDC,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=CDC,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=CDC,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=CDC,USB\Class_EF&SubClass_04&Prot_01
+%Gadget%=CDC,USB\VID_0525&PID_A4A2
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+cdcnet.sys=1
+
+[DestinationDirs]
+Copy9x=11
+
+; ---- Windows 98 SE and ME: NDIS.VXD loads the WDM miniport ----
+
+[CDC]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params
+
+[Copy9x]
+cdcnet.sys
+
+[Reg9x]
+HKR,,DevLoader,,*ndis
+HKR,,DeviceVxDs,,cdcnet.sys
+HKR,,EnumPropPages,,"netdi.dll,EnumPropPages"
+HKR,NDIS,LogDriverName,,CDCNET
+HKR,NDIS,MajorNdisVersion,1,05
+HKR,NDIS,MinorNdisVersion,1,00
+HKR,Ndi,DeviceID,,"USB\CDCNET"
+HKR,Ndi\Interfaces,DefUpper,,ndis3
+HKR,Ndi\Interfaces,UpperRange,,"ndis3,ndis4,ndis5"
+HKR,Ndi\Interfaces,DefLower,,ethernet
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+HKR,Ndi\Install,ndis3,,CDC.ndis
+HKR,Ndi\Install,ndis4,,CDC.ndis
+HKR,Ndi\Install,ndis5,,CDC.ndis
+
+[CDC.ndis]
+CopyFiles=Copy9x
+
+; The Advanced tab: which protocol to prefer when a device offers several.
+[Params]
+HKR,Ndi\params\Protocol,ParamDesc,,%ProtocolDesc%
+HKR,Ndi\params\Protocol,type,,enum
+HKR,Ndi\params\Protocol,default,,0
+HKR,Ndi\params\Protocol\enum,0,,%Auto%
+HKR,Ndi\params\Protocol\enum,1,,%ForceRndis%
+HKR,Ndi\params\Protocol\enum,2,,%ForceEcm%
+HKR,Ndi\params\Protocol\enum,3,,%ForceNcm%
+HKR,,Protocol,,0
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="CDCNET installation disk"
+Ecm="USB Ethernet (CDC-ECM)"
+Ncm="USB Ethernet (CDC-NCM)"
+Rndis="USB Ethernet (RNDIS)"
+Gadget="USB Ethernet (Linux USB gadget)"
+Service="usb-wdm-free CDCNET USB Ethernet"
+ProtocolDesc="USB protocol"
+Auto="Automatic (NCM, ECM, RNDIS)"
+ForceRndis="RNDIS only"
+ForceEcm="CDC-ECM only"
+ForceNcm="CDC-NCM only"

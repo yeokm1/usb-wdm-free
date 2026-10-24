@@ -1,0 +1,33 @@
+# Imports xpad98 may use (MODULE!name). Being listed is the package's
+# declaration; the 98 DDK library check and the guest load test show
+# availability (build.md 5.1).
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+HIDCLASS.SYS!HidRegisterMinidriver
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!InterlockedExchange
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoInitializeIrp
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!IoReleaseCancelSpinLock
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!PoCallDriver
+NTOSKRNL.EXE!PoStartNextPowerIrp
+NTOSKRNL.EXE!RtlInitUnicodeString
+NTOSKRNL.EXE!ZwClose
+NTOSKRNL.EXE!ZwQueryValueKey
+# checked builds only
+NTOSKRNL.EXE!RtlAssert
+NTOSKRNL.EXE!DbgPrint

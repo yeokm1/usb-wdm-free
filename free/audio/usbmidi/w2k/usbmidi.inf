@@ -1,0 +1,96 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; usbmidi.inf TEMPLATE. mkinf.ps1 writes one INF per release folder
+; (design 8): lines between ";@IF <tag>" and ";@END" are kept only when the
+; folder has the tag, and ";@MODELS" expands to that folder's model lines.
+; Tags: X86 (98 SE to 8, 32-bit), X64 (XP x64 to 8 x64), W9X (98 SE, ME).
+; Sections are original, written from Microsoft's INF documentation and the
+; stock wdma_usb.inf/wdmaudio.inf entry names the design cites (design 3.1,
+; 8); no kit sample INF was used.
+
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Generic%=UM,USB\Class_01&SubClass_03&Prot_00
+%UmOneTab%=UM,USB\VID_0582&PID_0168&MI_00
+%Manual%=UM,USBMIDI_BY_HAND
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+usbmidi.sys=1
+
+[DestinationDirs]
+DefaultDestDir=10,system32\drivers
+Driver.Copy=10,system32\drivers
+
+[Driver.Copy]
+usbmidi.sys
+
+[MidiSupport]
+HKR,,AssociatedFilters,,wdmaud
+HKR,,Driver,,usbmidi.sys
+HKR,Drivers,SubClasses,,"midi"
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
+
+[Midi.Interface]
+AddReg=Midi.Interface.Reg
+
+[Midi.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device%
+
+
+[UM.NT]
+; The KS and WDMAUDIO registrations copy the system's KS/WDM audio files.
+; When those are loaded (any running WDM audio device, or a second instance
+; of this one), Windows 2000 asks for a restart after installing (setupapi:
+; "files in use, or treated as in use"), even though usbmidi.sys itself was
+; not in use (2026-10-22 test log).
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration.NT
+CopyFiles=Driver.Copy
+AddReg=MidiSupport
+
+[UM.NT.Services]
+AddService=usbmidi,0x00000002,Service
+
+[UM.NT.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,Midi00,Midi.Interface
+AddInterface=%KSCATEGORY_RENDER%,Midi00,Midi.Interface
+AddInterface=%KSCATEGORY_CAPTURE%,Midi00,Midi.Interface
+
+
+[Service]
+DisplayName=%Service%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\usbmidi.sys
+
+[Strings]
+Provider="usb-wdm-free"
+Device="USB MIDI"
+Service="USB MIDI 1.0 driver (usbmidi)"
+Generic="USB MIDI device"
+Manual="USB MIDI device (class compliant)"
+UmOneTab="Roland UM-ONE mk2 (TAB)"
+Simulation1="USB MIDI loopback (simulated, test only)"
+Simulation2="USB MIDI 2x2 (simulated, test only)"
+Simulation3="USB MIDI lone interface (simulated, test only)"
+Disk="usbmidi installation disk"
+KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

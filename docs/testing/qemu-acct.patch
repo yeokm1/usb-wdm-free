@@ -1,0 +1,101 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Observation-only ISO OUT ring accounting: count guest packets/bytes a ring
+accepts or refuses (out of buffers), and at ring release trace those totals
+with the guest packets still waiting in the copy queue, which are discarded
+(usb_host_iso_ring_free). No transport or timing behaviour change intended.
+Apply AFTER qemu-iso.patch, qemu-poll.patch, qemu-wait.patch and
+qemu-orphan.patch to QEMU v11.1.0 commit 84f07211cc5b4fc6a371559bf8a5de4fb068e648.
+The emulator as a whole remains GPL-2.0-or-later. host-libusb.c keeps its
+original upstream notice:
+/*
+ * Linux host USB redirector
+ *
+ * Copyright (c) 2005 Fabrice Bellard
+ *
+ * Copyright (c) 2008 Max Krasnyansky
+ *      Support for host device auto connect & disconnect
+ *      Major rewrite to support fully async operation
+ *
+ * Copyright 2008 TJ <linux@tjworld.net>
+ *      Added flexible support for /dev/bus/usb /sys/bus/usb/devices in addition
+ *      to the legacy /proc/bus/usb USB device discovery and handling
+ *
+ * (c) 2012 Gerd Hoffmann <kraxel@redhat.com>
+ *      Completely rewritten to use libusb instead of usbfs ioctls.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -151,6 +151,10 @@
+     QTAILQ_HEAD(, USBHostIsoXfer)    inflight;
+     QTAILQ_HEAD(, USBHostIsoXfer)    copy;
+     QTAILQ_ENTRY(USBHostIsoRing)     next;
++    /* Observation only: guest packets taken by this ring, and refused. */
++    uint64_t                         accepted_packets;
++    uint64_t                         accepted_bytes;
++    uint64_t                         refused_packets;
+ };
+ 
+ static QTAILQ_HEAD(, USBHostDevice) hostdevs =
+@@ -720,6 +724,16 @@
+ static void usb_host_iso_free(USBHostIsoRing *ring)
+ {
+     USBHostIsoXfer *xfer;
++    uint64_t pending = 0;
++
++    /* Guest data still waiting in the copy queue is discarded below. */
++    QTAILQ_FOREACH(xfer, &ring->copy, next) {
++        pending += xfer->packet;
++    }
++    trace_usb_host_iso_ring_free(ring->host->bus_num, ring->host->addr,
++                                 ring->ep->nr, ring->accepted_packets,
++                                 ring->accepted_bytes, ring->refused_packets,
++                                 pending);
+ 
+     while ((xfer = QTAILQ_FIRST(&ring->inflight)) != NULL) {
+         QTAILQ_REMOVE(&ring->inflight, xfer, next);
+@@ -854,12 +868,15 @@
+         xfer = QTAILQ_FIRST(&ring->unused);
+         if (xfer == NULL) {
+             trace_usb_host_iso_out_of_bufs(s->bus_num, s->addr, p->ep->nr);
++            ring->refused_packets++;
+             return;
+         }
+         QTAILQ_REMOVE(&ring->unused, xfer, next);
+         usb_host_iso_reset_xfer(xfer);
+         QTAILQ_INSERT_TAIL(&ring->copy, xfer, next);
+     }
++    ring->accepted_packets++;
++    ring->accepted_bytes += p->iov.size;
+     usb_host_iso_data_copy(xfer, p);
+ 
+     if (QTAILQ_EMPTY(&ring->inflight)) {
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -343,6 +343,7 @@
+ usb_host_iso_callback(int bus, int addr, int ep, void *transfer, int64_t ns, int status, int packets, int failed, int first, int actual) "dev %d:%d, ep %d, transfer %p, ns %" PRId64 ", status %d, packets %d, failed %d, first %d, actual %d"
+ usb_host_iso_out_of_bufs(int bus, int addr, int ep) "dev %d:%d, ep %d"
+ usb_host_iso_orphan_callback(void *transfer, int64_t ns, int status, int packets, int failed, int first, int actual) "transfer %p, ns %" PRId64 ", status %d, packets %d, failed %d, first %d, actual %d"
++usb_host_iso_ring_free(int bus, int addr, int ep, uint64_t accepted, uint64_t accepted_bytes, uint64_t refused, uint64_t pending) "dev %d:%d, ep %d, accepted %" PRIu64 ", accepted_bytes %" PRIu64 ", refused %" PRIu64 ", pending %" PRIu64 ""
+ usb_host_reset(int bus, int addr) "dev %d:%d"
+ usb_host_auto_scan_enabled(void)
+ usb_host_auto_scan_disabled(void)

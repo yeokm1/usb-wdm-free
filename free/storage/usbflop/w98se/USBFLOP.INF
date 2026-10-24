@@ -1,0 +1,47 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Release 0.1.0. Requires USBSTOR.SYS, USBNTMAP.SYS, USBMPHLP.PDR
+; and the floppy child binding already installed by ME or a 98 SE stack.
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%CBI%=UFI_CBI,USB\Class_08&SubClass_04&Prot_00
+%CB%=UFI_CB,USB\Class_08&SubClass_04&Prot_01
+
+[UFI_CBI]
+AddReg=Loader,CBI.Flags
+
+[UFI_CBI.HW]
+AddReg=Mapper
+
+[UFI_CB]
+AddReg=Loader,CB.Flags
+
+[UFI_CB.HW]
+AddReg=Mapper
+
+[Loader]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,USBSTOR.SYS
+
+[Mapper]
+HKR,,upperfilters,0,"USBNTMAP.SYS"
+
+[CBI.Flags]
+HKR,,DriverFlags,0x00010001,2
+
+[CB.Flags]
+HKR,,DriverFlags,0x00010001,3
+
+[Strings]
+Provider="usb-wdm-free"
+CBI="USB UFI floppy (CBI, usb-wdm-free)"
+CB="USB UFI floppy (CB, usb-wdm-free)"

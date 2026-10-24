@@ -5,10 +5,10 @@
 #
 #   release.ps1 -Definition release\0.1.0.psd1 [-Part x86|all] [-X64Dir <signed x64 drivers>]
 #               [-NonFree <usb-wdm-nonfree checkout>] [-Certificate <public .cer>]
-#               [-Thumbprint <signer SHA-1>] [-Check]
+#               [-Thumbprint <signer SHA-1>] [-OutRoot <checkout holding out\>] [-Check]
 #
 # Copies validated build results (out\...) and INFs into free\<class>\<pkg>\<folder>\,
-# as the definition lists them, then:
+# as the definition lists them, and each tool (Tools) into free\tools\<name>\, then:
 #   1. checks each INF: DriverVer, Signature, AddService names against the package's,
 #      every file it copies present in its folder (or from Windows through LayoutFile,
 #      Include/Needs, reported), whole-device hardware ids only where the definition
@@ -17,12 +17,18 @@
 #   2. checks every file and folder name under free\ for 8.3, reserved DOS names and
 #      case-insensitive collisions;
 #   3. checks each folder holds exactly its files (README.TXT and declared extras aside);
+#   4. checks each tool: no INF (a tool is not a driver package and has no STAGE.TXT
+#      line), each image x86, unsigned and importing only the DLLs its entry lists,
+#      each text file plain ASCII, CRLF, at most 78 columns;
 #   7. writes STAGE.TXT (STAGE/COPY lines, PACKAGE lines, relations) and checks every
 #      INF under free\ is on exactly one line and no id is staged twice on one system
 #      (with -NonFree, over both sets), then rewrites SHA256.TXT over free\ and checks it.
 # -Part x86 leaves the x64 folders out (before the owner signs). -Check builds the tree
-# in a scratch folder and touches nothing in the repository. Never signs anything and
-# never reads a private key: the x64 images arrive signed in -X64Dir.
+# in a scratch folder and touches nothing in the repository. -OutRoot takes the packages'
+# build results (out\..., with their records) from another checkout of this repository,
+# such as the worktree a release was first made in; a tool is built in this checkout by
+# its own build script. Never signs anything and never reads a private key: the x64
+# images arrive signed in -X64Dir.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Definition,
@@ -31,11 +37,13 @@ param(
     [string]$NonFree = '',
     [string]$Certificate = '',
     [string]$Thumbprint = '814CF778B45159EC2659C39C16C7E75EB3C37145',
+    [string]$OutRoot = '',
     [switch]$Check
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$BuildRoot = if ($OutRoot -ne '') { [IO.Path]::GetFullPath($OutRoot).TrimEnd('\') } else { $Root }
 $script:Errors = New-Object System.Collections.Generic.List[string]
 $script:Notes = New-Object System.Collections.Generic.List[string]
 function Fail([string]$m) { $script:Errors.Add($m) }
@@ -246,6 +254,33 @@ function Get-Pe([byte[]]$b) {
     return [pscustomobject]@{ Machine = $machine; Magic = $magic; CheckSum = $opt + 64; SecDir = $sec
         CertOff = [BitConverter]::ToUInt32($b, $sec); CertLen = [BitConverter]::ToUInt32($b, $sec + 4) }
 }
+function Get-Imports([byte[]]$b) {
+    # The DLL names in a PE image's import directory (upper case), or $null.
+    try {
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        $nsec = [BitConverter]::ToUInt16($b, $pe + 6); $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+        $opt = $pe + 24
+        $dd = if ([BitConverter]::ToUInt16($b, $opt) -eq 0x20B) { $opt + 112 } else { $opt + 96 }
+        $secs = @(for ($i = 0; $i -lt $nsec; $i++) {
+            $h = $opt + $optSize + 40 * $i
+            $vs = [BitConverter]::ToUInt32($b, $h + 8); $rs = [BitConverter]::ToUInt32($b, $h + 16)
+            [pscustomobject]@{ Va = [BitConverter]::ToUInt32($b, $h + 12); Size = [Math]::Max($vs, $rs); Raw = [BitConverter]::ToUInt32($b, $h + 20) }
+        })
+        $off = { param($rva) foreach ($s in $secs) { if ($rva -ge $s.Va -and $rva -lt $s.Va + $s.Size) { return [int]($rva - $s.Va + $s.Raw) } }; throw "RVA $rva in no section" }
+        $rva = [BitConverter]::ToUInt32($b, $dd + 8)
+        if ($rva -eq 0) { return @() }
+        $at = & $off $rva; $out = @()
+        while ($true) {
+            $nameRva = [BitConverter]::ToUInt32($b, $at + 12); $thunk = [BitConverter]::ToUInt32($b, $at + 16)
+            if ($nameRva -eq 0 -and $thunk -eq 0) { break }
+            $o = & $off $nameRva; $e = $o
+            while ($b[$e] -ne 0) { $e++ }
+            $out += [Text.Encoding]::ASCII.GetString($b, $o, $e - $o).ToUpperInvariant()
+            $at += 20
+        }
+        return ,$out
+    } catch { return $null }
+}
 function Read-DerHeader([byte[]]$d, [int]$at) {
     # Tag, header length and content length of the DER element at $at, or $null.
     if ($at + 2 -gt $d.Length) { return $null }
@@ -407,9 +442,9 @@ foreach ($p in $def.Packages) {
                 if ($X64Dir -eq '') { Fail "$($p.Id)/$($f.Name)/$n`: no -X64Dir for the signed x64 image"; continue }
                 $srcPath = Join-Path $X64Dir $src.Substring(4)
             } else {
-                $srcPath = Join-Path $Root $src
+                $srcPath = Join-Path $BuildRoot $src
                 $d = Split-Path $srcPath -Parent; $pass = $null
-                while ($d.Length -gt $Root.Length) { if (Test-Path (Join-Path $d 'PASS.TXT')) { $pass = $d; break }; $d = Split-Path $d -Parent }
+                while ($d.Length -gt $BuildRoot.Length) { if (Test-Path (Join-Path $d 'PASS.TXT')) { $pass = $d; break }; $d = Split-Path $d -Parent }
                 if ($null -eq $pass) { Fail "$src`: no PASS.TXT in its build result" }
                 else {
                     $rec = Join-Path $pass 'record.txt'
@@ -426,7 +461,7 @@ foreach ($p in $def.Packages) {
             if ($src.StartsWith('x64:')) {
                 $build = $def.X64Builds[$src.Substring(4)]
                 if ($null -eq $build) { Fail "$src`: no X64Builds entry naming its unsigned build"; continue }
-                $unsigned = Join-Path $Root $build
+                $unsigned = Join-Path $BuildRoot $build
                 $rec = Join-Path (Split-Path $unsigned -Parent) 'record.txt'
                 if (-not (Test-Path (Join-Path (Split-Path $unsigned -Parent) 'PASS.TXT')) -or -not (Test-Path $rec) -or ([IO.File]::ReadAllText($rec) -notmatch 'commit\s+([0-9a-f]{40})')) { Fail "$build`: no passing build record" }
                 elseif ($Matches[1] -ne $head) { Test-Fresh $Matches[1] $p.Id $build }
@@ -459,6 +494,39 @@ foreach ($p in $def.Packages) {
         }
     }
     $tokens[$p.Id] = @($tok | Sort-Object -Unique { [array]::IndexOf($Systems, $_) })
+}
+
+# 4: tools (free\tools\<name>\): not driver packages, so no INF and no STAGE.TXT line.
+if ($def.ContainsKey('Tools')) {
+    foreach ($t in $def.Tools) {
+        $dest = Join-Path $newFree (Join-Path 'tools' $t.Name)
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        $want = @($t.Imports | ForEach-Object { $_.ToUpperInvariant() })
+        foreach ($n in @($t.Files.Keys)) {
+            $label = "tools/$($t.Name)/$n"
+            $key = (Join-Path $dest $n).ToUpperInvariant()
+            if ($destSeen.ContainsKey($key)) { Fail "$label`: a second definition of the same published path"; continue }
+            $destSeen[$key] = $true
+            if ($n -match '\.inf$') { Fail "$label`: a tool folder holds no INF (a tool is not a driver package)"; continue }
+            $src = $t.Files[$n]
+            $srcPath = if ($src.StartsWith('tree:')) { Join-Path $Root $src.Substring(5) } else { Join-Path $Root $src }
+            if (-not (Test-Path -LiteralPath $srcPath -PathType Leaf)) { Fail "$label`: source '$srcPath' missing"; continue }
+            $full = Join-Path $dest $n
+            Copy-Item -LiteralPath $srcPath -Destination $full
+            if ($n -match '\.(exe|dll)$') {
+                Test-Image $full 'x86' $label | Out-Null
+                $imp = Get-Imports ([IO.File]::ReadAllBytes($full))
+                if ($null -eq $imp) { Fail "$label`: cannot read its import table"; continue }
+                foreach ($d in $imp) { if ($want -notcontains $d) { Fail "$label`: imports $d, not in its Imports list" } }
+                Note ("$label`: SHA-256 {0}, imports {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLowerInvariant(), ($imp -join ' '))
+            } elseif ($n -match '\.txt$') {
+                $tb = [IO.File]::ReadAllBytes($full)
+                if (@($tb | Where-Object { $_ -gt 0x7E -or ($_ -lt 0x20 -and $_ -ne 0x0D -and $_ -ne 0x0A) }).Count) { Fail "$label`: not plain ASCII" }
+                $tl = [Text.Encoding]::ASCII.GetString($tb) -split "`r`n"
+                if (@($tl | Where-Object { $_.Contains("`n") -or $_.Contains("`r") -or $_.Length -gt 78 }).Count) { Fail "$label`: a line over 78 columns or not CRLF" }
+            }
+        }
+    }
 }
 
 # 2: names.

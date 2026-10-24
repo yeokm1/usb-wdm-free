@@ -51,6 +51,8 @@ Release 0.1.0 (owner, 2026-10-24): `uac2`, `usbmidi`, `uvc98`, `usbcom`,
 `cdcnet`, `rtl815x`, `xpad98`, `usbflop` and `libusb0` in `free/`, x86
 unsigned and x64 test-signed, every folder "Built, not tested" (no leg on a
 real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
+`free/tools/camcheck/` carries the CamCheck webcam preview (owner,
+2026-10-24), a tool, not a driver package.
 Earlier: `noaud` 1.0.0.0, an INF-only Windows 98 SE workaround
 (below and [docs/release-notes.md](release-notes.md)). Wave 1 has experimental source builds: UAC2 X4 M1
 integration (simulated playback passes; physical playback pending), the USB floppy INFs and the NT CDC-ACM INF. Build and test

@@ -277,6 +277,18 @@ prove unattended package installation. Preserve the owner's signing
 policy while making any failed installation leg an explicit M0 finding
 in the package design. No release note may call such a leg successful.
 
+Tools that only help check a driver (CamCheck, `free/tools/camcheck/`,
+owner 2026-10-24) are released in `free/tools/<tool>/`. A tool is not a
+driver package: no INF and no `STAGE.TXT` line. The release definition
+lists its files (the image built by the tool's own script, a `README.TXT`
+and a `NOTICE.TXT`) and the DLLs the image may import; the release
+operation checks the image is x86 and unsigned, imports nothing else, and
+that its text files are plain ASCII, CRLF, at most 78 columns.
+`SHA256.TXT` lists the tool files with the rest. Re-cutting a release to
+add a tool takes the packages' build results from the checkout the release
+was made in (`release.ps1 -OutRoot`) and the owner's signed x64 images
+(`-X64Dir`), so every released driver file stays byte for byte.
+
 Nothing under `free/` is edited by hand. The release gate also checks that
 `.gitattributes` preserves released bytes. Source documentation is LF;
 released batch files and INFs get the encoding and line endings required

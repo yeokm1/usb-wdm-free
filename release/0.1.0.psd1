@@ -225,6 +225,15 @@
             )
         }
     )
+    # Tools (owner, 2026-10-24): free\tools\<Name>\, not driver packages (no INF, no
+    # STAGE.TXT line). Files as for a folder; an image is built in this checkout by its
+    # own script (CamCheck: src\video\uvc98\preview.cmd) and may import only Imports.
+    Tools = @(
+        @{ Name = 'camcheck'
+           Files = @{ 'CAMCHECK.EXE' = 'out\video\uvc98\preview\CAMCHECK.EXE'
+                      'README.TXT' = 'tree:release\tools\camcheck\README.TXT'; 'NOTICE.TXT' = 'tree:release\tools\camcheck\NOTICE.TXT' }
+           Imports = @('AVICAP32.DLL', 'USER32.DLL', 'KERNEL32.DLL', 'MSVCRT.DLL') }
+    )
     Relations = @(
         'EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids'
         'EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips'

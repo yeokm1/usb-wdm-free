@@ -93,6 +93,10 @@ the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
 
+`free/tools/camcheck/` holds CamCheck (`CAMCHECK.EXE`), a webcam preview
+for 98 SE, ME and 2000 that works with `uvc98` and any other Video for
+Windows capture driver; run it, nothing is installed.
+
 ## License
 
 GPL-2.0 ([LICENSE](LICENSE)); code adapted from other projects is listed

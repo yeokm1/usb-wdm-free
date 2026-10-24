@@ -1,0 +1,46 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Original INF; section references are facts from targets' usbstor.inf.
+; Release 0.1.0, unsigned, no catalog.
+[Version]
+Signature="$Windows NT$"
+Class=USB
+ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models,NTx86,NTamd64
+
+[Models]
+%CBI%=UFI_CBI,USB\Class_08&SubClass_04&Prot_00
+%CB%=UFI_CB,USB\Class_08&SubClass_04&Prot_01
+
+[Models.NTx86]
+%CBI%=UFI_CBI,USB\Class_08&SubClass_04&Prot_00
+%CB%=UFI_CB,USB\Class_08&SubClass_04&Prot_01
+
+[Models.NTamd64]
+%CBI%=UFI_CBI,USB\Class_08&SubClass_04&Prot_00
+%CB%=UFI_CB,USB\Class_08&SubClass_04&Prot_01
+
+[UFI_CBI.NT]
+Include=usbstor.inf
+Needs=USBSTOR_CBI.NT
+
+[UFI_CBI.NT.Services]
+Include=usbstor.inf
+Needs=USBSTOR_CBI.NT.Services
+
+[UFI_CB.NT]
+Include=usbstor.inf
+Needs=USBSTOR_CB.NT
+
+[UFI_CB.NT.Services]
+Include=usbstor.inf
+Needs=USBSTOR_CB.NT.Services
+
+[Strings]
+Provider="usb-wdm-free"
+CBI="USB UFI floppy (CBI, usb-wdm-free)"
+CB="USB UFI floppy (CB, usb-wdm-free)"

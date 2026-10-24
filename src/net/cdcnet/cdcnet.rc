@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 Yeo Kheng Meng
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0
+FILEOS 0x00040004L
+FILETYPE 3
+FILESUBTYPE 6
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "usb-wdm-free\0"
+            VALUE "FileDescription", "usb-wdm-free CDCNET USB Ethernet (CDC-ECM, CDC-NCM, RNDIS)\0"
+            VALUE "FileVersion", "0.1.0.0\0"
+            VALUE "OriginalFilename", "cdcnet.sys\0"
+            VALUE "ProductName", "usb-wdm-free\0"
+            VALUE "ProductVersion", "0.1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1252
+    END
+END

@@ -1,0 +1,51 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; USBCOMP.INF - Windows 98 SE / ME: installs the USBCOM\COMPORT child that
+; USBCOM.SYS reports as a Ports-class COM port loaded by VCOMM with the
+; USBCOMV.VXD port driver (docs/design/serial.md 5.1.2 item 2). The values
+; are the ones the 98 DDK's "Installation and the Registry" (comm_0sqe)
+; lists for a COM port's software key. Original INF.
+[Version]
+Signature="$CHICAGO$"
+Class=Ports
+ClassGUID={4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Port%=UsbComPort,USBCOM\COMPORT
+
+[UsbComPort]
+CopyFiles=UsbComPort.Copy
+AddReg=UsbComPort.AddReg
+
+; DCB: the Win32 DCB serialui.dll keeps (comm_0sqe): 28 bytes, 9600 8N1,
+; fBinary, DTR_CONTROL_ENABLE, RTS_CONTROL_ENABLE, XON 11h, XOFF 13h.
+[UsbComPort.AddReg]
+HKR,,DevLoader,,*vcomm
+HKR,,PortDriver,,USBCOMV.VXD
+HKR,,Contention,,*vcd
+HKR,,PortSubClass,1,01
+HKR,,ConfigDialog,,serialui.dll
+HKR,,EnumPropPages,,"serialui.dll,EnumPropPages"
+HKR,,DCB,3,1C,00,00,00,80,25,00,00,11,10,00,00,00,00,00,01,00,01,08,00,00,11,13,00,00,00,00,00
+
+[UsbComPort.Copy]
+USBCOMV.VXD
+
+[DestinationDirs]
+UsbComPort.Copy=11
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+USBCOMV.VXD=1
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="usb-wdm-free USB serial disk"
+Port="USB Serial Port"

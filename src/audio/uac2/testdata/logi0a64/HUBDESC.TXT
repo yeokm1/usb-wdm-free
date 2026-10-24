@@ -1,0 +1,30 @@
+Original HUBDESC read-only diagnostic; target VID/PID 046D:0A64 only
+No strings, MAC, vendor controls, configuration changes, resets or driver installation
+Limits: 64 hubs,127 ports/hub,4096 config bytes,10s IOCTL+5s cancellation
+Old connection IOCTL LowSpeed cannot distinguish full/high speed
+Hub0 ports2
+Hub1 ports2
+Hub2 ports4
+Hub3 ports4
+Hub4 ports4
+Hub5 ports7
+Hub6 ports2
+Hub7 ports4
+Hub8 ports4
+Hub9 ports4
+Hub10 ports4
+MATCH hub10 port3 status1 LowSpeed0 configuration1 pipes1
+GET_DESCRIPTOR device bcdUSB=0200 configs=1
+GET_DESCRIPTOR config0 total=280 returned=280 interfaces=4
+Interface 0 alt0 class 01/01/00 endpoints0
+Interface 1 alt0 class 01/02/00 endpoints0
+Interface 1 alt1 class 01/02/00 endpoints1
+Endpoint 81 type1 rawMaxPacket=0090 bytes=144 interval=1
+Interface 2 alt0 class 01/02/00 endpoints0
+Interface 2 alt1 class 01/02/00 endpoints1
+Endpoint 01 type1 rawMaxPacket=0300 bytes=768 interval=1
+Interface 3 alt0 class 03/00/00 endpoints1
+Endpoint 84 type3 rawMaxPacket=0023 bytes=35 interval=1
+DEVICE.BIN: saved, 18 bytes
+CONFIG.BIN: saved, 280 bytes
+RESULT hubs11 matches1 captured1

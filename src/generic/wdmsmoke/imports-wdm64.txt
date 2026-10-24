@@ -1,0 +1,17 @@
+# Imports wdmsmoke may use under profile wdm64 (MODULE!name). Being listed
+# here is the package's declaration; whether a target system exports a
+# routine is shown by the guest load test (build.md sections 5.1, 6).
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!IoAttachDeviceToDeviceStack
+NTOSKRNL.EXE!IoCreateDevice
+NTOSKRNL.EXE!IoDeleteDevice
+NTOSKRNL.EXE!IoDetachDevice
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!PoCallDriver
+NTOSKRNL.EXE!PoStartNextPowerIrp
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+# checked builds only, from the ASSERT macros
+NTOSKRNL.EXE!RtlAssert

@@ -1,0 +1,121 @@
+# STAGE.TXT - which of this release's INFs may be staged, on which Windows
+#
+# Read by the xHCI98 installer (roadmap-usb4 task 43.48) for the free set
+# (WDMFREE in xHCI98's release download) when the user ticks the set's
+# "let Windows use these automatically when a device is plugged in" box.
+# The installer copies the set whether or not the box is ticked; this file
+# says only what the box may stage (place where Windows finds it at the
+# first plug of the device: the INF folder on 98 SE and ME,
+# SetupCopyOEMInf on 2000 and later). Format as usb-wdm-nonfree's
+# STAGE.TXT (128106f).
+#
+# Format. Plain ASCII text, CRLF or LF line ends. A line starting with '#'
+# and a blank line are comments. Every other line is four fields separated
+# by '|', each trimmed of spaces:
+#
+#   ACTION | SYSTEMS | INF | NOTE
+#
+#   ACTION   STAGE  the box may stage this INF on the systems named.
+#            COPY   copy-only: never staged by the box, on any system (the
+#                   files are still copied with the rest of the set).
+#   SYSTEMS  one or more of these tokens, separated by spaces:
+#            W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64
+#            On a COPY line, the systems the folder is for, for
+#            information only.
+#   INF      the INF's path from the release's top, '/' separated, exactly
+#            as in SHA256.TXT.
+#   NOTE     free text, why; may be empty.
+#
+# Metadata lines (xHCI98 design record 26 section 6.7.11), read by the
+# installer and the xHCI98 cut, not by a STAGE/COPY reader:
+#
+#   PACKAGE  | <class>/<package> | CLASS or DEVICE | <description, at most 80>
+#   EXCLUDES | <set>:<class>/<package> | <set>:<class>/<package> | SYSTEMS | why
+#   COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | SYSTEMS | why
+#
+# CLASS: bound by class ids; DEVICE: by listed VID/PIDs. <set> is free (this
+# release) or nonfree (usb-wdm-nonfree). EXCLUDES: never staged together on
+# those systems; COEXISTS: the overlap was considered and is allowed.
+#
+# This file is written by release\release.ps1 from release\<version>.psd1.
+#
+# Rules the file keeps (and a reader may check):
+#   - Every INF under free/ is on exactly one line.
+#   - On any one system, no two STAGE lines match the same hardware ID.
+
+
+# ---- audio/uac2
+PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs
+STAGE | W98SE | free/audio/uac2/w98se-me/uac2wdm.inf | every simulator profile passed under xHCI98 (build 16); ME has no leg
+STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg
+STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | playback and capture passed on 7 x86 (simulator, real X4 via VM); Vista and 8 have no leg
+COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24): no XP x64 leg
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted
+
+# ---- audio/usbmidi
+PACKAGE  | audio/usbmidi | CLASS | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces
+STAGE | W98SE | free/audio/usbmidi/w98se/usbmidi.inf | UHCI, xHCI98 and NUSB EHCI legs passed
+COPY  | WME | free/audio/usbmidi/wme/usbmidi.inf | by-hand INF (USBMIDI_BY_HAND only); Windows usbaudio serves the rest
+STAGE | W2K | free/audio/usbmidi/w2k/usbmidi.inf | UHCI, EHCI and xHCI98 legs passed
+COPY  | WXP | free/audio/usbmidi/wxp/usbmidi.inf | by-hand INF (USBMIDI_BY_HAND only)
+COPY  | WVISTA W7 W8 | free/audio/usbmidi/wv-8-x86/usbmidi.inf | by-hand INF (USBMIDI_BY_HAND only)
+COPY  | WXP64 | free/audio/usbmidi/wxp-x64/usbmidi.inf | by-hand INF (USBMIDI_BY_HAND only); no x64 leg
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/usbmidi/wv-8-x64/usbmidi.inf | by-hand INF (USBMIDI_BY_HAND only); no x64 leg; test-signed
+
+# ---- video/uvc98
+PACKAGE  | video/uvc98 | CLASS | Webcams (uvc98): USB Video Class 1.0 and 1.5 cameras
+STAGE | W98SE | free/video/uvc98/w98se-me/UVCM298.INF | xHCI98 legs passed (simulator to 640x480, real camera via VM at 160x120); ME has no leg
+STAGE | W2K | free/video/uvc98/w2k/UVCM2.INF | Windows EHCI legs passed (simulator, real camera via VM to 320x240)
+
+# ---- serial/usbcom
+PACKAGE  | serial/usbcom | CLASS | USB serial (usbcom): CDC ACM serial ports and modems
+STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOMP.INF | its COM port (USBCOM\COMPORT)
+STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOM.INF | the USB device; xHCI98, UHCI and NUSB EHCI legs passed
+STAGE | W7X64 | free/serial/usbcom/w2k-8/USBCDC.INF | binds Windows usbser.sys; 7 x64 echoes passed; 2000 and XP copy only (owner, 2026-10-24)
+
+# ---- net/cdcnet
+PACKAGE  | net/cdcnet | CLASS | USB Ethernet (cdcnet): CDC ECM, CDC NCM and RNDIS adapters
+STAGE | W98SE WME | free/net/cdcnet/w98se-me/CDCNET.INF | UHCI, NUSB EHCI and xHCI98 legs passed (QEMU usb-net)
+STAGE | W2K WXP | free/net/cdcnet/w2k-xp/CDCNET.INF | UHCI and EHCI ECM legs passed (QEMU usb-net)
+COPY  | WXP | free/net/cdcnet/w2k-xp/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
+COPY  | WVISTA W7 | free/net/cdcnet/wv-7-x86/CDCNET.INF | no leg on Vista or 7 x86
+COPY  | WVISTA W7 | free/net/cdcnet/wv-7-x86/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
+COPY  | WXP64 | free/net/cdcnet/wxp-x64/CDCNET.INF | no XP x64 leg
+COPY  | WXP64 | free/net/cdcnet/wxp-x64/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
+STAGE | W7X64 | free/net/cdcnet/wv-7-x64/CDCNET.INF | UHCI ECM leg passed on 7 x64; test-signed
+COPY  | WVISTA64 W7X64 | free/net/cdcnet/wv-7-x64/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
+
+# ---- net/rtl815x
+PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or RTL8153 chip
+COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device
+COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
+
+# ---- hid/xpad98
+PACKAGE  | hid/xpad98 | DEVICE | Game pads (xpad98): for Xbox 360 and Xbox One controllers
+STAGE | W98SE WME | free/hid/xpad98/w98se-me/xp98me.inf | xHCI98, UHCI and NUSB EHCI legs passed (simulated pads)
+COPY  | W2K | free/hid/xpad98/w2k/xp2k.inf | EHCI legs passed; copy only while it shares 045E:028F with the non-free x360wc staged on 2000
+STAGE | WXP | free/hid/xpad98/wxp/xpxpv.inf | EHCI Xbox One leg passed
+STAGE | WVISTA | free/hid/xpad98/wv-x86/xpxpv.inf | EHCI Xbox One leg passed
+STAGE | WXP64 | free/hid/xpad98/wxp-x64/xpxpv.inf | EHCI Xbox One leg passed
+STAGE | WVISTA64 | free/hid/xpad98/wv-x64/xpxpv.inf | EHCI Xbox One leg passed with test signing (owner, 2026-10-24); test-signed
+
+# ---- storage/usbflop
+PACKAGE  | storage/usbflop | CLASS | USB floppy (usbflop): USB Mass Storage UFI floppy drives
+STAGE | W98SE | free/storage/usbflop/w98se/USBFLOP.INF | real drive via VM, UHCI and xHCI98 reads passed; needs NUSB 3.3 USB storage installed
+STAGE | WME | free/storage/usbflop/wme/USBFLOP.INF | real drive via VM, xHCI98 read passed
+STAGE | W2K WXP W7X64 | free/storage/usbflop/w2k-8/USBFLOP.INF | binds Windows USBSTOR; simulator reads passed, real drive bound on 2000
+
+# ---- generic/libusb0
+PACKAGE  | generic/libusb0 | DEVICE | libusb (libusb0): libusb-win32 0.1 for listed programmer devices
+STAGE | W98SE | free/generic/libusb0/w98se-me/LIBUSB0.INF | xHCI98, NUSB EHCI and UHCI install and listing passed; ME has no leg
+
+# ---- audio/noaud
+PACKAGE  | audio/noaud | DEVICE | No driver (noaud): leaves a webcam microphone driverless on 98 SE
+COPY  | W98SE | free/audio/noaud/w98se/NOAUD98.INF | opt-in (owner, 2026-10-23): install by hand only if plugging a webcam freezes 98 SE; staged, it would take the microphone from usbaudio.sys for everyone
+
+# ---- Relations (set-qualified)
+EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids
+EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
+EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | both bind the Play and Charge Kit 045E:028F
+COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: xpad98 takes the pads outside x360c list and the Xbox One pads
+COEXISTS | free:video/uvc98 | free:audio/noaud | W98SE | one webcam, different interfaces: uvc98 the video function, noaud the microphone

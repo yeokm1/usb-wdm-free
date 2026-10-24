@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Imports LIBUSB0.SYS may use (MODULE!name), the 35 of upstream 0.1.12.2's
+# driver (docs/design/libusb.md 2.3). Being listed is the package's
+# declaration; the gate also requires each name in the Windows 98 SE DDK's
+# import library for its module. Whether 98 SE's NTKERN exports it is shown
+# only by the guest load test (build.md 5.1).
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!InterlockedExchange
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!IoAttachDeviceToDeviceStack
+NTOSKRNL.EXE!IoBuildDeviceIoControlRequest
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoCreateDevice
+NTOSKRNL.EXE!IoCreateSymbolicLink
+NTOSKRNL.EXE!IoDeleteDevice
+NTOSKRNL.EXE!IoDeleteSymbolicLink
+NTOSKRNL.EXE!IoDetachDevice
+NTOSKRNL.EXE!IoGetAttachedDeviceReference
+NTOSKRNL.EXE!IoGetDeviceProperty
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!PoCallDriver
+NTOSKRNL.EXE!PoRequestPowerIrp
+NTOSKRNL.EXE!PoSetPowerState
+NTOSKRNL.EXE!PoStartNextPowerIrp
+NTOSKRNL.EXE!RtlInitUnicodeString
+NTOSKRNL.EXE!ZwClose
+NTOSKRNL.EXE!ZwQueryValueKey
+NTOSKRNL.EXE!_snwprintf
+NTOSKRNL.EXE!_strlwr
+NTOSKRNL.EXE!_vsnprintf
+NTOSKRNL.EXE!strstr
+USBD.SYS!_USBD_CreateConfigurationRequestEx@8
+# checked builds only (DBG=1 ASSERT)
+NTOSKRNL.EXE!RtlAssert

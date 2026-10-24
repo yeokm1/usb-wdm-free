@@ -1,0 +1,55 @@
+# The declared x86 NDIS 5.0 import set (build.md section 5). A declaration, not
+# target evidence: 98 SE/ME have no PE export table for NTKERN/NDIS.VXD, so the
+# guest load test of docs/testing/2026-10-21-cdcnet.md is their evidence.
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES
+NDIS.SYS!NdisAcquireSpinLock
+NDIS.SYS!NdisAdjustBufferLength
+NDIS.SYS!NdisAllocateBuffer
+NDIS.SYS!NdisAllocateBufferPool
+NDIS.SYS!NdisAllocateMemory
+NDIS.SYS!NdisAllocatePacket
+NDIS.SYS!NdisAllocatePacketPool
+NDIS.SYS!NdisAllocateSpinLock
+NDIS.SYS!NdisCloseConfiguration
+NDIS.SYS!NdisFreeBuffer
+NDIS.SYS!NdisFreeBufferPool
+NDIS.SYS!NdisFreeMemory
+NDIS.SYS!NdisFreePacket
+NDIS.SYS!NdisFreePacketPool
+NDIS.SYS!NdisFreeSpinLock
+NDIS.SYS!NdisInitializeWrapper
+NDIS.SYS!NdisMGetDeviceProperty
+NDIS.SYS!NdisMRegisterMiniport
+NDIS.SYS!NdisMSetAttributesEx
+NDIS.SYS!NdisMSleep
+NDIS.SYS!NdisOpenConfiguration
+NDIS.SYS!NdisQueryBuffer
+NDIS.SYS!NdisQueryBufferOffset
+NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReleaseSpinLock
+NDIS.SYS!NdisTerminateWrapper
+NDIS.SYS!NdisUnchainBufferAtFront
+NDIS.SYS!NdisWriteErrorLogEntry
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!ObReferenceObjectByHandle
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!PsCreateSystemThread
+NTOSKRNL.EXE!PsTerminateSystemThread
+NTOSKRNL.EXE!ZwClose
+# Checked flavour only (DbgPrint trace, ASSERT).
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!RtlAssert

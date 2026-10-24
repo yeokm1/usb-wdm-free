@@ -1,0 +1,46 @@
+# UAC2 M1 experimental NT import set; actual target validation is separate.
+# x86: stream cleanup is an executive work item (98 SE has no IoXxxWorkItem).
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!IoGetDeviceProperty
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IoBuildDeviceIoControlRequest
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!RtlAssert
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!ZwSetValueKey
+NTOSKRNL.EXE!ZwClose
+PORTCLS.SYS!PcAddAdapterDevice
+PORTCLS.SYS!PcRegisterPhysicalConnection
+PORTCLS.SYS!PcRegisterSubdevice
+PORTCLS.SYS!PcNewPort
+PORTCLS.SYS!PcInitializeAdapterDriver
+NTOSKRNL.EXE!KeInitializeMutex
+NTOSKRNL.EXE!InterlockedExchange
+NTOSKRNL.EXE!InterlockedCompareExchange
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!ObfReferenceObject
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!PsCreateSystemThread
+NTOSKRNL.EXE!PsTerminateSystemThread
+NTOSKRNL.EXE!KeGetCurrentThread
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeQueryInterruptTime
+NTOSKRNL.EXE!KeReleaseMutex
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!KeSetEvent
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+HAL.DLL!KeGetCurrentIrql
+PORTCLS.SYS!PcRegisterAdapterPowerManagement
+PORTCLS.SYS!PcNewServiceGroup
+# 98 SE thread join (uacusb.c): Exited event; the thread object only on WDM 1.10+
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!ExQueueWorkItem

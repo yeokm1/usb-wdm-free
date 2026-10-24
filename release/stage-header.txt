@@ -1,0 +1,45 @@
+# STAGE.TXT - which of this release's INFs may be staged, on which Windows
+#
+# Read by the xHCI98 installer (roadmap-usb4 task 43.48) for the free set
+# (WDMFREE in xHCI98's release download) when the user ticks the set's
+# "let Windows use these automatically when a device is plugged in" box.
+# The installer copies the set whether or not the box is ticked; this file
+# says only what the box may stage (place where Windows finds it at the
+# first plug of the device: the INF folder on 98 SE and ME,
+# SetupCopyOEMInf on 2000 and later). Format as usb-wdm-nonfree's
+# STAGE.TXT (128106f).
+#
+# Format. Plain ASCII text, CRLF or LF line ends. A line starting with '#'
+# and a blank line are comments. Every other line is four fields separated
+# by '|', each trimmed of spaces:
+#
+#   ACTION | SYSTEMS | INF | NOTE
+#
+#   ACTION   STAGE  the box may stage this INF on the systems named.
+#            COPY   copy-only: never staged by the box, on any system (the
+#                   files are still copied with the rest of the set).
+#   SYSTEMS  one or more of these tokens, separated by spaces:
+#            W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64
+#            On a COPY line, the systems the folder is for, for
+#            information only.
+#   INF      the INF's path from the release's top, '/' separated, exactly
+#            as in SHA256.TXT.
+#   NOTE     free text, why; may be empty.
+#
+# Metadata lines (xHCI98 design record 26 section 6.7.11), read by the
+# installer and the xHCI98 cut, not by a STAGE/COPY reader:
+#
+#   PACKAGE  | <class>/<package> | CLASS or DEVICE | <description, at most 80>
+#   EXCLUDES | <set>:<class>/<package> | <set>:<class>/<package> | SYSTEMS | why
+#   COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | SYSTEMS | why
+#
+# CLASS: bound by class ids; DEVICE: by listed VID/PIDs. <set> is free (this
+# release) or nonfree (usb-wdm-nonfree). EXCLUDES: never staged together on
+# those systems; COEXISTS: the overlap was considered and is allowed.
+#
+# This file is written by release\release.ps1 from release\<version>.psd1.
+#
+# Rules the file keeps (and a reader may check):
+#   - Every INF under free/ is on exactly one line.
+#   - On any one system, no two STAGE lines match the same hardware ID.
+

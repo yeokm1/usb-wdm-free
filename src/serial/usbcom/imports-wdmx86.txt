@@ -1,0 +1,46 @@
+# Imports USBCOM.SYS may use under profile wdmx86 (MODULE!name). Being
+# listed here is the package's declaration; the gate also requires every
+# name to be declared in the Windows 98 DDK's WDM.H. Whether 98 SE's NTKERN
+# exports it is shown only by the guest load test (build.md 5.1).
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!ExQueueWorkItem
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!IoAttachDeviceToDeviceStack
+NTOSKRNL.EXE!IoBuildDeviceIoControlRequest
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoCreateDevice
+NTOSKRNL.EXE!IoDeleteDevice
+NTOSKRNL.EXE!IoDetachDevice
+NTOSKRNL.EXE!IoGetDeviceProperty
+NTOSKRNL.EXE!IoInitializeIrp
+NTOSKRNL.EXE!IoInvalidateDeviceRelations
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeInitializeDpc
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeInsertQueueDpc
+NTOSKRNL.EXE!KeRemoveQueueDpc
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!ObfReferenceObject
+NTOSKRNL.EXE!PoCallDriver
+NTOSKRNL.EXE!PoRequestPowerIrp
+NTOSKRNL.EXE!PoStartNextPowerIrp
+NTOSKRNL.EXE!RtlEqualUnicodeString
+NTOSKRNL.EXE!RtlInitUnicodeString
+NTOSKRNL.EXE!ZwClose
+NTOSKRNL.EXE!ZwCreateKey
+NTOSKRNL.EXE!ZwEnumerateKey
+NTOSKRNL.EXE!ZwOpenKey
+NTOSKRNL.EXE!ZwQueryValueKey
+NTOSKRNL.EXE!ZwSetValueKey
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+# checked builds only (UcTrace)
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!RtlAssert

@@ -1,0 +1,16 @@
+1	Creative Technology Ltd
+2	Sound Blaster X4
+3	Sound Blaster X4 Speakers
+4	Sound Blaster X4
+5	Sound Blaster X4 SPDIF Out
+6	Microphone
+7	Speaker
+8	SPDIF-Out
+9	(serial number, not recorded)
+10	What U Hear
+11	Aux In
+12	SPDIF In
+13	Aux In
+14	Microphone
+15	SPDIF In
+16	SPDIF-Out

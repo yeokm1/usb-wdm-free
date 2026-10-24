@@ -1,0 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Yeo Kheng Meng
+ * Native x64 helper's explicit device-install elevation requirement.
+ */
+1 24 "cdcprobe.man"

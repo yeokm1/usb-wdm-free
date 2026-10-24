@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 Yeo Kheng Meng
+// xpad98.sys version resource.
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0
+FILEOS 0x00040004L
+FILETYPE 0x00000003L
+FILESUBTYPE 0x00000000L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "usb-wdm-free\0"
+            VALUE "FileDescription", "xpad98 Xbox pad HID minidriver\0"
+            VALUE "FileVersion", "0.1.0.0\0"
+            VALUE "InternalName", "xpad98\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Yeo Kheng Meng; parts from Linux xpad.c (GPL-2.0-or-later)\0"
+            VALUE "OriginalFilename", "xpad98.sys\0"
+            VALUE "ProductName", "usb-wdm-free\0"
+            VALUE "ProductVersion", "0.1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1252
+    END
+END

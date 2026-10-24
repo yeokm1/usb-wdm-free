@@ -1,0 +1,113 @@
+CONFIG total=1143 ifaces=7 value=1 attr=80 maxpower=100mA
+  IF 0 alt 0 eps=1 class=03/00/00 iIf=0
+    HID descriptor len=9
+    EP 86 int mps=64 bInterval=6
+
+IAD first=1 count=2 class=02/02/00
+  IF 1 alt 0 eps=1 class=02/02/00 iIf=0
+    CS_INTERFACE(class 02) subtype=00 len=5
+    CS_INTERFACE(class 02) subtype=02 len=4
+    CS_INTERFACE(class 02) subtype=06 len=5
+    CS_INTERFACE(class 02) subtype=01 len=5
+    EP 87 int mps=8 bInterval=6
+  IF 2 alt 0 eps=2 class=0a/00/00 iIf=0
+    EP 03 bulk mps=512 bInterval=0
+    EP 82 bulk mps=256 bInterval=0
+
+IAD first=3 count=4 class=01/00/20
+  IF 3 alt 0 eps=1 class=01/01/20 iIf=0
+    AC HEADER bcdADC=0200 category=08 total=423
+    AC CLOCK_SOURCE id=33 attr=03 controls=07
+    AC CLOCK_SELECTOR id=34 inputs=[33]
+    AC CLOCK_SOURCE id=37 attr=03 controls=07
+    AC CLOCK_SELECTOR id=38 inputs=[37]
+    AC CLOCK_SOURCE id=35 attr=03 controls=07
+    AC CLOCK_SELECTOR id=36 inputs=[35]
+    AC INPUT_TERMINAL id=3 type=0101 assoc=0 clk=34 ch=8
+    AC INPUT_TERMINAL id=17 type=0101 assoc=0 clk=36 ch=2
+    AC INPUT_TERMINAL id=4 type=0201 assoc=0 clk=38 ch=2
+    AC INPUT_TERMINAL id=24 type=0603 assoc=0 clk=38 ch=2
+    AC INPUT_TERMINAL id=18 type=0602 assoc=0 clk=38 ch=2
+    AC INPUT_TERMINAL id=19 type=0605 assoc=0 clk=38 ch=2
+    AC FEATURE_UNIT id=1 src=7 len=42
+    AC FEATURE_UNIT id=2 src=4 len=18
+    AC FEATURE_UNIT id=25 src=24 len=18
+    AC FEATURE_UNIT id=23 src=18 len=18
+    AC FEATURE_UNIT id=8 src=19 len=18
+    AC FEATURE_UNIT id=11 src=24 len=18
+    AC FEATURE_UNIT id=13 src=4 len=18
+    AC FEATURE_UNIT id=12 src=19 len=18
+    AC FEATURE_UNIT id=14 src=17 len=18
+    AC OUTPUT_TERMINAL id=5 type=0301 assoc=0 src=1 clk=34
+    AC OUTPUT_TERMINAL id=20 type=0605 assoc=0 src=14 clk=36
+    AC OUTPUT_TERMINAL id=6 type=0101 assoc=0 src=26 clk=38
+    AC MIXER_UNIT id=7 len=31
+    AC SELECTOR_UNIT id=26 len=11
+    EP 84 int mps=6 bInterval=4
+  IF 4 alt 0 eps=0 class=01/02/20 iIf=3
+  IF 4 alt 1 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=2 bits=16
+    EP 01 iso/async/data mps=112 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 4 alt 2 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=6
+    FORMAT_TYPE 1 subslot=2 bits=16
+    EP 01 iso/async/data mps=336 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 4 alt 3 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=8
+    FORMAT_TYPE 1 subslot=2 bits=16
+    EP 01 iso/async/data mps=448 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 4 alt 4 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=3 bits=24
+    EP 01 iso/async/data mps=168 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 4 alt 5 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=6
+    FORMAT_TYPE 1 subslot=3 bits=24
+    EP 01 iso/async/data mps=504 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 4 alt 6 eps=2 class=01/02/20 iIf=3
+    AS_GENERAL terminal=3 format_type=1 formats=00000001 channels=8
+    FORMAT_TYPE 1 subslot=3 bits=24
+    EP 01 iso/async/data mps=672 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 83 iso/none/feedback mps=4 bInterval=4
+  IF 5 alt 0 eps=0 class=01/02/20 iIf=4
+  IF 5 alt 1 eps=1 class=01/02/20 iIf=4
+    AS_GENERAL terminal=6 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=2 bits=16
+    EP 81 iso/async/implicit-fb mps=256 bInterval=3
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+  IF 5 alt 2 eps=1 class=01/02/20 iIf=4
+    AS_GENERAL terminal=6 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=3 bits=24
+    EP 81 iso/async/implicit-fb mps=384 bInterval=3
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+  IF 6 alt 0 eps=0 class=01/02/20 iIf=5
+  IF 6 alt 1 eps=2 class=01/02/20 iIf=5
+    AS_GENERAL terminal=17 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=2 bits=16
+    EP 02 iso/async/data mps=112 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 85 iso/none/feedback mps=4 bInterval=4
+  IF 6 alt 2 eps=2 class=01/02/20 iIf=5
+    AS_GENERAL terminal=17 format_type=3 formats=00000001 channels=2
+    FORMAT_TYPE 3 subslot=2 bits=16
+    EP 02 iso/async/data mps=40 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 85 iso/none/feedback mps=4 bInterval=4
+  IF 6 alt 3 eps=2 class=01/02/20 iIf=5
+    AS_GENERAL terminal=17 format_type=1 formats=00000001 channels=2
+    FORMAT_TYPE 1 subslot=3 bits=24
+    EP 02 iso/async/data mps=168 bInterval=1
+    CS_ENDPOINT len=8 attr=00 controls=00 lockunits=3 lockdelay=8
+    EP 85 iso/none/feedback mps=4 bInterval=4

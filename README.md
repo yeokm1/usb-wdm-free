@@ -1,0 +1,116 @@
+# usb-wdm-free
+
+Free (GPL-2.0) WDM USB class drivers for Windows 98 SE to Windows 8,
+source and built drivers together. They use Windows' standard USB driver
+interface, so they run under Windows' own USB 2.0 drivers, NUSB's on
+98 SE, or [xHCI98](https://github.com/yeokm1/xhci98), whose releases carry
+them in their `-free` download.
+
+These drivers are experimental. They may not work with every device and can make Windows unstable. Report problems at https://github.com/yeokm1/usb-wdm-free.
+
+## What each driver is for
+
+| Driver | Device class | Windows |
+|---|---|---|
+| `uac2` | USB Audio Class 2.0, playback and recording | 98 SE to 8; x64 from XP |
+| `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
+| `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
+| `usbcom` | USB CDC-ACM serial, as COM ports | 98 SE, ME; 2000 to 8 and x64 as an INF for Windows' `usbser.sys` |
+| `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
+| `rtl815x` | Realtek RTL8152/8153 USB Ethernet | 98 SE, ME, 2000 |
+| `ax88179` | ASIX AX88179 USB Ethernet | 98 SE, ME, 2000 |
+| `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
+| `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
+| `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
+| `libusb0` | libusb-win32 0.1.12.2, driver and library | 98 SE, ME |
+| `usbprn` | USB printers and USB-to-parallel cables (not built yet) | 98 SE (5) |
+
+1. ME, and XP onward: listed devices only; Windows' own driver serves the rest.
+2. RNDIS on XP to 7 is an INF for Windows' own driver.
+3. XP and Vista: Xbox One and Series pads only. Xbox 360-type pads outside
+   the `x360c` driver's list: 98 SE to 2000. The Xbox 360 wireless
+   receiver: 98 SE and ME.
+4. 98 SE needs a USB storage driver set (such as NUSB's) installed first.
+5. ME only if its own USB printing proves unable to print.
+
+Windows 8.1 and 10 are not targets and were not evaluated.
+
+## How each driver was evaluated
+
+<a name="tested-by-the-author"></a>
+No driver has been evaluated on a real PC with a real connection yet.
+"Real device (VM)" means a real device passed through to Windows running
+in a virtual machine; "Simulator only" means a simulated device. Cells are
+32-bit Windows unless they say x64; "-" means the driver is not meant for
+that Windows.
+
+| Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
+|---|---|---|---|---|---|---|---|
+| `uac2` | Simulator only (a) | Not evaluated | Not evaluated | Real device (VM) (b) | Not evaluated | Real device (VM) | Not evaluated |
+| `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
+| `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
+| `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
+| `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
+| `rtl815x` | Simulator only | Not evaluated | Not evaluated | - | - | - | - |
+| `ax88179` | Real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
+| `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
+| `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
+| `noaud` | Real device (VM) | - | - | - | - | - | - |
+| `libusb0` | Simulator only (i) | Not evaluated | - | - | - | - | - |
+| `usbprn` | Not built | Not built | - | - | - | - | - |
+
+- (a) Under NUSB's EHCI, 8-channel playback stalls and Full Speed was not run; the other layouts pass.
+- (b) Playback works; recording fails (half speed, no sound).
+- (c) 160x120 works under xHCI98, 320x240 fails; under NUSB's EHCI no frame arrived in the VM.
+- (d) Up to 320x240 under Windows' EHCI (640x480 fails in the VM). Under xHCI98 the real camera gives a picture at 160x120 in QEMU, but a later session or 320x240 fails with errors the camera reports. A simulated camera works at every size, so this is open in QEMU's USB passthrough or xHCI98, not in uvc98; a real PC settles it. On Windows 2000's own USB stack and under NUSB on 98 SE the whole camera binds to uvc98 and its microphone has no driver.
+- (e) Windows 2000's `usbser.sys` stops reading after a zero-length packet from the device.
+- (f) ECM passes; RNDIS through Windows' own driver failed on the simulated device.
+- (g) The Xbox 360 wireless receiver fails under xHCI98 3.1.0.0 and works under 3.2.0.0.
+- (h) The real drive was recognised but no disk was read; reading passed with a simulated drive.
+- (i) Install and device listing only; no data transfers.
+
+Each run, with its device, host controller driver, date and result, is in
+[docs/status.md](docs/status.md) (with the layout, sources and install
+notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
+
+## Known issues
+
+- **98 SE may freeze when the first USB audio device is plugged in after
+  a boot** (an audio or MIDI interface, a headset, a webcam with a
+  microphone), with Windows' own audio driver too. Plug the device in
+  before switching on and leave it in; if Windows freezes, restart with
+  it plugged in. For a webcam whose microphone you do not need, install
+  `NOAUD98.INF`.
+- **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
+  in afterwards cannot be opened until Windows is restarted.
+
+## Installing
+
+The built drivers and their INFs are committed in this repository under
+`free/`, so no build is needed: download the whole repository (on GitHub,
+Code > Download ZIP, or the `v0.1.0` tag's source zip) and unzip it.
+Then point the Add New Hardware Wizard, or Update Driver, at the
+driver's folder under `free/` for your Windows (release 0.1.0). `SHA256.TXT` lists
+every file's hash. The x86 drivers are unsigned. The x64 drivers carry
+the project's own test signature: on Vista and later x64, add
+`usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
+stores and turn test signing on (`bcdedit /set testsigning on`).
+
+`free/tools/camcheck/` holds CamCheck (`CAMCHECK.EXE`), a webcam preview
+for 98 SE, ME and 2000 that works with `uvc98` and any other Video for
+Windows capture driver; run it, nothing is installed.
+
+## License
+
+GPL-2.0 ([LICENSE](LICENSE)); code adapted from other projects is listed
+in [NOTICE.md](NOTICE.md).
+
+## AI usage
+
+This project was developed with substantial help from AI coding agents:
+
+- Claude Fable 5.1 for planning
+- Claude Opus 5.5 for coding
+- Codex GPT 6 Astra as an adversarial reviewer
+
+The agents wrote and revised code, tests and documentation under the guidance in [AGENTS.md](AGENTS.md).

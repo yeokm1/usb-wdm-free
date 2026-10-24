@@ -1,0 +1,96 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; UVCDEC.INF - installs uvcdec.dll, the Video for Windows MJPEG decompressor
+; (FOURCC MJPG to RGB24, RGB32 and YUY2) used with uvc98's MJPEG formats.
+; Based in part on the work of the Independent JPEG Group.
+;
+; Install: right-click UVCDEC.INF, Install. Or:
+;   98 SE / ME: rundll.exe setupx.dll,InstallHinfSection DefaultInstall 132 UVCDEC.INF
+;   2000:       rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 UVCDEC.INF
+; Remove: the same with DefaultUninstall.
+;
+; Registration: 98 SE / ME, SYSTEM.INI [drivers32] VIDC.MJPG=uvcdec.dll and
+; the MediaResources\icm key the Multimedia control panel lists; 2000,
+; HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32 VIDC.MJPG.
+;
+; An existing VIDC.MJPG codec is left alone (owner, 2026-10-22): VIDC.MJPG is
+; written only if it is absent. An INF cannot show a message only in that
+; case, so the warning is README.md's ("Installing"), which says how to see
+; which codec holds VIDC.MJPG and how to switch.
+; 2000: AddReg with FLG_ADDREG_NOCLOBBER. Uninstall leaves VIDC.MJPG in place:
+; 2000 SP4's setupapi, through the Drivers32 mapping, deleted it whatever its
+; value under UpdateInis flags 1, 2 and 3 alike (2026-10-22), so no INF line
+; removes it only while it names uvcdec.dll; README.md says how to remove it.
+; 98 SE / ME: uninstall deletes it only while it names uvcdec.dll
+; ([UVCDEC.IniDel], flag 1). Install uses the [UVCDEC.Ini] lines, as 98 SE's
+; setupx was seen to act on 2026-10-22 (a plain add replaces an existing
+; value; a flag 3 rename does not remove an entry already under the new name;
+; flag 1 deletes only on key and value): (1) add UVCDEC.KEP=uvcdec.dll at the
+; end; (2) rename an existing VIDC.MJPG, in place, to UVCDEC.KEP; (3) rename
+; the first UVCDEC.KEP to VIDC.MJPG, which is the old codec's line if (2) found
+; one and ours if not; (4) delete what is left under UVCDEC.KEP.
+
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGUID={4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider=%Provider%
+DriverVer=10/22/2026,0.1.0.0
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+uvcdec.dll=1
+
+[DestinationDirs]
+DefaultDestDir=11
+UVCDEC.Files=11
+
+[DefaultInstall]
+CopyFiles=UVCDEC.Files
+UpdateInis=UVCDEC.Ini
+AddReg=UVCDEC.Reg9x
+
+[DefaultInstall.NT]
+CopyFiles=UVCDEC.Files
+AddReg=UVCDEC.RegNT,UVCDEC.DescNT
+
+[DefaultUninstall]
+DelFiles=UVCDEC.Files
+UpdateInis=UVCDEC.IniDel
+DelReg=UVCDEC.Reg9x
+
+[DefaultUninstall.NT]
+DelFiles=UVCDEC.Files
+DelReg=UVCDEC.DescNT
+
+[UVCDEC.Files]
+uvcdec.dll
+
+[UVCDEC.Ini]
+system.ini,drivers32,,"UVCDEC.KEP=uvcdec.dll"
+system.ini,drivers32,"VIDC.MJPG=*","UVCDEC.KEP=",3
+system.ini,drivers32,"UVCDEC.KEP=*","VIDC.MJPG=",3
+system.ini,drivers32,"UVCDEC.KEP=*",,3
+
+[UVCDEC.IniDel]
+system.ini,drivers32,"VIDC.MJPG=uvcdec.dll",,1
+
+; 0x00000002 = FLG_ADDREG_NOCLOBBER: a value already there is kept.
+[UVCDEC.Reg9x]
+HKLM,SYSTEM\CurrentControlSet\Control\MediaResources\icm\VIDC.MJPG,Description,0x00000002,%Desc%
+HKLM,SYSTEM\CurrentControlSet\Control\MediaResources\icm\VIDC.MJPG,Driver,0x00000002,"uvcdec.dll"
+HKLM,SYSTEM\CurrentControlSet\Control\MediaResources\icm\VIDC.MJPG,FriendlyName,0x00000002,%Desc%
+
+[UVCDEC.RegNT]
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32",VIDC.MJPG,0x00000002,"uvcdec.dll"
+
+[UVCDEC.DescNT]
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\drivers.desc",uvcdec.dll,,%Desc%
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="uvcdec MJPEG decoder disk"
+Desc="uvcdec MJPEG decoder (based on IJG libjpeg)"

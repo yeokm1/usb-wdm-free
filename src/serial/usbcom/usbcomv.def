@@ -1,0 +1,20 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Module definition of USBCOMV.VXD (98 DDK "Building a Virtual Device":
+; the module name is the DDB name, the DDB is export ordinal 1). All code
+; and data stay locked: port functions run at interrupt time.
+; The module is USBCOMV, not USBCOM: NTKERN lists USBCOM.SYS with VXDLDR as
+; USBCOM, and VCOMM's load of a VxD of the same name then got a
+; Sys_Dynamic_Device_Reinit sent to the SYS's entry and a fatal exception 0E
+; (98 SE guest leg, 2026-10-22).
+VXD USBCOMV DYNAMIC
+DESCRIPTION 'USBCOM CDC-ACM port driver'
+SEGMENTS
+    _LPTEXT CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    _LTEXT  CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    _LDATA  CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    _TEXT   CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    _DATA   CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    CONST   CLASS 'LCODE' PRELOAD NONDISCARDABLE
+    _BSS    CLASS 'LCODE' PRELOAD NONDISCARDABLE
+EXPORTS
+    _USBCOMV_DDB @1

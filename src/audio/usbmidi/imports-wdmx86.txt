@@ -1,0 +1,58 @@
+# usbmidi imports under wdmx86 (MODULE!name). Each must also resolve in the
+# Windows 98 SE DDK import libraries (build.cmd probe98); a guest load is
+# the final word (build.md 5.1).
+HAL.DLL!KeGetCurrentIrql
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!ExQueueWorkItem
+NTOSKRNL.EXE!InterlockedCompareExchange
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!InterlockedExchange
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoInitializeIrp
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!IoOpenDeviceInterfaceRegistryKey
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!IoRegisterDeviceInterface
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeGetCurrentThread
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeInitializeMutex
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeQuerySystemTime
+NTOSKRNL.EXE!KeReleaseMutex
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!ObfReferenceObject
+NTOSKRNL.EXE!PsCreateSystemThread
+NTOSKRNL.EXE!PsTerminateSystemThread
+NTOSKRNL.EXE!RtlFreeUnicodeString
+NTOSKRNL.EXE!RtlInitUnicodeString
+NTOSKRNL.EXE!ZwClose
+NTOSKRNL.EXE!ZwOpenKey
+NTOSKRNL.EXE!ZwSetValueKey
+PORTCLS.SYS!PcAddAdapterDevice
+PORTCLS.SYS!PcInitializeAdapterDriver
+PORTCLS.SYS!PcNewPort
+PORTCLS.SYS!PcNewServiceGroup
+PORTCLS.SYS!PcRegisterAdapterPowerManagement
+PORTCLS.SYS!PcRegisterSubdevice
+# checked builds only (ASSERT/KdPrint)
+NTOSKRNL.EXE!RtlAssert
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!KeInitializeDpc
+NTOSKRNL.EXE!KeInsertQueueDpc
+# umusb.c: the IN refill waits 1 ms after a burst of synchronous completions (in the 98 SE DDK wdm.lib)
+NTOSKRNL.EXE!KeInitializeTimer
+NTOSKRNL.EXE!KeSetTimer
+# umusb.c: the IN retry deadline is interrupt time, not wall time (a macro on amd64)
+NTOSKRNL.EXE!KeQueryInterruptTime

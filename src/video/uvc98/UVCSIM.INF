@@ -1,0 +1,71 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Original ROOT-only STREAM.SYS M0 experiment. No USB match, no release.
+; Metadata/STOP pin only: RUN and frame delivery are not implemented.
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/21/2026,0.0.0.1
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Device%=Capture,ROOT\UVCSIM98
+
+[DestinationDirs]
+MiniFiles=10,system32\drivers
+
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+uvcmini.sys=1
+[MiniFiles]
+uvcmini.sys
+
+[Capture]
+Include=ks.inf,kscaptur.inf
+Needs=KS.Registration,KSCAPTUR.Registration
+CopyFiles=MiniFiles
+AddReg=Legacy
+
+[Legacy]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,uvcmini.sys
+
+[Capture.NT]
+Include=ks.inf,kscaptur.inf
+Needs=KS.Registration,KSCAPTUR.Registration.NT
+CopyFiles=MiniFiles
+
+[Capture.NT.Services]
+AddService=uvcmini,0x00000002,MiniService
+
+[MiniService]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\uvcmini.sys
+
+[Capture.Interfaces]
+AddInterface=%Video%,GLOBAL,Interface
+AddInterface=%Capture%,GLOBAL,Interface
+[Capture.NT.Interfaces]
+AddInterface=%Video%,GLOBAL,Interface
+AddInterface=%Capture%,GLOBAL,Interface
+[Interface]
+AddReg=InterfaceReg
+[InterfaceReg]
+HKR,,CLSID,,%KSProxy%
+HKR,,FriendlyName,,%Device%
+
+[Strings]
+Provider="usb-wdm-free"
+Device="SIMULATED YUY2 test source (STOP only)"
+Disk="usb-wdm-free experimental source"
+Video="{6994AD05-93EF-11D0-A3CC-00A0C9223196}"
+Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSProxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

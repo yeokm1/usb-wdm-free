@@ -1,0 +1,154 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Experimental QEMU Windows libusb host-poll candidate.
+Apply AFTER qemu-iso.patch to QEMU v11.1.0 commit84f07211cc5b4fc6a371559bf8a5de4fb068e648.
+Retains the original MIT permission/copyright notice below; the emulator as a whole is GPL2-compatible.
+Source-only tests and build do not establish physical correctness.
+
+/*
+ * Linux host USB redirector
+ *
+ * Copyright (c) 2005 Fabrice Bellard
+ *
+ * Copyright (c) 2008 Max Krasnyansky
+ *      Support for host device auto connect & disconnect
+ *      Major rewrite to support fully async operation
+ *
+ * Copyright 2008 TJ <linux@tjworld.net>
+ *      Added flexible support for /dev/bus/usb /sys/bus/usb/devices in addition
+ *      to the legacy /proc/bus/usb USB device discovery and handling
+ *
+ * (c) 2012 Gerd Hoffmann <kraxel@redhat.com>
+ *      Completely rewritten to use libusb instead of usbfs ioctls.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+--- a/hw/usb/host-libusb.c
++++ b/hw/usb/host-libusb.c
+@@ -256,31 +256,56 @@
+ 
+ #else
+ 
+-static QEMUTimer *poll_timer;
++/* The libusb context and this notifier have process lifetime.  All normal
++ * dispatch stays on the main loop under BQL, and stops with the VM. */
+ static uint32_t request_count;
+ static uint32_t iso_request_count;
+-
+-static void usb_host_timer_kick(void)
+-{
+-    int64_t delay_ns;
+-
+-    delay_ns = iso_request_count
+-        ? (NANOSECONDS_PER_SECOND / 1000) /* 1 ms for active ISO rings */
+-        : request_count
+-        ? (NANOSECONDS_PER_SECOND / 100)  /* 10 ms interval with active req */
+-        : (NANOSECONDS_PER_SECOND);       /* 1 sec interval otherwise */
+-    /* New work must not postpone an already earlier dispatch deadline.
+-     * Keep VM-changing completion callbacks on the existing virtual clock. */
+-    timer_mod_anticipate_ns(poll_timer,
+-        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ns);
+-}
+-
+-static void usb_host_timer(void *opaque)
+-{
++static Notifier usb_host_poll_notifier;
++static VMChangeStateEntry *usb_host_poll_vmstate;
++static bool usb_host_poll_dispatching;
++
++static void usb_host_poll_kick(void)
++{
++    /* A request may arrive while an earlier idle host wait is in progress. */
++    qemu_notify_event();
++}
++
++static void usb_host_poll_notify(Notifier *notifier, void *data)
++{
++    MainLoopPoll *poll = data;
+     struct timeval tv = { 0, 0 };
+-
+-    libusb_handle_events_timeout(ctx, &tv);
+-    usb_host_timer_kick();
++    uint32_t delay_ms;
++
++    (void)notifier;
++    assert(bql_locked());
++    if (!runstate_is_running()) {
++        return;
++    }
++    switch (poll->state) {
++    case MAIN_LOOP_POLL_FILL:
++        delay_ms = (request_count || iso_request_count) ? 1 : 1000;
++        poll->timeout = MIN(poll->timeout, delay_ms);
++        break;
++    case MAIN_LOOP_POLL_OK:
++    case MAIN_LOOP_POLL_ERR:
++        if (!usb_host_poll_dispatching) {
++            usb_host_poll_dispatching = true;
++            libusb_handle_events_timeout(ctx, &tv);
++            usb_host_poll_dispatching = false;
++        }
++        break;
++    default:
++        g_assert_not_reached();
++    }
++}
++
++static void usb_host_poll_vm_change(void *opaque, bool running, RunState state)
++{
++    (void)opaque;
++    (void)state;
++    if (running) {
++        usb_host_poll_kick();
++    }
+ }
+ 
+ #endif /* !CONFIG_WIN32 */
+@@ -305,8 +330,11 @@
+     libusb_set_debug(ctx, loglevel);
+ #endif
+ #ifdef CONFIG_WIN32
+-    poll_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, usb_host_timer, NULL);
+-    usb_host_timer_kick();
++    usb_host_poll_notifier.notify = usb_host_poll_notify;
++    main_loop_poll_add_notifier(&usb_host_poll_notifier);
++    usb_host_poll_vmstate = qemu_add_vm_change_state_handler(
++        usb_host_poll_vm_change, NULL);
++    usb_host_poll_kick();
+ #else
+     libusb_set_pollfd_notifiers(ctx, usb_host_add_fd,
+                                 usb_host_del_fd,
+@@ -396,7 +424,7 @@
+     QTAILQ_INSERT_TAIL(&s->requests, r, next);
+ #ifdef CONFIG_WIN32
+     request_count++;
+-    usb_host_timer_kick();
++    usb_host_poll_kick();
+ #endif
+     return r;
+ }
+@@ -537,7 +565,7 @@
+ #ifdef CONFIG_WIN32
+     if (rc == 0) {
+         iso_request_count++;
+-        usb_host_timer_kick();
++        usb_host_poll_kick();
+     }
+ #endif
+     return rc;

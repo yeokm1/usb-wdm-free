@@ -1,0 +1,312 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: gives QEMU's usb-net a High Speed descriptor set (property
+highspeed=on: bulk wMaxPacketSize 512, interrupt bInterval 9) beside the
+Full Speed one, so the device attaches at 480 Mb/s on usb-ehci and on
+qemu-xhci's USB 2 ports (12 Mb/s on UHCI); adds idvendor=/idproduct=
+overrides; makes the ECM end-of-frame (short packet / ZLP) rule use the
+endpoint's own wMaxPacketSize instead of a fixed 64; registers
+usb_desc_attach so the speed's descriptor set is chosen at attach; and
+fixes the RNDIS status endpoint, which copied its 8 bytes before NAKing:
+EHCI retries the same USBPacket after a NAK, the bytes accumulated, and
+QEMU aborted in usb_packet_copy (assertion) once RNDIS ran on usb-ehci. Applies to
+official QEMU v11.1.0 hw/usb/dev-network.c. Build: x86_64-softmmu only,
+--disable-slirp (the guest's netdev is a dgram socket joined to a stock
+QEMU's user network, see 2026-10-22-cdcnet-9x.md). The emulator as a
+whole remains GPL-2.0-or-later; dev-network.c keeps its upstream notice.
+--- a/hw/usb/dev-network.c
++++ b/hw/usb/dev-network.c
+@@ -290,6 +290,199 @@
+     },
+ };
+ 
++static const USBDescIface desc_iface_rndis_hs[] = {
++    {
++        /* RNDIS Control Interface */
++        .bInterfaceNumber              = 0,
++        .bNumEndpoints                 = 1,
++        .bInterfaceClass               = USB_CLASS_COMM,
++        .bInterfaceSubClass            = USB_CDC_SUBCLASS_ACM,
++        .bInterfaceProtocol            = USB_CDC_ACM_PROTO_VENDOR,
++        .iInterface                    = STRING_RNDIS_CONTROL,
++        .ndesc                         = 4,
++        .descs = (USBDescOther[]) {
++            {
++                /* Header Descriptor */
++                .data = (uint8_t[]) {
++                    0x05,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_HEADER_TYPE,        /*  u8    bDescriptorSubType */
++                    0x10, 0x01,                 /*  le16  bcdCDC */
++                },
++            },{
++                /* Call Management Descriptor */
++                .data = (uint8_t[]) {
++                    0x05,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_CALL_MANAGEMENT_TYPE, /*  u8    bDescriptorSubType */
++                    0x00,                       /*  u8    bmCapabilities */
++                    0x01,                       /*  u8    bDataInterface */
++                },
++            },{
++                /* ACM Descriptor */
++                .data = (uint8_t[]) {
++                    0x04,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_ACM_TYPE,           /*  u8    bDescriptorSubType */
++                    0x00,                       /*  u8    bmCapabilities */
++                },
++            },{
++                /* Union Descriptor */
++                .data = (uint8_t[]) {
++                    0x05,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_UNION_TYPE,         /*  u8    bDescriptorSubType */
++                    0x00,                       /*  u8    bMasterInterface0 */
++                    0x01,                       /*  u8    bSlaveInterface0 */
++                },
++            },
++        },
++        .eps = (USBDescEndpoint[]) {
++            {
++                .bEndpointAddress      = USB_DIR_IN | 0x01,
++                .bmAttributes          = USB_ENDPOINT_XFER_INT,
++                .wMaxPacketSize        = STATUS_BYTECOUNT,
++                .bInterval             = LOG2_STATUS_INTERVAL_MSEC + 4,
++            },
++        }
++    },{
++        /* RNDIS Data Interface */
++        .bInterfaceNumber              = 1,
++        .bNumEndpoints                 = 2,
++        .bInterfaceClass               = USB_CLASS_CDC_DATA,
++        .iInterface                    = STRING_DATA,
++        .eps = (USBDescEndpoint[]) {
++            {
++                .bEndpointAddress      = USB_DIR_IN | 0x02,
++                .bmAttributes          = USB_ENDPOINT_XFER_BULK,
++                .wMaxPacketSize        = 0x200,
++            },{
++                .bEndpointAddress      = USB_DIR_OUT | 0x02,
++                .bmAttributes          = USB_ENDPOINT_XFER_BULK,
++                .wMaxPacketSize        = 0x200,
++            }
++        }
++    }
++};
++
++static const USBDescIface desc_iface_cdc_hs[] = {
++    {
++        /* CDC Control Interface */
++        .bInterfaceNumber              = 0,
++        .bNumEndpoints                 = 1,
++        .bInterfaceClass               = USB_CLASS_COMM,
++        .bInterfaceSubClass            = USB_CDC_SUBCLASS_ETHERNET,
++        .bInterfaceProtocol            = USB_CDC_PROTO_NONE,
++        .iInterface                    = STRING_CONTROL,
++        .ndesc                         = 3,
++        .descs = (USBDescOther[]) {
++            {
++                /* Header Descriptor */
++                .data = (uint8_t[]) {
++                    0x05,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_HEADER_TYPE,        /*  u8    bDescriptorSubType */
++                    0x10, 0x01,                 /*  le16  bcdCDC */
++                },
++            },{
++                /* Union Descriptor */
++                .data = (uint8_t[]) {
++                    0x05,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_UNION_TYPE,         /*  u8    bDescriptorSubType */
++                    0x00,                       /*  u8    bMasterInterface0 */
++                    0x01,                       /*  u8    bSlaveInterface0 */
++                },
++            },{
++                /* Ethernet Descriptor */
++                .data = (uint8_t[]) {
++                    0x0d,                       /*  u8    bLength */
++                    USB_DT_CS_INTERFACE,        /*  u8    bDescriptorType */
++                    USB_CDC_ETHERNET_TYPE,      /*  u8    bDescriptorSubType */
++                    STRING_ETHADDR,             /*  u8    iMACAddress */
++                    0x00, 0x00, 0x00, 0x00,     /*  le32  bmEthernetStatistics */
++                    ETH_FRAME_LEN & 0xff,
++                    ETH_FRAME_LEN >> 8,         /*  le16  wMaxSegmentSize */
++                    0x00, 0x00,                 /*  le16  wNumberMCFilters */
++                    0x00,                       /*  u8    bNumberPowerFilters */
++                },
++            },
++        },
++        .eps = (USBDescEndpoint[]) {
++            {
++                .bEndpointAddress      = USB_DIR_IN | 0x01,
++                .bmAttributes          = USB_ENDPOINT_XFER_INT,
++                .wMaxPacketSize        = STATUS_BYTECOUNT,
++                .bInterval             = LOG2_STATUS_INTERVAL_MSEC + 4,
++            },
++        }
++    },{
++        /* CDC Data Interface (off) */
++        .bInterfaceNumber              = 1,
++        .bAlternateSetting             = 0,
++        .bNumEndpoints                 = 0,
++        .bInterfaceClass               = USB_CLASS_CDC_DATA,
++    },{
++        /* CDC Data Interface */
++        .bInterfaceNumber              = 1,
++        .bAlternateSetting             = 1,
++        .bNumEndpoints                 = 2,
++        .bInterfaceClass               = USB_CLASS_CDC_DATA,
++        .iInterface                    = STRING_DATA,
++        .eps = (USBDescEndpoint[]) {
++            {
++                .bEndpointAddress      = USB_DIR_IN | 0x02,
++                .bmAttributes          = USB_ENDPOINT_XFER_BULK,
++                .wMaxPacketSize        = 0x200,
++            },{
++                .bEndpointAddress      = USB_DIR_OUT | 0x02,
++                .bmAttributes          = USB_ENDPOINT_XFER_BULK,
++                .wMaxPacketSize        = 0x200,
++            }
++        }
++    }
++};
++
++static const USBDescDevice desc_device_net_hs = {
++    .bcdUSB                        = 0x0200,
++    .bDeviceClass                  = USB_CLASS_COMM,
++    .bMaxPacketSize0               = 0x40,
++    .bNumConfigurations            = 2,
++    .confs = (USBDescConfig[]) {
++        {
++            .bNumInterfaces        = 2,
++            .bConfigurationValue   = DEV_RNDIS_CONFIG_VALUE,
++            .iConfiguration        = STRING_RNDIS,
++            .bmAttributes          = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER,
++            .bMaxPower             = 0x32,
++            .nif = ARRAY_SIZE(desc_iface_rndis_hs),
++            .ifs = desc_iface_rndis_hs,
++        },{
++            .bNumInterfaces        = 2,
++            .bConfigurationValue   = DEV_CONFIG_VALUE,
++            .iConfiguration        = STRING_CDC,
++            .bmAttributes          = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER,
++            .bMaxPower             = 0x32,
++            .nif = ARRAY_SIZE(desc_iface_cdc_hs),
++            .ifs = desc_iface_cdc_hs,
++        }
++    },
++};
++
++static const USBDesc desc_net_hs = {
++    .id = {
++        .idVendor          = RNDIS_VENDOR_NUM,
++        .idProduct         = RNDIS_PRODUCT_NUM,
++        .bcdDevice         = 0,
++        .iManufacturer     = STRING_MANUFACTURER,
++        .iProduct          = STRING_PRODUCT,
++        .iSerialNumber     = STRING_SERIALNUMBER,
++    },
++    .full = &desc_device_net,
++    .high = &desc_device_net_hs,
++    .str  = usb_net_stringtable,
++};
++
+ static const USBDesc desc_net = {
+     .id = {
+         .idVendor          = RNDIS_VENDOR_NUM,
+@@ -645,6 +838,10 @@
+     USBEndpoint *intr;
+     USBEndpoint *bulk_in;
+ 
++    bool highspeed;
++    uint16_t usb_vid, usb_pid;
++    USBDesc *own_desc;
++
+     char usbstring_mac[13];
+     NICState *nic;
+     NICConf conf;
+@@ -1147,10 +1344,14 @@
+     if (is_rndis(s)) {
+         rbuf[0] = cpu_to_le32(1);
+         rbuf[1] = cpu_to_le32(0);
+-        usb_packet_copy(p, rbuf, 8);
++        /* NAK before copying: a host controller may retry the same
++         * USBPacket after a NAK (EHCI does), and bytes copied into a
++         * NAKed packet would accumulate past its size. */
+         if (!s->rndis_resp.tqh_first) {
+             p->status = USB_RET_NAK;
++            return;
+         }
++        usb_packet_copy(p, rbuf, 8);
+     } else {
+         ebuf[0] =
+             cpu_to_be16(ClassInterfaceRequest | USB_CDC_NETWORK_CONNECTION);
+@@ -1167,6 +1368,12 @@
+ #endif
+ }
+ 
++static int usb_net_mps(USBDevice *dev, int pid)
++{
++    USBEndpoint *ep = usb_ep_get(dev, pid, 2);
++    return (ep && ep->max_packet_size) ? ep->max_packet_size : 64;
++}
++
+ static void usb_net_handle_datain(USBNetState *s, USBPacket *p)
+ {
+     int len;
+@@ -1187,7 +1394,7 @@
+     usb_packet_copy(p, &s->in_buf[s->in_ptr], len);
+     s->in_ptr += len;
+     if (s->in_ptr >= s->in_len &&
+-                    (is_rndis(s) || (s->in_len & (64 - 1)) || !len)) {
++                    (is_rndis(s) || (s->in_len % usb_net_mps(&s->dev, USB_TOKEN_IN)) || !len)) {
+         /* no short packet necessary */
+         usb_net_reset_in_buf(s);
+     }
+@@ -1217,7 +1424,7 @@
+     s->out_ptr += sz;
+ 
+     if (!is_rndis(s)) {
+-        if (p->iov.size % 64 || p->iov.size == 0) {
++        if (p->iov.size % usb_net_mps(&s->dev, USB_TOKEN_OUT) || p->iov.size == 0) {
+             qemu_send_packet(qemu_get_queue(s->nic), s->out_buf, s->out_ptr);
+             s->out_ptr = 0;
+         }
+@@ -1361,6 +1568,17 @@
+ {
+     USBNetState *s = USB_NET(dev);
+ 
++    if (s->highspeed || s->usb_vid || s->usb_pid) {
++        s->own_desc = g_new(USBDesc, 1);
++        *s->own_desc = s->highspeed ? desc_net_hs : desc_net;
++        if (s->usb_vid) {
++            s->own_desc->id.idVendor = s->usb_vid;
++        }
++        if (s->usb_pid) {
++            s->own_desc->id.idProduct = s->usb_pid;
++        }
++        dev->usb_desc = s->own_desc;
++    }
+     usb_desc_create_serial(dev);
+     usb_desc_init(dev);
+ 
+@@ -1409,6 +1627,9 @@
+ 
+ static const Property net_properties[] = {
+     DEFINE_NIC_PROPERTIES(USBNetState, conf),
++    DEFINE_PROP_BOOL("highspeed", USBNetState, highspeed, false),
++    DEFINE_PROP_UINT16("idvendor", USBNetState, usb_vid, 0),
++    DEFINE_PROP_UINT16("idproduct", USBNetState, usb_pid, 0),
+ };
+ 
+ static void usb_net_class_initfn(ObjectClass *klass, const void *data)
+@@ -1420,6 +1641,7 @@
+     uc->product_desc   = "QEMU USB Network Interface";
+     uc->usb_desc       = &desc_net;
+     uc->handle_reset   = usb_net_handle_reset;
++    uc->handle_attach  = usb_desc_attach;   /* pick the speed's descriptor set on attach */
+     uc->handle_control = usb_net_handle_control;
+     uc->handle_data    = usb_net_handle_data;
+     uc->unrealize      = usb_net_unrealize;

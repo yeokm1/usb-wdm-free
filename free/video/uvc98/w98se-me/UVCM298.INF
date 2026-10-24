@@ -1,0 +1,64 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Original Windows 98 SE / ME form of uvc98 (UVCM2.INF is the NT form):
+; USB Video Class 1.0 to 1.5 cameras, matched by their video function's
+; class ids (owner, 2026-10-24). NTKERN loads the WDM miniport
+; (DevLoader/NTMPDriver, as 98 SE's own WDM INFs and usbmidi.inf do).
+; Written from Microsoft's INF documentation; no kit sample INF was used.
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+; The KS and capture files that Needs= pulls come from the Windows CD:
+; name its layout files, as the stock wdma_usb.inf does.
+LayoutFile=layout.inf, layout1.inf, layout2.inf
+DriverVer=10/24/2026,0.1.0.0
+[Manufacturer]
+%Provider%=Models
+[Models]
+; Interface-level (function) ids only (design 4; owner, 2026-10-20, and
+; 2026-10-24 for the class match): the IAD video function that xHCI98
+; splits off (SubClass_03), and the VideoControl interface of a camera a
+; stack splits per interface (SubClass_01; protocol 01 is UVC 1.5's).
+; No DevClass match. Where a hub does not split the camera (2000, NUSB) the
+; whole device carries its first interface's ids, so SubClass_01 binds it
+; as a whole device; the driver serves its video function (uvc.md 4).
+%Uvc%=Capture,USB\Class_0E&SubClass_03&Prot_00
+%Uvc%=Capture,USB\Class_0E&SubClass_01&Prot_00
+%Uvc%=Capture,USB\Class_0E&SubClass_01&Prot_01
+; Per-camera whole-device line (design 4: an unsplit camera, by request):
+; the camera of the NUSB legs, which NUSB's hub does not split.
+%UvcWhole%=Capture,USB\VID_046D&PID_094C
+[DestinationDirs]
+MiniFiles=10,system32\drivers
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+uvcm2.sys=1
+[MiniFiles]
+uvcm2.sys
+[Capture]
+Include=ks.inf,kscaptur.inf
+Needs=KS.Registration,KSCAPTUR.Registration
+CopyFiles=MiniFiles
+AddReg=Loader9x
+[Loader9x]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,uvcm2.sys
+[Capture.Interfaces]
+AddInterface=%Video%,GLOBAL,Interface
+AddInterface=%Capture%,GLOBAL,Interface
+[Interface]
+AddReg=InterfaceReg
+[InterfaceReg]
+HKR,,CLSID,,%KSProxy%
+HKR,,FriendlyName,,%Uvc%
+[Strings]
+Provider="usb-wdm-free"
+Uvc="USB Video Class camera (uvc98)"
+UvcWhole="USB Video Class camera, whole device (uvc98)"
+Disk="usb-wdm-free uvc98"
+Video="{6994AD05-93EF-11D0-A3CC-00A0C9223196}"
+Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSProxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

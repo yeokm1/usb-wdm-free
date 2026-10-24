@@ -1,0 +1,90 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; CDCRNDIS.INF - binds Windows' own RNDIS driver to RNDIS devices by their
+; class ids, on XP to 7 (ethernet.md sections 1 item 7 and 7.5). It
+; installs no file of its own: the install sections come from the in-box
+; netrndis.inf by Include/Needs. The section names were read from the
+; target systems' own netrndis.inf (XP SP3 x86, XP x64 SP2, Vista SP2:
+; usb_rndis.ndi) and Windows 7's rndiscmp.inf (usbrndis6.ndi, the NDIS 6
+; driver, with the *IfType values that INF sets); see
+; docs/testing/2026-10-21-cdcnet.md. Windows 2000 finds no model here
+; (only decorated models): CDCNET.INF's 2000 models bind CDCNET there.
+
+[Version]
+Signature="$Windows NT$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models,NTx86.5.1,NTx86.6.0,NTx86.6.1,NTamd64,NTamd64.6.0,NTamd64.6.1
+
+[Models.NTx86.5.1]
+%Rndis%=Rndis5,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis5,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis5,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis5,USB\Class_EF&SubClass_04&Prot_01
+
+[Models.NTx86.6.0]
+%Rndis%=Rndis5,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis5,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis5,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis5,USB\Class_EF&SubClass_04&Prot_01
+
+[Models.NTx86.6.1]
+%Rndis%=Rndis6,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis6,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis6,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis6,USB\Class_EF&SubClass_04&Prot_01
+
+[Models.NTamd64]
+%Rndis%=Rndis5,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis5,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis5,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis5,USB\Class_EF&SubClass_04&Prot_01
+
+[Models.NTamd64.6.0]
+%Rndis%=Rndis5,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis5,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis5,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis5,USB\Class_EF&SubClass_04&Prot_01
+
+[Models.NTamd64.6.1]
+%Rndis%=Rndis6,USB\Class_02&SubClass_02&Prot_FF
+%Rndis%=Rndis6,USB\Class_E0&SubClass_01&Prot_03
+%Rndis%=Rndis6,USB\Class_EF&SubClass_01&Prot_01
+%Rndis%=Rndis6,USB\Class_EF&SubClass_04&Prot_01
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+; XP, XP x64 and Vista: the NDIS 5 RNDIS miniport.
+[Rndis5]
+Characteristics=0x84
+BusType=15
+Include=netrndis.inf
+Needs=usb_rndis.ndi
+
+[Rndis5.Services]
+Include=netrndis.inf
+Needs=usb_rndis.ndi.Services
+
+; 7: the NDIS 6 RNDIS miniport.
+[Rndis6]
+Characteristics=0x84
+BusType=15
+Include=netrndis.inf
+Needs=usbrndis6.ndi
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
+
+[Rndis6.Services]
+Include=netrndis.inf
+Needs=usbrndis6.ndi.Services
+
+[Strings]
+Provider="usb-wdm-free"
+Rndis="USB Ethernet (RNDIS, Windows driver)"

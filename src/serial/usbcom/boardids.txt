@@ -1,0 +1,201 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# boardids.txt - the USB ids the usbcom INFs list beyond the Uno R3 and the
+# Pico (Owner, 2026-10-22: Leonardo/Micro and bootloaders, STM32 VCP,
+# CH9102, Espressif 303A, Adafruit 239A, SparkFun 1B4F). The gates
+# (validate.ps1, gate98.ps1) derive the expected INF model lines from this
+# file. Only USB ids were taken from the sources below (facts, no code).
+#
+# Columns: VID:PID  kind  source  board
+#   single    a single-function CDC device (bDeviceClass 02): listed as a
+#             whole device on every system. For the Caterina bootloaders,
+#             STM32 VCP and CH9102 this is an inference, read in M0/M2.
+#   composite an Arduino-sketch PID (CDC plus other functions): whole
+#             device on 98 SE/ME and 2000 only (owner Q5 exception), plus
+#             &MI_00 for buses that split composites on 98; on XP and
+#             later the interface-class match already serves it.
+# Selection rules: Arduino AVR and SparkFun AVR list every PID of the named
+# boards; PIDs with bit 15 clear (SparkFun: build.pid.0) are the Caterina
+# bootloaders. arduino-esp32 and arduino-pico: pid.0 of every board whose
+# vid.0 is 303A or 239A. Adafruit SAMD and nRF52: build.pid of every
+# 239A board. A PID found in several sources is composite unless all say
+# single. UF2 bootloader and CircuitPython PIDs are not listed.
+#
+# Sources, fetched 2026-10-22 (branch head at fetch time, file SHA-256):
+#   arduino-avr     github.com/arduino/ArduinoCore-avr boards.txt @11b91303 e49283dc7a276291e24e91d04b883ea4e884ea2375ed80ede0d69cbf25d40a5d
+#   sparkfun-avr    github.com/sparkfun/Arduino_Boards sparkfun/avr/boards.txt @b2ccf642 00f56082bd1f806010c661a8089eb67d4c548045090eec0ef722cd2407b48447
+#   arduino-esp32   github.com/espressif/arduino-esp32 boards.txt @6b41cf6f 96b0b9aeec7dc38b7322be5dd99b1b4443653702b0b6c7e1edeec4ebb3ef0d70
+#   adafruit-samd   github.com/adafruit/ArduinoCore-samd boards.txt @65b62069 49848ecc87fabf0993e327bf2aada4204e81e94fdca87427c4aacba113ae671a
+#   adafruit-nrf52  github.com/adafruit/Adafruit_nRF52_Arduino boards.txt @343ab5fe d66c6ab8ba561faf22a5db9a9a8882cac383e88888ee686e3287682e0e399e5e
+#   arduino-pico    github.com/earlephilhower/arduino-pico boards.txt @6b2a125f 2e63abe59b0f4b58f74f9e1eb2846fb6056c77dce5231d733504f71d7d8e35fd
+#   usb.ids         www.linux-usb.org/usb.ids version 2026.06.26 (0483:5740 "Virtual COM Port") f5a48b0cc8dae1607c2f0bae6b8dc13f2ecef69dbeaeaf34b4be8e280d34dba4
+#   wch-ch343ser    github.com/WCHSoftGroup/ch343ser_linux driver/ch343.c id table "CH9102 chip" @b5515b91 c816a67017f734ed396b07df0fd2dea36c987960dd84f194dcde87a931325c97
+0483:5740 single    usb.ids        STM32 Virtual COM Port
+1A86:55D4 single    wch-ch343ser   WCH CH9102
+1B4F:0110 composite sparkfun-avr   LilyPad USB Plus
+1B4F:2B74 single    sparkfun-avr   SparkFun MaKey MaKey
+1B4F:2B75 composite sparkfun-avr   SparkFun MaKey MaKey
+1B4F:514D single    sparkfun-avr   Qduino Mini
+1B4F:516D composite sparkfun-avr   Qduino Mini
+1B4F:9203 single    sparkfun-avr   SparkFun Pro Micro
+1B4F:9204 composite sparkfun-avr   SparkFun Pro Micro
+1B4F:9205 single    sparkfun-avr   SparkFun Pro Micro
+1B4F:9206 composite sparkfun-avr   SparkFun Pro Micro
+1B4F:F100 single    sparkfun-avr   SparkFun Fio v3
+1B4F:F101 composite sparkfun-avr   SparkFun Fio v3
+2341:0036 single    arduino-avr    Arduino Leonardo
+2341:0037 single    arduino-avr    Arduino Micro
+2341:0237 single    arduino-avr    Arduino Micro
+2341:8036 composite arduino-avr    Arduino Leonardo
+2341:8037 composite arduino-avr    Arduino Micro
+2341:8237 composite arduino-avr    Arduino Micro
+239A:0117 composite arduino-esp32  Adafruit pyCamera S3
+239A:800A composite arduino-esp32  ATMegaZero ESP32-S2
+239A:800B composite adafruit-samd  Adafruit Feather M0 (SAMD21)
+239A:800F composite adafruit-samd  Adafruit ItsyBitsy M0 Express (SAMD21)
+239A:8013 composite adafruit-samd  Adafruit Metro M0 Express (SAMD21)
+239A:8018 composite adafruit-samd  Adafruit Circuit Playground Express (SAMD21)
+239A:801B composite adafruit-samd  Adafruit Feather M0 Express (SAMD21)
+239A:801C composite adafruit-samd  Adafruit Gemma M0 (SAMD21)
+239A:801E composite adafruit-samd  Adafruit Trinket M0 (SAMD21)
+239A:8020 composite adafruit-samd  Adafruit Metro M4 (SAMD51)
+239A:8022 composite adafruit-samd  Adafruit Feather M4 Express (SAMD51)
+239A:8027 composite adafruit-samd  Adafruit pIRKey (SAMD21)
+239A:8029 composite adafruit-nrf52 Adafruit Feather nRF52840 Express
+239A:802B composite adafruit-samd  Adafruit ItsyBitsy M4 (SAMD51)
+239A:802D composite adafruit-samd  Adafruit Crickit M0 (SAMD21)
+239A:802F composite adafruit-samd  Adafruit Trellis M4 (SAMD51)
+239A:8031 composite adafruit-samd  Adafruit Grand Central M4 (SAMD51)
+239A:8033 composite adafruit-samd  Adafruit pyBadge M4 Express (SAMD51)
+239A:8035 composite adafruit-samd  Adafruit PyPortal M4 (SAMD51)
+239A:8037 composite adafruit-samd  Adafruit Metro M4 AirLift Lite (SAMD51)
+239A:803D composite adafruit-samd  Adafruit PyGamer M4 Express (SAMD51)
+239A:803F composite adafruit-nrf52 Adafruit Metro nRF52840 Express
+239A:8043 composite adafruit-samd  Adafruit pyBadge AirLift M4 (SAMD51)
+239A:8045 composite adafruit-nrf52 Adafruit Circuit Playground Bluefruit
+239A:8047 composite adafruit-samd  Adafruit MONSTER M4SK (SAMD51)
+239A:8049 composite adafruit-samd  Adafruit Hallowing M4 (SAMD51)
+239A:8051 composite adafruit-nrf52 Adafruit ItsyBitsy nRF52840 Express
+239A:8053 composite adafruit-samd  Adafruit PyPortal M4 Titano (SAMD51)
+239A:8071 composite adafruit-nrf52 Adafruit CLUE
+239A:8087 composite adafruit-nrf52 Adafruit Feather nRF52840 Sense
+239A:80AB composite arduino-esp32  UM FeatherS2
+239A:80BF composite adafruit-samd  Adafruit BLM Badge (SAMD21)
+239A:80C5 composite arduino-esp32  microS2
+239A:80C9 composite adafruit-samd  Adafruit Matrix Portal M4 (SAMD51)
+239A:80CB composite adafruit-samd  Adafruit QT Py M0 (SAMD21)
+239A:80CD composite adafruit-samd  Adafruit Feather M4 CAN (SAME51)
+239A:80D8 composite adafruit-nrf52 Nordic nRF52833 DK
+239A:80DA composite adafruit-nrf52 Nordic nRF52840 DK
+239A:80DF composite arduino-esp32  Adafruit Metro ESP32-S2
+239A:80E3 composite arduino-pico   Adafruit STEMMA Friend RP2040
+239A:80E5 composite arduino-esp32  Adafruit MagTag 2.9"
+239A:80EB composite arduino-esp32  Adafruit Feather ESP32-S2
+239A:80ED composite arduino-esp32  Adafruit Feather ESP32-S2 Reverse TFT
+239A:80EF composite adafruit-samd  Adafruit NeoPixel Trinkey M0 (SAMD21)
+239A:80F1 composite arduino-pico   Adafruit Feather RP2040
+239A:80F7 composite arduino-pico   Adafruit QT Py RP2040
+239A:80F9 composite arduino-esp32  Adafruit FunHouse
+239A:80FB composite adafruit-samd  Adafruit Rotary Trinkey M0 (SAMD21)
+239A:80FD composite arduino-pico   Adafruit ItsyBitsy RP2040
+239A:80FF composite adafruit-samd  Adafruit NeoKey Trinkey M0 (SAMD21)
+239A:8101 composite adafruit-samd  Adafruit Slide Trinkey M0 (SAMD21)
+239A:8103 composite adafruit-samd  Adafruit ProxLight Trinkey M0 (SAMD21)
+239A:8105 composite arduino-pico   Adafruit KB2040
+239A:8107 composite arduino-pico   Adafruit MacroPad RP2040
+239A:8109 composite arduino-pico   Adafruit Trinkey RP2040 QT
+239A:810B composite adafruit-nrf52 Raytac nRF52840 Dongle
+239A:810D composite adafruit-nrf52 Adafruit LED Glasses Driver nRF52840
+239A:810F composite arduino-esp32  Adafruit Feather ESP32-S2 TFT
+239A:8111 composite arduino-esp32  Adafruit QT Py ESP32-S2
+239A:8113 composite arduino-esp32  Adafruit Feather ESP32-S3 No PSRAM
+239A:8119 composite arduino-esp32  Adafruit QT Py ESP32-S3 No PSRAM
+239A:811B composite arduino-esp32  Adafruit Feather ESP32-S3 2MB PSRAM
+239A:811D composite arduino-esp32  Adafruit Feather ESP32-S3 TFT
+239A:8121 composite arduino-pico   Adafruit Feather RP2040 SCORPIO
+239A:8123 composite arduino-esp32  Adafruit Feather ESP32-S3 Reverse TFT
+239A:8125 composite arduino-esp32  Adafruit MatrixPortal ESP32-S3
+239A:8127 composite arduino-pico   Adafruit Feather RP2040 DVI
+239A:8129 composite arduino-pico   Adafruit Feather RP2040 USB Host
+239A:812B composite arduino-pico   Adafruit Feather RP2040 ThinkINK
+239A:812D composite arduino-pico   Adafruit Feather RP2040 RFM
+239A:812F composite arduino-pico   Adafruit Feather RP2040 CAN
+239A:8131 composite arduino-pico   Adafruit Feather RP2040 Prop-Maker
+239A:813D composite arduino-pico   Adafruit Metro RP2040
+239A:8143 composite arduino-esp32  Adafruit QT Py ESP32-S3 (4M Flash 2M PSRAM)
+239A:8145 composite arduino-esp32  Adafruit Metro ESP32-S3
+239A:8147 composite arduino-esp32  Adafruit Qualia ESP32-S3 RGB666
+239A:814D composite arduino-pico   Adafruit Metro RP2350
+239A:814F composite arduino-pico   Adafruit Feather RP2350 HSTX
+239A:8151 composite arduino-pico   Adafruit Floppsy
+239A:8153 composite adafruit-samd  Adafruit SHT4x Trinkey M0 (SAMD21)
+239A:8155 composite adafruit-samd  Adafruit Pixel Trinkey M0 (SAMD21)
+239A:8157 composite adafruit-samd  Adafruit TRRS Trinkey M0 (SAMD21)
+239A:8159 composite adafruit-samd  Adafruit Thumbstick Trinkey M0 (SAMD21)
+239A:815D composite arduino-pico   Adafruit Feather RP2040 Adalogger
+239A:816B composite arduino-pico   Adafruit Fruit Jam RP2350
+239A:816D composite arduino-pico   Adafruit Feather RP2350 Adalogger
+239A:DEAD composite adafruit-samd  Adafruit Hallowing M0 (SAMD21)
+2A03:0036 single    arduino-avr    Arduino Leonardo
+2A03:0037 single    arduino-avr    Arduino Micro
+2A03:8036 composite arduino-avr    Arduino Leonardo
+2A03:8037 composite arduino-avr    Arduino Micro
+303A:0002 composite arduino-esp32  ESP32S2 Dev Module
+303A:0003 composite arduino-esp32  ESP32S2 Native USB
+303A:1001 composite arduino-esp32  ESP32 Family Device
+303A:8001 composite arduino-esp32  UM TinyS2
+303A:80A9 composite arduino-esp32  Franzininho WiFi
+303A:80B4 composite arduino-esp32  UM FeatherS2 Neo
+303A:80C2 composite arduino-esp32  LOLIN S2 Mini
+303A:80C5 composite arduino-esp32  LOLIN S2 PICO
+303A:80D0 composite arduino-esp32  UM TinyS3
+303A:80D3 composite arduino-esp32  UM PROS3
+303A:80D6 composite arduino-esp32  UM FeatherS3
+303A:80DB composite arduino-esp32  CircuitART Zero S3
+303A:80DF composite arduino-esp32  BPI-Leaf-S3
+303A:80F8 composite arduino-esp32  Cytron Maker Feather AIoT S3
+303A:80FF composite arduino-esp32  Department of Alchemy MiniMain ESP32-S2
+303A:810D composite arduino-esp32  Bee Motion
+303A:8110 composite arduino-esp32  Bee S3
+303A:8113 composite arduino-esp32  Bee Motion S3
+303A:8141 composite arduino-esp32  Deneyap Mini
+303A:8144 composite arduino-esp32  Deneyap Mini v2
+303A:8147 composite arduino-esp32  Deneyap Kart 1A v2
+303A:814A composite arduino-esp32  Deneyap Kart G
+303A:815C composite arduino-esp32  Bee Data Logger
+303A:8161 composite arduino-esp32  LOLIN S3 Pro
+303A:8167 composite arduino-esp32  LOLIN S3 Mini
+303A:8179 composite arduino-esp32  UM NanoS3
+303A:817F composite arduino-esp32  UM BLING
+303A:8192 composite arduino-esp32  uPesy ESP32S3 Basic
+303A:8195 composite arduino-esp32  uPesy ESP32C3 Basic
+303A:819B composite arduino-esp32  uPesy ESP32C3 Mini
+303A:81B8 composite arduino-esp32  senseBox MCU-S2 ESP32-S2
+303A:81BB composite arduino-esp32  ESP32-S3 PowerFeather
+303A:81FB composite arduino-esp32  UM FeatherS3 Neo
+303A:8216 composite arduino-esp32  LOLIN S3 Mini Pro
+303A:821E composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-1.69
+303A:8221 composite arduino-esp32  Waveshare ESP32-S3-LCD-1.69
+303A:8224 composite arduino-esp32  UM OMGS3
+303A:822B composite arduino-esp32  Waveshare ESP32-S3-Zero
+303A:822E composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-4.3
+303A:8231 composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-4.3B
+303A:8234 composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-7
+303A:8237 composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-5
+303A:823A composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-5B
+303A:823D composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-4
+303A:8242 composite arduino-esp32  Waveshare ESP32-S3-Touch-AMOLED-2.41
+303A:8249 composite arduino-esp32  Waveshare ESP32-S3-Touch-AMOLED-1.64
+303A:824A composite arduino-esp32  Waveshare ESP32-S3-Touch-AMOLED-1.43
+303A:824B composite arduino-esp32  Waveshare ESP32-S3-Touch-AMOLED-1.91
+303A:8255 composite arduino-esp32  Waveshare ESP32-S3-Touch-AMOLED-1.8
+303A:8290 composite arduino-esp32  Waveshare ESP32-S3-Touch-LCD-1.85
+303A:82C5 composite arduino-esp32  Geekble nano ESP32-S3
+303A:82D1 composite arduino-esp32  senseBox MCU Eye
+303A:82DC composite arduino-esp32  UM EdgeS3[D]
+303A:82DF composite arduino-esp32  UM SQUIXL
+303A:82E5 composite arduino-esp32  FED4
+303A:82EB composite arduino-esp32  Deneyap Kart v2
+303A:82F4 composite arduino-esp32  FoBE Quill ESP32S3 Mesh
+303A:8372 composite arduino-esp32  Pcbcupid GLYPH S3
+303A:8375 composite arduino-esp32  Pcbcupid GLYPH S3 PSRAM
+303A:8388 composite arduino-esp32  Pcbcupid Cypher

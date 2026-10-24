@@ -1,0 +1,135 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+; Experimental UAC 2.0 WaveCyclic/USB playback and capture: the formats
+; and rates the device describes. 98 SE, XP and 7 x86 run in VMs; others
+; unverified.
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models,NTamd64,NTx86
+
+; Undecorated: 98 SE (and 2000 if it reads no model decoration; not run
+; there). The function under a composite parent, or the whole device where
+; the hub does not split this class EF/02/01 (IAD) device: 98 SE under
+; NUSB's EHCI. The driver then selects all seven interfaces; HID and CDC
+; stay unbound. The whole-device id is the owner's request under the
+; 2026-10-20 rule (interface ids only unless a device id is requested),
+; decided 2026-10-22.
+; Class matches (owner, 2026-10-23: any UAC 2.0 device the parser can
+; describe): a UAC 2.0 function as a composite parent presents it, by its
+; IAD (bFunctionClass 01, subclass 00, protocol 20) or, without an IAD,
+; by its AudioControl interface (01/01/20); NUSB's hub gives a whole IAD
+; device interface 0's ids, the AudioControl interface on a UAC 2.0
+; device. AudioStreaming interfaces (subclass 02) are never bound alone:
+; the driver needs the AudioControl interface. On 98 SE these rank above
+; wdma_usb.inf's USB\Class_01, a later entry of the same compatible list.
+[Models]
+%Device%=UAC2,USB\VID_041E&PID_3278&MI_03
+%Device%=UAC2,USB\VID_041E&PID_3278
+%Device%=UAC2,USB\Class_01&SubClass_00&Prot_20
+%Device%=UAC2,USB\Class_01&SubClass_01&Prot_20
+
+; XP and later split IAD devices (usbccgp): the function only.
+[Models.NTx86]
+%Device%=UAC2,USB\VID_041E&PID_3278&MI_03
+%Device%=UAC2,USB\Class_01&SubClass_00&Prot_20
+%Device%=UAC2,USB\Class_01&SubClass_01&Prot_20
+
+[Models.NTamd64]
+%Device%=UAC2,USB\VID_041E&PID_3278&MI_03
+%Device%=UAC2,USB\Class_01&SubClass_00&Prot_20
+%Device%=UAC2,USB\Class_01&SubClass_01&Prot_20
+
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+uac2wdm.sys=1
+[DestinationDirs]
+Driver.Copy=10,system32\drivers
+Driver.Copy.NT=12
+
+[UAC2]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration
+CopyFiles=Driver.Copy
+AddReg=Loader,AudioSupport
+[Driver.Copy]
+uac2wdm.sys
+[Loader]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,uac2wdm.sys
+[AudioSupport]
+; Published PortCls multimedia registration contract. WDMAud supplies
+; wave/mixer API translation; this experiment has no MIDI or CD path.
+HKR,,AssociatedFilters,,wdmaud
+HKR,,Driver,,uac2wdm.sys
+HKR,Drivers,SubClasses,,"wave,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%Device%
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
+
+[UAC2.NT]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration.NT
+CopyFiles=Driver.Copy.NT
+AddReg=AudioSupport
+[UAC2.NTamd64]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration.NT
+CopyFiles=Driver.Copy.NT
+AddReg=AudioSupport
+[Driver.Copy.NT]
+uac2wdm.sys
+[UAC2.NT.Services]
+AddService=uac2wdm,0x00000002,Service
+[UAC2.NTamd64.Services]
+AddService=uac2wdm,0x00000002,Service
+[Service]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\uac2wdm.sys
+
+; RENDER and CAPTURE come from each device's wave filter (PcRegisterSubdevice
+; registers the categories its descriptor lists): an INF line would claim
+; RENDER for a capture-only device too, which 98 SE's WDMAud faulted on
+; (wdmaud(07)+2F3C, 2026-10-23).
+[UAC2.Interfaces]
+AddInterface=%Audio%,Wave,Wave.Interface
+AddInterface=%Audio%,Topology,Topology.Interface
+AddInterface=%Topology%,Topology,Topology.Interface
+[UAC2.NT.Interfaces]
+AddInterface=%Audio%,Wave,Wave.Interface
+AddInterface=%Audio%,Topology,Topology.Interface
+AddInterface=%Topology%,Topology,Topology.Interface
+[UAC2.NTamd64.Interfaces]
+AddInterface=%Audio%,Wave,Wave.Interface
+AddInterface=%Audio%,Topology,Topology.Interface
+AddInterface=%Topology%,Topology,Topology.Interface
+[Wave.Interface]
+AddReg=Wave.Interface.Reg
+[Topology.Interface]
+AddReg=Topology.Interface.Reg
+[Wave.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device%
+[Topology.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device%
+
+[Strings]
+Provider="usb-wdm-free"
+Device="UAC2 USB audio (experiment)"
+Disk="UAC2 experimental build folder"
+Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+Render="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+Topology="{DDA54A40-1E4C-11D1-A050-405705C10000}"
+Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

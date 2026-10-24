@@ -1,0 +1,37 @@
+# Toolchains, installed per host (AGENTS.md, "Standalone")
+/tools/
+
+# Build output
+/out/
+obj/
+objfre*/
+objchk*/
+build*.log
+build*.wrn
+build*.err
+*.obj
+*.ilk
+*.idb
+*.pch
+*.exp
+__pycache__/
+*.py[cod]
+*.pdb
+*.map
+*.res
+
+# Editor and scratch files
+*.tmp
+*.bak
+*.swp
+*~
+.vscode/
+
+# Released files are tracked whatever their type
+!/free/**
+
+# Test VMs, copied per host
+/vm/
+
+# Locally downloaded specifications and reference sources; see audit records.
+/docs/references/

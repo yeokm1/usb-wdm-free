@@ -1,0 +1,76 @@
+; SPDX-License-Identifier: GPL-2.0-only
+;
+; wdmsmoke - test INF for the disposable build/lifetime driver
+; (build.md section 6). Installs on a root-enumerated devnode only,
+; through Add New Hardware / Add Hardware, "select from a list",
+; Have Disk. Never released.
+;
+; Copyright (C) 2026 Yeo Kheng Meng
+
+[Version]
+Signature="$CHICAGO$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%Prov%
+DriverVer=10/20/2026,0.0.0.1
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+wdmsmoke.sys=1
+
+[DestinationDirs]
+DefaultDestDir=10,System32\Drivers
+Smoke.NT.Copy=12
+
+[Manufacturer]
+%Mfg%=Models,NTamd64
+
+; 98 SE, ME, 2000, XP x86, Vista/7 x86 (undecorated)
+[Models]
+%Desc%=Smoke,ROOT\WDMSMOKE
+
+[Models.NTamd64]
+%Desc%=Smoke,ROOT\WDMSMOKE
+
+; ---- 98 SE and ME ----
+[Smoke]
+CopyFiles=Smoke.Copy
+AddReg=Smoke.AddReg
+
+[Smoke.Copy]
+wdmsmoke.sys
+
+[Smoke.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,wdmsmoke.sys
+
+; ---- 2000 and later, x86 and x64 ----
+[Smoke.NT]
+CopyFiles=Smoke.NT.Copy
+
+[Smoke.NT.Copy]
+wdmsmoke.sys
+
+[Smoke.NT.Services]
+AddService=wdmsmoke,0x00000002,Smoke.Service
+
+[Smoke.NTamd64]
+CopyFiles=Smoke.NT.Copy
+
+[Smoke.NTamd64.Services]
+AddService=wdmsmoke,0x00000002,Smoke.Service
+
+[Smoke.Service]
+DisplayName=%Desc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\wdmsmoke.sys
+
+[Strings]
+Prov="usb-wdm-free"
+Mfg="usb-wdm-free test"
+Desc="wdmsmoke test device (not a release)"
+Disk="wdmsmoke build folder"

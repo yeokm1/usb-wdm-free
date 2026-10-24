@@ -1,0 +1,76 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; LIBUSB0.INF - Windows 98 SE / ME: binds the libusb-win32 driver
+; (LIBUSB0.SYS, rebuilt here from 0.1.12.2) to a curated list of devices
+; that libusb-0.1 programs use (docs/design/libusb.md 6.2, 6.3). The class,
+; its GUID, the loader values and the SurpriseRemovalOK value follow the
+; INF template of upstream 0.1.12.2's inf_wizard.c (GPL-2.0-or-later).
+; 9x section only; no filters; LIBUSB0.DLL goes to SYSTEM (DIRID 11), where
+; the 9x loader searches, not SYSTEM32 (design 2.7 item 2).
+; Other devices: a copy of this INF with their own VID/PID line.
+[Version]
+Signature="$CHICAGO$"
+Class=LibUsbDevices
+ClassGUID={EB781AAF-9C70-4523-A5DF-642A87ECA567}
+Provider=%Provider%
+DriverVer=10/22/2026,0.1.13.0
+
+[ClassInstall]
+AddReg=LibUsb.ClassReg
+
+[LibUsb.ClassReg]
+HKR,,,,%ClassName%
+HKR,,Icon,,"-20"
+
+[Manufacturer]
+%Provider%=Devices
+
+; VID/PID only, from avrdude's avrdude.conf.in and usbdevs.h; never a
+; class or generic match (Owner, 2026-10-20).
+[Devices]
+%USBasp%=LibUsb,USB\VID_16C0&PID_05DC
+%USBtiny%=LibUsb,USB\VID_1781&PID_0C9F
+%AVRISP2%=LibUsb,USB\VID_03EB&PID_2104
+%JTAGICE2%=LibUsb,USB\VID_03EB&PID_2103
+%Dragon%=LibUsb,USB\VID_03EB&PID_2107
+
+[LibUsb]
+CopyFiles=LibUsb.Sys,LibUsb.Dll
+AddReg=LibUsb.AddReg
+
+[LibUsb.HW]
+AddReg=LibUsb.HwReg
+
+[LibUsb.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,LIBUSB0.SYS
+
+[LibUsb.HwReg]
+HKR,,SurpriseRemovalOK,0x00010001,1
+
+[LibUsb.Sys]
+LIBUSB0.SYS
+
+[LibUsb.Dll]
+LIBUSB0.DLL
+
+[DestinationDirs]
+LibUsb.Sys=10,System32\Drivers
+LibUsb.Dll=11
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+LIBUSB0.SYS=1
+LIBUSB0.DLL=1
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="usb-wdm-free libusb0 disk"
+ClassName="LibUSB-Win32 Devices"
+USBasp="USBasp and V-USB devices on the shared libusb PID (libusb0)"
+USBtiny="USBtinyISP (libusb0)"
+AVRISP2="Atmel AVRISP mkII (libusb0)"
+JTAGICE2="Atmel JTAGICE mkII (libusb0)"
+Dragon="Atmel AVR Dragon (libusb0)"

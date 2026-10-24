@@ -1,0 +1,147 @@
+; SPDX-License-Identifier: GPL-2.0-only
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; RTL815X.INF - usb-wdm-free RTL815X: Realtek RTL8152/RTL8153 USB Ethernet
+; in vendor mode, Windows 2000 (ethernet.md sections 1 item 8, 7.2, 7.4).
+; RTL81598.INF is the Windows 98 SE and ME INF. Written from the Windows
+; 2000 DDK network guide's INF pages; no DDK sample INF was read.
+;
+; Whole-device hardware ids: each is a dedicated network device whose
+; configuration with a vendor-class first interface RTL815X selects
+; (ethernet.md 5.1, 6.5). The ids are those of Linux r8152.c at f47d2236
+; except 0BDA:8155, 8156, 8157 and 815A, the 2.5/5/10 Gb/s parts (RTL8156
+; and later, not served yet). Another id in this list carrying such a chip
+; is refused at start (unknown chip version), with an event-log entry.
+; 0BDA:8153 moves here from CDCNET.INF's 98 SE/ME/2000 models when this
+; package ships (owner decision, ethernet.md 6.5).
+
+[Version]
+Signature="$Windows NT$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/24/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%D00%=RTL,USB\VID_0BDA&PID_8050
+%D01%=RTL,USB\VID_0BDA&PID_8053
+%D02%=RTL,USB\VID_0BDA&PID_8152
+%D03%=RTL,USB\VID_0BDA&PID_8153
+%D04%=RTL,USB\VID_045E&PID_07AB
+%D05%=RTL,USB\VID_045E&PID_07C6
+%D06%=RTL,USB\VID_045E&PID_0927
+%D07%=RTL,USB\VID_045E&PID_0C5E
+%D08%=RTL,USB\VID_04E8&PID_A101
+%D09%=RTL,USB\VID_17EF&PID_304F
+%D10%=RTL,USB\VID_17EF&PID_3054
+%D11%=RTL,USB\VID_17EF&PID_3062
+%D12%=RTL,USB\VID_17EF&PID_3069
+%D13%=RTL,USB\VID_17EF&PID_3082
+%D14%=RTL,USB\VID_17EF&PID_3098
+%D15%=RTL,USB\VID_17EF&PID_7205
+%D16%=RTL,USB\VID_17EF&PID_720C
+%D17%=RTL,USB\VID_17EF&PID_7214
+%D18%=RTL,USB\VID_17EF&PID_721E
+%D19%=RTL,USB\VID_17EF&PID_A359
+%D20%=RTL,USB\VID_17EF&PID_A387
+%D21%=RTL,USB\VID_13B1&PID_0041
+%D22%=RTL,USB\VID_0955&PID_09FF
+%D23%=RTL,USB\VID_2357&PID_0601
+%D24%=RTL,USB\VID_2357&PID_0602
+%D25%=RTL,USB\VID_2001&PID_B301
+%D26%=RTL,USB\VID_413C&PID_B097
+%D27%=RTL,USB\VID_0B05&PID_1976
+%D28%=RTL,USB\VID_20F4&PID_E02B
+%D29%=RTL,USB\VID_20F4&PID_E02C
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+rtl815x.sys=1
+
+[DestinationDirs]
+CopyNT=12
+
+[RTL.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+
+[CopyNT]
+rtl815x.sys
+
+[RegNT]
+HKR,Ndi,Service,,rtl815x
+HKR,Ndi\Interfaces,UpperRange,,ndis5
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+
+[RTL.NT.Services]
+AddService=rtl815x,2,Service,EventLog
+
+[Service]
+DisplayName=%Service%
+ServiceType=1
+StartType=3
+ErrorControl=1
+LoadOrderGroup=NDIS
+ServiceBinary=%12%\rtl815x.sys
+
+[EventLog]
+AddReg=EventLogReg
+
+[EventLogReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
+HKR,,TypesSupported,0x00010001,7
+
+; The Advanced tab: a locally administered address (ethernet.md 4.8).
+[Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="RTL815X installation disk"
+Service="usb-wdm-free RTL815X USB Ethernet"
+AddressDesc="Network Address"
+D00="Realtek RTL8152-based USB Ethernet (RTL815X)"
+D01="Realtek RTL8153-based USB Ethernet (RTL815X)"
+D02="Realtek RTL8152 USB Fast Ethernet (RTL815X)"
+D03="Realtek RTL8153 USB Gigabit Ethernet (RTL815X)"
+D04="Microsoft USB Ethernet adapter (RTL815X)"
+D05="Microsoft USB Ethernet adapter (RTL815X)"
+D06="Microsoft USB Ethernet adapter (RTL815X)"
+D07="Microsoft USB Ethernet adapter (RTL815X)"
+D08="Samsung USB Ethernet adapter (RTL815X)"
+D09="Lenovo USB Ethernet (RTL815X)"
+D10="Lenovo ThinkPad OneLink+ Dock Ethernet (RTL815X)"
+D11="Lenovo ThinkPad USB-C Dock Gen 3 Ethernet (RTL815X)"
+D12="Lenovo USB Ethernet (RTL815X)"
+D13="Lenovo ThinkPad Thunderbolt 3 Dock Gen 2 Ethernet (RTL815X)"
+D14="Lenovo USB Ethernet (RTL815X)"
+D15="Lenovo USB Ethernet (RTL815X)"
+D16="Lenovo ThinkPad USB-C Dongle Ethernet (RTL815X)"
+D17="Lenovo USB Ethernet (RTL815X)"
+D18="Lenovo USB-C Travel Hub Ethernet (RTL815X)"
+D19="Lenovo ThinkPad Hybrid USB-C Dock Ethernet (RTL815X)"
+D20="Lenovo ThinkPad USB-C Dock Gen 2 Ethernet (RTL815X)"
+D21="Linksys USB Ethernet adapter (RTL815X)"
+D22="NVIDIA USB Ethernet (RTL815X)"
+D23="TP-Link USB Ethernet adapter (RTL815X)"
+D24="TP-Link USB Ethernet adapter (RTL815X)"
+D25="D-Link USB Ethernet adapter (RTL815X)"
+D26="Dell USB Ethernet adapter (RTL815X)"
+D27="ASUS USB Ethernet adapter (RTL815X)"
+D28="TRENDnet USB Ethernet adapter (RTL815X)"
+D29="TRENDnet USB Ethernet adapter (RTL815X)"

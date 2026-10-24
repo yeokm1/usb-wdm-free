@@ -1,0 +1,43 @@
+# UAC2 M1 experimental NT import set; actual target validation is separate.
+# Work-item cleanup requires2000+; current transport speed interface isXP+.
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExQueueWorkItem
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!IoGetDeviceProperty
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IoBuildDeviceIoControlRequest
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!RtlAssert
+NTOSKRNL.EXE!IoOpenDeviceRegistryKey
+NTOSKRNL.EXE!ZwSetValueKey
+NTOSKRNL.EXE!ZwClose
+PORTCLS.SYS!PcAddAdapterDevice
+PORTCLS.SYS!PcRegisterPhysicalConnection
+PORTCLS.SYS!PcRegisterSubdevice
+PORTCLS.SYS!PcNewPort
+PORTCLS.SYS!PcInitializeAdapterDriver
+NTOSKRNL.EXE!KeReleaseMutex
+NTOSKRNL.EXE!KeInitializeMutex
+NTOSKRNL.EXE!KeReleaseSpinLock
+NTOSKRNL.EXE!KeAcquireSpinLockRaiseToDpc
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!ObfReferenceObject
+NTOSKRNL.EXE!IoFreeWorkItem
+NTOSKRNL.EXE!IoQueueWorkItem
+NTOSKRNL.EXE!IoAllocateWorkItem
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!PsTerminateSystemThread
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!PsCreateSystemThread
+PORTCLS.SYS!PcRegisterAdapterPowerManagement
+PORTCLS.SYS!PcNewServiceGroup
+# 98 SE thread join (uacusb.c): Exited event; the thread object only on WDM 1.10+
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!KeDelayExecutionThread

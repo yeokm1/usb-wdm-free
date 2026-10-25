@@ -35,7 +35,7 @@ The release gate is 98 SE under NUSB's EHCI and under xHCI98
 | Rank | Driver | Gap | Profile | State |
 |---|---|---|---|---|
 | 1 | `uvc98` | UVC 1.5: `bcdUVC 0x0150`, the 48-byte probe/commit, 1.5 VC descriptors (3-byte PU controls, encoding unit), formats the parser must skip (frame-based, H.264), NV12 | `uvcsim.py --uvc 1.5` (UVC 1.0 and 1.1 profiles exist) | this task |
-| 2 | `rtl815x` | everything: no device at all | new `rtlemu.py`, RTL8152/8153 bring-up, MAC, link, bulk RX/TX | this task |
+| 2 | `rtl815x` | everything: no device at all (since then a simulator only: real-chip behaviour, the RTL8152's data path on a guest, ME and 2000 remain) | new `rtlemu.py`, RTL8152/8153 bring-up, MAC, link, bulk RX/TX | done: `2026-10-23-rtl815x-sim.md`, `2026-10-25-rtl815x-rewrite.md` |
 | 3 | `cdcnet` | CDC-NCM has never run on a guest; link-state and speed notifications never seen (QEMU `usb-net` sends only "connected") | new NCM model (NTB16, notifications) | this task, after 1-2 |
 | 4 | `xpad98` | Xbox 360 wireless receiver with more than one pad: `xpademu.py receiver` populates slot 0 only, no connect/disconnect on a live receiver | `xpademu.py receiver --pads N` | this task, after 3 |
 | 5 | `usbcom` | more than one CDC-ACM function per device (the driver reports one COM port per function, up to `AC_MAX_FUNCS` 4); `acmemu.py` has one function | `acmemu.py --profile dual` | after 4 |
@@ -93,19 +93,24 @@ Claimed (`uvcdesc.c`, `uvcctrl.c`, `uvcneg.c`, `uvcfmt.c`, `uvcusb.c`):
 
 ### `rtl815x` (Realtek RTL8152/8153 Ethernet)
 
-Claimed (`rtlchip.c`, adapted from Linux `r8152.c`; `netusb.c`,
-`netcore.c`): vendor register access (request 0x05, PLA/USB MCU types,
-byte enables), chip identification from the `PLA_TCR0`/`TCR1` version bits (`RtlVersionFromTcr0`), RTL8152,
-8153, 8153B and 8153C bring-up sequences, MAC from `PLA_IDR` (or
-`PLA_BACKUP`), PHY access through OCP, link from `PLA_PHYSTATUS`, interrupt
-endpoint link status, RX descriptors (24-byte `rx_desc`, several frames per
-transfer), TX descriptors (8-byte `tx_desc`), multicast hash in `PLA_MAR`,
-promiscuous/all-multicast in `PLA_RCR`.
+Claimed (`rtlchip.c`; `netusb.c`, `netcore.c`): vendor register access
+(request 0x05, MAC/USB spaces, byte lanes), chip identification from the
+id bits of `MR_TX_CONFIG` (`RtlChipId`), RTL8152, 8153, 8153B and 8153C
+bring-up sequences, MAC from `MR_NODE_ID` (or `MR_NODE_ID_SAVED`), PHY
+access through the PHY window, link from `MR_LINK`, interrupt endpoint
+link status, receive records (24-byte header, several frames per
+transfer), transmit headers (8 bytes), multicast hash in `MR_HASH`,
+promiscuous/all-multicast in `MR_RX_ACCEPT`.
 
 Physical: none (`2026-10-22-ax88179-rtl815x.md`: "no device available").
-Simulator: none. Host unit tests (`rtltest.c`, `coretest.c`) run the cores
-against a mock register file. **Everything is a gap.** QEMU has no Realtek
-USB model.
+Simulator: `rtlemu.py`, this repository's model of the register interface
+(QEMU has no Realtek USB model): RTL8153 on 98 SE under xHCI98 and NUSB's
+EHCI (`2026-10-23-rtl815x-sim.md`), and with the rewritten core the
+RTL8153 under both and the RTL8153B under xHCI98
+(`2026-10-25-rtl815x-rewrite.md`). Host unit tests (`rtltest.c`,
+`coretest.c`) run the cores against a mock register file. Gaps: every
+real-chip behaviour (firmware, timing, PHY), the RTL8152's data path on a
+guest, ME and 2000.
 
 ### `cdcnet` (CDC-ECM, CDC-NCM, RNDIS)
 

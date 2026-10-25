@@ -759,6 +759,24 @@ v2 supports `RTL_VER_01/02/07` (8152, 8152B; `r8152b_init`), `03`-`06` (8153;
 later after. Register access is vendor control requests on the OCP space;
 bring-up is the per-revision `init`, `hw_phy_cfg`, `up` and `down` routines.
 
+Owner, 2026-10-25: the chip core (`rtlchip.c`, `rtlchip.h`), first adapted
+from `r8152.c` function by function, was rewritten, ahead of the move of
+the repository to GPL-2.0-or-later. The rewrite keeps the register facts (chip ids
+`4C00`, `4C10`, `4800`, `5C00`-`5C30`, `6000`, `6010`, `6400`; register
+addresses, bit values, the order of reads and writes, and which values
+read back decide a path) and states them as tables of register steps run
+by one interpreter, under this project's own names (`MR_`, `UR_`, `PR_`,
+`SR_`); no code, function names, comments or structure of `r8152.c` are
+kept. The facts were taken from the adapted core and its control-request
+traces. Check (`docs/testing/2026-10-25-rtl815x-rewrite.md`): a trace
+harness drove the old and new cores through every chip id at Full, High
+and SuperSpeed and 24 register-model variants (stuck and absent bits,
+efuse and PHY values, failed reads); the logged requests, sleeps and
+results are byte-identical. With a failure injected at each request the
+request count, status and register state match; the diagnostic
+`Timeouts` count differs only after an I/O failure. The core reports the chip id (`NET_PARAMS.Version`, e.g.
+`5c10`) where it reported Linux's `RTL_VER_` number before.
+
 - Receive: aggregated, each frame behind a 24-byte `rx_desc` (six dwords,
   lines 821-840), buffers of 16-48 KiB by revision (`rx_buf_sz`, lines
   9754-9909); the driver walks descriptors with bounds checks.
@@ -983,12 +1001,12 @@ Linux copyright lines and SPDX tag:
 | `src/net/cdcnet/ecm.c` | Linux `drivers/net/usb/cdc_ether.c` (Brownell; Ole Andre Vadla Ravnas): descriptor parsing quirks, device table | GPL-2.0-or-later |
 | `src/net/cdcnet/ncm.c` | Linux `drivers/net/usb/cdc_ncm.c` (Copyright (C) ST-Ericsson 2010-2012): NTB sizing and quirks | GPL-2.0 (taken from "Dual BSD/GPL") |
 | `src/net/common/*.c` (where it follows usbnet's pipeline logic) | Linux `drivers/net/usb/usbnet.c` (Brownell; David Hollis) | GPL-2.0-or-later |
-| `src/net/rtl815x/*.c` | Linux `drivers/net/usb/r8152.c` (Copyright (c) 2014 Realtek Semiconductor Corp.) | GPL-2.0-only |
+| `src/net/rtl815x/*.c` | Not adapted: written from the chips' register facts (section 6.4; owner, 2026-10-25) | - |
 | `src/net/ax88179/*.c` | Linux `drivers/net/usb/ax88179_178a.c` (Copyright (C) 2011-2013 ASIX) | GPL-2.0-or-later |
 
-All are compatible with this repository's GPL-2.0. `r8152.c` is
-GPL-2.0-only, so `rtl815x` must stay GPL-2.0 exactly, which this repository
-already is. No Realtek firmware blob is redistributed. Not used: Microsoft's
+All are compatible with this repository's GPL-2.0. `rtl815x` was
+rewritten from the register facts (section 6.4) and no longer follows
+`r8152.c`'s code. No Realtek firmware blob is redistributed. Not used: Microsoft's
 RNDIS kit binaries, ASIX's or Realtek's Windows drivers, and the vendor INFs
 in the non-free repository beyond the facts quoted in section 2.6.
 

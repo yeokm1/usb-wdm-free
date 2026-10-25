@@ -1,1222 +1,922 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (c) 2014 Realtek Semiconductor Corp. All rights reserved.
  * Copyright (C) 2026 Yeo Kheng Meng
  *
- * RTL815X chip core: the RTL8152/RTL8152B (RTL_VER_01, 02, 07), RTL8153
- * (03 to 06), RTL8153B (08, 09) and RTL8153C (14) register sequences,
- * adapted from Linux drivers/net/usb/r8152.c at
- * f47d223627f80cb7a1eb14c585fe6cb35de5e984 (ethernet.md section 6.4),
- * behind the netchip.h interface. Function names follow Linux so each
- * routine can be compared with its source.
+ * RTL815X chip core behind the netchip.h interface (ethernet.md section
+ * 6.4): Realtek RTL8152 (ids 4C00, 4C10, 4800), RTL8153 (5C00 to 5C30),
+ * RTL8153B (6000, 6010) and RTL8153C (6400) in their vendor configuration.
  *
- * Mapping to Linux: Start is probe (rtl8152_get_version, rtl_ops_init,
- * ops->init, hw_phy_cfg + rtl8152_set_speed from rtl_hw_phy_work_func_t,
- * set_ethernet_addr) followed by ndo_open (ops->up). Link is set_carrier
- * (ops->enable or ops->disable on a carrier change). SetFilter is
- * _rtl8152_set_rx_mode. Suspend is rtl8152_system_suspend (ops->down);
- * Resume is rtl8152_reset_resume (init, hw_phy_cfg, set_speed, address,
- * then up), since a Windows 98 or 2000 system sleep may cut the power.
- * Stop is ndo_stop plus disconnect (ops->down, ops->unload).
+ * Every chip-side sequence is a table of register steps (STEP), run by
+ * one small interpreter (Run). A step names a register, what to clear and
+ * what to set; guard steps limit the steps after them to some chips or
+ * USB speeds; the few decisions that depend on a value read back are
+ * hooks (Hook). The register addresses, values and the order of writes
+ * are facts of the chips' register interface; rtlchip.h names them.
  *
- * Where this core departs from Linux, on purpose:
- * - No firmware patch is loaded (ethernet.md 6.4); Linux runs the same
- *   sequences when its request_firmware fails, which is this path.
- * - RX VLAN untagging is off (Linux enables it with the default
- *   NETIF_F_HW_VLAN_CTAG_RX feature): v1 has no VLAN, frames arrive tagged.
- * - No checksum offload or TSO: the transmit descriptor is FS|LS|length.
- * - No wake-up: the saved WoL options are 0, as for a device that cannot
- *   wake; runtime suspend (autosuspend_en) is never enabled.
- * - The MAC pass-through of docks (vendor_mac_passthru_addr_read) and
- *   the Dell TB16 RX-aggregation quirk are not done.
- * - The lower edge stops the USB transfers before disable runs, so the
- *   FIFO-empty waits of rtl_disable may run to their bound; they are
- *   bounded as in Linux (1000 polls), with a 1 ms sleep each.
- * - usb_enable_lpm is a host-side Linux call with no equivalent here.
+ * What the core does, in the netchip.h terms:
+ * - Start: read the chip id, then Setup (the chip's base setup), PhySetup,
+ *   Negotiate (advertise and restart autonegotiation), take the station
+ *   address, and Wake (out of the low-power "OOB" state, receiver ready
+ *   but off).
+ * - Link: read MR_LINK; on a change to up, RxOn and the receive mode; on a
+ *   change to down, RxOff.
+ * - Stop and Suspend: Sleep (back into OOB, as the chip waits while no
+ *   driver runs it); Stop also turns the power-cut feature as Detach says.
+ * - Resume: the whole of Start but the id read, since a 98 or 2000 system
+ *   sleep may have cut the chip's power.
+ *
+ * Choices of this core: no PHY firmware patch is loaded (ethernet.md 6.4);
+ * VLAN tags are left in received frames; no checksum offload or TSO; no
+ * wake-up source; the chip's runtime power saving (UPS) stays off. The
+ * lower edge stops the bulk transfers before RxOff and Sleep run, so their
+ * FIFO-empty waits may run to their bound (1000 tries, 1 ms apart).
  */
 #include "rtlchip.h"
 
-#define VER(s) ((s)->Version)
-
 /* ------------------------------------------------------------------ */
-/* Register access (generic_ocp_read/write and the helpers above them). */
+/* Chips and guards */
 
-static void Put32(nc_u8 *b, nc_u32 v)
+/* One bit per supported id, in the order of Ids[]. */
+static const nc_u16 Ids[] = {
+    ID_4C00, ID_4C10, ID_4800, ID_5C00, ID_5C10, ID_5C20, ID_5C30, ID_6000, ID_6010, ID_6400
+};
+#define K_4C00  0x0001
+#define K_4C10  0x0002
+#define K_4800  0x0004
+#define K_5C00  0x0008
+#define K_5C10  0x0010
+#define K_5C20  0x0020
+#define K_5C30  0x0040
+#define K_6000  0x0080
+#define K_6010  0x0100
+#define K_6400  0x0200
+#define K_8152  (K_4C00 | K_4C10 | K_4800)
+#define K_8153  (K_5C00 | K_5C10 | K_5C20 | K_5C30)
+#define K_8153B (K_6000 | K_6010)
+#define K_LATER (K_8153B | K_6400)          /* 8153B and 8153C */
+#define K_GIG   (K_8153 | K_LATER)
+#define K_ANY   0xffff
+
+/* USB speeds, for guards. */
+#define U_FULL  1
+#define U_HIGH  2
+#define U_SUPER 4
+#define U_ANY   7
+
+static int SpeedBit(const RTL_STATE *s)
 {
-    b[0] = (nc_u8)v; b[1] = (nc_u8)(v >> 8); b[2] = (nc_u8)(v >> 16); b[3] = (nc_u8)(v >> 24);
+    return s->UsbSpeed == NC_SPEED_SUPER ? U_SUPER : s->UsbSpeed == NC_SPEED_HIGH ? U_HIGH : U_FULL;
 }
 
-static nc_u32 Get32(const nc_u8 *b)
+/* ------------------------------------------------------------------ */
+/* Register access */
+
+static nc_u32 Le32(const nc_u8 *b)
 {
     return (nc_u32)b[0] | ((nc_u32)b[1] << 8) | ((nc_u32)b[2] << 16) | ((nc_u32)b[3] << 24);
 }
 
-static void get_registers(NET_IO *io, nc_u16 value, nc_u16 index, nc_u16 size, nc_u8 *data)
+static void SetLe32(nc_u8 *b, nc_u32 v)
 {
-    NcIoRead(io, RTL8152_REQ_GET_REGS, value, index, data, size);
+    int i;
+    for (i = 0; i < 4; i++) b[i] = (nc_u8)(v >> (8 * i));
 }
 
-static void set_registers(NET_IO *io, nc_u16 value, nc_u16 index, nc_u16 size, const nc_u8 *data)
+/* A register of 1, 2 or 4 bytes is read as its whole dword. A word read
+ * names the word's two lanes in wIndex; byte and dword reads name none. */
+static nc_u32 Get(NET_IO *io, nc_u16 space, nc_u16 reg, int size)
 {
-    NcIoWrite(io, RTL8152_REQ_SET_REGS, value, index, data, size);
+    nc_u8 b[4];
+    int shift = (reg & 3) * 8;
+    nc_u16 lanes = (nc_u16)(size == 2 ? RTL_LANES_WORD << (reg & 2) : 0);
+    NcIoRead(io, RTL_REQ, (nc_u16)(reg & ~3), (nc_u16)(space | lanes), b, 4);
+    if (size == 4) return Le32(b);
+    return (Le32(b) >> shift) & (size == 2 ? 0xffffUL : 0xffUL);
 }
 
-static void generic_ocp_read(NET_IO *io, nc_u16 index, nc_u16 size, nc_u8 *data, nc_u16 type)
+/* A register write is one dword with the register's lanes enabled. */
+static void Put(NET_IO *io, nc_u16 space, nc_u16 reg, int size, nc_u32 value)
 {
-    const nc_u16 limit = (nc_u16)64;
-    if ((size & 3) || !size || (index & 3) || (nc_u32)index + size > 0xffff) {
-        if (io->Status >= 0) io->Status = NC_E_MALFORMED;
+    nc_u8 b[4];
+    int at = reg & 3;
+    nc_u16 lanes = RTL_LANES_ALL;
+    if (size == 2) {
+        lanes = (nc_u16)(RTL_LANES_WORD << (reg & 2));
+        value = (value & 0xffff) << (8 * (reg & 2));
+    } else if (size == 1) {
+        lanes = (nc_u16)(RTL_LANES_BYTE << at);
+        value = (value & 0xff) << (8 * at);
+    }
+    SetLe32(b, value);
+    NcIoWrite(io, RTL_REQ, (nc_u16)(reg & ~3), (nc_u16)(space | lanes), b, 4);
+}
+
+static void Edit(NET_IO *io, nc_u16 space, nc_u16 reg, int size, nc_u32 clear, nc_u32 set)
+{
+    Put(io, space, reg, size, (Get(io, space, reg, size) & ~clear) | set);
+}
+
+/* Eight bytes at a dword boundary: one request, or, with the last two
+ * bytes left alone, a full dword and then a dword with two lanes. */
+static void PutEight(NET_IO *io, nc_u16 space, nc_u16 reg, const nc_u8 *data, int six)
+{
+    if (!six) {
+        NcIoWrite(io, RTL_REQ, reg, (nc_u16)(space | RTL_LANES_ALL), data, 8);
         return;
     }
-    while (size) {
-        nc_u16 n = (nc_u16)(size > limit ? limit : size);
-        get_registers(io, index, type, n, data);
-        index = (nc_u16)(index + n); data += n; size = (nc_u16)(size - n);
+    NcIoWrite(io, RTL_REQ, reg, (nc_u16)(space | RTL_LANES_ALL), data, 4);
+    NcIoWrite(io, RTL_REQ, (nc_u16)(reg + 4), (nc_u16)(space | RTL_LANES_WORD), data + 4, 4);
+}
+
+/* PHY registers: MR_PHY_PAGE selects the 4 KiB page, the window at
+ * MR_PHY_WINDOW shows it. The page last written is remembered. */
+static nc_u16 PhyAt(RTL_STATE *s, NET_IO *io, nc_u16 reg)
+{
+    nc_u16 page = (nc_u16)(reg & 0xf000);
+    if (s->PhyPage != page) {
+        Put(io, RTL_SPACE_MAC, MR_PHY_PAGE, 2, page);
+        s->PhyPage = page;
     }
+    return (nc_u16)(MR_PHY_WINDOW | (reg & 0x0fff));
 }
 
-static void generic_ocp_write(NET_IO *io, nc_u16 index, nc_u16 byteen, nc_u16 size,
-                              const nc_u8 *data, nc_u16 type)
+static nc_u16 PhyGet(RTL_STATE *s, NET_IO *io, nc_u16 reg)
 {
-    const nc_u16 limit = (nc_u16)512;
-    nc_u16 byteen_start, byteen_end, byen;
-    if ((size & 3) || !size || (index & 3) || (nc_u32)index + size > 0xffff) {
-        if (io->Status >= 0) io->Status = NC_E_MALFORMED;
-        return;
-    }
-    byteen_start = (nc_u16)(byteen & BYTE_EN_START_MASK);
-    byteen_end = (nc_u16)(byteen & BYTE_EN_END_MASK);
-    byen = (nc_u16)(byteen_start | (byteen_start << 4));
-    /* Split the first DWORD if the byte_en is not 0xff */
-    if (byen != BYTE_EN_DWORD) {
-        set_registers(io, index, (nc_u16)(type | byen), 4, data);
-        index = (nc_u16)(index + 4); data += 4; size = (nc_u16)(size - 4);
-    }
-    if (size) {
-        byen = (nc_u16)(byteen_end | (byteen_end >> 4));
-        /* Split the last DWORD if the byte_en is not 0xff */
-        if (byen != BYTE_EN_DWORD) size = (nc_u16)(size - 4);
-        while (size) {
-            nc_u16 n = (nc_u16)(size > limit ? limit : size);
-            set_registers(io, index, (nc_u16)(type | BYTE_EN_DWORD), n, data);
-            index = (nc_u16)(index + n); data += n; size = (nc_u16)(size - n);
-        }
-        /* Set the last DWORD */
-        if (byen != BYTE_EN_DWORD) set_registers(io, index, (nc_u16)(type | byen), 4, data);
-    }
+    return (nc_u16)Get(io, RTL_SPACE_MAC, PhyAt(s, io, reg), 2);
 }
 
-static nc_u32 ocp_read_dword(NET_IO *io, nc_u16 type, nc_u16 index)
+static void PhyPut(RTL_STATE *s, NET_IO *io, nc_u16 reg, nc_u16 value)
 {
-    nc_u8 b[4];
-    generic_ocp_read(io, index, 4, b, type);
-    return Get32(b);
+    Put(io, RTL_SPACE_MAC, PhyAt(s, io, reg), 2, value);
 }
 
-static void ocp_write_dword(NET_IO *io, nc_u16 type, nc_u16 index, nc_u32 data)
-{
-    nc_u8 b[4];
-    Put32(b, data);
-    generic_ocp_write(io, index, BYTE_EN_DWORD, 4, b, type);
-}
-
-static nc_u16 ocp_read_word(NET_IO *io, nc_u16 type, nc_u16 index)
-{
-    nc_u8 b[4];
-    nc_u16 byen = BYTE_EN_WORD;
-    nc_u8 shift = (nc_u8)(index & 2);
-    index &= ~3;
-    byen = (nc_u16)(byen << shift);
-    generic_ocp_read(io, index, 4, b, (nc_u16)(type | byen));
-    return (nc_u16)(Get32(b) >> (shift * 8));
-}
-
-static void ocp_write_word(NET_IO *io, nc_u16 type, nc_u16 index, nc_u32 data)
-{
-    nc_u8 b[4];
-    nc_u16 byen = BYTE_EN_WORD;
-    nc_u8 shift = (nc_u8)(index & 2);
-    data &= 0xffff;
-    if (index & 2) {
-        byen = (nc_u16)(byen << shift);
-        data <<= (shift * 8);
-        index &= ~3;
-    }
-    Put32(b, data);
-    generic_ocp_write(io, index, byen, 4, b, type);
-}
-
-static nc_u8 ocp_read_byte(NET_IO *io, nc_u16 type, nc_u16 index)
-{
-    nc_u8 b[4];
-    nc_u8 shift = (nc_u8)(index & 3);
-    index &= ~3;
-    generic_ocp_read(io, index, 4, b, type);
-    return (nc_u8)(Get32(b) >> (shift * 8));
-}
-
-static void ocp_write_byte(NET_IO *io, nc_u16 type, nc_u16 index, nc_u32 data)
-{
-    nc_u8 b[4];
-    nc_u16 byen = BYTE_EN_BYTE;
-    nc_u8 shift = (nc_u8)(index & 3);
-    data &= 0xff;
-    if (index & 3) {
-        byen = (nc_u16)(byen << shift);
-        data <<= (shift * 8);
-        index &= ~3;
-    }
-    Put32(b, data);
-    generic_ocp_write(io, index, byen, 4, b, type);
-}
-
-static void ocp_dword_w0w1(NET_IO *io, nc_u16 type, nc_u16 index, nc_u32 clear, nc_u32 set)
-{
-    nc_u32 v = ocp_read_dword(io, type, index);
-    ocp_write_dword(io, type, index, (v & ~clear) | set);
-}
-
-static void ocp_word_w0w1(NET_IO *io, nc_u16 type, nc_u16 index, nc_u16 clear, nc_u16 set)
-{
-    nc_u16 v = ocp_read_word(io, type, index);
-    ocp_write_word(io, type, index, (nc_u16)((v & ~clear) | set));
-}
-
-static void ocp_byte_w0w1(NET_IO *io, nc_u16 type, nc_u16 index, nc_u8 clear, nc_u8 set)
-{
-    nc_u8 v = ocp_read_byte(io, type, index);
-    ocp_write_byte(io, type, index, (nc_u8)((v & ~clear) | set));
-}
-
-#define ocp_dword_clr_bits(io, t, i, c) ocp_dword_w0w1(io, t, i, c, 0)
-#define ocp_dword_set_bits(io, t, i, s) ocp_dword_w0w1(io, t, i, 0, s)
-#define ocp_word_clr_bits(io, t, i, c)  ocp_word_w0w1(io, t, i, (nc_u16)(c), 0)
-#define ocp_word_set_bits(io, t, i, s)  ocp_word_w0w1(io, t, i, 0, (nc_u16)(s))
-#define ocp_byte_clr_bits(io, t, i, c)  ocp_byte_w0w1(io, t, i, (nc_u8)(c), 0)
-#define ocp_byte_set_bits(io, t, i, s)  ocp_byte_w0w1(io, t, i, 0, (nc_u8)(s))
-
-static void ocp_word_test_and_clr_bits(NET_IO *io, nc_u16 type, nc_u16 index, nc_u16 clear)
-{
-    nc_u16 v = ocp_read_word(io, type, index);
-    if (v & clear) ocp_write_word(io, type, index, (nc_u16)(v & ~clear));
-}
-
-static nc_u16 ocp_reg_read(RTL_STATE *s, NET_IO *io, nc_u16 addr)
-{
-    nc_u16 base = (nc_u16)(addr & 0xf000);
-    if (base != s->OcpBase) {
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_OCP_GPHY_BASE, base);
-        s->OcpBase = base;
-    }
-    return ocp_read_word(io, MCU_TYPE_PLA, (nc_u16)((addr & 0x0fff) | 0xb000));
-}
-
-static void ocp_reg_write(RTL_STATE *s, NET_IO *io, nc_u16 addr, nc_u16 data)
-{
-    nc_u16 base = (nc_u16)(addr & 0xf000);
-    if (base != s->OcpBase) {
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_OCP_GPHY_BASE, base);
-        s->OcpBase = base;
-    }
-    ocp_write_word(io, MCU_TYPE_PLA, (nc_u16)((addr & 0x0fff) | 0xb000), data);
-}
-
-static void ocp_reg_w0w1(RTL_STATE *s, NET_IO *io, nc_u16 addr, nc_u16 clear, nc_u16 set)
-{
-    nc_u16 v = ocp_reg_read(s, io, addr);
-    ocp_reg_write(s, io, addr, (nc_u16)((v & ~clear) | set));
-}
-#define ocp_reg_clr_bits(s, io, a, c) ocp_reg_w0w1(s, io, a, (nc_u16)(c), 0)
-#define ocp_reg_set_bits(s, io, a, v) ocp_reg_w0w1(s, io, a, 0, (nc_u16)(v))
-
-static void r8152_mdio_write(RTL_STATE *s, NET_IO *io, nc_u16 reg, nc_u16 value)
-{
-    ocp_reg_write(s, io, (nc_u16)(OCP_BASE_MII + reg * 2), value);
-}
-
-static nc_u16 r8152_mdio_read(RTL_STATE *s, NET_IO *io, nc_u16 reg)
-{
-    return ocp_reg_read(s, io, (nc_u16)(OCP_BASE_MII + reg * 2));
-}
-
-static void r8152_mdio_set_bit(RTL_STATE *s, NET_IO *io, nc_u16 reg, nc_u16 set)
-{
-    r8152_mdio_write(s, io, reg, (nc_u16)(r8152_mdio_read(s, io, reg) | set));
-}
-
-static void r8152_mdio_clr_bit(RTL_STATE *s, NET_IO *io, nc_u16 reg, nc_u16 clear)
-{
-    r8152_mdio_write(s, io, reg, (nc_u16)(r8152_mdio_read(s, io, reg) & ~clear));
-}
-
-static void r8152_mdio_test_and_clr_bit(RTL_STATE *s, NET_IO *io, nc_u16 reg, nc_u16 clear)
-{
-    nc_u16 v = r8152_mdio_read(s, io, reg);
-    if (v & clear) r8152_mdio_write(s, io, reg, (nc_u16)(v & ~clear));
-}
-
-static void sram_write(RTL_STATE *s, NET_IO *io, nc_u16 addr, nc_u16 data)
-{
-    ocp_reg_write(s, io, OCP_SRAM_ADDR, addr);
-    ocp_reg_write(s, io, OCP_SRAM_DATA, data);
-}
-
-static nc_u16 sram_read(RTL_STATE *s, NET_IO *io, nc_u16 addr)
-{
-    ocp_reg_write(s, io, OCP_SRAM_ADDR, addr);
-    return ocp_reg_read(s, io, OCP_SRAM_DATA);
-}
-
-static void sram_write_w0w1(RTL_STATE *s, NET_IO *io, nc_u16 addr, nc_u16 clear, nc_u16 set)
-{
-    nc_u16 v = sram_read(s, io, addr);
-    ocp_reg_write(s, io, OCP_SRAM_DATA, (nc_u16)((v & ~clear) | set));
-}
-
-static int Gone(NET_IO *io) { return io->Status < 0; }
 
 /* ------------------------------------------------------------------ */
-/* Small Linux routines. */
+/* Steps */
 
-static void rxdy_gated_en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_MISC_1, RXDY_GATED_EN);
-    else ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MISC_1, RXDY_GATED_EN);
-}
+enum {
+    OP_END,
+    OP_ONLY,        /* Kinds, Speeds: the next Count steps run only on a match */
+    OP_PUT,         /* Space Reg Size <- Set */
+    OP_EDIT,        /* Space Reg Size: clear Clear, set Set */
+    OP_SIX,         /* Space Reg: eight bytes of Set's low byte, last two left alone */
+    OP_WAIT,        /* Space Reg Size until (value & Clear) == Set; Count tries Ms apart */
+    OP_WAIT_LATE,   /* the same, sleeping before each read; no timeout counted */
+    OP_PHY_PUT,     /* PHY Reg <- Set */
+    OP_PHY_EDIT,    /* PHY Reg: clear Clear, set Set */
+    OP_PHY_TRIM,    /* PHY Reg: clear Clear, written only if any of it was set */
+    OP_PHY_WAIT,    /* PHY Reg until (value & Clear) == Set, sleeping first; Count x Ms */
+    OP_PHY_STATE,   /* PHY Reg until bit (value & Clear) of Set is set; Count x Ms */
+    OP_SRAM_PUT,    /* PHY SRAM Reg <- Set */
+    OP_SRAM_EDIT,   /* PHY SRAM Reg: clear Clear, set Set */
+    OP_TRIM,        /* Space Reg Size: clear Clear, written only if any of it was set */
+    OP_SLEEP,       /* Ms */
+    OP_RUN,         /* the sequence Seq[Count] */
+    OP_HOOK         /* Hook(Count) */
+};
 
-static void r8153_teredo_off(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_03: case RTL_VER_04:
-    case RTL_VER_05: case RTL_VER_06: case RTL_VER_07:
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_TEREDO_CFG,
-                          TEREDO_SEL | TEREDO_RS_EVENT_MASK | OOB_TEREDO_EN);
-        break;
-    default:
-        /* bits 0 to 7 are write-1-to-clear */
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_TEREDO_CFG, 0xff);
-        break;
-    }
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_WDT6_CTRL, WDT6_SET_MODE);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_REALWOW_TIMER, 0);
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_TEREDO_TIMER, 0);
-}
+typedef struct STEP {
+    nc_u8 Op, Size, Ms, Space;   /* Space: 1 MAC, 0 USB */
+    nc_u16 Reg, Count;
+    nc_u32 Clear, Set;
+} STEP;
 
-static void rtl_reset_bmu(NET_IO *io)
-{
-    ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_BMU_RESET, BMU_RESET_EP_IN | BMU_RESET_EP_OUT);
-    ocp_byte_set_bits(io, MCU_TYPE_USB, USB_BMU_RESET, BMU_RESET_EP_IN | BMU_RESET_EP_OUT);
-}
+#define MAC 1
+#define USB 0
+#define END                      { OP_END, 0, 0, 0, 0, 0, 0, 0 }
+#define ONLY(kinds, speeds, n)   { OP_ONLY, 0, 0, 0, (nc_u16)(kinds), (nc_u16)(n), (speeds), 0 }
+#define PUT(sp, size, r, v)      { OP_PUT, size, 0, sp, r, 0, 0, (v) }
+#define EDIT(sp, size, r, c, v)  { OP_EDIT, size, 0, sp, r, 0, (c), (v) }
+#define SET(sp, size, r, v)      EDIT(sp, size, r, 0, v)
+#define CLR(sp, size, r, c)      EDIT(sp, size, r, c, 0)
+#define TRIM(sp, size, r, c)     { OP_TRIM, size, 0, sp, r, 0, (c), 0 }
+#define SIX(sp, r, byte)         { OP_SIX, 0, 0, sp, r, 0, 0, (byte) }
+#define WAIT(sp, size, r, mask, want, n, ms) { OP_WAIT, size, ms, sp, r, n, (mask), (want) }
+#define WAIT_LATE(sp, size, r, mask, want, n, ms) { OP_WAIT_LATE, size, ms, sp, r, n, (mask), (want) }
+#define PHY_PUT(r, v)            { OP_PHY_PUT, 2, 0, 0, r, 0, 0, (v) }
+#define PHY_EDIT(r, c, v)        { OP_PHY_EDIT, 2, 0, 0, r, 0, (c), (v) }
+#define PHY_SET(r, v)            PHY_EDIT(r, 0, v)
+#define PHY_CLR(r, c)            PHY_EDIT(r, c, 0)
+#define PHY_TRIM(r, c)           { OP_PHY_TRIM, 2, 0, 0, r, 0, (c), 0 }
+#define PHY_WAIT(r, mask, want, n, ms) { OP_PHY_WAIT, 2, ms, 0, r, n, (mask), (want) }
+#define PHY_STATE(states)        { OP_PHY_STATE, 2, 20, 0, PR_STATE, 500, PHYST_MASK, (states) }
+#define SRAM_PUT(r, v)           { OP_SRAM_PUT, 2, 0, 0, r, 0, 0, (v) }
+#define SRAM_SET(r, v)           { OP_SRAM_EDIT, 2, 0, 0, r, 0, 0, (v) }
+#define SLEEP(ms)                { OP_SLEEP, 0, ms, 0, 0, 0, 0, 0 }
+#define RUN(q)                   { OP_RUN, 0, 0, 0, 0, q, 0, 0 }
+#define HOOK(h)                  { OP_HOOK, 0, 0, 0, 0, h, 0, 0 }
 
-static void r8152b_reset_packet_filter(NET_IO *io)
-{
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_FMC, FMC_FCR_MCU_EN);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_FMC, FMC_FCR_MCU_EN);
-}
+/* Sequence numbers (Seq[]) */
+enum {
+    Q_RX_GATE, Q_RX_UNGATE, Q_TEREDO_OFF, Q_RESET_MAC, Q_RESET_BMU, Q_REBUILD_LIST,
+    Q_LEAVE_OOB, Q_QUIESCE, Q_POWER_CUT_OFF, Q_U1U2_OFF, Q_U1U2_ON, Q_ALDPS_OFF, Q_ALDPS_ON,
+    Q_EEE_OFF, Q_EEE_ON, Q_NO_WAKE, Q_CFG34_BIT8, Q_AUTOLOAD, Q_DRAIN, Q_QUEUE_WAKE_OFF,
+    Q_SETUP_8152, Q_SETUP_8153, Q_SETUP_LATER, Q_PHY_8152, Q_PHY_8153, Q_PHY_LATER,
+    Q_FIRST_FILL, Q_WAKE_8152, Q_WAKE_8153, Q_WAKE_8153B, Q_WAKE_8153C, Q_SLEEP, Q_DETACH,
+    Q_RX_ON, Q_RX_OFF, Q_BIAS_FULL, Q_BIAS_LOW
+};
 
-/* rtl8152_nic_reset, default branch: every version this core serves. */
-static void rtl8152_nic_reset(RTL_STATE *s, NET_IO *io)
-{
-    int i;
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CR, CR_RST);
-    for (i = 0; i < 1000; i++) {
-        if (Gone(io)) break;
-        if (!(ocp_read_byte(io, MCU_TYPE_PLA, PLA_CR) & CR_RST)) return;
-        NcIoSleep(io, 1);
-    }
-    s->Timeouts++;
-}
+/* Hook numbers (Hook()) */
+enum {
+    H_PHY_WAKE, H_BURST, H_LINK_FLAGS, H_PACKAGE, H_UPS_CHECK,
+    H_BIAS, H_ADC_TRIM, H_SAW_TIMER, H_EEE_CLOCKS, H_EEE_PLUS, H_GAP
+};
 
-static nc_u16 rtl8152_get_speed(NET_IO *io)
-{
-    return ocp_read_word(io, MCU_TYPE_PLA, PLA_PHYSTATUS);
-}
+/* PHY states a wait accepts (PR_STATE low bits, as bits of a set). */
+#define ST_LAN_ON   (1u << PHYST_LAN_ON)
+#define ST_SETTLED  ((1u << PHYST_LAN_ON) | (1u << PHYST_POWER_DOWN) | (1u << PHYST_EXT_INIT))
 
-static void rtl_eee_plus_en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_EEEP_CR, EEEP_CR_EEEP_TX);
-    else ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_EEEP_CR, EEEP_CR_EEEP_TX);
-}
+/* Receive-path gate: while set, the MAC hands nothing to USB. */
+static const STEP SqRxGate[] = { SET(MAC, 2, MR_MISC1, MISC1_RX_GATE), END };
+static const STEP SqRxUngate[] = { CLR(MAC, 2, MR_MISC1, MISC1_RX_GATE), END };
 
-static void rtl_set_eee_plus(NET_IO *io)
-{
-    rtl_eee_plus_en(io, (rtl8152_get_speed(io) & RTL_10BPS) != 0);
-}
+/* Teredo wake-up offload off, its timers cleared. */
+static const STEP SqTeredoOff[] = {
+    ONLY(K_8152 | K_8153, U_ANY, 1), CLR(MAC, 2, MR_TEREDO, 0x80ff),
+    ONLY(K_LATER, U_ANY, 1), PUT(MAC, 1, MR_TEREDO, 0xff),     /* low byte: write 1 to clear */
+    PUT(MAC, 2, MR_WDT6, 0x0010),
+    PUT(MAC, 2, MR_WOW_TMR, 0),
+    PUT(MAC, 4, MR_TEREDO_TMR, 0),
+    END
+};
 
-static void rtl_rx_vlan_en(NET_IO *io, int enable)
-{
-    /* Every version this core serves uses PLA_CPCR. */
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_CPCR, CPCR_RX_VLAN);
-    else ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_CPCR, CPCR_RX_VLAN);
-}
+static const STEP SqResetMac[] = {
+    PUT(MAC, 1, MR_COMMAND, CMD_RESET),
+    WAIT(MAC, 1, MR_COMMAND, CMD_RESET, 0, 1000, 1),
+    END
+};
 
-static void rtl_tally_reset(NET_IO *io)
-{
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_RSTTALLY, TALLY_RESET);
-}
+/* Bulk endpoint buffer units: both directions reset. */
+static const STEP SqResetBmu[] = { CLR(USB, 1, UR_BMU, 0x03), SET(USB, 1, UR_BMU, 0x03), END };
 
-static void wait_oob_link_list_ready(RTL_STATE *s, NET_IO *io)
-{
-    int i;
-    for (i = 0; i < 1000; i++) {
-        if (Gone(io)) return;
-        if (ocp_read_byte(io, MCU_TYPE_PLA, PLA_OOB_CTRL) & LINK_LIST_READY) return;
-        NcIoSleep(io, 1);
-    }
-    s->Timeouts++;
-}
+static const STEP SqRebuildList[] = {
+    WAIT(MAC, 1, MR_OOB, OOB_LIST_READY, OOB_LIST_READY, 1000, 1),
+    SET(MAC, 2, MR_SFF7, 0x8000),
+    WAIT(MAC, 1, MR_OOB, OOB_LIST_READY, OOB_LIST_READY, 1000, 1),
+    END
+};
 
-static void r8152_power_cut_en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_USB, USB_UPS_CTRL, POWER_CUT);
-    else ocp_word_clr_bits(io, MCU_TYPE_USB, USB_UPS_CTRL, POWER_CUT);
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_PM_CTRL_STATUS, RESUME_INDICATE);
-}
+static const STEP SqLeaveOob[] = {
+    CLR(MAC, 1, MR_OOB, OOB_ACTIVE),
+    CLR(MAC, 2, MR_SFF7, 0x4000),
+    RUN(Q_REBUILD_LIST),
+    END
+};
 
-static void r8153_power_cut_en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_USB, USB_POWER_CUT, PWR_EN | PHASE2_EN);
-    else ocp_word_clr_bits(io, MCU_TYPE_USB, USB_POWER_CUT, PWR_EN | PHASE2_EN);
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_MISC_0, PCUT_STATUS);
-}
+/* The 8153 family's way out of OOB, up to the frame size. */
+static const STEP SqQuiesce[] = {
+    RUN(Q_RX_GATE),
+    RUN(Q_TEREDO_OFF),
+    CLR(MAC, 4, MR_RX_ACCEPT, ACC_MASK),
+    RUN(Q_RESET_MAC),
+    RUN(Q_RESET_BMU),
+    RUN(Q_LEAVE_OOB),
+    CLR(MAC, 2, MR_CPLUS, CPLUS_RX_VLAN),
+    PUT(MAC, 2, MR_RX_MAX_LEN, RX_MAX_LEN),
+    END
+};
 
-static void r8153b_power_cut_en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_USB, USB_POWER_CUT, PWR_EN | PHASE2_EN);
-    else ocp_word_clr_bits(io, MCU_TYPE_USB, USB_POWER_CUT, PWR_EN);
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_MISC_0, PCUT_STATUS);
-}
+static const STEP SqPowerCutOff[] = {
+    ONLY(K_8152, U_ANY, 2), CLR(USB, 2, UR_UPS, 0x0100), CLR(USB, 2, UR_PM_STATUS, 0x0001),
+    ONLY(K_8153, U_ANY, 2), CLR(USB, 2, UR_POWER_CUT, 0x0009), CLR(USB, 2, UR_MISC0, 0x0001),
+    ONLY(K_LATER, U_ANY, 2), CLR(USB, 2, UR_POWER_CUT, 0x0001), CLR(USB, 2, UR_MISC0, 0x0001),
+    END
+};
 
-static void r8153_u1u2en(NET_IO *io, int enable)
-{
-    nc_u8 u1u2[8];
-    int i;
-    for (i = 0; i < 8; i++) u1u2[i] = (nc_u8)(enable ? 0xff : 0x00);
-    generic_ocp_write(io, USB_TOLERANCE, BYTE_EN_SIX_BYTES, 8, u1u2, MCU_TYPE_USB);
-}
+/* USB 3 U1/U2 link states. */
+static const STEP SqU1U2Off[] = {
+    ONLY(K_8153, U_ANY, 1), SIX(USB, UR_U1U2, 0x00),
+    ONLY(K_LATER, U_ANY, 1), CLR(USB, 2, UR_LPM_CFG, 0x0001),
+    END
+};
+static const STEP SqU1U2On[] = {
+    ONLY(K_8153, U_ANY, 1), SIX(USB, UR_U1U2, 0xff),
+    ONLY(K_LATER, U_ANY, 1), SET(USB, 2, UR_LPM_CFG, 0x0001),
+    END
+};
 
-static void r8153b_u1u2en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_USB, USB_LPM_CONFIG, LPM_U1U2_EN);
-    else ocp_word_clr_bits(io, MCU_TYPE_USB, USB_LPM_CONFIG, LPM_U1U2_EN);
-}
+/* Advanced link-down power saving of the PHY. */
+static const STEP SqAldpsOff[] = {
+    ONLY(K_8152, U_ANY, 2), PHY_PUT(PR_ALDPS_A, 0x0310), SLEEP(20),
+    ONLY(K_GIG, U_ANY, 2), PHY_CLR(PR_POWER, 0x0004),
+    WAIT_LATE(MAC, 2, MR_POWER_STATE, 0x0100, 0x0100, 20, 1),
+    END
+};
+static const STEP SqAldpsOn[] = {
+    ONLY(K_8152, U_ANY, 1), PHY_PUT(PR_ALDPS_A, 0x8310),
+    ONLY(K_GIG, U_ANY, 1), PHY_SET(PR_POWER, 0x0004),
+    END
+};
 
-static void r8153_u2p3en(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_USB, USB_U2P3_CTRL, U2P3_ENABLE);
-    else ocp_word_clr_bits(io, MCU_TYPE_USB, USB_U2P3_CTRL, U2P3_ENABLE);
-}
+/* Energy-efficient Ethernet: MAC side, PHY side, advertisement. */
+static const STEP SqEeeOff[] = {                       /* 8153 and later only */
+    CLR(MAC, 2, MR_EEE, 0x0003),
+    PHY_CLR(PR_EEE_CFG, 0x0010),
+    PHY_PUT(PR_EEE_ADV, 0),
+    END
+};
+static const STEP SqEeeOn[] = {
+    SET(MAC, 2, MR_EEE, 0x0003),
+    ONLY(K_8152, U_ANY, 9),
+    PHY_EDIT(PR_EEE_A1, 0x0070, 0x3310),
+    PHY_SET(PR_EEE_A2, 0x0600),
+    PHY_EDIT(PR_EEE_A3, 0xff80, 0x1500),
+    /* MMD 7 register 60 through the MMD access pair */
+    PHY_PUT(PR_MMD_CTRL, 0x0007), PHY_PUT(PR_MMD_DATA, 60),
+    PHY_PUT(PR_MMD_CTRL, 0x4007), PHY_PUT(PR_MMD_DATA, EEEADV_100TX),
+    PHY_PUT(PR_MMD_CTRL, 0x0000),
+    ONLY(K_GIG, U_ANY, 2),
+    PHY_SET(PR_EEE_CFG, 0x0010),
+    PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
+    END
+};
 
-static void r8153_mac_clk_speed_down(NET_IO *io, int enable)
-{
-    if (enable) ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2, MAC_CLK_SPDWN_EN);
-    else ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2, MAC_CLK_SPDWN_EN);
-}
+/* No wake-up source: link, magic packet and wake frames off. */
+static const STEP SqNoWake[] = {
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_UNLOCKED),
+    CLR(MAC, 2, MR_CFG34, 0x0010),
+    CLR(MAC, 2, MR_CFG5, CFG5_WAKE_FRAMES),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_LOCKED),
+    CLR(MAC, 2, MR_WOL, WOL_MAGIC),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_UNLOCKED),
+    CLR(MAC, 2, MR_CFG34, 0x0008),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_LOCKED),
+    END
+};
 
-static void r8153_queue_wake(NET_IO *io, int enable)
-{
-    if (enable) ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_INDICATE_FALG, UPCOMING_RUNTIME_D3);
-    else ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_INDICATE_FALG, UPCOMING_RUNTIME_D3);
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_SUSPEND_FLAG, LINK_CHG_EVENT);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_EXTRA_STATUS, LINK_CHANGE_FLAG);
-}
+static const STEP SqCfg34Bit8[] = {                    /* 8153C */
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_UNLOCKED),
+    SET(MAC, 2, MR_CFG34, 0x0100),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_LOCKED),
+    END
+};
 
-/* __rtl_set_wol(tp, 0): no wake-up source. */
-static void rtl_set_wol_none(NET_IO *io)
-{
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_CONFIG34, LINK_ON_WAKE_EN);
-    ocp_word_w0w1(io, MCU_TYPE_PLA, PLA_CONFIG5, UWF_EN | BWF_EN | MWF_EN, 0);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_CFG_WOL, MAGIC_EN);
-}
+static const STEP SqAutoload[] = { WAIT(MAC, 2, MR_BOOT, BOOT_LOADED, BOOT_LOADED, 500, 20), END };
 
-/* rtl_runtime_suspend_enable(tp, false) with saved_wolopts 0. */
-static void rtl_runtime_suspend_disable(NET_IO *io)
-{
-    rtl_set_wol_none(io);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_CONFIG34, LINK_OFF_WAKE_EN);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
-}
+/* Receive off, then wait for both FIFOs and the transmitter to empty
+ * and reset the MAC. */
+static const STEP SqDrain[] = {
+    CLR(MAC, 4, MR_RX_ACCEPT, ACC_MASK),
+    RUN(Q_RX_GATE),
+    WAIT(MAC, 1, MR_OOB, OOB_FIFOS_EMPTY, OOB_FIFOS_EMPTY, 1000, 1),
+    WAIT(MAC, 2, MR_TX_CONFIG, TXC_EMPTY, TXC_EMPTY, 1000, 1),
+    RUN(Q_RESET_MAC),
+    END
+};
 
-static void r8152_aldps_en(RTL_STATE *s, NET_IO *io, int enable)
-{
-    if (enable) {
-        ocp_reg_write(s, io, OCP_ALDPS_CONFIG, ENPWRSAVE | ENPDNPS | LINKENA | DIS_SDSAVE);
-    } else {
-        ocp_reg_write(s, io, OCP_ALDPS_CONFIG, ENPDNPS | LINKENA | DIS_SDSAVE);
-        NcIoSleep(io, 20);
-    }
-}
+static const STEP SqQueueWakeOff[] = {
+    CLR(MAC, 1, MR_INDICATE, 0x01),
+    CLR(MAC, 1, MR_SUSPEND_FLAG, 0x01),
+    CLR(MAC, 2, MR_EXTRA_STATUS, 0x0100),
+    END
+};
 
-static void r8153_aldps_en(RTL_STATE *s, NET_IO *io, int enable)
+/* ---- base setup, once per bring-up ---- */
+
+static const STEP SqSetup8152[] = {
+    PHY_TRIM(MII(MII_CONTROL), MIICTL_POWERDOWN),
+    RUN(Q_ALDPS_OFF),
+    ONLY(K_4C00, U_ANY, 1), CLR(MAC, 2, MR_LED, 0x0700),
+    RUN(Q_POWER_CUT_OFF),
+    SET(MAC, 2, MR_PHY_POWER, 0x00c0),
+    EDIT(MAC, 4, MR_POWER1, 0x0f0f0f0fUL, 0x07014f07UL),
+    PUT(MAC, 2, MR_PHY_IRQ_MASK, 0x000f),
+    SET(MAC, 2, MR_TALLY, 0x0001),
+    CLR(USB, 2, UR_CTRL, CTRL_RX_AGG_OFF | CTRL_RX_ZERO),   /* receive aggregation on */
+    END
+};
+
+static const STEP SqSetup8153[] = {
+    RUN(Q_U1U2_OFF),
+    RUN(Q_AUTOLOAD),
+    PHY_STATE(ST_SETTLED),
+    ONLY(K_5C00 | K_5C10 | K_5C20, U_ANY, 1), PHY_PUT(PR_ADC_CFG, 0x01c0),
+    PHY_TRIM(MII(MII_CONTROL), MIICTL_POWERDOWN),
+    PHY_STATE(ST_LAN_ON),
+    CLR(USB, 2, UR_U2P3, 0x0001),
+    ONLY(K_5C10, U_ANY, 2),
+    EDIT(USB, 2, UR_SS_LINK2, 0x3ffe, 0x00c0),
+    SET(USB, 1, UR_U2_PHY, 0x03),
+    ONLY(K_5C20, U_ANY, 1), CLR(MAC, 1, MR_SPARE0, 0x02),
+    ONLY(K_5C20 | K_5C30, U_ANY, 1), HOOK(H_BURST),
+    ONLY(K_5C30, U_ANY, 2), RUN(Q_QUEUE_WAKE_OFF), HOOK(H_LINK_FLAGS),
+    SET(USB, 1, UR_DUMMY2, 0x01),
+    CLR(USB, 2, UR_WDT11, 0x0001),
+    CLR(MAC, 2, MR_LED, 0x0700),
+    ONLY(K_5C10, U_FULL | U_HIGH, 1), PUT(USB, 1, UR_LPM_CTRL, 0x36),
+    ONLY(K_5C10, U_SUPER, 1), PUT(USB, 1, UR_LPM_CTRL, 0x3e),
+    ONLY(K_5C00 | K_5C20 | K_5C30, U_ANY, 1), PUT(USB, 1, UR_LPM_CTRL, 0x3e),
+    EDIT(USB, 2, UR_AFE2, 0xf800, 0xa100),
+    PUT(USB, 2, UR_CONNECT_TMR, 0x0001),
+    RUN(Q_POWER_CUT_OFF),
+    RUN(Q_NO_WAKE),
+    CLR(MAC, 2, MR_POWER2, 0x8000),
+    RUN(Q_U1U2_ON),
+    SET(MAC, 1, MR_CFG6, 0x01),
+    CLR(MAC, 1, MR_LANWAKE, 0x80),
+    CLR(USB, 2, UR_CTRL, CTRL_RX_AGG_OFF | CTRL_RX_ZERO),
+    SET(MAC, 2, MR_TALLY, 0x0001),
+    END
+};
+
+static const STEP SqSetupLater[] = {
+    RUN(Q_U1U2_OFF),
+    ONLY(K_6400, U_ANY, 3),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_UNLOCKED),
+    CLR(MAC, 2, MR_CFG5, 0x0008),
+    SET(USB, 2, UR_SPI, 0x0002),
+    RUN(Q_AUTOLOAD),
+    PHY_STATE(ST_SETTLED),
+    PHY_TRIM(MII(MII_CONTROL), MIICTL_POWERDOWN),
+    PHY_STATE(ST_LAN_ON),
+    CLR(USB, 2, UR_U2P3, 0x0001),
+    PUT(USB, 2, UR_MSC_TMR, 0x0fff),
+    RUN(Q_POWER_CUT_OFF),
+    CLR(USB, 1, UR_POWER_CUT, 0x30),
+    CLR(USB, 1, UR_MISC2, 0x01),
+    HOOK(H_UPS_CHECK),
+    ONLY(K_6400, U_ANY, 1), RUN(Q_CFG34_BIT8),
+    RUN(Q_QUEUE_WAKE_OFF),
+    RUN(Q_NO_WAKE),
+    HOOK(H_LINK_FLAGS),
+    ONLY(K_6400, U_ANY, 1), RUN(Q_U1U2_ON),
+    ONLY(K_8153B, U_SUPER, 1), RUN(Q_U1U2_ON),
+    SET(MAC, 2, MR_POWER2, 0x8000),
+    ONLY(K_6400, U_ANY, 1), CLR(USB, 1, UR_MISC2, 0x80),
+    ONLY(K_8153B, U_ANY, 1), CLR(MAC, 2, MR_POWER3, 0x4000),
+    ONLY(K_6010, U_ANY, 1), HOOK(H_PACKAGE),
+    CLR(USB, 2, UR_CTRL, CTRL_RX_AGG_OFF | CTRL_RX_ZERO),
+    SET(MAC, 2, MR_TALLY, 0x0001),
+    END
+};
+
+/* ---- PHY setup ---- */
+
+static const STEP SqPhy8152[] = {
+    RUN(Q_EEE_ON),
+    RUN(Q_ALDPS_ON),
+    PHY_SET(MII(MII_AN_ADV), ANADV_PAUSE),
+    END
+};
+
+static const STEP SqPhy8153[] = {
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_EEE_OFF),
+    ONLY(K_5C00, U_ANY, 1), PHY_CLR(PR_EEE_CFG, 0x0040),
+    PHY_SET(PR_POWER, 0x8000),
+    PHY_SET(PR_SPEED_DOWN, 0x0080),
+    PHY_SET(PR_POWER, 0x0001),
+    SRAM_PUT(SR_IMPEDANCE, 0x0b13),
+    SET(MAC, 2, MR_PHY_POWER, 0x0040),
+    SRAM_PUT(SR_LPF, 0xf70f),
+    SRAM_PUT(SR_AMP_10A, 0x00af),
+    SRAM_PUT(SR_AMP_10B, 0x0208),
+    RUN(Q_EEE_ON),
+    RUN(Q_ALDPS_ON),
+    PHY_SET(MII(MII_AN_ADV), ANADV_PAUSE),
+    ONLY(K_5C20 | K_5C30, U_ANY, 1), SET(USB, 2, UR_U2P3, 0x0001),
+    END
+};
+
+static const STEP SqPhyLater[] = {
+    TRIM(USB, 2, UR_MISC0, 0x0001),
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_EEE_OFF),
+    PUT(USB, 2, UR_U1U2_TMR, 500),          /* idle time before U1/U2/L1, us */
+    HOOK(H_PHY_WAKE),
+    HOOK(H_BIAS),
+    SRAM_SET(SR_GREEN, 0x0800),
+    PHY_SET(PR_NCTL, 0x0002),
+    HOOK(H_ADC_TRIM),
+    HOOK(H_SAW_TIMER),
+    SET(MAC, 2, MR_PHY_POWER, 0x0040),
+    HOOK(H_EEE_CLOCKS),
+    RUN(Q_EEE_ON),
+    RUN(Q_ALDPS_ON),
+    PHY_SET(MII(MII_AN_ADV), ANADV_PAUSE),
+    END
+};
+
+static const STEP SqBiasFull[] = {
+    SRAM_PUT(SR_BIAS_10, 0x2444), SRAM_PUT(SR_BIAS_100, 0x2444), SRAM_PUT(SR_BIAS_1000, 0x2444),
+    SRAM_SET(SR_GREEN, 0x8000),
+    END
+};
+static const STEP SqBiasLow[] = {
+    SRAM_PUT(SR_BIAS_10, 0x0000), SRAM_PUT(SR_BIAS_100, 0x1222), SRAM_PUT(SR_BIAS_1000, 0x0022),
+    SRAM_SET(SR_GREEN, 0x8000),
+    END
+};
+
+/* ---- out of OOB: receiver ready, not yet on ---- */
+
+/* The 8153 and 8153B: thresholds and frame size after the quiesce. */
+static const STEP SqFirstFill[] = {
+    RUN(Q_QUIESCE),
+    PUT(MAC, 1, MR_TX_MAX_PKT, 12 * 1024 / 64),
+    SET(MAC, 2, MR_TX_CONFIG, TXC_AUTO_FIFO),
+    RUN(Q_RESET_MAC),
+    PUT(MAC, 4, MR_RXFIFO_TH1, 0x00080002UL),
+    PUT(MAC, 2, MR_RXFIFO_TH2, 0x00a0),
+    PUT(MAC, 2, MR_RXFIFO_TH3, 0x0110),
+    PUT(MAC, 4, MR_TXFIFO_TH, 0x01000008UL),
+    END
+};
+
+static const STEP SqWake8152[] = {
+    RUN(Q_ALDPS_OFF),
+    CLR(MAC, 4, MR_RX_ACCEPT, ACC_MASK),
+    RUN(Q_RX_GATE),
+    RUN(Q_TEREDO_OFF),
+    PUT(MAC, 1, MR_CFG_LOCK, CFG_LOCKED),
+    PUT(MAC, 1, MR_COMMAND, 0x00),
+    RUN(Q_LEAVE_OOB),
+    RUN(Q_RESET_MAC),
+    PUT(MAC, 4, MR_RXFIFO_TH1, 0x00080002UL),
+    ONLY(K_ANY, U_FULL, 2),
+    PUT(MAC, 4, MR_RXFIFO_TH2, 0x00000060UL), PUT(MAC, 4, MR_RXFIFO_TH3, 0x00000078UL),
+    ONLY(K_ANY, U_HIGH | U_SUPER, 2),
+    PUT(MAC, 4, MR_RXFIFO_TH2, 0x00000038UL), PUT(MAC, 4, MR_RXFIFO_TH3, 0x00000048UL),
+    PUT(MAC, 4, MR_TXFIFO_TH, 0x01000008UL),
+    PUT(USB, 1, UR_TX_AGG, 0x03),
+    PUT(USB, 4, UR_RX_BUF_TH, 0x7a120180UL),
+    PUT(USB, 4, UR_TX_DMA, 0x00000101UL),
+    CLR(MAC, 2, MR_CPLUS, CPLUS_RX_VLAN),
+    PUT(MAC, 2, MR_RX_MAX_LEN, RX_MAX_LEN),
+    SET(MAC, 2, MR_TX_CONFIG, TXC_AUTO_FIFO),
+    RUN(Q_ALDPS_ON),
+    END
+};
+
+static const STEP SqWake8153[] = {
+    RUN(Q_U1U2_OFF),
+    CLR(USB, 2, UR_U2P3, 0x0001),
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_FIRST_FILL),
+    SET(MAC, 1, MR_CFG6, 0x01),
+    CLR(MAC, 1, MR_LANWAKE, 0x80),
+    CLR(USB, 2, UR_SS_LINK1, 0x0002),
+    RUN(Q_ALDPS_ON),
+    ONLY(K_5C20 | K_5C30, U_ANY, 1), SET(USB, 2, UR_U2P3, 0x0001),
+    RUN(Q_U1U2_ON),
+    END
+};
+
+static const STEP SqWake8153B[] = {
+    RUN(Q_U1U2_OFF),
+    CLR(USB, 2, UR_U2P3, 0x0001),
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_FIRST_FILL),
+    PUT(USB, 4, UR_RX_BUF_TH, 0x00010001UL),
+    CLR(MAC, 2, MR_POWER3, 0x4000),
+    RUN(Q_ALDPS_ON),
+    ONLY(K_ANY, U_SUPER, 1), RUN(Q_U1U2_ON),
+    END
+};
+
+static const STEP SqWake8153C[] = {
+    RUN(Q_U1U2_OFF),
+    CLR(USB, 2, UR_U2P3, 0x0001),
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_QUIESCE),
+    PUT(MAC, 1, MR_TX_MAX_PKT, 10 * 1024 / 64),
+    PUT(MAC, 2, MR_TXFIFO_TH, 512 / 64),
+    PUT(MAC, 2, MR_TXFIFO_FULL, 2048 / 8),
+    RUN(Q_RESET_MAC),
+    PUT(MAC, 1, MR_RXFIFO_TH1, 0x02),
+    PUT(MAC, 1, MR_RXFIFO_TH1_HI, 0x08),
+    PUT(MAC, 2, MR_RXFIFO_TH2, 0x00a0),
+    PUT(MAC, 2, MR_RXFIFO_TH3, 0x0110),
+    PUT(USB, 4, UR_RX_BUF_TH, 0x00010001UL),
+    RUN(Q_CFG34_BIT8),
+    CLR(MAC, 2, MR_POWER3, 0x4000),
+    RUN(Q_ALDPS_ON),
+    RUN(Q_U1U2_ON),
+    END
+};
+
+/* ---- back into OOB (Stop, Suspend) ---- */
+
+static const STEP SqSleep[] = {
+    ONLY(K_8152, U_ANY, 1), RUN(Q_POWER_CUT_OFF),
+    ONLY(K_8153, U_ANY, 1), CLR(MAC, 1, MR_CFG6, 0x01),
+    ONLY(K_LATER, U_ANY, 1), SET(MAC, 2, MR_POWER3, 0x4000),
+    ONLY(K_GIG, U_ANY, 3), RUN(Q_U1U2_OFF), CLR(USB, 2, UR_U2P3, 0x0001), RUN(Q_POWER_CUT_OFF),
+    RUN(Q_ALDPS_OFF),
+    CLR(MAC, 1, MR_OOB, OOB_ACTIVE),
+    PUT(MAC, 4, MR_RXFIFO_TH1, 0x01800003UL),
+    ONLY(K_8152, U_ANY, 2),
+    PUT(MAC, 4, MR_RXFIFO_TH2, 0x0000004aUL), PUT(MAC, 4, MR_RXFIFO_TH3, 0x0000005aUL),
+    ONLY(K_GIG, U_ANY, 2),
+    PUT(MAC, 2, MR_RXFIFO_TH2, 0x004a), PUT(MAC, 2, MR_RXFIFO_TH3, 0x005a),
+    RUN(Q_DRAIN),
+    ONLY(K_GIG, U_ANY, 1), RUN(Q_RESET_BMU),
+    RUN(Q_REBUILD_LIST),
+    PUT(MAC, 2, MR_RX_MAX_LEN, RX_MAX_LEN),
+    ONLY(K_GIG, U_ANY, 1), PUT(MAC, 1, MR_TX_MAX_PKT, 6 * 1024 / 64),
+    ONLY(K_8153, U_ANY, 1), CLR(MAC, 2, MR_TEREDO, 0x7f00),
+    ONLY(K_LATER, U_ANY, 1), PUT(MAC, 2, MR_TEREDO_WAKE, 0x00ff),
+    SET(MAC, 2, MR_CPLUS, CPLUS_RX_VLAN),
+    SET(MAC, 2, MR_BDC, 0x0001),
+    SET(MAC, 1, MR_OOB, OOB_ACTIVE | OOB_HOLD),
+    ONLY(K_GIG, U_ANY, 1), SET(MAC, 2, MR_SFF7, 0x4000),
+    RUN(Q_RX_UNGATE),
+    SET(MAC, 4, MR_RX_ACCEPT, ACC_MY_PHYS | ACC_MCAST | ACC_BCAST),
+    RUN(Q_ALDPS_ON),
+    END
+};
+
+/* After Sleep, when the driver lets go of the chip. */
+static const STEP SqDetach[] = {
+    ONLY(K_4C10 | K_4800, U_ANY, 2), SET(USB, 2, UR_UPS, 0x0100), CLR(USB, 2, UR_PM_STATUS, 0x0001),
+    ONLY(K_8153 | K_6400, U_ANY, 2), CLR(USB, 2, UR_POWER_CUT, 0x0009), CLR(USB, 2, UR_MISC0, 0x0001),
+    ONLY(K_8153B, U_ANY, 2), CLR(USB, 2, UR_POWER_CUT, 0x0001), CLR(USB, 2, UR_MISC0, 0x0001),
+    END
+};
+
+/* ---- link up and down ---- */
+
+#define RX_EARLY(buffer) (((buffer) - (RX_MAX_LEN + RX_DESC_LEN + RX_RECORD_ALIGN)))
+
+static const STEP SqRxOn[] = {
+    HOOK(H_EEE_PLUS),
+    /* Early receive: timeout in 8 ns units, size in 4 (8153) or 8 bytes. */
+    ONLY(K_8153, U_SUPER, 2),
+    PUT(USB, 2, UR_RX_EARLY_TMO, 85000UL / 8), PUT(USB, 2, UR_RX_EARLY_LEN, RX_EARLY(32768UL) / 4),
+    ONLY(K_8153, U_HIGH, 2),
+    PUT(USB, 2, UR_RX_EARLY_TMO, 250000UL / 8), PUT(USB, 2, UR_RX_EARLY_LEN, RX_EARLY(16384UL) / 4),
+    ONLY(K_8153, U_FULL, 2),
+    PUT(USB, 2, UR_RX_EARLY_TMO, 524280UL / 8), PUT(USB, 2, UR_RX_EARLY_LEN, RX_EARLY(16384UL) / 4),
+    ONLY(K_LATER, U_ANY, 3),
+    PUT(USB, 2, UR_RX_EARLY_TMO, 128 / 8), PUT(USB, 2, UR_PM_STATUS, 15000UL / 8),
+    PUT(USB, 2, UR_RX_EARLY_LEN, RX_EARLY(32768UL) / 8),
+    ONLY(K_GIG, U_ANY, 1), HOOK(H_GAP),
+    ONLY(K_6010 | K_6400, U_ANY, 3),
+    CLR(USB, 2, UR_FW_TASK, 0x0002), SLEEP(1), SET(USB, 2, UR_FW_TASK, 0x0002),
+    /* filter MCU restart, receiver and transmitter on, gate open */
+    CLR(MAC, 2, MR_FILTER_MCU, 0x0001),
+    SET(MAC, 2, MR_FILTER_MCU, 0x0001),
+    SET(MAC, 1, MR_COMMAND, CMD_RX_ON | CMD_TX_ON),
+    ONLY(K_LATER, U_ANY, 1), PUT(USB, 1, UR_RXDMA_OWN, 0x03),
+    RUN(Q_RX_UNGATE),
+    END
+};
+
+static const STEP SqRxOff[] = {
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_DRAIN),
+    ONLY(K_GIG, U_ANY, 1), RUN(Q_RESET_BMU),
+    RUN(Q_ALDPS_ON),
+    END
+};
+
+static const STEP *const Seq[] = {
+    SqRxGate, SqRxUngate, SqTeredoOff, SqResetMac, SqResetBmu, SqRebuildList,
+    SqLeaveOob, SqQuiesce, SqPowerCutOff, SqU1U2Off, SqU1U2On, SqAldpsOff, SqAldpsOn,
+    SqEeeOff, SqEeeOn, SqNoWake, SqCfg34Bit8, SqAutoload, SqDrain, SqQueueWakeOff,
+    SqSetup8152, SqSetup8153, SqSetupLater, SqPhy8152, SqPhy8153, SqPhyLater,
+    SqFirstFill, SqWake8152, SqWake8153, SqWake8153B, SqWake8153C, SqSleep, SqDetach,
+    SqRxOn, SqRxOff, SqBiasFull, SqBiasLow
+};
+
+/* ------------------------------------------------------------------ */
+/* The interpreter */
+
+static void Run(RTL_STATE *s, NET_IO *io, int q);
+
+/* Polls a register up to Count times, Ms apart: OP_WAIT and OP_PHY_STATE
+ * read first and sleep after a miss, the others sleep before each read.
+ * Returns 1 on a match; *last (if given) receives the last masked value.
+ * A wait that runs out on a working device counts in Timeouts, except
+ * the two "late" kinds, which are short settling waits. */
+static int WaitFor(RTL_STATE *s, NET_IO *io, const STEP *p, nc_u32 *last)
 {
-    if (enable) {
-        ocp_reg_set_bits(s, io, OCP_POWER_CFG, EN_ALDPS);
-    } else {
-        int i;
-        ocp_reg_clr_bits(s, io, OCP_POWER_CFG, EN_ALDPS);
-        for (i = 0; i < 20; i++) {
-            if (Gone(io)) return;
-            NcIoSleep(io, 1);
-            if (ocp_read_word(io, MCU_TYPE_PLA, 0xe000) & 0x0100) break;
+    int early = p->Op == OP_WAIT || p->Op == OP_PHY_STATE;
+    int phy = p->Op == OP_PHY_WAIT || p->Op == OP_PHY_STATE;
+    nc_u32 i, v = 0;
+    for (i = 0; i < p->Count && io->Status >= 0; i++) {
+        if (!early) NcIoSleep(io, p->Ms);
+        v = phy ? PhyGet(s, io, p->Reg)
+                : Get(io, (nc_u16)(p->Space ? RTL_SPACE_MAC : RTL_SPACE_USB), p->Reg, p->Size);
+        if (io->Status < 0) break;
+        v &= p->Clear;
+        if (p->Op == OP_PHY_STATE ? ((p->Set >> v) & 1) != 0 : v == p->Set) {
+            if (last) *last = v;
+            return 1;
         }
+        if (early) NcIoSleep(io, p->Ms);
     }
-    s->UpsAldps = (nc_u8)enable;
-}
-
-static void r8152_mmd_write(RTL_STATE *s, NET_IO *io, nc_u16 dev, nc_u16 reg, nc_u16 data)
-{
-    ocp_reg_write(s, io, OCP_EEE_AR, (nc_u16)(FUN_ADDR | dev));
-    ocp_reg_write(s, io, OCP_EEE_DATA, reg);
-    ocp_reg_write(s, io, OCP_EEE_AR, (nc_u16)(FUN_DATA | dev));
-    ocp_reg_write(s, io, OCP_EEE_DATA, data);
-    ocp_reg_write(s, io, OCP_EEE_AR, 0x0000);
-}
-
-static void r8152_eee_en(RTL_STATE *s, NET_IO *io, int enable)
-{
-    if (enable) {
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_EEE_CR, EEE_RX_EN | EEE_TX_EN);
-        ocp_reg_w0w1(s, io, OCP_EEE_CONFIG1, SD_RISE_TIME_MASK,
-                     EEE_10_CAP | EEE_NWAY_EN | TX_QUIET_EN | RX_QUIET_EN | SD_RISE_TIME(1));
-        ocp_reg_set_bits(s, io, OCP_EEE_CONFIG2, RG_DACQUIET_EN | RG_LDVQUIET_EN);
-        ocp_reg_w0w1(s, io, OCP_EEE_CONFIG3, FAST_SNR_MASK, FAST_SNR(42));
-    } else {
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_EEE_CR, EEE_RX_EN | EEE_TX_EN);
-        ocp_reg_w0w1(s, io, OCP_EEE_CONFIG1, SD_RISE_TIME_MASK | EEE_10_CAP | EEE_NWAY_EN |
-                     TX_QUIET_EN | RX_QUIET_EN, SD_RISE_TIME(7));
-        ocp_reg_clr_bits(s, io, OCP_EEE_CONFIG2, RG_DACQUIET_EN | RG_LDVQUIET_EN);
-        ocp_reg_w0w1(s, io, OCP_EEE_CONFIG3, FAST_SNR_MASK, (nc_u16)FAST_SNR(511));
-    }
-}
-
-static void r8153_eee_en(RTL_STATE *s, NET_IO *io, int enable)
-{
-    if (enable) {
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_EEE_CR, EEE_RX_EN | EEE_TX_EN);
-        ocp_reg_set_bits(s, io, OCP_EEE_CFG, EEE10_EN);
-    } else {
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_EEE_CR, EEE_RX_EN | EEE_TX_EN);
-        ocp_reg_clr_bits(s, io, OCP_EEE_CFG, EEE10_EN);
-    }
-    s->UpsEee = (nc_u8)enable;
-}
-
-static void rtl_eee_enable(RTL_STATE *s, NET_IO *io, int enable)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:
-        r8152_eee_en(s, io, enable);
-        r8152_mmd_write(s, io, MDIO_MMD_AN, MDIO_AN_EEE_ADV, (nc_u16)(enable ? s->EeeAdv : 0));
-        break;
-    default:
-        r8153_eee_en(s, io, enable);
-        ocp_reg_write(s, io, OCP_EEE_ADV, (nc_u16)(enable ? s->EeeAdv : 0));
-        break;
-    }
-}
-
-static void r8152b_enable_fc(RTL_STATE *s, NET_IO *io)
-{
-    r8152_mdio_set_bit(s, io, MII_ADVERTISE, ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM);
-    s->UpsFlowControl = 1;
-}
-
-static void rtl_green_en(RTL_STATE *s, NET_IO *io, int enable)
-{
-    if (enable) sram_write_w0w1(s, io, SRAM_GREEN_CFG, 0, GREEN_ETH_EN);
-    else sram_write_w0w1(s, io, SRAM_GREEN_CFG, GREEN_ETH_EN, 0);
-    s->UpsGreen = (nc_u8)enable;
-}
-
-static void r8153b_green_en(RTL_STATE *s, NET_IO *io, int enable)
-{
-    if (enable) {
-        sram_write(s, io, 0x8045, 0);        /* 10M abiq&ldvbias */
-        sram_write(s, io, 0x804d, 0x1222);   /* 100M short abiq&ldvbias */
-        sram_write(s, io, 0x805d, 0x0022);   /* 1000M short abiq&ldvbias */
-    } else {
-        sram_write(s, io, 0x8045, 0x2444);
-        sram_write(s, io, 0x804d, 0x2444);
-        sram_write(s, io, 0x805d, 0x2444);
-    }
-    rtl_green_en(s, io, 1);
-}
-
-static nc_u16 r8153_phy_status(RTL_STATE *s, NET_IO *io, nc_u16 desired)
-{
-    nc_u16 data = 0;
-    int i;
-    for (i = 0; i < 500; i++) {
-        data = (nc_u16)(ocp_reg_read(s, io, OCP_PHY_STATUS) & PHY_STAT_MASK);
-        if (desired) {
-            if (data == desired) return data;
-        } else if (data == PHY_STAT_LAN_ON || data == PHY_STAT_PWRDN || data == PHY_STAT_EXT_INIT) {
-            return data;
-        }
-        NcIoSleep(io, 20);
-        if (Gone(io)) return data;
-    }
-    s->Timeouts++;
-    return data;
-}
-
-static int rtl_phy_patch_request(RTL_STATE *s, NET_IO *io, int request, int wait)
-{
-    nc_u16 check;
-    int i;
-    if (request) {
-        ocp_reg_set_bits(s, io, OCP_PHY_PATCH_CMD, PATCH_REQUEST);
-        check = 0;
-    } else {
-        ocp_reg_clr_bits(s, io, OCP_PHY_PATCH_CMD, PATCH_REQUEST);
-        check = PATCH_READY;
-    }
-    for (i = 0; wait && i < 5000; i++) {
-        if (Gone(io)) return -1;
-        NcIoSleep(io, 1);
-        if ((ocp_reg_read(s, io, OCP_PHY_PATCH_STAT) & PATCH_READY) ^ check) break;
-    }
-    if (request && wait && !(ocp_reg_read(s, io, OCP_PHY_PATCH_STAT) & PATCH_READY)) {
-        rtl_phy_patch_request(s, io, 0, 0);
-        return -1;
-    }
+    if (last) *last = v;
+    if (early && io->Status >= 0) s->Timeouts++;
     return 0;
 }
 
-static nc_u32 r8152_efuse_read(NET_IO *io, nc_u8 addr)
+static void Hook(RTL_STATE *s, NET_IO *io, int h);
+
+static void Run(RTL_STATE *s, NET_IO *io, int q)
 {
-    nc_u32 v;
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_EFUSE_CMD, EFUSE_READ_CMD | addr);
-    v = ocp_read_word(io, MCU_TYPE_PLA, PLA_EFUSE_CMD);
-    v = (v & EFUSE_DATA_BIT16) << 9;     /* data of bit16 */
-    v |= ocp_read_word(io, MCU_TYPE_PLA, PLA_EFUSE_DATA);
-    return v;
-}
-
-/* r8153b_ups_flags is used only when UPS (runtime suspend) is enabled,
- * which this core never does; the Ups* fields keep the state Linux keeps. */
-
-/* ------------------------------------------------------------------ */
-/* PHY configuration and speed. */
-
-static void rtl8152_set_speed(RTL_STATE *s, NET_IO *io)
-{
-    nc_u16 orig, new1, bmcr;
-    int i;
-    /* AUTONEG_ENABLE with the default advertising of rtl8152_probe_once:
-     * 10/100 half and full, and 1000 full with a gigabit PHY. */
-    orig = r8152_mdio_read(s, io, MII_ADVERTISE);
-    new1 = (nc_u16)(orig & ~(ADVERTISE_10HALF | ADVERTISE_10FULL | ADVERTISE_100HALF | ADVERTISE_100FULL));
-    new1 |= ADVERTISE_10HALF | ADVERTISE_10FULL | ADVERTISE_100HALF | ADVERTISE_100FULL;
-    s->UpsSpeedDuplex = NWAY_100M_FULL;
-    if (orig != new1) r8152_mdio_write(s, io, MII_ADVERTISE, new1);
-    if (s->Gmii) {
-        orig = r8152_mdio_read(s, io, MII_CTRL1000);
-        new1 = (nc_u16)((orig & ~(ADVERTISE_1000FULL | ADVERTISE_1000HALF)) | ADVERTISE_1000FULL);
-        s->UpsSpeedDuplex = NWAY_1000M_FULL;
-        if (orig != new1) r8152_mdio_write(s, io, MII_CTRL1000, new1);
-    }
-    bmcr = BMCR_ANENABLE | BMCR_ANRESTART;
-    if (s->PhyReset) { s->PhyReset = 0; bmcr |= BMCR_RESET; }
-    r8152_mdio_write(s, io, MII_BMCR, bmcr);
-    if (bmcr & BMCR_RESET) {
-        for (i = 0; i < 50; i++) {
-            NcIoSleep(io, 20);
-            if (Gone(io)) return;
-            if (!(r8152_mdio_read(s, io, MII_BMCR) & BMCR_RESET)) break;
+    const STEP *p;
+    for (p = Seq[q]; p->Op != OP_END; p++) {
+        nc_u16 space = (nc_u16)(p->Space ? RTL_SPACE_MAC : RTL_SPACE_USB);
+        if (io->Status < 0) return;
+        switch (p->Op) {
+        case OP_ONLY:
+            if (!(p->Reg & s->Kind) || !(p->Clear & SpeedBit(s))) p += p->Count;
+            break;
+        case OP_PUT: Put(io, space, p->Reg, p->Size, p->Set); break;
+        case OP_EDIT: Edit(io, space, p->Reg, p->Size, p->Clear, p->Set); break;
+        case OP_TRIM: {
+            nc_u32 v = Get(io, space, p->Reg, p->Size);
+            if (v & p->Clear) Put(io, space, p->Reg, p->Size, v & ~p->Clear);
+            break;
+        }
+        case OP_SIX: {
+            nc_u8 b[8];
+            int i;
+            for (i = 0; i < 8; i++) b[i] = (nc_u8)p->Set;
+            PutEight(io, space, p->Reg, b, 1);
+            break;
+        }
+        case OP_WAIT: case OP_WAIT_LATE: case OP_PHY_WAIT: case OP_PHY_STATE:
+            WaitFor(s, io, p, 0);
+            break;
+        case OP_PHY_PUT: PhyPut(s, io, p->Reg, (nc_u16)p->Set); break;
+        case OP_PHY_EDIT:
+            PhyPut(s, io, p->Reg, (nc_u16)((PhyGet(s, io, p->Reg) & ~p->Clear) | p->Set));
+            break;
+        case OP_PHY_TRIM: {
+            nc_u16 v = PhyGet(s, io, p->Reg);
+            if (v & p->Clear) PhyPut(s, io, p->Reg, (nc_u16)(v & ~p->Clear));
+            break;
+        }
+        case OP_SRAM_PUT:
+            PhyPut(s, io, PR_SRAM_ADDR, p->Reg);
+            PhyPut(s, io, PR_SRAM_DATA, (nc_u16)p->Set);
+            break;
+        case OP_SRAM_EDIT: {
+            nc_u16 v;
+            PhyPut(s, io, PR_SRAM_ADDR, p->Reg);
+            v = PhyGet(s, io, PR_SRAM_DATA);
+            PhyPut(s, io, PR_SRAM_DATA, (nc_u16)((v & ~p->Clear) | p->Set));
+            break;
+        }
+        case OP_SLEEP: NcIoSleep(io, p->Ms); break;
+        case OP_RUN: Run(s, io, p->Count); break;
+        case OP_HOOK: Hook(s, io, p->Count); break;
         }
     }
 }
 
-static void r8152b_hw_phy_cfg(RTL_STATE *s, NET_IO *io)
+/* ------------------------------------------------------------------ */
+/* Hooks: the steps that depend on a value read back */
+
+/* Autonegotiation: 10/100 (and 1000 full on a gigabit chip) advertised,
+ * then the PHY reset with autonegotiation enabled and restarted. */
+static void Negotiate(RTL_STATE *s, NET_IO *io)
 {
-    rtl_eee_enable(s, io, 1);           /* tp->eee_en */
-    r8152_aldps_en(s, io, 1);
-    r8152b_enable_fc(s, io);
-    s->PhyReset = 1;
+    static const STEP reset = PHY_WAIT(PR_MII, MIICTL_RESET, 0, 50, 20);
+    nc_u16 was = PhyGet(s, io, MII(MII_AN_ADV));
+    if ((was | ANADV_10_100) != was) PhyPut(s, io, MII(MII_AN_ADV), (nc_u16)(was | ANADV_10_100));
+    if (s->Kind & K_GIG) {
+        nc_u16 now;
+        was = PhyGet(s, io, MII(MII_GIG_CONTROL));
+        now = (nc_u16)((was & ~GIGCTL_1000_MASK) | GIGCTL_1000_FULL);
+        if (now != was) PhyPut(s, io, MII(MII_GIG_CONTROL), now);
+    }
+    PhyPut(s, io, MII(MII_CONTROL), MIICTL_RESET | MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
+    WaitFor(s, io, &reset, 0);
 }
 
-static void r8153_hw_phy_cfg(RTL_STATE *s, NET_IO *io)
+static int PhySequence(const RTL_STATE *s)
 {
-    r8153_aldps_en(s, io, 0);
-    rtl_eee_enable(s, io, 0);
-    if (VER(s) == RTL_VER_03) ocp_reg_clr_bits(s, io, OCP_EEE_CFG, CTAP_SHORT_EN);
-    ocp_reg_set_bits(s, io, OCP_POWER_CFG, EEE_CLKDIV_EN);
-    ocp_reg_set_bits(s, io, OCP_DOWN_SPEED, EN_10M_BGOFF);
-    ocp_reg_set_bits(s, io, OCP_POWER_CFG, EN_10M_PLLOFF);
-    sram_write(s, io, SRAM_IMPEDANCE, 0x0b13);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_PHY_PWR, PFM_PWM_SWITCH);
-    sram_write(s, io, SRAM_LPF_CFG, 0xf70f);       /* LPF corner auto tune */
-    sram_write(s, io, SRAM_10M_AMP1, 0x00af);      /* 10M amplitude */
-    sram_write(s, io, SRAM_10M_AMP2, 0x0208);
-    rtl_eee_enable(s, io, 1);
-    r8153_aldps_en(s, io, 1);
-    r8152b_enable_fc(s, io);
-    if (VER(s) != RTL_VER_03 && VER(s) != RTL_VER_04) r8153_u2p3en(io, 1);
-    s->PhyReset = 1;
+    return (s->Kind & K_8152) ? Q_PHY_8152 : (s->Kind & K_8153) ? Q_PHY_8153 : Q_PHY_LATER;
 }
 
-static void r8153b_hw_phy_cfg(RTL_STATE *s, NET_IO *io)
+static void Hook(RTL_STATE *s, NET_IO *io, int h)
 {
     nc_u32 v;
-    nc_u16 data;
-    ocp_word_test_and_clr_bits(io, MCU_TYPE_USB, USB_MISC_0, PCUT_STATUS);
-    r8153_aldps_en(s, io, 0);
-    rtl_eee_enable(s, io, 0);
-    ocp_write_word(io, MCU_TYPE_USB, USB_U1U2_TIMER, 500);   /* U1/U2/L1 idle timer, 500 us */
-    data = r8153_phy_status(s, io, 0);
-    if (data == PHY_STAT_PWRDN || data == PHY_STAT_EXT_INIT)
-        r8152_mdio_clr_bit(s, io, MII_BMCR, BMCR_PDOWN);
-    r8153b_green_en(s, io, s->Green);
-    sram_write_w0w1(s, io, SRAM_GREEN_CFG, 0, R_TUNE_EN);
-    ocp_reg_set_bits(s, io, OCP_NCTL_CFG, PGA_RETURN_EN);
-    /* ADC bias calibration from efuse 0x7d: drop the dummy bit 3. */
-    v = r8152_efuse_read(io, 0x7d);
-    data = (nc_u16)(((v & 0x1fff0) >> 1) | (v & 0x7));
-    if (data != 0xffff) ocp_reg_write(s, io, OCP_ADC_IOFFSET, data);
-    /* UPS tx-link-pulse timing: swr_cnt_1ms_ini = 16000000 / rg_saw_cnt */
-    v = ocp_reg_read(s, io, 0xc426) & 0x3fff;
-    if (v) ocp_word_w0w1(io, MCU_TYPE_USB, USB_UPS_CFG, SAW_CNT_1MS_MASK,
-                         (nc_u16)((16000000UL / v) & SAW_CNT_1MS_MASK));
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_PHY_PWR, PFM_PWM_SWITCH);
-    /* Advance EEE */
-    if (!rtl_phy_patch_request(s, io, 1, 1)) {
-        ocp_reg_set_bits(s, io, OCP_POWER_CFG, EEE_CLKDIV_EN);
-        s->UpsEeeCkdiv = 1;
-        ocp_reg_set_bits(s, io, OCP_DOWN_SPEED, EN_EEE_CMODE | EN_EEE_1000 | EN_10M_CLKDIV);
-        s->UpsEeeCmodLv = 1;
-        s->Ups10mCkdiv = 1;
-        s->UpsEeePlloffGiga = 1;
-        ocp_reg_write(s, io, OCP_SYSCLK_CFG, 0);
-        ocp_reg_write(s, io, OCP_SYSCLK_CFG, CLK_DIV_EXPO(5));
-        s->Ups250mCkdiv = 1;
-        rtl_phy_patch_request(s, io, 0, 1);
+    switch (h) {
+    case H_PHY_WAKE: {  /* a PHY found powered down is powered up */
+        static const STEP settled = PHY_STATE(ST_SETTLED);
+        WaitFor(s, io, &settled, &v);
+        if (io->Status < 0) break;
+        if (v == PHYST_POWER_DOWN || v == PHYST_EXT_INIT)
+            PhyPut(s, io, MII(MII_CONTROL), (nc_u16)(PhyGet(s, io, MII(MII_CONTROL)) & ~MIICTL_POWERDOWN));
+        break;
     }
-    rtl_eee_enable(s, io, 1);
-    r8153_aldps_en(s, io, 1);
-    r8152b_enable_fc(s, io);
-    s->PhyReset = 1;
-}
-
-static void hw_phy_cfg(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07: r8152b_hw_phy_cfg(s, io); break;
-    case RTL_VER_08: case RTL_VER_09: r8153b_hw_phy_cfg(s, io); break;
-    case RTL_VER_14: r8153b_hw_phy_cfg(s, io); s->UpsRTune = 1; break;  /* r8153c_hw_phy_cfg */
-    default: r8153_hw_phy_cfg(s, io); break;
+    case H_BURST:       /* dynamic burst follows whether a burst size is set */
+        if (Get(io, RTL_SPACE_USB, UR_BURST, 2) == 0) Edit(io, RTL_SPACE_USB, UR_DUMMY1, 1, 0x01, 0);
+        else Edit(io, RTL_SPACE_USB, UR_DUMMY1, 1, 0, 0x01);
+        break;
+    case H_LINK_FLAGS:  /* the firmware's link flags follow the link now */
+        if (Get(io, RTL_SPACE_MAC, MR_LINK, 2) & LNK_UP) Edit(io, RTL_SPACE_MAC, MR_EXTRA_STATUS, 2, 0, 0x8001);
+        else Edit(io, RTL_SPACE_MAC, MR_EXTRA_STATUS, 2, 0x8000, 0x0001);
+        break;
+    case H_PACKAGE:     /* the 32-pin package */
+        if (Get(io, RTL_SPACE_MAC, MR_PACKAGE, 1) & 0x20) Edit(io, RTL_SPACE_MAC, MR_PHY_POWER, 2, 0, 0x0010);
+        break;
+    case H_UPS_CHECK:   /* power was cut: the PHY is set up again */
+        if (Get(io, RTL_SPACE_USB, UR_MISC0, 2) & 0x0001) {
+            Run(s, io, Q_AUTOLOAD);
+            if (io->Status < 0) break;
+            Run(s, io, PhySequence(s));
+            Negotiate(s, io);
+        }
+        break;
+    case H_BIAS:        /* PHY bias: lower once the chip has been set up */
+        Run(s, io, s->SetUpOnce ? Q_BIAS_LOW : Q_BIAS_FULL);
+        break;
+    case H_ADC_TRIM: {  /* ADC offset from efuse word 0x7d (17 bits, bit 3 unused) */
+        nc_u16 trim;
+        Put(io, RTL_SPACE_MAC, MR_EFUSE_CMD, 2, 0x8000 | 0x7d);
+        v = (Get(io, RTL_SPACE_MAC, MR_EFUSE_CMD, 2) & 0x0080) << 9;
+        v |= Get(io, RTL_SPACE_MAC, MR_EFUSE_DATA, 2);
+        trim = (nc_u16)(((v >> 4) << 3) | (v & 0x7));
+        if (trim != 0xffff) PhyPut(s, io, PR_ADC_OFFSET, trim);
+        break;
     }
-}
-
-static void wait_autoload(RTL_STATE *s, NET_IO *io)
-{
-    int i;
-    for (i = 0; i < 500; i++) {
-        if (Gone(io)) return;
-        if (ocp_read_word(io, MCU_TYPE_PLA, PLA_BOOT_CTRL) & AUTOLOAD_DONE) return;
-        NcIoSleep(io, 20);
+    case H_SAW_TIMER:   /* ticks per millisecond from the PHY's saw counter */
+        v = PhyGet(s, io, PR_SAW_COUNT) & 0x3fff;
+        if (v) Edit(io, RTL_SPACE_USB, UR_UPS_CFG, 2, 0x0fff, (16000000UL / v) & 0x0fff);
+        break;
+    case H_EEE_CLOCKS: {
+        /* PHY clocks for EEE, changed only while the PHY grants a patch
+         * request; a request not granted is withdrawn. */
+        static const STEP granted = PHY_WAIT(PR_PATCH_STATE, PATCH_GRANTED, PATCH_GRANTED, 5000, 1);
+        static const STEP released = PHY_WAIT(PR_PATCH_STATE, PATCH_GRANTED, 0, 5000, 1);
+        PhyPut(s, io, PR_PATCH_CMD, (nc_u16)(PhyGet(s, io, PR_PATCH_CMD) | PATCH_ASK));
+        WaitFor(s, io, &granted, 0);
+        if (io->Status < 0) break;
+        if (!(PhyGet(s, io, PR_PATCH_STATE) & PATCH_GRANTED)) {
+            PhyPut(s, io, PR_PATCH_CMD, (nc_u16)(PhyGet(s, io, PR_PATCH_CMD) & ~PATCH_ASK));
+            break;
+        }
+        PhyPut(s, io, PR_POWER, (nc_u16)(PhyGet(s, io, PR_POWER) | 0x8000));
+        PhyPut(s, io, PR_SPEED_DOWN, (nc_u16)(PhyGet(s, io, PR_SPEED_DOWN) | 0x6800));
+        PhyPut(s, io, PR_SYSCLK, 0);
+        PhyPut(s, io, PR_SYSCLK, 5 << 4);
+        PhyPut(s, io, PR_PATCH_CMD, (nc_u16)(PhyGet(s, io, PR_PATCH_CMD) & ~PATCH_ASK));
+        WaitFor(s, io, &released, 0);
+        break;
     }
-    s->Timeouts++;
-}
-
-static void r8153b_ups_en_off(RTL_STATE *s, NET_IO *io, int c)
-{
-    /* r8153b_ups_en(tp, false) and, with c, r8153c_ups_en(tp, false) */
-    ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_POWER_CUT, UPS_EN | USP_PREWAKE);
-    ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_MISC_2, UPS_FORCE_PWR_DOWN);
-    if (ocp_read_word(io, MCU_TYPE_USB, USB_MISC_0) & PCUT_STATUS) {
-        wait_autoload(s, io);
-        if (Gone(io)) return;
-        hw_phy_cfg(s, io);
-        rtl8152_set_speed(s, io);
-    }
-    if (c) {
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_CONFIG34, 0x0100);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
+    case H_EEE_PLUS:    /* EEE+ on at 10 Mb/s only */
+        if (Get(io, RTL_SPACE_MAC, MR_LINK, 2) & LNK_10) Edit(io, RTL_SPACE_MAC, MR_EEE_PLUS, 2, 0, 0x0002);
+        else Edit(io, RTL_SPACE_MAC, MR_EEE_PLUS, 2, 0x0002, 0);
+        break;
+    case H_GAP:         /* the long inter-frame gap at 10/100 half duplex */
+        v = Get(io, RTL_SPACE_MAC, MR_LINK, 2);
+        if ((v & (LNK_10 | LNK_100)) && !(v & LNK_FULL)) {
+            Edit(io, RTL_SPACE_MAC, MR_TX_CONFIG1, 2, IFG_FIELD, IFG_LONG);
+            Edit(io, RTL_SPACE_MAC, MR_POWER4, 2, 0x0100, 0);
+        } else {
+            Edit(io, RTL_SPACE_MAC, MR_TX_CONFIG1, 2, IFG_FIELD, IFG_SHORT);
+            Edit(io, RTL_SPACE_MAC, MR_POWER4, 2, 0, 0x0100);
+        }
+        break;
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* init (ops->init) */
+/* The netchip.h interface */
 
-static void r8152b_init(RTL_STATE *s, NET_IO *io)
+nc_u16 RtlChipId(nc_u32 txConfig)
 {
-    r8152_mdio_test_and_clr_bit(s, io, MII_BMCR, BMCR_PDOWN);
-    r8152_aldps_en(s, io, 0);
-    if (VER(s) == RTL_VER_01) ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_LED_FEATURE, LED_MODE_MASK);
-    r8152_power_cut_en(io, 0);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_PHY_PWR, TX_10M_IDLE_EN | PFM_PWM_SWITCH);
-    ocp_dword_w0w1(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL, MCU_CLK_RATIO_MASK, MCU_CLK_RATIO | D3_CLK_GATED_EN);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_GPHY_INTR_IMR,
-                   GPHY_STS_MSK | SPEED_DOWN_MSK | SPDWN_RXDV_MSK | SPDWN_LINKCHG_MSK);
-    rtl_tally_reset(io);
-    /* enable rx aggregation */
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_USB_CTRL, RX_AGG_DISABLE | RX_ZERO_EN);
+    nc_u16 id = (nc_u16)((txConfig >> 16) & TXC_ID_MASK);
+    unsigned i;
+    for (i = 0; i < sizeof(Ids) / sizeof(Ids[0]); i++)
+        if (Ids[i] == id) return id;
+    return 0;
 }
 
-static void r8153_init(RTL_STATE *s, NET_IO *io)
+static nc_u16 KindOf(nc_u16 id)
 {
-    nc_u8 lpm;
-    r8153_u1u2en(io, 0);
-    wait_autoload(s, io);
-    r8153_phy_status(s, io, 0);
-    if (VER(s) == RTL_VER_03 || VER(s) == RTL_VER_04 || VER(s) == RTL_VER_05)
-        ocp_reg_write(s, io, OCP_ADC_CFG, CKADSEL_L | ADC_EN | EN_EMI_L);
-    r8152_mdio_test_and_clr_bit(s, io, MII_BMCR, BMCR_PDOWN);
-    r8153_phy_status(s, io, PHY_STAT_LAN_ON);
-    r8153_u2p3en(io, 0);
-    if (VER(s) == RTL_VER_04) {
-        ocp_word_w0w1(io, MCU_TYPE_USB, USB_SSPHYLINK2, PWD_DN_SCALE_MASK, PWD_DN_SCALE(96));
-        ocp_byte_set_bits(io, MCU_TYPE_USB, USB_USB2PHY, USB2PHY_L1 | USB2PHY_SUSPEND);
-    } else if (VER(s) == RTL_VER_05) {
-        ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_DMY_REG0, ECM_ALDPS);
-        if (ocp_read_word(io, MCU_TYPE_USB, USB_BURST_SIZE) == 0)
-            ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_CSR_DUMMY1, DYNAMIC_BURST);
-        else
-            ocp_byte_set_bits(io, MCU_TYPE_USB, USB_CSR_DUMMY1, DYNAMIC_BURST);
-    } else if (VER(s) == RTL_VER_06) {
-        if (ocp_read_word(io, MCU_TYPE_USB, USB_BURST_SIZE) == 0)
-            ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_CSR_DUMMY1, DYNAMIC_BURST);
-        else
-            ocp_byte_set_bits(io, MCU_TYPE_USB, USB_CSR_DUMMY1, DYNAMIC_BURST);
-        r8153_queue_wake(io, 0);
-        if (rtl8152_get_speed(io) & RTL_LINK_STATUS)
-            ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_EXTRA_STATUS, CUR_LINK_OK | POLL_LINK_CHG);
-        else
-            ocp_word_w0w1(io, MCU_TYPE_PLA, PLA_EXTRA_STATUS, CUR_LINK_OK, POLL_LINK_CHG);
-    }
-    ocp_byte_set_bits(io, MCU_TYPE_USB, USB_CSR_DUMMY2, EP4_FULL_FC);
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_WDT11_CTRL, TIMER11_EN);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_LED_FEATURE, LED_MODE_MASK);
-    lpm = FIFO_EMPTY_1FB | ROK_EXIT_LPM;
-    if (VER(s) == RTL_VER_04 && s->UsbSpeed != NC_SPEED_SUPER) lpm |= LPM_TIMER_500MS;
-    else lpm |= LPM_TIMER_500US;
-    ocp_write_byte(io, MCU_TYPE_USB, USB_LPM_CTRL, lpm);
-    ocp_word_w0w1(io, MCU_TYPE_USB, USB_AFE_CTRL2, SEN_VAL_MASK, SEN_VAL_NORMAL | SEL_RXIDLE);
-    ocp_write_word(io, MCU_TYPE_USB, USB_CONNECT_TIMER, 0x0001);
-    r8153_power_cut_en(io, 0);
-    rtl_runtime_suspend_disable(io);
-    r8153_mac_clk_speed_down(io, 0);
-    r8153_u1u2en(io, 1);
-    ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_CONFIG6, LANWAKE_CLR_EN);
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_LWAKE_CTRL_REG, LANWAKE_PIN);
-    /* rx aggregation */
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_USB_CTRL, RX_AGG_DISABLE | RX_ZERO_EN);
-    rtl_tally_reset(io);
-    s->Coalesce = s->UsbSpeed == NC_SPEED_SUPER ? COALESCE_SUPER :
-                  s->UsbSpeed == NC_SPEED_HIGH ? COALESCE_HIGH : COALESCE_SLOW;
+    unsigned i;
+    for (i = 0; i < sizeof(Ids) / sizeof(Ids[0]); i++)
+        if (Ids[i] == id) return (nc_u16)(1u << i);
+    return 0;
 }
 
-static void r8153b_init(RTL_STATE *s, NET_IO *io, int c)
+/* Bulk-IN buffer: 16 KiB on the 8152, and on the 8153 below SuperSpeed. */
+static nc_u32 RxBuffer(const RTL_STATE *s)
 {
-    r8153b_u1u2en(io, 0);
-    if (c) {
-        /* r8153c_init: disable spi_en */
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_CONFIG5, 0x0008);
-        ocp_word_set_bits(io, MCU_TYPE_USB, 0xcbf0, 0x0002);
-    }
-    wait_autoload(s, io);
-    r8153_phy_status(s, io, 0);
-    r8152_mdio_test_and_clr_bit(s, io, MII_BMCR, BMCR_PDOWN);
-    r8153_phy_status(s, io, PHY_STAT_LAN_ON);
-    r8153_u2p3en(io, 0);
-    ocp_write_word(io, MCU_TYPE_USB, USB_MSC_TIMER, 0x0fff);   /* 0xfff * 8 ms */
-    r8153b_power_cut_en(io, 0);
-    r8153b_ups_en_off(s, io, c);
-    r8153_queue_wake(io, 0);
-    rtl_runtime_suspend_disable(io);
-    if (rtl8152_get_speed(io) & RTL_LINK_STATUS)
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_EXTRA_STATUS, CUR_LINK_OK | POLL_LINK_CHG);
-    else
-        ocp_word_w0w1(io, MCU_TYPE_PLA, PLA_EXTRA_STATUS, CUR_LINK_OK, POLL_LINK_CHG);
-    if (c || s->UsbSpeed == NC_SPEED_SUPER) r8153b_u1u2en(io, 1);
-    r8153_mac_clk_speed_down(io, 1);        /* MAC clock speed down */
-    if (c) {
-        ocp_byte_clr_bits(io, MCU_TYPE_USB, USB_MISC_2, 0x80);
-    } else {
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3, PLA_MCU_SPDWN_EN);
-        if (VER(s) == RTL_VER_09 && (ocp_read_byte(io, MCU_TYPE_PLA, 0xdc00) & 0x20))
-            ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_PHY_PWR, TEST_IO_OFF);  /* 32QFN */
-    }
-    s->Green = 1;
-    /* rx aggregation */
-    ocp_word_clr_bits(io, MCU_TYPE_USB, USB_USB_CTRL, RX_AGG_DISABLE | RX_ZERO_EN);
-    rtl_tally_reset(io);
-    s->Coalesce = 15000;                    /* 15 us */
-}
-
-static void ops_init(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07: r8152b_init(s, io); break;
-    case RTL_VER_08: case RTL_VER_09: r8153b_init(s, io, 0); break;
-    case RTL_VER_14: r8153b_init(s, io, 1); break;
-    default: r8153_init(s, io); break;
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* up / down (ops->up, ops->down), oob and first_init */
-
-static void r8152b_exit_oob(RTL_STATE *s, NET_IO *io)
-{
-    ocp_dword_clr_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_ACPT_ALL);
-    rxdy_gated_en(io, 1);
-    r8153_teredo_off(s, io);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CR, 0x00);
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, MCU_BORW_EN);
-    wait_oob_link_list_ready(s, io);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, RE_INIT_LL);
-    wait_oob_link_list_ready(s, io);
-    rtl8152_nic_reset(s, io);
-    /* rx share fifo credit full threshold */
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0, RXFIFO_THR1_NORMAL);
-    if (s->UsbSpeed == NC_SPEED_FULL) {
-        ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_FULL);
-        ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_FULL);
-    } else {
-        ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_HIGH);
-        ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_HIGH);
-    }
-    /* TX share fifo free credit full threshold */
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_TXFIFO_CTRL, TXFIFO_THR_NORMAL2);
-    ocp_write_byte(io, MCU_TYPE_USB, USB_TX_AGG, TX_AGG_MAX_THRESHOLD);
-    ocp_write_dword(io, MCU_TYPE_USB, USB_RX_BUF_TH, RX_THR_HIGH);
-    ocp_write_dword(io, MCU_TYPE_USB, USB_TX_DMA, TEST_MODE_DISABLE | TX_SIZE_ADJUST1);
-    rtl_rx_vlan_en(io, 0);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RMS, RTL8152_RMS);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_TCR0, TCR0_AUTO_FIFO);
-}
-
-/* rtl_disable, without the USB parts (the lower edge has stopped the
- * transfers already). */
-static void rtl_disable(RTL_STATE *s, NET_IO *io)
-{
-    int i;
-    if (Gone(io)) return;
-    ocp_dword_clr_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_ACPT_ALL);
-    rxdy_gated_en(io, 1);
-    for (i = 0; i < 1000; i++) {
-        if (Gone(io)) return;
-        if ((ocp_read_byte(io, MCU_TYPE_PLA, PLA_OOB_CTRL) & FIFO_EMPTY) == FIFO_EMPTY) break;
-        NcIoSleep(io, 1);
-    }
-    if (i == 1000) s->Timeouts++;
-    for (i = 0; i < 1000; i++) {
-        if (Gone(io)) return;
-        if (ocp_read_word(io, MCU_TYPE_PLA, PLA_TCR0) & TCR0_TX_EMPTY) break;
-        NcIoSleep(io, 1);
-    }
-    if (i == 1000) s->Timeouts++;
-    rtl8152_nic_reset(s, io);
-}
-
-static void r8152b_enter_oob(RTL_STATE *s, NET_IO *io)
-{
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB);
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0, RXFIFO_THR1_OOB);
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_OOB);
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_OOB);
-    rtl_disable(s, io);
-    wait_oob_link_list_ready(s, io);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, RE_INIT_LL);
-    wait_oob_link_list_ready(s, io);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RMS, RTL8152_RMS);
-    rtl_rx_vlan_en(io, 1);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_BDC_CR, ALDPS_PROXY_MODE);
-    ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB | DIS_MCU_CLROOB);
-    rxdy_gated_en(io, 0);
-    ocp_dword_set_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_APM | RCR_AM | RCR_AB);
-}
-
-static void rtl8153_change_mtu(NET_IO *io)
-{
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RMS, RTL8152_RMS);   /* mtu_to_size(1500) */
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_MTPS, MTPS_JUMBO);
-}
-
-static void r8153_first_init(RTL_STATE *s, NET_IO *io)
-{
-    rxdy_gated_en(io, 1);
-    r8153_teredo_off(s, io);
-    ocp_dword_clr_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_ACPT_ALL);
-    rtl8152_nic_reset(s, io);
-    rtl_reset_bmu(io);
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB);
-    ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, MCU_BORW_EN);
-    wait_oob_link_list_ready(s, io);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, RE_INIT_LL);
-    wait_oob_link_list_ready(s, io);
-    rtl_rx_vlan_en(io, 0);
-    rtl8153_change_mtu(io);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_TCR0, TCR0_AUTO_FIFO);
-    rtl8152_nic_reset(s, io);
-    /* rx share fifo credit full threshold */
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0, RXFIFO_THR1_NORMAL);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_NORMAL);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_NORMAL);
-    /* TX share fifo free credit full threshold */
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_TXFIFO_CTRL, TXFIFO_THR_NORMAL2);
-}
-
-static void r8153_enter_oob(RTL_STATE *s, NET_IO *io)
-{
-    ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB);
-    /* RX FIFO settings for OOB */
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0, RXFIFO_THR1_OOB);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_OOB);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_OOB);
-    rtl_disable(s, io);
-    rtl_reset_bmu(io);
-    wait_oob_link_list_ready(s, io);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, RE_INIT_LL);
-    wait_oob_link_list_ready(s, io);
-    ocp_write_word(io, MCU_TYPE_PLA, PLA_RMS, 1522);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_MTPS, MTPS_DEFAULT);
-    switch (VER(s)) {
-    case RTL_VER_03: case RTL_VER_04: case RTL_VER_05: case RTL_VER_06:
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_TEREDO_CFG, TEREDO_WAKE_MASK);
-        break;
-    default:   /* RTL_VER_08, 09, 14: clear the teredo wake events */
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_TEREDO_WAKE_BASE, 0x00ff);
-        break;
-    }
-    rtl_rx_vlan_en(io, 1);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_BDC_CR, ALDPS_PROXY_MODE);
-    ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB | DIS_MCU_CLROOB);
-    ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, MCU_BORW_EN);
-    rxdy_gated_en(io, 0);
-    ocp_dword_set_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_APM | RCR_AM | RCR_AB);
-}
-
-static void ops_up(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:     /* rtl8152_up */
-        r8152_aldps_en(s, io, 0);
-        r8152b_exit_oob(s, io);
-        r8152_aldps_en(s, io, 1);
-        break;
-    case RTL_VER_08: case RTL_VER_09:                      /* rtl8153b_up */
-        r8153b_u1u2en(io, 0);
-        r8153_u2p3en(io, 0);
-        r8153_aldps_en(s, io, 0);
-        r8153_first_init(s, io);
-        ocp_write_dword(io, MCU_TYPE_USB, USB_RX_BUF_TH, RX_THR_B);
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3, PLA_MCU_SPDWN_EN);
-        r8153_aldps_en(s, io, 1);
-        if (s->UsbSpeed == NC_SPEED_SUPER) r8153b_u1u2en(io, 1);
-        break;
-    case RTL_VER_14:                                       /* rtl8153c_up */
-        r8153b_u1u2en(io, 0);
-        r8153_u2p3en(io, 0);
-        r8153_aldps_en(s, io, 0);
-        rxdy_gated_en(io, 1);
-        r8153_teredo_off(s, io);
-        ocp_dword_clr_bits(io, MCU_TYPE_PLA, PLA_RCR, RCR_ACPT_ALL);
-        rtl8152_nic_reset(s, io);
-        rtl_reset_bmu(io);
-        ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_OOB_CTRL, NOW_IS_OOB);
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, MCU_BORW_EN);
-        wait_oob_link_list_ready(s, io);
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_SFF_STS_7, RE_INIT_LL);
-        wait_oob_link_list_ready(s, io);
-        rtl_rx_vlan_en(io, 0);
-        /* rtl8153c_change_mtu at MTU 1500 */
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_RMS, RTL8152_RMS);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_MTPS, 10 * 1024 / 64);
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_TXFIFO_CTRL, 512 / 64);
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_TXFIFO_FULL, 2048 / 8);
-        rtl8152_nic_reset(s, io);
-        /* rx share fifo credit full threshold */
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0, 0x02);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_RXFIFO_FULL, 0x08);
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1, RXFIFO_THR2_NORMAL);
-        ocp_write_word(io, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2, RXFIFO_THR3_NORMAL);
-        ocp_write_dword(io, MCU_TYPE_USB, USB_RX_BUF_TH, RX_THR_B);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_CONFIG34, 0x0100);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3, PLA_MCU_SPDWN_EN);
-        r8153_aldps_en(s, io, 1);
-        r8153b_u1u2en(io, 1);
-        break;
-    default:                                               /* rtl8153_up */
-        r8153_u1u2en(io, 0);
-        r8153_u2p3en(io, 0);
-        r8153_aldps_en(s, io, 0);
-        r8153_first_init(s, io);
-        ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_CONFIG6, LANWAKE_CLR_EN);
-        ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_LWAKE_CTRL_REG, LANWAKE_PIN);
-        ocp_word_clr_bits(io, MCU_TYPE_USB, USB_SSPHYLINK1, DELAY_PHY_PWR_CHG);
-        r8153_aldps_en(s, io, 1);
-        if (VER(s) != RTL_VER_03 && VER(s) != RTL_VER_04) r8153_u2p3en(io, 1);
-        r8153_u1u2en(io, 1);
-        break;
-    }
-}
-
-static void ops_down(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:     /* rtl8152_down */
-        r8152_power_cut_en(io, 0);
-        r8152_aldps_en(s, io, 0);
-        r8152b_enter_oob(s, io);
-        r8152_aldps_en(s, io, 1);
-        break;
-    case RTL_VER_08: case RTL_VER_09: case RTL_VER_14:     /* rtl8153b_down */
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3, PLA_MCU_SPDWN_EN);
-        r8153b_u1u2en(io, 0);
-        r8153_u2p3en(io, 0);
-        r8153b_power_cut_en(io, 0);
-        r8153_aldps_en(s, io, 0);
-        r8153_enter_oob(s, io);
-        r8153_aldps_en(s, io, 1);
-        break;
-    default:                                               /* rtl8153_down */
-        ocp_byte_clr_bits(io, MCU_TYPE_PLA, PLA_CONFIG6, LANWAKE_CLR_EN);
-        r8153_u1u2en(io, 0);
-        r8153_u2p3en(io, 0);
-        r8153_power_cut_en(io, 0);
-        r8153_aldps_en(s, io, 0);
-        r8153_enter_oob(s, io);
-        r8153_aldps_en(s, io, 1);
-        break;
-    }
-}
-
-static void ops_unload(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: break;
-    case RTL_VER_02: case RTL_VER_07: r8152_power_cut_en(io, 1); break;   /* rtl8152_unload */
-    case RTL_VER_08: case RTL_VER_09: r8153b_power_cut_en(io, 0); break;  /* rtl8153b_unload */
-    default: r8153_power_cut_en(io, 0); break;   /* rtl8153_unload (03-06 and 14) */
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* enable / disable (ops->enable, ops->disable) */
-
-static void rtl_set_ifg(NET_IO *io, nc_u16 speed)
-{
-    if ((speed & (RTL_10BPS | RTL_100BPS)) && !(speed & RTL_FULL_DUP)) {
-        ocp_word_w0w1(io, MCU_TYPE_PLA, PLA_TCR1, IFG_MASK, IFG_144NS);
-        ocp_word_clr_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4, TX10MIDLE_EN);
-    } else {
-        ocp_word_w0w1(io, MCU_TYPE_PLA, PLA_TCR1, IFG_MASK, IFG_96NS);
-        ocp_word_set_bits(io, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4, TX10MIDLE_EN);
-    }
-}
-
-static void rtl_enable(RTL_STATE *s, NET_IO *io)
-{
-    r8152b_reset_packet_filter(io);
-    ocp_byte_set_bits(io, MCU_TYPE_PLA, PLA_CR, CR_RE | CR_TE);
-    if (VER(s) > RTL_VER_07)   /* r8153b_rx_agg_chg_indicate */
-        ocp_write_byte(io, MCU_TYPE_USB, USB_UPT_RXDMA_OWN, OWN_UPDATE | OWN_CLEAR);
-    rxdy_gated_en(io, 0);
-}
-
-static void ops_enable(RTL_STATE *s, NET_IO *io)
-{
-    nc_u32 early;
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:     /* rtl8152_enable */
-        rtl_set_eee_plus(io);
-        rtl_enable(s, io);
-        return;
-    default:                                               /* rtl8153_enable */
-        break;
-    }
-    rtl_set_eee_plus(io);
-    /* r8153_set_rx_early_timeout */
-    if (VER(s) <= RTL_VER_06) {
-        ocp_write_word(io, MCU_TYPE_USB, USB_RX_EARLY_TIMEOUT, s->Coalesce / 8);
-    } else {
-        ocp_write_word(io, MCU_TYPE_USB, USB_RX_EARLY_TIMEOUT, 128 / 8);
-        ocp_write_word(io, MCU_TYPE_USB, USB_RX_EXTRA_AGGR_TMR, s->Coalesce / 8);
-    }
-    /* r8153_set_rx_early_size: rx_buf_sz - rx_reserved_size(1500) */
-    early = s->RxBufSize - (RTL8152_RMS + RTL_RX_DESC + RTL_RX_ALIGN);
-    ocp_write_word(io, MCU_TYPE_USB, USB_RX_EARLY_SIZE, VER(s) <= RTL_VER_06 ? early / 4 : early / 8);
-    rtl_set_ifg(io, rtl8152_get_speed(io));
-    if (VER(s) == RTL_VER_09 || VER(s) == RTL_VER_14) {
-        ocp_word_clr_bits(io, MCU_TYPE_USB, USB_FW_TASK, FC_PATCH_TASK);
-        NcIoSleep(io, 1);
-        ocp_word_set_bits(io, MCU_TYPE_USB, USB_FW_TASK, FC_PATCH_TASK);
-    }
-    rtl_enable(s, io);
-}
-
-static void ops_disable(RTL_STATE *s, NET_IO *io)
-{
-    switch (VER(s)) {
-    case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:     /* rtl8152_disable */
-        r8152_aldps_en(s, io, 0);
-        rtl_disable(s, io);
-        r8152_aldps_en(s, io, 1);
-        break;
-    default:                                               /* rtl8153_disable */
-        r8153_aldps_en(s, io, 0);
-        rtl_disable(s, io);
-        rtl_reset_bmu(io);
-        r8153_aldps_en(s, io, 1);
-        break;
-    }
-}
-
-/* _rtl8152_set_rx_mode, with the stored accept bits and hash. */
-static void apply_rx_mode(RTL_STATE *s, NET_IO *io)
-{
-    nc_u32 rcr = ocp_read_dword(io, MCU_TYPE_PLA, PLA_RCR);
-    rcr &= ~RCR_ACPT_ALL;
-    rcr |= RCR_AB | RCR_APM | s->RcrAccept;
-    generic_ocp_write(io, PLA_MAR, BYTE_EN_DWORD, 8, s->Mar, MCU_TYPE_PLA);
-    ocp_write_dword(io, MCU_TYPE_PLA, PLA_RCR, rcr);
-}
-
-/* ------------------------------------------------------------------ */
-/* The netchip.h interface. */
-
-nc_u8 RtlVersionFromTcr0(nc_u32 tcr0)
-{
-    switch ((tcr0 >> 16) & VERSION_MASK) {
-    case 0x4c00: return RTL_VER_01;
-    case 0x4c10: return RTL_VER_02;
-    case 0x5c00: return RTL_VER_03;
-    case 0x5c10: return RTL_VER_04;
-    case 0x5c20: return RTL_VER_05;
-    case 0x5c30: return RTL_VER_06;
-    case 0x4800: return RTL_VER_07;
-    case 0x6000: return RTL_VER_08;
-    case 0x6010: return RTL_VER_09;
-    case 0x6400: return RTL_VER_14;
-    default: return RTL_VER_UNKNOWN;   /* incl. RTL8156/8157/8159 (later) */
-    }
+    if (s->Kind & K_8152) return 16384;
+    if ((s->Kind & K_8153) && s->UsbSpeed != NC_SPEED_SUPER) return 16384;
+    return 32768;
 }
 
 long RtlProbe(const nc_u8 *device, nc_u32 deviceSize, const nc_u8 *const *config,
               const nc_u32 *size, nc_u32 count, NET_PROBE *probe)
 {
     nc_u32 i;
-    long status;
     if (NcParseDevice(device, deviceSize, probe) != NC_OK) return NC_E_MALFORMED;
-    /* rtl8152_cfgselector_choose_configuration: the configuration whose
-     * first interface is vendor class; rtl_check_vendor_ok: endpoints 1
+    /* The vendor configuration is the one whose first interface is class
+     * FF; it need not be the first configuration. Its endpoints are 1
      * (bulk IN), 2 (bulk OUT) and 3 (interrupt IN). */
     for (i = 0; i < count; i++) {
+        long r;
         if (!config[i] || !size[i]) continue;
-        status = NcFindVendorInterface(config[i], size[i], 1, probe);
-        if (status == NC_E_MALFORMED) return status;
-        if (status != NC_OK) continue;
+        r = NcFindVendorInterface(config[i], size[i], 1, probe);
+        if (r == NC_E_MALFORMED) return r;
+        if (r != NC_OK) continue;
         if ((probe->In & 0x0f) != 1 || (probe->Out & 0x0f) != 2 || (probe->Interrupt & 0x0f) != 3)
             return NC_E_UNSUPPORTED;
         probe->ConfigIndex = (nc_u8)i;
@@ -1225,178 +925,179 @@ long RtlProbe(const nc_u8 *device, nc_u32 deviceSize, const nc_u8 *const *config
     return NC_E_UNSUPPORTED;
 }
 
-static long RtlBringUp(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params, int resume)
+static void WriteNodeId(NET_IO *io, const nc_u8 mac[6])
 {
-    RTL_STATE *s = chip;
     nc_u8 b[8];
     int i;
+    for (i = 0; i < 6; i++) b[i] = mac[i];
+    b[6] = b[7] = 0;
+    Put(io, RTL_SPACE_MAC, MR_CFG_LOCK, 1, CFG_UNLOCKED);
+    PutEight(io, RTL_SPACE_MAC, MR_NODE_ID, b, 1);
+    Put(io, RTL_SPACE_MAC, MR_CFG_LOCK, 1, CFG_LOCKED);
+}
 
-    if (!resume) {
+static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params, int again)
+{
+    nc_u8 b[8];
+    int i;
+    if (!again) {
         nc_u8 *p = (nc_u8 *)s;
-        nc_u32 k;
-        for (k = 0; k < sizeof(*s); k++) p[k] = 0;
+        for (i = 0; i < (int)sizeof(*s); i++) p[i] = 0;
         s->UsbSpeed = probe->Speed;
-        /* __rtl_get_hw_ver: PLA_TCR0, up to three tries. */
-        for (i = 0; i < 3; i++) {
-            if (NcIoTry(io, RTL8152_REQ_GET_REGS, PLA_TCR0, MCU_TYPE_PLA, b, 4) >= 0) break;
-        }
+        /* The chip id, in MR_TX_CONFIG's high word; three tries. */
+        for (i = 0; i < 3; i++)
+            if (NcIoTry(io, RTL_REQ, MR_TX_CONFIG, RTL_SPACE_MAC, b, 4) >= 0) break;
         if (i == 3) { io->Status = NC_E_IO; return io->Status; }
-        s->Version = RtlVersionFromTcr0(Get32(b));
-        if (s->Version == RTL_VER_UNKNOWN) return NC_E_UNSUPPORTED;
-        /* rtl_ops_init */
-        switch (VER(s)) {
-        case RTL_VER_01: case RTL_VER_02: case RTL_VER_07:
-            s->RxBufSize = 16 * 1024; s->EeeAdv = MDIO_EEE_100TX; s->Gmii = 0;
-            break;
-        case RTL_VER_03: case RTL_VER_04: case RTL_VER_05: case RTL_VER_06:
-            s->RxBufSize = s->UsbSpeed == NC_SPEED_SUPER ? 32 * 1024 : 16 * 1024;
-            s->EeeAdv = MDIO_EEE_1000T | MDIO_EEE_100TX; s->Gmii = 1;
-            break;
-        default:
-            s->RxBufSize = 32 * 1024; s->EeeAdv = MDIO_EEE_1000T | MDIO_EEE_100TX; s->Gmii = 1;
-            break;
-        }
+        s->Id = RtlChipId(Le32(b));
+        if (!s->Id) return NC_E_UNSUPPORTED;
+        s->Kind = KindOf(s->Id);
     }
-    s->OcpBase = 0xffff;                     /* rtl_reset_ocp_base */
+    s->PhyPage = 0xffff;
     s->Carrier = 0;
 
-    ops_init(s, io);
-    hw_phy_cfg(s, io);
-    rtl8152_set_speed(s, io);
-    /* set_ethernet_addr: RTL_VER_01 reads PLA_IDR, the others PLA_BACKUP
-     * and write it to PLA_IDR. */
-    generic_ocp_read(io, (nc_u16)(VER(s) == RTL_VER_01 ? PLA_IDR : PLA_BACKUP), 8, b, MCU_TYPE_PLA);
+    Run(s, io, (s->Kind & K_8152) ? Q_SETUP_8152 : (s->Kind & K_8153) ? Q_SETUP_8153 : Q_SETUP_LATER);
+    if (s->Kind & K_LATER) s->SetUpOnce = 1;
+    Run(s, io, PhySequence(s));
+    Negotiate(s, io);
+    /* The station address: the 4C00 keeps it in MR_NODE_ID; the others
+     * load it into MR_NODE_ID_SAVED, from where it is copied. */
+    NcIoRead(io, RTL_REQ, (nc_u16)(s->Id == ID_4C00 ? MR_NODE_ID : MR_NODE_ID_SAVED), RTL_SPACE_MAC, b, 8);
     for (i = 0; i < 6; i++) s->Mac[i] = b[i];
-    if (VER(s) != RTL_VER_01 && NcValidMac(s->Mac)) {
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-        b[6] = b[7] = 0;
-        generic_ocp_write(io, PLA_IDR, BYTE_EN_SIX_BYTES, 8, b, MCU_TYPE_PLA);
-        ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
-    }
-    ops_up(s, io);
+    if (s->Id != ID_4C00 && NcValidMac(s->Mac)) WriteNodeId(io, s->Mac);
+    Run(s, io, (s->Kind & K_8152) ? Q_WAKE_8152 : (s->Kind & K_8153) ? Q_WAKE_8153 :
+               (s->Kind & K_8153B) ? Q_WAKE_8153B : Q_WAKE_8153C);
     if (io->Status < 0) return io->Status;
 
     for (i = 0; i < 6; i++) params->Mac[i] = s->Mac[i];
-    params->RxSize = s->RxBufSize;
+    params->RxSize = RxBuffer(s);
     params->RxCount = 4;
-    params->TxHeader = RTL_TX_DESC;
-    params->TxAlign = RTL_TX_ALIGN;
+    params->TxSize = TX_BUFFER;
+    params->TxSlots = 4;
     params->TxBatch = 32;
-    params->TxSlots = 4;                     /* RTL8152_MAX_TX */
-    params->TxSize = RTL_AGG_BUF;            /* agg_buf_sz */
-    params->Version = s->Version;
+    params->TxHeader = TX_DESC_LEN;
+    params->TxAlign = TX_ALIGN;
+    params->Version = s->Id;
     return NC_OK;
 }
 
 static long RtlStart(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
 {
-    return RtlBringUp(chip, io, probe, params, 0);
+    return BringUp(chip, io, probe, params, 0);
 }
 
 static long RtlResume(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
 {
-    return RtlBringUp(chip, io, probe, params, 1);
+    return BringUp(chip, io, probe, params, 1);
 }
 
 static long RtlSetMac(void *chip, NET_IO *io, const nc_u8 mac[6])
 {
     RTL_STATE *s = chip;
-    nc_u8 b[8];
     int i;
-    for (i = 0; i < 6; i++) b[i] = mac[i];
-    b[6] = b[7] = 0;
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
-    generic_ocp_write(io, PLA_IDR, BYTE_EN_SIX_BYTES, 8, b, MCU_TYPE_PLA);
-    ocp_write_byte(io, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_NORAML);
+    WriteNodeId(io, mac);
     if (io->Status < 0) return io->Status;
     for (i = 0; i < 6; i++) s->Mac[i] = mac[i];
     return NC_OK;
 }
 
+/* The receive mode: broadcast and own address always, plus the filter's
+ * bits, and the hash table. */
+static void ApplyFilter(RTL_STATE *s, NET_IO *io)
+{
+    nc_u32 accept = Get(io, RTL_SPACE_MAC, MR_RX_ACCEPT, 4);
+    accept = (accept & ~(nc_u32)ACC_MASK) | ACC_BCAST | ACC_MY_PHYS | s->Accept;
+    PutEight(io, RTL_SPACE_MAC, MR_HASH, s->Hash, 0);
+    Put(io, RTL_SPACE_MAC, MR_RX_ACCEPT, 4, accept);
+}
+
 static long RtlLink(void *chip, NET_IO *io, NET_LINK *link)
 {
     RTL_STATE *s = chip;
-    nc_u16 speed = rtl8152_get_speed(io);
+    nc_u32 st = Get(io, RTL_SPACE_MAC, MR_LINK, 2);
     if (io->Status < 0) return io->Status;
-    link->RxLength = s->RxBufSize;
-    if (speed & RTL_LINK_STATUS) {
-        if (!s->Carrier) {
-            ops_enable(s, io);
-            apply_rx_mode(s, io);
-            if (io->Status < 0) return io->Status;
-            s->Carrier = 1;
-        }
-        link->Up = 1;
-        link->Mbps = (speed & RTL_1000BPS) ? 1000 : (speed & RTL_100BPS) ? 100 : 10;
-        link->FullDuplex = (speed & RTL_FULL_DUP) != 0;
-    } else {
+    link->RxLength = RxBuffer(s);
+    if (!(st & LNK_UP)) {
         if (s->Carrier) {
             s->Carrier = 0;
-            ops_disable(s, io);
+            Run(s, io, Q_RX_OFF);
         }
-        link->Up = 0; link->Mbps = 0; link->FullDuplex = 0;
+        link->Up = 0;
+        link->Mbps = 0;
+        link->FullDuplex = 0;
+        return io->Status < 0 ? io->Status : NC_OK;
     }
+    if (!s->Carrier) {
+        Run(s, io, Q_RX_ON);
+        ApplyFilter(s, io);
+        if (io->Status < 0) return io->Status;
+        s->Carrier = 1;
+    }
+    link->Up = 1;
+    link->Mbps = (st & LNK_1000) ? 1000 : (st & LNK_100) ? 100 : 10;
+    link->FullDuplex = (st & LNK_FULL) ? 1 : 0;
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
 static int RtlPoll(void *chip, NET_IO *io)
 {
     RTL_STATE *s = chip;
-    nc_u16 speed = rtl8152_get_speed(io);
+    int up = (Get(io, RTL_SPACE_MAC, MR_LINK, 2) & LNK_UP) != 0;
     if (io->Status < 0) return 0;
-    return ((speed & RTL_LINK_STATUS) != 0) != (s->Carrier != 0);
+    return up != (s->Carrier != 0);
 }
 
-void RtlMulticastHash(nc_u32 filter, const nc_u8 *multicast, nc_u32 count, nc_u32 *rcr, nc_u8 mar[8])
+/* 64 bins: the top six bits of the Ethernet CRC (NcEtherCrc) of each
+ * address. Bins 32-63 go to hash bytes 0-3 and bins 0-31 to bytes 4-7,
+ * the highest bin of each half in the first byte. More than
+ * NC_MULTICAST_MAX addresses accept all multicast. */
+void RtlMulticastHash(nc_u32 filter, const nc_u8 *multicast, nc_u32 count, nc_u32 *accept,
+                      nc_u8 hash[8])
 {
-    nc_u32 mc[2] = { 0, 0 }, i, accept = 0;
+    nc_u32 i;
+    nc_u8 fill = 0;
+    *accept = 0;
     if (filter & NC_FILTER_PROMISCUOUS) {
-        accept = RCR_AM | RCR_AAP;
-        mc[0] = mc[1] = 0xffffffffUL;
-    } else if ((filter & NC_FILTER_ALL_MULTICAST) || count > 32) {  /* multicast_filter_limit */
-        accept = RCR_AM;
-        mc[0] = mc[1] = 0xffffffffUL;
-    } else if (filter & NC_FILTER_MULTICAST) {
-        for (i = 0; i < count; i++) {
-            nc_u32 bit = NcEtherCrc(multicast + 6 * i, 6) >> 26;
-            mc[bit >> 5] |= 1UL << (bit & 31);
-            accept = RCR_AM;
-        }
+        *accept = ACC_ALL_PHYS | ACC_MCAST;
+        fill = 0xff;
+    } else if ((filter & NC_FILTER_ALL_MULTICAST) || count > NC_MULTICAST_MAX) {
+        *accept = ACC_MCAST;
+        fill = 0xff;
     }
-    /* tmp[0] = cpu_to_le32(swab32(mc_filter[1])), tmp[1] = ...(mc_filter[0]) */
-    for (i = 0; i < 4; i++) {
-        mar[i] = (nc_u8)(mc[1] >> (24 - 8 * i));
-        mar[4 + i] = (nc_u8)(mc[0] >> (24 - 8 * i));
+    for (i = 0; i < 8; i++) hash[i] = fill;
+    if (fill || !(filter & NC_FILTER_MULTICAST)) return;
+    for (i = 0; i < count; i++) {
+        nc_u32 bin = NcEtherCrc(multicast + 6 * i, 6) >> 26;
+        int at = (bin >= 32 ? 3 : 7) - (int)((bin & 31) >> 3);
+        hash[at] = (nc_u8)(hash[at] | (1u << (bin & 7)));
+        *accept = ACC_MCAST;
     }
-    *rcr = accept;
 }
 
 static long RtlSetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *multicast, nc_u32 count)
 {
     RTL_STATE *s = chip;
-    RtlMulticastHash(filter, multicast, count, &s->RcrAccept, s->Mar);
-    /* rtl8152_set_rx_mode acts only with the carrier on; set_carrier
-     * applies it when the link comes up. */
-    if (s->Carrier) apply_rx_mode(s, io);
+    RtlMulticastHash(filter, multicast, count, &s->Accept, s->Hash);
+    /* With the link down it is applied when the link comes up. */
+    if (s->Carrier) ApplyFilter(s, io);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
 static long RtlStop(void *chip, NET_IO *io)
 {
     RTL_STATE *s = chip;
-    if (VER(s) == RTL_VER_UNKNOWN) return NC_OK;   /* Start refused the chip */
+    if (!s->Id) return NC_OK;      /* Start refused the chip: nothing to undo */
     s->Carrier = 0;
-    ops_down(s, io);
-    ops_unload(s, io);
+    Run(s, io, Q_SLEEP);
+    Run(s, io, Q_DETACH);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
 static long RtlSuspend(void *chip, NET_IO *io)
 {
     RTL_STATE *s = chip;
-    if (VER(s) == RTL_VER_UNKNOWN) return NC_OK;
+    if (!s->Id) return NC_OK;
     s->Carrier = 0;
-    ops_down(s, io);
+    Run(s, io, Q_SLEEP);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
@@ -1404,35 +1105,39 @@ static int RtlStatus(void *chip, const nc_u8 *data, nc_u32 length)
 {
     (void)chip;
     if (length < 2) return -1;
-    return ((data[0] | (data[1] << 8)) & INTR_LINK) ? 1 : 0;
+    return (data[0] & IRQ_LINK) ? 1 : 0;
 }
 
-/* rx_bottom: each frame behind a 24-byte rx_desc, its length (opts1 bits
- * 0-14) counting the 4-byte FCS, the next descriptor 8-byte aligned. A
- * length below ETH_ZLEN ends the walk, as in Linux. Unlike Linux, a frame
- * running past the transfer rejects the whole transfer before anything
- * is emitted (ethernet.md section 3.3). */
+/* One bulk-IN transfer holds records: a 24-byte header whose first dword
+ * gives, in bits 0-14, the frame length with its 4-byte FCS, then the
+ * frame, then padding to 8 bytes. A length below 60 marks the end. The
+ * transfer is checked whole (first pass) before any frame is handed up
+ * (second pass); a frame running past its end rejects it. Frames longer
+ * than NC_ETH_MAX are counted as dropped. */
 long RtlRxParse(void *chip, const nc_u8 *data, nc_u32 length, NET_EMIT emit, void *context,
                 NET_RX_STATS *stats)
 {
-    nc_u32 pass, at, frames = 0, dropped = 0;
+    int deliver;
+    nc_u32 frames = 0, dropped = 0;
     (void)chip;
-    stats->Frames = 0; stats->Dropped = 0;
-    if (length < 60) return 0;               /* urb->actual_length < ETH_ZLEN */
-    for (pass = 0; pass < 2; pass++) {
-        at = 0;
+    stats->Frames = 0;
+    stats->Dropped = 0;
+    if (length < NC_ETH_PAD) return 0;
+    for (deliver = 0; deliver < 2; deliver++) {
+        nc_u32 at = 0;
         frames = dropped = 0;
-        while (length > at && length - at > RTL_RX_DESC) {
-            nc_u32 pkt = Get32(data + at) & 0x7fff;
-            if (pkt < 60) break;
-            if (pkt > length - at - RTL_RX_DESC) return NC_E_MALFORMED;
-            if (pkt - 4 > NC_ETH_MAX) dropped++;
-            else {
-                if (pass) emit(context, data + at + RTL_RX_DESC, pkt - 4);
+        while (at < length && length - at > RX_DESC_LEN) {
+            nc_u32 left = length - at - RX_DESC_LEN;
+            nc_u32 wire = Le32(data + at) & 0x7fff;
+            if (wire < NC_ETH_PAD) break;
+            if (wire > left) return NC_E_MALFORMED;
+            if (wire - 4 <= NC_ETH_MAX) {
+                if (deliver) emit(context, data + at + RX_DESC_LEN, wire - 4);
                 frames++;
+            } else {
+                dropped++;
             }
-            at += RTL_RX_DESC + pkt;
-            at = (at + RTL_RX_ALIGN - 1) & ~(nc_u32)(RTL_RX_ALIGN - 1);
+            at = (at + RX_DESC_LEN + wire + RX_RECORD_ALIGN - 1) & ~(nc_u32)(RX_RECORD_ALIGN - 1);
         }
     }
     stats->Frames = frames;
@@ -1440,17 +1145,20 @@ long RtlRxParse(void *chip, const nc_u8 *data, nc_u32 length, NET_EMIT emit, voi
     return (long)frames;
 }
 
+/* Each frame is preceded by an 8-byte header: first and last segment
+ * bits and the length; no offloads. */
 static void RtlTxHeader(void *chip, nc_u8 *hdr, nc_u32 length, nc_u32 maxPacket, int single)
 {
     (void)chip; (void)maxPacket; (void)single;
-    Put32(hdr, length | 0x80000000UL | 0x40000000UL);   /* TX_FS | TX_LS | len */
-    Put32(hdr + 4, 0);
+    SetLe32(hdr, TX_FIRST_LAST | length);
+    SetLe32(hdr + 4, 0);
 }
 
+/* No padding and no zero-length packet after a transfer. */
 static int RtlTxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 maxPacket)
 {
     (void)chip; (void)buffer; (void)total; (void)capacity; (void)maxPacket;
-    return 0;            /* r8152_tx_agg_fill submits no zero-length packet */
+    return 0;
 }
 
 const NET_CHIP NetPackageChip = {

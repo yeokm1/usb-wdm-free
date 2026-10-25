@@ -197,8 +197,8 @@ class Tests(unittest.TestCase):
 
     # -- tests -------------------------------------------------------------
     def test_probe_and_bring_up_every_chip(self):
-        for chip, speed, version, mbps in (('8153', 'high', 4, 1000), ('8152', 'high', 2, 100),
-                                           ('8153b', 'high', 9, 1000), ('8153', 'full', 4, 1000)):
+        for chip, speed, version, mbps in (('8153', 'high', 0x5c10, 1000), ('8152', 'high', 0x4c10, 100),
+                                           ('8153b', 'high', 0x6010, 1000), ('8153', 'full', 0x5c10, 1000)):
             with self.subTest(chip=chip, speed=speed):
                 self.assertEqual(self.setup(chip, speed), 0)
                 p = self.probe
@@ -233,7 +233,7 @@ class Tests(unittest.TestCase):
         self.assertTrue(self.link().Up)
         self.settle(3.1)                              # cable out
         self.assertFalse(self.link().Up)
-        self.assertFalse(self.m.chip.receiving() and self.m.chip.pla[r.PLA_PHYSTATUS])
+        self.assertFalse(self.m.chip.receiving() and self.m.chip.pla[r.MR_LINK])
         self.settle(1.1)                              # cable in
         self.assertTrue(self.link().Up)
         events = [json.loads(x)['why'] for x in self.trace.getvalue().splitlines() if '"link"' in x]
@@ -296,7 +296,7 @@ class Tests(unittest.TestCase):
         self.assertTrue(acc(other) and acc(bytes.fromhex('020000000009')))
         self.assertEqual(self.chip.SetFilter(self.state, c.byref(self.io), FILTER_DIRECTED, None, 0), 0)
         # Directed only: multicast and foreign unicast refused; broadcast
-        # stays accepted (r8152 _rtl8152_set_rx_mode always sets RCR_AB).
+        # stays accepted (the core always sets ACC_BCAST).
         self.assertFalse(acc(group) or acc(bytes.fromhex('020000000009')))
         self.assertTrue(acc(b'\xff' * 6))
         # SetMac moves the directed address.
@@ -322,7 +322,7 @@ class Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.transmit(bad)
         with self.assertRaises(ValueError):
-            self.m.transmit(struct.pack('<II', 60, 0) + bytes(60))      # no TX_FS|TX_LS
+            self.m.transmit(struct.pack('<II', 60, 0) + bytes(60))      # no first/last segment bits
 
     def test_aggregate_respects_request_length(self):
         self.assertEqual(self.setup(), 0)

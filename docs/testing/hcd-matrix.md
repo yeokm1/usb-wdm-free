@@ -27,7 +27,7 @@ Compiled 2026-10-22 from the records in this folder. "-" means no leg.
 | usbcom 98/ME driver | PASS / PASS (QEMU, CDC-ACM simulator; under NUSB a 64 KiB echo fails about 1 run in 6, below the driver) | 98 SE (NUSB 3.3, High Speed) | 98 SE (Full and High Speed), ME (High Speed) | 98 SE (PASS, Full Speed) |
 | usbflop | REAL CHECK NEEDED / PASS (real Mitsumi via VM; a Full Speed drive is not carried by QEMU's EHCI) | - | 98 SE, ME (read PASS) | 98 SE (read PASS), ME, 2000, XP, 7 x64 (Mitsumi: binding only; simulated unlisted CBI and CB drive: read PASS, `2026-10-24-usbflop-nt-xpad-x64.md`) |
 | ax88179 | PASS / PASS (real AX88179 via VM, 2026-10-22) | 98 SE (NUSB 3.3, High Speed behind a USB 2.0 hub) | 98 SE, ME (SuperSpeed) | - |
-| rtl815x | PASS / PASS with the SIMULATED RTL8153 (`rtlemu.py`; install, link flap, DHCP, ping 32-1472, removal; `2026-10-23-rtl815x-sim.md`); no real device | 98 SE NUSB (simulator) | 98 SE (simulator) | - |
+| rtl815x | PASS / PASS with the SIMULATED RTL8153 (`rtlemu.py`; install, link flap, DHCP, ping 32-1472, removal; `2026-10-23-rtl815x-sim.md`); no real device; the rewritten core (2026-10-25) again with the RTL8153 under both, and the RTL8153B under xHCI98 only, `2026-10-25-rtl815x-rewrite.md` | 98 SE NUSB (simulator) | 98 SE (simulator) | - |
 | libusb0 | PASS / PASS (install, load, listing only; QEMU usb-storage via a test INF) | 98 SE (NUSB 3.3, High Speed) | 98 SE (SuperSpeed) | 98 SE (PASS) |
 | xpad98 | PASS / PASS (simulated pads, after the 2026-10-23 fixes; the receiver unsupported under xHCI98 3.1.0.0, PASS with 43.67) | 98 SE (NUSB 3.3: 360, Xbox One, receiver); 2000 SP4, XP SP3, Vista SP2 x86 (Windows' usbehci) | 98 SE (360, Xbox One; receiver with 43.67), ME (360, Xbox One) | 98 SE, ME (PASS) |
 

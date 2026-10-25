@@ -2,12 +2,13 @@
  * Copyright (C) 2026 Yeo Kheng Meng
  *
  * Host tests for the RTL815X chip core (rtlchip.c) and the shared pure
- * helpers (netchip.c), against a register-file model of the chip: the PLA
- * and USB OCP spaces with the byte-enable rules of r8152.c's
- * generic_ocp_read/write, the PHY OCP window behind PLA_OCP_GPHY_BASE, and
- * the self-clearing bits the bring-up waits for. The model and every
- * descriptor here are synthetic; no RTL8152/8153 was read. Expected values
- * come from Linux r8152.c at f47d2236, as cited at each check.
+ * helpers (netchip.c), against a register-file model of the chip: the MAC
+ * and USB register spaces with the byte-lane rules of the vendor request
+ * (rtlchip.h), the PHY window behind MR_PHY_PAGE, and the self-clearing
+ * bits the bring-up waits for. The model and every descriptor here are
+ * synthetic; no RTL8152/8153 was read. The expected values are register
+ * facts of the chips (outcomes of the bring-up, link and filter
+ * sequences), not code.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -45,22 +46,22 @@ typedef struct MODEL {
 
 static nc_u16 PhyAddr(MODEL *m, nc_u16 pla)
 {
-    nc_u16 base = (nc_u16)(m->Pla[PLA_OCP_GPHY_BASE] | (m->Pla[PLA_OCP_GPHY_BASE + 1] << 8));
+    nc_u16 base = (nc_u16)(m->Pla[MR_PHY_PAGE] | (m->Pla[MR_PHY_PAGE + 1] << 8));
     return (nc_u16)(base | (pla & 0x0fff));
 }
 
 static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
 {
-    if (addr == OCP_BASE_MII + MII_BMCR * 2) v = (nc_u16)(v & ~BMCR_RESET);  /* reset completes */
-    if (addr == OCP_PHY_PATCH_CMD) {
-        /* PATCH_READY follows PATCH_REQUEST. */
-        nc_u16 st = m->Phy[OCP_PHY_PATCH_STAT / 2];
-        m->Phy[OCP_PHY_PATCH_STAT / 2] = (nc_u16)((v & PATCH_REQUEST) ? st | PATCH_READY : st & ~PATCH_READY);
+    if (addr == MII(MII_CONTROL)) v = (nc_u16)(v & ~MIICTL_RESET);  /* reset completes */
+    if (addr == PR_PATCH_CMD) {
+        /* PATCH_GRANTED follows PATCH_ASK. */
+        nc_u16 st = m->Phy[PR_PATCH_STATE / 2];
+        m->Phy[PR_PATCH_STATE / 2] = (nc_u16)((v & PATCH_ASK) ? st | PATCH_GRANTED : st & ~PATCH_GRANTED);
     }
     m->Phy[addr / 2] = v;
 }
 
-static nc_u8 *Space(MODEL *m, nc_u16 index) { return (index & MCU_TYPE_PLA) ? m->Pla : m->Usb; }
+static nc_u8 *Space(MODEL *m, nc_u16 index) { return (index & RTL_SPACE_MAC) ? m->Pla : m->Usb; }
 
 static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 index,
                     void *data, nc_u16 length, nc_u16 *actual)
@@ -74,23 +75,23 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
     memset(e->Data, 0, 8);
     if (!in) memcpy(e->Data, b, length < 8 ? length : 8);
     if (m->FailAt == m->Count || m->Count <= m->FailFirst) return -5;
-    CHECK(request == RTL8152_REQ_GET_REGS);
+    CHECK(request == RTL_REQ);
     CHECK((index & ~0x1ff) == 0);                  /* type | byte enables only */
     CHECK(!(value & 3) && length && !(length & 3) && (nc_u32)value + length <= 0x10000);
     *actual = length;
     space = Space(m, index);
     if (in) {
-        CHECK(length <= 64);                       /* generic_ocp_read's limit */
+        CHECK(length <= 64);                       /* the read limit */
         for (k = 0; k < length; k++) {
             nc_u16 a = (nc_u16)(value + k);
-            if ((index & MCU_TYPE_PLA) && a >= 0xb000 && a < 0xc000) {
+            if ((index & RTL_SPACE_MAC) && a >= 0xb000 && a < 0xc000) {
                 nc_u16 w = m->Phy[PhyAddr(m, (nc_u16)(a & ~1)) / 2];
                 b[k] = (nc_u8)((a & 1) ? w >> 8 : w);
             } else {
                 b[k] = space[a];
             }
         }
-        if ((index & MCU_TYPE_PLA) && value == PLA_TCR0 && length >= 4) {
+        if ((index & RTL_SPACE_MAC) && value == MR_TX_CONFIG && length >= 4) {
             b[2] = (nc_u8)(m->VersionTcr0 >> 16); b[3] = (nc_u8)(m->VersionTcr0 >> 24);
         }
         return 0;
@@ -98,11 +99,11 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
     m->Writes++;
     CHECK(length <= 512);
     /* A partial-dword write carries exactly one dword. */
-    if (byen != BYTE_EN_DWORD) CHECK(length == 4 && byen);
+    if (byen != RTL_LANES_ALL) CHECK(length == 4 && byen);
     for (k = 0; k < length; k++) {
         nc_u16 a = (nc_u16)(value + k);
-        if (byen != BYTE_EN_DWORD && !(byen & (1 << (k & 3)))) continue;
-        if ((index & MCU_TYPE_PLA) && a >= 0xb000 && a < 0xc000) {
+        if (byen != RTL_LANES_ALL && !(byen & (1 << (k & 3)))) continue;
+        if ((index & RTL_SPACE_MAC) && a >= 0xb000 && a < 0xc000) {
             if (a & 1) {
                 nc_u16 pa = PhyAddr(m, (nc_u16)(a & ~1));
                 PhyWritten(m, pa, (nc_u16)((m->Phy[pa / 2] & 0x00ff) | (b[k] << 8)));
@@ -115,7 +116,7 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
         space[a] = b[k];
     }
     /* Self-clearing and status bits the bring-up polls. */
-    m->Pla[PLA_CR] &= ~CR_RST;
+    m->Pla[MR_COMMAND] &= ~CMD_RESET;
     return 0;
 }
 
@@ -133,16 +134,16 @@ static void Reset(nc_u32 tcr0)
 {
     memset(m, 0, sizeof(*m));
     m->VersionTcr0 = tcr0;
-    m->Pla[PLA_OOB_CTRL] = LINK_LIST_READY | FIFO_EMPTY;
-    m->Pla[PLA_TCR0 + 1] = (nc_u8)(TCR0_TX_EMPTY >> 8);
-    m->Pla[PLA_BOOT_CTRL] = AUTOLOAD_DONE;
-    m->Pla[0xe000 + 1] = 0x01;                    /* r8153_aldps_en's wait bit */
-    m->Phy[OCP_PHY_STATUS / 2] = PHY_STAT_LAN_ON;
-    memcpy(m->Pla + PLA_BACKUP, backupMac, 6);
-    memset(m->Pla + PLA_IDR, 0x11, 6);            /* differs from BACKUP */
-    m->Pla[PLA_RCR] = (nc_u8)RCR_ACPT_ALL;
-    m->Usb[USB_USB_CTRL] = RX_AGG_DISABLE | RX_ZERO_EN;
-    m->Pla[PLA_CPCR] = CPCR_RX_VLAN;
+    m->Pla[MR_OOB] = OOB_LIST_READY | OOB_FIFOS_EMPTY;
+    m->Pla[MR_TX_CONFIG + 1] = (nc_u8)(TXC_EMPTY >> 8);
+    m->Pla[MR_BOOT] = BOOT_LOADED;
+    m->Pla[0xe000 + 1] = 0x01;                    /* MR_POWER_STATE bit 8, polled after ALDPS off */
+    m->Phy[PR_STATE / 2] = PHYST_LAN_ON;
+    memcpy(m->Pla + MR_NODE_ID_SAVED, backupMac, 6);
+    memset(m->Pla + MR_NODE_ID, 0x11, 6);            /* differs from BACKUP */
+    m->Pla[MR_RX_ACCEPT] = (nc_u8)ACC_MASK;
+    m->Usb[UR_CTRL] = CTRL_RX_AGG_OFF | CTRL_RX_ZERO;
+    m->Pla[MR_CPLUS] = CPLUS_RX_VLAN;
     memset(&io, 0, sizeof(io));
     io.Context = m; io.Control = Control; io.Sleep = Sleeper;
     memset(state, 0, sizeof(state));
@@ -164,30 +165,30 @@ static NET_PROBE Probe(nc_u8 speed)
 static void Encoding(void)
 {
     nc_u32 tcr;
-    static const struct { nc_u16 id; nc_u8 ver; } map[] = {
-        { 0x4c00, RTL_VER_01 }, { 0x4c10, RTL_VER_02 }, { 0x5c00, RTL_VER_03 },
-        { 0x5c10, RTL_VER_04 }, { 0x5c20, RTL_VER_05 }, { 0x5c30, RTL_VER_06 },
-        { 0x4800, RTL_VER_07 }, { 0x6000, RTL_VER_08 }, { 0x6010, RTL_VER_09 },
-        { 0x6400, RTL_VER_14 },
+    static const nc_u16 map[] = {
+        0x4c00, 0x4c10, 0x5c00, 0x5c10, 0x5c20, 0x5c30, 0x4800, 0x6000, 0x6010, 0x6400
     };
     unsigned i;
     for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        CHECK(RtlVersionFromTcr0((nc_u32)map[i].id << 16) == map[i].ver);
-        /* bits outside VERSION_MASK are ignored */
-        CHECK(RtlVersionFromTcr0(((nc_u32)map[i].id << 16) | 0x830f0000UL | 0xffff) == map[i].ver);
+        CHECK(RtlChipId((nc_u32)map[i] << 16) == map[i]);
+        /* bits outside TXC_ID_MASK are ignored */
+        CHECK(RtlChipId(((nc_u32)map[i] << 16) | 0x830f0000UL | 0xffff) == map[i]);
     }
     /* RTL8156/8156B/8157/8159 and the test chip: later, not this core. */
     for (tcr = 0; tcr < 0x10000; tcr++) {
-        nc_u8 v = RtlVersionFromTcr0(tcr << 16);
+        nc_u16 v = RtlChipId(tcr << 16);
         int known = 0;
-        for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) if ((tcr & VERSION_MASK) == map[i].id) known = 1;
-        CHECK(known ? v != RTL_VER_UNKNOWN : v == RTL_VER_UNKNOWN);
+        for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) if ((tcr & TXC_ID_MASK) == map[i]) known = 1;
+        CHECK(known ? v == (tcr & TXC_ID_MASK) : v == 0);
     }
 }
 
-/* ---------------- bring-up per version ---------------- */
+/* ---------------- bring-up per chip ---------------- */
 
-static void BringUp(nc_u16 id, nc_u8 speed, nc_u8 ver)
+static int Is8152(nc_u16 id) { return id == ID_4C00 || id == ID_4C10 || id == ID_4800; }
+static int Is8153(nc_u16 id) { return (id & 0xff00) == 0x5c00; }
+
+static void BringUp(nc_u16 id, nc_u8 speed)
 {
     NET_PROBE p = Probe(speed);
     NET_PARAMS par;
@@ -195,47 +196,48 @@ static void BringUp(nc_u16 id, nc_u8 speed, nc_u8 ver)
     Reset((nc_u32)id << 16);
     CHECK(sizeof(RTL_STATE) <= NET_CHIP_STATE);
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
-    CHECK(s->Version == ver && s->Timeouts == 0);
+    CHECK(s->Id == id && s->Timeouts == 0);
     CHECK(m->Count < 2000);
-    CHECK(memcmp(par.Mac, ver == RTL_VER_01 ? m->Pla + PLA_IDR : backupMac, 6) == 0);
-    if (ver != RTL_VER_01) {
-        CHECK(memcmp(m->Pla + PLA_IDR, backupMac, 6) == 0);       /* set_ethernet_addr */
-        CHECK(m->Pla[PLA_CRWECR] == CRWECR_NORAML || ver == RTL_VER_14);
+    CHECK(par.Version == id);
+    CHECK(memcmp(par.Mac, id == ID_4C00 ? m->Pla + MR_NODE_ID : backupMac, 6) == 0);
+    if (id != ID_4C00) {
+        CHECK(memcmp(m->Pla + MR_NODE_ID, backupMac, 6) == 0);       /* copied from the saved address */
+        CHECK(m->Pla[MR_CFG_LOCK] == CFG_LOCKED || id == ID_6400);
     }
-    /* rx_buf_sz (rtl_ops_init) */
-    if (ver <= RTL_VER_02 || ver == RTL_VER_07) CHECK(par.RxSize == 16384);
-    else if (ver <= RTL_VER_06) CHECK(par.RxSize == (speed == NC_SPEED_SUPER ? 32768UL : 16384UL));
+    /* bulk-IN buffer */
+    if (Is8152(id)) CHECK(par.RxSize == 16384);
+    else if (Is8153(id)) CHECK(par.RxSize == (speed == NC_SPEED_SUPER ? 32768UL : 16384UL));
     else CHECK(par.RxSize == 32768);
     CHECK(par.TxHeader == 8 && par.TxAlign == 4 && par.TxSize == 16384 && par.TxSlots == 4);
     /* After up: receive accept off, RX aggregation on, VLAN untag off,
      * RMS 1522, the MAC not yet receiving (CR RE/TE clear). */
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == 0);
-    CHECK((Word(m->Usb, USB_USB_CTRL) & (RX_AGG_DISABLE | RX_ZERO_EN)) == 0);
-    CHECK((Word(m->Pla, PLA_CPCR) & CPCR_RX_VLAN) == 0);
-    CHECK(Word(m->Pla, PLA_RMS) == RTL8152_RMS);
-    CHECK((m->Pla[PLA_CR] & (CR_RE | CR_TE)) == 0);
-    CHECK(m->Pla[PLA_OOB_CTRL] & LINK_LIST_READY);
-    CHECK((m->Pla[PLA_OOB_CTRL] & NOW_IS_OOB) == 0);
-    /* rtl8152_set_speed: autonegotiation restarted with a PHY reset;
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0);
+    CHECK((Word(m->Usb, UR_CTRL) & (CTRL_RX_AGG_OFF | CTRL_RX_ZERO)) == 0);
+    CHECK((Word(m->Pla, MR_CPLUS) & CPLUS_RX_VLAN) == 0);
+    CHECK(Word(m->Pla, MR_RX_MAX_LEN) == RX_MAX_LEN);
+    CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == 0);
+    CHECK(m->Pla[MR_OOB] & OOB_LIST_READY);
+    CHECK((m->Pla[MR_OOB] & OOB_ACTIVE) == 0);
+    /* Autonegotiation restarted with a PHY reset;
      * 10/100 advertised, 1000 full with a gigabit PHY, pause advertised. */
-    CHECK((m->Phy[(OCP_BASE_MII + MII_BMCR * 2) / 2] & (BMCR_ANENABLE | BMCR_ANRESTART)) ==
-          (BMCR_ANENABLE | BMCR_ANRESTART));
-    CHECK((m->Phy[(OCP_BASE_MII + MII_ADVERTISE * 2) / 2] & 0x0de0) == 0x0de0);
-    if (ver == RTL_VER_01 || ver == RTL_VER_02 || ver == RTL_VER_07)
-        CHECK(m->Phy[(OCP_BASE_MII + MII_CTRL1000 * 2) / 2] == 0);
+    CHECK((m->Phy[(MII(MII_CONTROL)) / 2] & (MIICTL_AN_ENABLE | MIICTL_AN_RESTART)) ==
+          (MIICTL_AN_ENABLE | MIICTL_AN_RESTART));
+    CHECK((m->Phy[(MII(MII_AN_ADV)) / 2] & 0x0de0) == 0x0de0);
+    if (Is8152(id))
+        CHECK(m->Phy[(MII(MII_GIG_CONTROL)) / 2] == 0);
     else
-        CHECK(m->Phy[(OCP_BASE_MII + MII_CTRL1000 * 2) / 2] == ADVERTISE_1000FULL);
-    /* EEE advertisement (rtl_eee_enable with eee_en) */
-    if (ver >= RTL_VER_03 && ver != RTL_VER_07)
-        CHECK(m->Phy[OCP_EEE_ADV / 2] == (MDIO_EEE_1000T | MDIO_EEE_100TX));
+        CHECK(m->Phy[(MII(MII_GIG_CONTROL)) / 2] == GIGCTL_1000_FULL);
+    /* EEE advertisement */
+    if (!Is8152(id))
+        CHECK(m->Phy[PR_EEE_ADV / 2] == (EEEADV_1000T | EEEADV_100TX));
     /* No wake-up source left on. */
-    CHECK((Word(m->Pla, PLA_CFG_WOL) & MAGIC_EN) == 0);
-    CHECK((Word(m->Pla, PLA_CONFIG5) & (UWF_EN | BWF_EN | MWF_EN)) == 0);
-    if (ver == RTL_VER_04 || ver == RTL_VER_05 || ver == RTL_VER_06 || ver == RTL_VER_03)
-        CHECK(Word(m->Usb, USB_CONNECT_TIMER) == 1);
+    CHECK((Word(m->Pla, MR_WOL) & WOL_MAGIC) == 0);
+    CHECK((Word(m->Pla, MR_CFG5) & CFG5_WAKE_FRAMES) == 0);
+    if (Is8153(id))
+        CHECK(Word(m->Usb, UR_CONNECT_TMR) == 1);
 }
 
-static void LinkAndFilter(nc_u16 id, nc_u8 ver)
+static void LinkAndFilter(nc_u16 id)
 {
     NET_PROBE p = Probe(NC_SPEED_HIGH);
     NET_PARAMS par;
@@ -259,58 +261,58 @@ static void LinkAndFilter(nc_u16 id, nc_u8 ver)
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up);
     CHECK(NetPackageChip.Poll(state, &io) == 0);
     /* Link up at 1000 full: enable and the receive mode. */
-    m->Pla[PLA_PHYSTATUS] = RTL_LINK_STATUS | RTL_1000BPS | RTL_FULL_DUP;
+    m->Pla[MR_LINK] = LNK_UP | LNK_1000 | LNK_FULL;
     CHECK(NetPackageChip.Poll(state, &io) == 1);
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK);
     CHECK(l.Up && l.Mbps == 1000 && l.FullDuplex && l.RxLength == par.RxSize && s->Carrier);
-    CHECK((m->Pla[PLA_CR] & (CR_RE | CR_TE)) == (CR_RE | CR_TE));
-    CHECK((Word(m->Pla, PLA_MISC_1) & RXDY_GATED_EN) == 0);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == (RCR_AB | RCR_APM | RCR_AM));
-    /* _rtl8152_set_rx_mode: mc_filter[bit >> 5] |= 1 << (bit & 31), then
-     * PLA_MAR = le32(swab32(mc[1])), le32(swab32(mc[0])).
-     * bins 31, 2 -> mc[0] = 0x80000004; bins 62, 43 -> mc[1] = 0x40000800 */
-    CHECK(m->Pla[PLA_MAR + 0] == 0x40 && m->Pla[PLA_MAR + 1] == 0x00 &&
-          m->Pla[PLA_MAR + 2] == 0x08 && m->Pla[PLA_MAR + 3] == 0x00);
-    CHECK(m->Pla[PLA_MAR + 4] == 0x80 && m->Pla[PLA_MAR + 5] == 0x00 &&
-          m->Pla[PLA_MAR + 6] == 0x00 && m->Pla[PLA_MAR + 7] == 0x04);
-    if (ver >= RTL_VER_03 && ver != RTL_VER_07) {
+    CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == (CMD_RX_ON | CMD_TX_ON));
+    CHECK((Word(m->Pla, MR_MISC1) & MISC1_RX_GATE) == 0);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == (ACC_BCAST | ACC_MY_PHYS | ACC_MCAST));
+    /* Hash bins 32-63 in bytes 0-3, bins 0-31 in bytes 4-7, the highest
+     * bin of each half in the first byte: bins 62, 43 -> 40 00 08 00;
+     * bins 31, 2 -> 80 00 00 04. */
+    CHECK(m->Pla[MR_HASH + 0] == 0x40 && m->Pla[MR_HASH + 1] == 0x00 &&
+          m->Pla[MR_HASH + 2] == 0x08 && m->Pla[MR_HASH + 3] == 0x00);
+    CHECK(m->Pla[MR_HASH + 4] == 0x80 && m->Pla[MR_HASH + 5] == 0x00 &&
+          m->Pla[MR_HASH + 6] == 0x00 && m->Pla[MR_HASH + 7] == 0x04);
+    if (!Is8152(id)) {
         nc_u32 early = par.RxSize - (1522 + 24 + 8);
-        CHECK(Word(m->Usb, USB_RX_EARLY_SIZE) == (ver <= RTL_VER_06 ? early / 4 : early / 8));
-        CHECK((Word(m->Pla, PLA_TCR1) & IFG_MASK) == IFG_96NS);
+        CHECK(Word(m->Usb, UR_RX_EARLY_LEN) == (Is8153(id) ? early / 4 : early / 8));
+        CHECK((Word(m->Pla, MR_TX_CONFIG1) & IFG_FIELD) == IFG_SHORT);
     }
     /* Promiscuous and all-multicast. */
     CHECK(NetPackageChip.SetFilter(state, &io, NC_FILTER_PROMISCUOUS, NULL, 0) == NC_OK);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == RCR_ACPT_ALL);
-    CHECK(Dword(m->Pla, PLA_MAR) == 0xffffffffUL && Dword(m->Pla, PLA_MAR + 4) == 0xffffffffUL);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == ACC_MASK);
+    CHECK(Dword(m->Pla, MR_HASH) == 0xffffffffUL && Dword(m->Pla, MR_HASH + 4) == 0xffffffffUL);
     CHECK(NetPackageChip.SetFilter(state, &io, NC_FILTER_ALL_MULTICAST | NC_FILTER_DIRECTED, NULL, 0) == NC_OK);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == (RCR_AB | RCR_APM | RCR_AM));
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == (ACC_BCAST | ACC_MY_PHYS | ACC_MCAST));
     CHECK(NetPackageChip.SetFilter(state, &io, NC_FILTER_DIRECTED | NC_FILTER_BROADCAST, NULL, 0) == NC_OK);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == (RCR_AB | RCR_APM));
-    CHECK(Dword(m->Pla, PLA_MAR) == 0 && Dword(m->Pla, PLA_MAR + 4) == 0);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == (ACC_BCAST | ACC_MY_PHYS));
+    CHECK(Dword(m->Pla, MR_HASH) == 0 && Dword(m->Pla, MR_HASH + 4) == 0);
     /* Link up again: no second enable. */
     before = m->Writes;
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
     CHECK(m->Writes == before);
     /* 100 half: speed, duplex. */
-    m->Pla[PLA_PHYSTATUS] = RTL_LINK_STATUS | RTL_100BPS;
+    m->Pla[MR_LINK] = LNK_UP | LNK_100;
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 100 && !l.FullDuplex);
     /* Link down: disable gates receive and resets the NIC. */
-    m->Pla[PLA_PHYSTATUS] = 0;
+    m->Pla[MR_LINK] = 0;
     CHECK(NetPackageChip.Poll(state, &io) == 1);
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up && !s->Carrier);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == 0);
-    CHECK(Word(m->Pla, PLA_MISC_1) & RXDY_GATED_EN);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0);
+    CHECK(Word(m->Pla, MR_MISC1) & MISC1_RX_GATE);
     CHECK(s->Timeouts == 0);
     /* Suspend (down) enters OOB with the wake filters; Stop likewise. */
     CHECK(NetPackageChip.Suspend(state, &io) == NC_OK);
-    CHECK(m->Pla[PLA_OOB_CTRL] & NOW_IS_OOB);
-    CHECK((Dword(m->Pla, PLA_RCR) & RCR_ACPT_ALL) == (RCR_APM | RCR_AM | RCR_AB));
+    CHECK(m->Pla[MR_OOB] & OOB_ACTIVE);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == (ACC_MY_PHYS | ACC_MCAST | ACC_BCAST));
     /* Resume is the whole bring-up, version kept. */
     m->Count = 0;
     CHECK(NetPackageChip.Resume(state, &io, &p, &par) == NC_OK);
-    CHECK(s->Version == ver && (m->Pla[PLA_OOB_CTRL] & NOW_IS_OOB) == 0);
+    CHECK(s->Id == id && (m->Pla[MR_OOB] & OOB_ACTIVE) == 0);
     CHECK(NetPackageChip.Stop(state, &io) == NC_OK);
-    CHECK(m->Pla[PLA_OOB_CTRL] & NOW_IS_OOB);
+    CHECK(m->Pla[MR_OOB] & OOB_ACTIVE);
 }
 
 static void Failures(void)
@@ -320,13 +322,13 @@ static void Failures(void)
     nc_u32 total, n;
     static const nc_u8 laa[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
     /* Unknown version: refused after reading TCR0, nothing written. */
-    Reset(0x7020UL << 16);                        /* RTL_VER_10, RTL8156 */
+    Reset(0x7020UL << 16);                        /* an RTL8156: not this core's */
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_E_UNSUPPORTED);
     CHECK(m->Count == 1 && m->Writes == 0);
     /* The lower edge's cleanup after a refused start touches nothing. */
     CHECK(NetPackageChip.Stop(state, &io) == NC_OK && NetPackageChip.Suspend(state, &io) == NC_OK);
     CHECK(m->Count == 1);
-    /* __rtl_get_hw_ver retries: two failed reads of TCR0 are tolerated,
+    /* The id read is tried three times: two failed reads are tolerated,
      * three refuse the device. */
     Reset(0x5c30UL << 16);
     m->FailFirst = 2;
@@ -351,11 +353,11 @@ static void Failures(void)
     m->Count = 0;
     CHECK(NetPackageChip.SetMac(state, &io, laa) == NC_OK);
     CHECK(m->Count == 4);
-    CHECK(m->Last[0].Value == (PLA_CRWECR & ~3) && m->Last[0].Index == (MCU_TYPE_PLA | (BYTE_EN_BYTE << 0)));
-    CHECK(m->Last[1].Value == PLA_IDR && m->Last[1].Index == (MCU_TYPE_PLA | 0xff) && m->Last[1].Length == 4);
-    CHECK(m->Last[2].Value == PLA_IDR + 4 && m->Last[2].Index == (MCU_TYPE_PLA | 0x33) && m->Last[2].Length == 4);
-    CHECK(m->Last[3].Value == (PLA_CRWECR & ~3));
-    CHECK(memcmp(m->Pla + PLA_IDR, laa, 6) == 0 && m->Pla[PLA_IDR + 6] == 0);
+    CHECK(m->Last[0].Value == (MR_CFG_LOCK & ~3) && m->Last[0].Index == (RTL_SPACE_MAC | (RTL_LANES_BYTE << 0)));
+    CHECK(m->Last[1].Value == MR_NODE_ID && m->Last[1].Index == (RTL_SPACE_MAC | 0xff) && m->Last[1].Length == 4);
+    CHECK(m->Last[2].Value == MR_NODE_ID + 4 && m->Last[2].Index == (RTL_SPACE_MAC | 0x33) && m->Last[2].Length == 4);
+    CHECK(m->Last[3].Value == (MR_CFG_LOCK & ~3));
+    CHECK(memcmp(m->Pla + MR_NODE_ID, laa, 6) == 0 && m->Pla[MR_NODE_ID + 6] == 0);
 }
 
 /* Word and byte writes at unaligned offsets use shifted byte enables. */
@@ -366,13 +368,13 @@ static void ByteEnables(void)
     Reset(0x4c10UL << 16);
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     m->Count = 0;
-    m->Pla[PLA_PHYSTATUS] = RTL_LINK_STATUS | RTL_100BPS | RTL_FULL_DUP;
+    m->Pla[MR_LINK] = LNK_UP | LNK_100 | LNK_FULL;
     {
         NET_LINK l;
         CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
     }
-    /* PLA_PHYSTATUS 0xe908 is dword aligned: the word read uses 0x33. */
-    CHECK(m->Last[0].In && m->Last[0].Value == PLA_PHYSTATUS && m->Last[0].Index == (MCU_TYPE_PLA | 0x33));
+    /* MR_LINK 0xe908 is dword aligned: the word read uses 0x33. */
+    CHECK(m->Last[0].In && m->Last[0].Value == MR_LINK && m->Last[0].Index == (RTL_SPACE_MAC | 0x33));
 }
 
 /* ---------------- receive, transmit, interrupt ---------------- */
@@ -431,7 +433,7 @@ static void Datapath(void)
 
     CHECK(NetPackageChip.Status(state, irq, 1) == -1);
     CHECK(NetPackageChip.Status(state, irq, 2) == 0);
-    irq[0] = INTR_LINK;
+    irq[0] = IRQ_LINK;
     CHECK(NetPackageChip.Status(state, irq, 2) == 1);
 }
 
@@ -470,7 +472,7 @@ static void Probes(void)
     CHECK(NetPackageChip.Probe(dev, 18, cfg, size, 2, &p) == NC_OK);
     CHECK(p.ConfigIndex == 0 && p.ConfigValue == 1 && p.Speed == NC_SPEED_HIGH && p.Product == 0x8153);
     CHECK(p.In == 0x81 && p.Out == 0x02 && p.Interrupt == 0x83 && p.IntMax == 2);
-    /* "The vendor mode is not always config #1". */
+    /* The vendor configuration need not be the first. */
     cfg[0] = ecm; size[0] = sizeof(ecm);
     cfg[1] = vendor; size[1] = sizeof(vendor);
     CHECK(NetPackageChip.Probe(dev, 18, cfg, size, 2, &p) == NC_OK && p.ConfigIndex == 1);
@@ -480,7 +482,7 @@ static void Probes(void)
     /* ECM only: not this driver's. */
     cfg[0] = ecm; size[0] = sizeof(ecm);
     CHECK(NetPackageChip.Probe(dev, 18, cfg, size, 1, &p) == NC_E_UNSUPPORTED);
-    /* rtl_check_vendor_ok: endpoint numbers 1, 2, 3. */
+    /* The vendor interface's endpoint numbers are 1, 2, 3. */
     memcpy(copy, vendor, sizeof(vendor));
     copy[20] = 0x84;
     cfg[0] = copy; size[0] = sizeof(copy);
@@ -499,23 +501,23 @@ int main(void)
     m = malloc(sizeof(*m));
     CHECK(m != NULL);
     Encoding();
-    BringUp(0x4c00, NC_SPEED_HIGH, RTL_VER_01);
-    BringUp(0x4c10, NC_SPEED_HIGH, RTL_VER_02);
-    BringUp(0x4c10, NC_SPEED_FULL, RTL_VER_02);
-    BringUp(0x4800, NC_SPEED_HIGH, RTL_VER_07);
-    BringUp(0x5c00, NC_SPEED_SUPER, RTL_VER_03);
-    BringUp(0x5c10, NC_SPEED_HIGH, RTL_VER_04);
-    BringUp(0x5c10, NC_SPEED_SUPER, RTL_VER_04);
-    BringUp(0x5c20, NC_SPEED_SUPER, RTL_VER_05);
-    BringUp(0x5c30, NC_SPEED_HIGH, RTL_VER_06);
-    BringUp(0x5c30, NC_SPEED_FULL, RTL_VER_06);
-    BringUp(0x6000, NC_SPEED_SUPER, RTL_VER_08);
-    BringUp(0x6010, NC_SPEED_HIGH, RTL_VER_09);
-    BringUp(0x6400, NC_SPEED_SUPER, RTL_VER_14);
-    LinkAndFilter(0x4c10, RTL_VER_02);
-    LinkAndFilter(0x5c30, RTL_VER_06);
-    LinkAndFilter(0x6010, RTL_VER_09);
-    LinkAndFilter(0x6400, RTL_VER_14);
+    BringUp(0x4c00, NC_SPEED_HIGH);
+    BringUp(0x4c10, NC_SPEED_HIGH);
+    BringUp(0x4c10, NC_SPEED_FULL);
+    BringUp(0x4800, NC_SPEED_HIGH);
+    BringUp(0x5c00, NC_SPEED_SUPER);
+    BringUp(0x5c10, NC_SPEED_HIGH);
+    BringUp(0x5c10, NC_SPEED_SUPER);
+    BringUp(0x5c20, NC_SPEED_SUPER);
+    BringUp(0x5c30, NC_SPEED_HIGH);
+    BringUp(0x5c30, NC_SPEED_FULL);
+    BringUp(0x6000, NC_SPEED_SUPER);
+    BringUp(0x6010, NC_SPEED_HIGH);
+    BringUp(0x6400, NC_SPEED_SUPER);
+    LinkAndFilter(0x4c10);
+    LinkAndFilter(0x5c30);
+    LinkAndFilter(0x6010);
+    LinkAndFilter(0x6400);
     Failures();
     ByteEnables();
     Datapath();

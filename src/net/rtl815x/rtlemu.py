@@ -5,29 +5,28 @@
 usbredir (test aid only).
 
 No RTL815x is on the bench, so this is the vehicle for rtl815x's legs. It
-models what rtl815x's own chip core (rtlchip.c, adapted from Linux
-r8152.c) reads and writes, not the chip's firmware: the vendor register
-protocol of r8152.c's generic_ocp_read/write (request 0x05, bmRequestType
-0xC0/0x40, wValue the register address, wIndex the MCU type PLA 0x0100 or
-USB 0x0000 with byte enables), the PLA and USB register spaces, the PHY OCP
-window at PLA 0xB000-0xBFFF behind PLA_OCP_GPHY_BASE, the version bits in
-PLA_TCR0, the bits the bring-up polls (CR_RST self-clearing, LINK_LIST_READY,
-FIFO_EMPTY, TCR0_TX_EMPTY, AUTOLOAD_DONE, BMCR reset, PATCH_READY), the MAC
-in PLA_BACKUP (and PLA_IDR for RTL_VER_01), link in PLA_PHYSTATUS with an
-interrupt-IN report (INTR_LINK) on each change, receive framing (24-byte
-rx_desc, packet length with FCS, 8-byte alignment, several frames per
-bulk-IN transfer) and transmit framing (8-byte tx_desc, 4-byte alignment).
-Register semantics follow rtltest.c's register-file model; Linux r8152.c
-at f47d2236 is the protocol reference (NOTICE.md).
+models what rtl815x's own chip core (rtlchip.c) reads and writes, not the
+chip's firmware: the vendor register request (request 0x05, bmRequestType
+0xC0/0x40, wValue the register address, wIndex the space, MAC 0x0100 or
+USB 0x0000, with byte lanes; rtlchip.h), the MAC and USB register spaces,
+the PHY window at MAC 0xB000-0xBFFF behind MR_PHY_PAGE, the chip id in
+MR_TX_CONFIG, the bits the bring-up polls (CMD_RESET self-clearing,
+OOB_LIST_READY, OOB_FIFOS_EMPTY, TXC_EMPTY, BOOT_LOADED, the PHY reset bit,
+PATCH_GRANTED), the MAC address in MR_NODE_ID_SAVED (and MR_NODE_ID for the
+4C00), link in MR_LINK with an interrupt-IN report (IRQ_LINK) on each
+change, receive framing (24-byte record header, frame length with FCS,
+8-byte alignment, several frames per bulk-IN transfer) and transmit framing
+(8-byte header, 4-byte alignment). Register semantics follow rtltest.c's
+register-file model.
 
 Behind the adapter sits a SIMULATED network of one host, 192.168.77.1
 (02:00:5E:77:00:01): it answers ARP, ICMP echo and DHCP (offering
 192.168.77.2/24, router 192.168.77.1), and logs every frame. Frames reach
-the guest only while the receiver is on (PLA_CR RE) and the receive
-configuration (PLA_RCR, PLA_MAR) accepts them.
+the guest only while the receiver is on (MR_COMMAND CMD_RX_ON) and the receive
+configuration (MR_RX_ACCEPT, MR_HASH) accepts them.
 
-Chips (--chip): 8152 (RTL_VER_02, 0BDA:8152, 100 Mb/s), 8153 (RTL_VER_04,
-0BDA:8153, 1000 Mb/s, default), 8153b (RTL_VER_09, 0BDA:8153). --speed
+Chips (--chip): 8152 (id 4C10, 0BDA:8152, 100 Mb/s), 8153 (id 5C10,
+0BDA:8153, 1000 Mb/s, default), 8153b (id 6010, 0BDA:8153). --speed
 high|full; --link-after seconds after the PHY's autonegotiation restart
 (default 1.0); --flap-after/--flap-for take the cable out once. No
 physical USB device is accessed.
@@ -46,26 +45,26 @@ from pathlib import Path
 CAP_VERSION, CAP_EP_MAX, CAP_ID64, CAP_BULK32 = 1, 4, 5, 6
 CAPS = (1 << CAP_VERSION) | (1 << CAP_EP_MAX) | (1 << CAP_ID64) | (1 << CAP_BULK32)
 
-# Register names and values: rtlchip.h (from Linux r8152.c / r8152.h).
-MCU_TYPE_PLA = 0x0100
-BYTE_EN_DWORD = 0xff
-PLA_IDR, PLA_RCR, PLA_MAR, PLA_BACKUP = 0xc000, 0xc010, 0xcd00, 0xd000
-PLA_BOOT_CTRL, PLA_TCR0, PLA_CR, PLA_OOB_CTRL = 0xe004, 0xe610, 0xe813, 0xe84f
-PLA_CPCR, PLA_OCP_GPHY_BASE, PLA_PHYSTATUS = 0xe854, 0xe86c, 0xe908
-USB_USB_CTRL = 0xd406
-OCP_BASE_MII, OCP_PHY_STATUS, OCP_PHY_PATCH_STAT, OCP_PHY_PATCH_CMD = 0xa400, 0xa420, 0xb800, 0xb820
-BMCR_RESET, BMCR_ANRESTART = 0x8000, 0x0200
-PATCH_REQUEST, PATCH_READY = 0x0010, 0x0040
-CR_RST, CR_RE, CR_TE = 0x10, 0x08, 0x04
-LINK_LIST_READY, FIFO_EMPTY, NOW_IS_OOB = 0x02, 0x30, 0x80
-TCR0_TX_EMPTY, AUTOLOAD_DONE, PHY_STAT_LAN_ON = 0x0800, 0x0002, 3
-RCR_AAP, RCR_APM, RCR_AM, RCR_AB = 1, 2, 4, 8
-RTL_1000BPS, RTL_100BPS, RTL_LINK_STATUS, RTL_FULL_DUP = 0x10, 0x08, 0x02, 0x01
-INTR_LINK = 0x04
-RX_DESC, TX_DESC = 24, 8
+# Register names and values: rtlchip.h.
+RTL_SPACE_MAC = 0x0100
+RTL_LANES_ALL = 0xff
+MR_NODE_ID, MR_RX_ACCEPT, MR_HASH, MR_NODE_ID_SAVED = 0xc000, 0xc010, 0xcd00, 0xd000
+MR_BOOT, MR_TX_CONFIG, MR_COMMAND, MR_OOB = 0xe004, 0xe610, 0xe813, 0xe84f
+MR_CPLUS, MR_PHY_PAGE, MR_LINK = 0xe854, 0xe86c, 0xe908
+UR_CTRL = 0xd406
+PR_MII, PR_STATE, PR_PATCH_STATE, PR_PATCH_CMD = 0xa400, 0xa420, 0xb800, 0xb820
+MIICTL_RESET, MIICTL_AN_RESTART = 0x8000, 0x0200
+PATCH_ASK, PATCH_GRANTED = 0x0010, 0x0040
+CMD_RESET, CMD_RX_ON, CMD_TX_ON = 0x10, 0x08, 0x04
+OOB_LIST_READY, OOB_FIFOS_EMPTY, OOB_ACTIVE = 0x02, 0x30, 0x80
+TXC_EMPTY, BOOT_LOADED, PHYST_LAN_ON = 0x0800, 0x0002, 3
+ACC_ALL_PHYS, ACC_MY_PHYS, ACC_MCAST, ACC_BCAST = 1, 2, 4, 8
+LNK_1000, LNK_100, LNK_UP, LNK_FULL = 0x10, 0x08, 0x02, 0x01
+IRQ_LINK = 0x04
+RX_DESC_LEN, TX_DESC_LEN = 24, 8
 
-CHIPS = {'8152': (0x4c10, 0x8152, RTL_100BPS), '8153': (0x5c10, 0x8153, RTL_1000BPS),
-         '8153b': (0x6010, 0x8153, RTL_1000BPS)}
+CHIPS = {'8152': (0x4c10, 0x8152, LNK_100), '8153': (0x5c10, 0x8153, LNK_1000),
+         '8153b': (0x6010, 0x8153, LNK_1000)}
 BACKUP_MAC = bytes.fromhex('00e04c770002')
 HOST_MAC, HOST_IP = bytes.fromhex('02005e770001'), bytes((192, 168, 77, 1))
 GUEST_IP = bytes((192, 168, 77, 2))
@@ -79,62 +78,62 @@ class Chip:
         self.tcr0, self.pid, self.rate_bit = CHIPS[chip]
         self.pla, self.usb = bytearray(65536), bytearray(65536)
         self.phy = [0] * 32768
-        self.pla[PLA_OOB_CTRL] = LINK_LIST_READY | FIFO_EMPTY
-        self.pla[PLA_TCR0 + 1] = TCR0_TX_EMPTY >> 8
-        self.pla[PLA_BOOT_CTRL] = AUTOLOAD_DONE
-        self.pla[0xe000 + 1] = 0x01                  # r8153_aldps_en's wait bit
-        self.phy[OCP_PHY_STATUS // 2] = PHY_STAT_LAN_ON
-        self.pla[PLA_BACKUP:PLA_BACKUP + 6] = BACKUP_MAC
-        self.pla[PLA_IDR:PLA_IDR + 6] = BACKUP_MAC if self.tcr0 != 0x4c00 else bytes.fromhex('00e04c770003')
-        self.pla[PLA_RCR] = RCR_AAP | RCR_APM | RCR_AM | RCR_AB
-        self.usb[USB_USB_CTRL] = 0x90
-        self.pla[PLA_CPCR] = 0x40
+        self.pla[MR_OOB] = OOB_LIST_READY | OOB_FIFOS_EMPTY
+        self.pla[MR_TX_CONFIG + 1] = TXC_EMPTY >> 8
+        self.pla[MR_BOOT] = BOOT_LOADED
+        self.pla[0xe000 + 1] = 0x01                  # MR_POWER_STATE bit 8, polled after ALDPS off
+        self.phy[PR_STATE // 2] = PHYST_LAN_ON
+        self.pla[MR_NODE_ID_SAVED:MR_NODE_ID_SAVED + 6] = BACKUP_MAC
+        self.pla[MR_NODE_ID:MR_NODE_ID + 6] = BACKUP_MAC if self.tcr0 != 0x4c00 else bytes.fromhex('00e04c770003')
+        self.pla[MR_RX_ACCEPT] = ACC_ALL_PHYS | ACC_MY_PHYS | ACC_MCAST | ACC_BCAST
+        self.usb[UR_CTRL] = 0x90
+        self.pla[MR_CPLUS] = 0x40
         self.autoneg = 0                             # restarts seen
         self.writes = self.reads = 0
 
     def phy_address(self, pla):
-        base = self.pla[PLA_OCP_GPHY_BASE] | self.pla[PLA_OCP_GPHY_BASE + 1] << 8
+        base = self.pla[MR_PHY_PAGE] | self.pla[MR_PHY_PAGE + 1] << 8
         return (base | (pla & 0x0fff)) & 0xffff
 
     def phy_written(self, addr, value):
-        if addr == OCP_BASE_MII:                     # BMCR
-            if value & BMCR_ANRESTART:
+        if addr == PR_MII:                     # BMCR
+            if value & MIICTL_AN_RESTART:
                 self.autoneg += 1
-            value &= ~BMCR_RESET                     # the reset completes
-        if addr == OCP_PHY_PATCH_CMD:
-            st = self.phy[OCP_PHY_PATCH_STAT // 2]
-            self.phy[OCP_PHY_PATCH_STAT // 2] = st | PATCH_READY if value & PATCH_REQUEST else st & ~PATCH_READY
+            value &= ~MIICTL_RESET                     # the reset completes
+        if addr == PR_PATCH_CMD:
+            st = self.phy[PR_PATCH_STATE // 2]
+            self.phy[PR_PATCH_STATE // 2] = st | PATCH_GRANTED if value & PATCH_ASK else st & ~PATCH_GRANTED
         self.phy[addr // 2] = value & 0xffff
 
     def read(self, value, index, length):
         if value & 3 or not length or length & 3 or value + length > 0x10000 or index & ~0x1ff or length > 64:
             return None
         self.reads += 1
-        space = self.pla if index & MCU_TYPE_PLA else self.usb
+        space = self.pla if index & RTL_SPACE_MAC else self.usb
         out = bytearray(length)
         for k in range(length):
             a = value + k
-            if index & MCU_TYPE_PLA and 0xb000 <= a < 0xc000:
+            if index & RTL_SPACE_MAC and 0xb000 <= a < 0xc000:
                 w = self.phy[self.phy_address(a & ~1) // 2]
                 out[k] = (w >> 8 if a & 1 else w) & 255
             else:
                 out[k] = space[a]
-        if index & MCU_TYPE_PLA and value == PLA_TCR0 and length >= 4:
+        if index & RTL_SPACE_MAC and value == MR_TX_CONFIG and length >= 4:
             out[2], out[3] = self.tcr0 & 255, self.tcr0 >> 8
         return bytes(out)
 
     def write(self, value, index, data):
         length, byen = len(data), index & 0xff
         if value & 3 or not length or length & 3 or value + length > 0x10000 or index & ~0x1ff or \
-                length > 512 or (byen != BYTE_EN_DWORD and (length != 4 or not byen)):
+                length > 512 or (byen != RTL_LANES_ALL and (length != 4 or not byen)):
             return False
         self.writes += 1
-        space = self.pla if index & MCU_TYPE_PLA else self.usb
+        space = self.pla if index & RTL_SPACE_MAC else self.usb
         for k in range(length):
             a = value + k
-            if byen != BYTE_EN_DWORD and not byen & (1 << (k & 3)):
+            if byen != RTL_LANES_ALL and not byen & (1 << (k & 3)):
                 continue
-            if index & MCU_TYPE_PLA and 0xb000 <= a < 0xc000:
+            if index & RTL_SPACE_MAC and 0xb000 <= a < 0xc000:
                 pa = self.phy_address(a & ~1)
                 if a & 1:
                     self.phy_written(pa, (self.phy[pa // 2] & 0x00ff) | data[k] << 8)
@@ -142,7 +141,7 @@ class Chip:
                     self.phy[pa // 2] = (self.phy[pa // 2] & 0xff00) | data[k]
                 continue
             space[a] = data[k]
-        self.pla[PLA_CR] &= ~CR_RST & 0xff
+        self.pla[MR_COMMAND] &= ~CMD_RESET & 0xff
         return True
 
     def dword(self, a):
@@ -150,31 +149,32 @@ class Chip:
 
     @property
     def mac(self):
-        return bytes(self.pla[PLA_IDR:PLA_IDR + 6])
+        return bytes(self.pla[MR_NODE_ID:MR_NODE_ID + 6])
 
     def receiving(self):
-        return bool(self.pla[PLA_CR] & CR_RE) and not self.pla[PLA_OOB_CTRL] & NOW_IS_OOB
+        return bool(self.pla[MR_COMMAND] & CMD_RX_ON) and not self.pla[MR_OOB] & OOB_ACTIVE
 
     def accepts(self, frame):
-        """PLA_RCR/PLA_MAR receive decision for a destination address."""
-        rcr, dest = self.dword(PLA_RCR), frame[:6]
-        if rcr & RCR_AAP:
+        """MR_RX_ACCEPT/MR_HASH receive decision for a destination address."""
+        rcr, dest = self.dword(MR_RX_ACCEPT), frame[:6]
+        if rcr & ACC_ALL_PHYS:
             return True
         if dest == b'\xff' * 6:
-            return bool(rcr & RCR_AB)
+            return bool(rcr & ACC_BCAST)
         if dest[0] & 1:
-            if not rcr & RCR_AM:
+            if not rcr & ACC_MCAST:
                 return False
             bit = ether_crc(dest) >> 26
-            # PLA_MAR holds le32(swab32(mc[1])), le32(swab32(mc[0])).
-            mc = [int.from_bytes(self.pla[PLA_MAR + 4:PLA_MAR + 8], 'big'),
-                  int.from_bytes(self.pla[PLA_MAR:PLA_MAR + 4], 'big')]
+            # MR_HASH: bins 32-63 in bytes 0-3, bins 0-31 in bytes 4-7, each
+            # half a big-endian 32-bit word.
+            mc = [int.from_bytes(self.pla[MR_HASH + 4:MR_HASH + 8], 'big'),
+                  int.from_bytes(self.pla[MR_HASH:MR_HASH + 4], 'big')]
             return bool(mc[bit >> 5] >> (bit & 31) & 1)
-        return bool(rcr & RCR_APM) and dest == self.mac
+        return bool(rcr & ACC_MY_PHYS) and dest == self.mac
 
 
 def ether_crc(data):
-    """Linux ether_crc: the bit-reversed, non-inverted CRC-32 of data."""
+    """The bit-reversed, non-inverted CRC-32 of data (netchip.c NcEtherCrc)."""
     crc = 0xffffffff
     for byte in data:
         for bit in range(8):
@@ -367,9 +367,9 @@ class Model:
         if up == self.link:
             return
         self.link = up
-        self.chip.pla[PLA_PHYSTATUS] = (RTL_LINK_STATUS | self.chip.rate_bit | RTL_FULL_DUP) if up else 0
+        self.chip.pla[MR_LINK] = (LNK_UP | self.chip.rate_bit | LNK_FULL) if up else 0
         self.log('link', up=up, why=why)
-        self.irq.append(bytes((INTR_LINK, 0)))
+        self.irq.append(bytes((IRQ_LINK, 0)))
         self.flush_irq()
 
     def flush_irq(self):
@@ -412,17 +412,17 @@ class Model:
         self.drain()
 
     def aggregate(self, length):
-        """One bulk-IN transfer: rx_desc + frame + FCS, each record 8-byte
+        """One bulk-IN transfer: record header + frame + FCS, each record 8-byte
         aligned, as many as fit in length."""
         out = bytearray()
         while self.rx:
             frame = self.rx[0]
-            record = RX_DESC + len(frame) + 4
+            record = RX_DESC_LEN + len(frame) + 4
             padded = (record + 7) & ~7
             if len(out) + record > length:
                 break
             self.rx.popleft()
-            desc = struct.pack('<I', len(frame) + 4) + bytes(RX_DESC - 4)
+            desc = struct.pack('<I', len(frame) + 4) + bytes(RX_DESC_LEN - 4)
             out += desc + frame + struct.pack('<I', zlib.crc32(frame))
             out += b'\xee' * (padded - record)
             self.totals['rx_frames'] += 1
@@ -442,20 +442,20 @@ class Model:
             self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def transmit(self, data):
-        """One bulk-OUT transfer: tx_desc + frame, each 4-byte aligned."""
+        """One bulk-OUT transfer: 8-byte header + frame, each 4-byte aligned."""
         frames, off = [], 0
-        while off + TX_DESC <= len(data):
+        while off + TX_DESC_LEN <= len(data):
             opts1 = struct.unpack_from('<I', data, off)[0]
             length = opts1 & 0x3ffff
-            if not length or off + TX_DESC + length > len(data):
-                raise ValueError('tx_desc length beyond the transfer')
+            if not length or off + TX_DESC_LEN + length > len(data):
+                raise ValueError('transmit header length beyond the transfer')
             if opts1 & 0xc0000000 != 0xc0000000:
-                raise ValueError('tx_desc without TX_FS|TX_LS')
-            frames.append(data[off + TX_DESC:off + TX_DESC + length])
-            off = (off + TX_DESC + length + 3) & ~3
+                raise ValueError('transmit header without the first and last segment bits')
+            frames.append(data[off + TX_DESC_LEN:off + TX_DESC_LEN + length])
+            off = (off + TX_DESC_LEN + length + 3) & ~3
         if off < len(data) and any(data[off:]):
-            raise ValueError('trailing bytes after the last tx_desc')
-        if not (self.chip.pla[PLA_CR] & CR_TE):
+            raise ValueError('trailing bytes after the last frame')
+        if not (self.chip.pla[MR_COMMAND] & CMD_TX_ON):
             self.totals['tx_while_disabled'] += 1
         for frame in frames:
             self.totals['tx_frames'] += 1

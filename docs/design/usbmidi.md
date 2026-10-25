@@ -661,7 +661,8 @@ under a dual licence (a BSD-style licence or "the GNU General Public
 License ... version 2 of the License, or (at your option) any later
 version"; `MODULE_LICENSE("Dual BSD/GPL")`). `sound/usb/quirks-table.h` and
 `sound/usb/quirks.c` are `SPDX-License-Identifier: GPL-2.0-or-later`. All
-three are GPL-2.0-compatible. The adapted files keep the original notices
+three offer GPL-2.0-or-later terms (`midi.c` as one option of its dual
+licence). The adapted files keep the original notices
 verbatim, take the GPL option, and carry an SPDX tag:
 
 | File | Adapted from | Licence |
@@ -676,8 +677,8 @@ the MIDIStreaming subclass (one match for "MIDI" in `usbaudio.c`); its
 PortCls reimplementation (`drivers/wdm/audio/backpln/portcls/`) contains
 `miniport_dmus.cpp`, headed "Copyright (c) 1997-2000 Microsoft
 Corporation", which must not be used. ReactOS PortCls files may be read to
-understand behaviour, not copied, unless a file's own header is checked
-GPL-compatible first.
+understand behaviour, not copied, unless a file's own licence is checked
+first against the source rule of `AGENTS.md` (GPL-2.0-only files: facts only).
 
 Microsoft's DDK sample sources (the MPU-401 and DMusUART samples) are not a
 source and are not read (Owner, 2026-10-20; `AGENTS.md`, "Sources"): the

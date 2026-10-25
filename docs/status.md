@@ -500,10 +500,13 @@ binary at all (an INF only).
   sample sources are not read.
 - The export tables of Microsoft's in-box binaries, read for function
   names and ordinals only, to know what each system offers a driver.
-- xHCI98's own code, which is GPL-2.0 and by the same author.
-- Code from GPL-2.0-compatible open-source projects (Linux, ReactOS),
+- xHCI98's own code, by the same author, from files tagged
+  GPL-2.0-or-later.
+- Code from open-source projects (Linux, ReactOS and others) under
+  GPL-2.0-or-later or a licence already used here alongside it,
   adapted with its copyright notices and licence tags kept, each such file
-  listed in `NOTICE.md`.
+  listed in `NOTICE.md`. From files under GPL-2.0 only, facts only (ids,
+  register values, protocol behaviour), no code.
 
 Never a Microsoft or hardware vendor's driver code, its disassembly, or
 code under a licence that does not permit this use.

@@ -11,7 +11,8 @@ The maintainer's rules for this repository. `README.md` says what it is.
   Toolchains (DDKs, WDK 7.1, compilers) are installed per host into the
   git-ignored `tools/`, and the build documents what goes there.
 - Code taken from xHCI98 is copied in, not referenced, and keeps its
-  GPL-2.0 header.
+  SPDX line and copyright lines. It is taken only from xHCI98 files whose
+  SPDX line reads GPL-2.0-or-later.
 - A driver's legs run under both host controller drivers: a USB 2.0
   (EHCI) one (Windows' own, or NUSB's on Windows 98 SE) and xHCI98
   (owner, 2026-10-22). A driver is not called ready until both have
@@ -24,12 +25,18 @@ The maintainer's rules for this repository. `README.md` says what it is.
 
 ## Sources
 
-As `README.md`, "Where the code comes from": specifications, Microsoft's
-published driver kit documentation and headers, xHCI98's own code, and
-GPL-2.0-compatible code (Linux, ReactOS) adapted with its notices and
-SPDX tags kept and a row in `NOTICE.md` per file. Never a Microsoft or
-vendor driver binary's code, its disassembly, or code whose licence does
-not permit this use.
+The repository is GPL-2.0-or-later (owner, 2026-10-25; GPL-2.0-only
+before). As `docs/status.md`, "Where the code comes from": specifications,
+Microsoft's published driver kit documentation and headers, xHCI98's own
+code (as above), and open-source code (Linux, ReactOS and others) adapted
+with its notices and SPDX tags kept and a row in `NOTICE.md` per file,
+when its licence is GPL-2.0-or-later or one already used here alongside
+it (LGPL-2.1-or-later, MIT, BSD, IJG, zlib). A file under GPL-2.0 only
+(no "or later"; many Linux files) is never adapted: from it only facts
+are taken (ids, register addresses and values, protocol behaviour), and
+no code, names, comments or structure. Never a Microsoft or vendor driver
+binary's code, its disassembly, or code whose licence does not permit
+this use.
 
 - The export table of a Microsoft binary that ships in a target system may
   be read, for function names and ordinals only, and what was read is

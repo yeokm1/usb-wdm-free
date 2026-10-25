@@ -155,8 +155,9 @@ has `slabcomm.vxd` next to WDM `.sys` files (section 2.3).
   - Whether it accepts CP2102N or CP2104, which share PID `ea60` with
     CP2101/2, is unverified.
 - **If no official 98 package can be found,** CP210x on 98 joins the gap,
-  through a module adapted from Linux `cp210x.c`, built on demand only
-  (Owner, 2026-10-20).
+  through a module written from the facts of Linux `cp210x.c` (GPL-2.0
+  only, so no code is taken; section 10), built on demand only (Owner,
+  2026-10-20).
 
 ### 2.4 Prolific PL2303
 
@@ -728,21 +729,22 @@ The descriptor rules come from CDC 1.2 and its PSTN subclass, and from Linux
 
 ### 6.3 Chip modules (later, on demand only)
 
-Each is a table entry plus about 300 lines on the core. The Linux sources to
-adapt, with their licences:
+Each is a table entry plus about 300 lines on the core. The Linux sources,
+with their licences; a GPL-2.0 (only) source gives facts only (section
+10):
 
-- **FTDI:** `ftdi_sio.c` (GPL-2.0+).
+- **FTDI:** `ftdi_sio.c` (GPL-2.0+), which may be adapted.
   - Divisor functions: `ftdi_232am_baud_base_to_divisor` (line 1127),
     `ftdi_232bm_baud_base_to_divisor` (1152, a 3 MHz base with eighths
     encoded as sub-divisor codes) and `ftdi_2232h_baud_base_to_divisor`
     (1173, a 12 MHz base for H parts).
   - Each 64-byte packet in carries a 2-byte modem and line status prefix.
-- **CP210x:** `cp210x.c` (GPL-2.0). The rate is set as a 32-bit value, with
+- **CP210x:** `cp210x.c` (GPL-2.0; facts only). The rate is set as a 32-bit value, with
   per-part rounding: `cp210x_get_an205_rate` (line 998) and
   `cp210x_get_actual_rate` (1010).
-- **CH341:** `ch341.c` (GPL-2.0). `ch341_get_divisor` (line 175) produces a
+- **CH341:** `ch341.c` (GPL-2.0; facts only). `ch341_get_divisor` (line 175) produces a
   prescaler and divisor; `ch341_set_baudrate_lcr` (239) writes them.
-- **PL2303:** `pl2303.c` (GPL-2.0). The rate is encoded either directly or
+- **PL2303:** `pl2303.c` (GPL-2.0; facts only). The rate is encoded either directly or
   as a divisor: `pl2303_encode_baud_rate_direct` (602) and
   `pl2303_encode_baud_rate_divisor` (610). The HXN/G series uses different
   registers (`PL2303_HXN_*`, lines 167-172).
@@ -968,14 +970,20 @@ x64.
 
 ## 10. What is adapted, and the NOTICE.md rows
 
+Owner, 2026-10-25: the repository is GPL-2.0-or-later. A source under
+GPL-2.0 only is not adapted; the modules below that would have followed
+one are written from the facts it shows (request codes, register values,
+divisor formulas, timeout cases) and from the chip vendors' published
+documents where they exist, with no code, names or comments taken.
+
 | File (planned) | Adapted from | Licence |
 |---|---|---|
 | `src/serial/usbcom/acmdesc.c` (CDC descriptor walk, union fallbacks, quirk table): **not adapted after all**. The walk in `acmcore.c` (2026-10-22) is original, written from CDC 1.2 and the behaviour list in 6.1, so it needs no NOTICE row. Its quirk table carries no entries yet | Linux `drivers/usb/class/cdc-acm.c` and `cdc-acm.h`, v6.12 | GPL-2.0+ |
 | `src/serial/usbcom/m_ftdi.c` (on demand) | Linux `drivers/usb/serial/ftdi_sio.c`, `ftdi_sio.h`, `ftdi_sio_ids.h` | GPL-2.0+ |
-| `src/serial/usbcom/m_cp210x.c` (on demand) | Linux `drivers/usb/serial/cp210x.c` | GPL-2.0 |
-| `src/serial/usbcom/m_ch341.c` (on demand) | Linux `drivers/usb/serial/ch341.c` | GPL-2.0 |
-| `src/serial/usbcom/m_pl2303.c` (on demand) | Linux `drivers/usb/serial/pl2303.c`, `pl2303.h` | GPL-2.0 |
-| `src/serial/usbcom/nt_ser.c` (if M4; timeout case table only) | ReactOS `drivers/serial/serial/rw.c` | GPL-2.0 (ReactOS `COPYING`; file header "See COPYING in the top level directory") |
+| `src/serial/usbcom/m_cp210x.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/cp210x.c` (GPL-2.0) and Silicon Labs' published interface notes | - |
+| `src/serial/usbcom/m_ch341.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/ch341.c` (GPL-2.0) | - |
+| `src/serial/usbcom/m_pl2303.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/pl2303.c`, `pl2303.h` (GPL-2.0) | - |
+| `src/serial/usbcom/nt_ser.c` (if M4; timeout case table only) | Not adapted: the timeout cases are written from the driver kit documentation of `SERIAL_TIMEOUTS`; ReactOS `drivers/serial/serial/rw.c` ("See COPYING in the top level directory") is a cross-check only | - |
 
 Everything else is original:
 

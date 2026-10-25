@@ -732,15 +732,18 @@ As xHCI98 builds its x86 drivers (`AGENTS.md` lines 201-202 there):
 | `src/video/uvc98/sys/uvcdesc.c` | Linux `drivers/media/usb/uvc/uvc_driver.c` (descriptor parsing) | GPL-2.0-or-later |
 | `src/video/uvc98/sys/uvcprobe.c` | Linux `drivers/media/usb/uvc/uvc_video.c` (`uvc_fixup_video_ctrl`, alternate selection) | GPL-2.0-or-later |
 | `src/video/uvc98/sys/uvcstrm.c` | Linux `drivers/media/usb/uvc/uvc_video.c` (payload decode, isochronous and bulk) | GPL-2.0-or-later |
-| `src/video/uvc98/sys/uvcquirk.c` | Linux `drivers/media/usb/uvc/uvc_driver.c` device table, `uvcvideo.h` quirk flags | GPL-2.0-or-later / GPL-2.0 |
+| `src/video/uvc98/sys/uvcquirk.c` | Linux `drivers/media/usb/uvc/uvc_driver.c` device table; the quirk flags as facts, not code from `uvcvideo.h` (GPL-2.0) | GPL-2.0-or-later |
 | `src/video/uvc98/sys/uvcctrl.c` | Linux `drivers/media/usb/uvc/uvc_ctrl.c` (control info table) | GPL-2.0-or-later |
-| `src/video/uvc98/sys/uvc.h` | Linux `include/uapi/linux/usb/video.h` (constants) | GPL-2.0 WITH Linux-syscall-note |
+| `src/video/uvc98/sys/uvc.h` | Not adapted: constants from the UVC 1.1 and 1.5 specifications, not from Linux `include/uapi/linux/usb/video.h` (GPL-2.0 WITH Linux-syscall-note) | - |
 | `src/video/uvcdec/turbo/` | libjpeg-turbo 3.2.0, four files patched for MSVC 6.0 (section 14.2; `NOTICE.md` rows for it and the configuration headers) | IJG licence; zlib licence for the SIMD; BSD-3-Clause for parts not built; all GPL-compatible |
 
 SPDX tags checked on the current Linux master: `uvc_driver.c`, `uvc_video.c`,
 `uvc_ctrl.c`, `uvc_queue.c`, `uvc_status.c` are `GPL-2.0-or-later`;
-`uvcvideo.h` is `GPL-2.0`. ReactOS's `ks` and `stream` are read, not copied;
-if any is copied, it gets its row. The 98 and 2000 DDK samples (TestCap,
+`uvcvideo.h` is `GPL-2.0` (only) and, as the uapi `video.h`, is used for
+facts only, since the repository is GPL-2.0-or-later (owner,
+2026-10-25). ReactOS's `ks` and `stream` are read, not copied; a file
+of them is adapted only if its own licence meets the source rule of `AGENTS.md` (GPL-2.0-only files: facts only), and
+then gets its row. The 98 and 2000 DDK samples (TestCap,
 the USBCAMD clients) are not read at all (Owner, 2026-10-20); the DDK
 documentation and headers are.
 

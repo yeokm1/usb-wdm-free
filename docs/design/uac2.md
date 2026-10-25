@@ -653,7 +653,7 @@ without a 16-bit stereo alternate is offered its own formats only.
 
 | Planned file | Adapted from | Licence |
 |---|---|---|
-| `src/audio/uac2/uacdesc.c` (descriptor parsing and validation) | Linux `include/linux/usb/audio-v2.h` (structures, constants), `sound/usb/clock.c` (`validate_clock_*`) | GPL-2.0; GPL-2.0-or-later |
+| `src/audio/uac2/uacdesc.c` (descriptor parsing and validation) | Linux `sound/usb/clock.c` (`validate_clock_*`); structures and constants from the UAC 2.0 specification, not from `include/linux/usb/audio-v2.h` (GPL-2.0, facts only) | GPL-2.0-or-later |
 | `src/audio/uac2/uacclock.c` (clock path, rate set, validity) | Linux `sound/usb/clock.c`, `sound/usb/format.c` (`parse_uac2_sample_rate_range`, `validate_sample_rate_table_v2v3`) | GPL-2.0-or-later |
 | `src/audio/uac2/uacsync.c` (packet sizing, feedback decoding, implicit feedback) | Linux `sound/usb/endpoint.c` (`snd_usb_handle_sync_urb`, `data_ep_set_params`, `get_usb_*_speed_rate`), `sound/usb/implicit.c` | GPL-2.0-or-later |
 | `src/audio/uac2/uacquirk.c` (device quirk table) | Linux `sound/usb/quirks.c` and `implicit.c` tables, as needed | GPL-2.0-or-later |
@@ -662,7 +662,11 @@ without a 16-bit stereo alternate is offered its own formats only.
 Licences read in the files' SPDX lines on 2026-10-20 (GitHub
 `torvalds/linux` master): `audio-v2.h` "GPL-2.0", the `sound/usb/` files
 "GPL-2.0-or-later", `include/uapi/linux/usb/audio.h` "GPL-2.0 WITH
-Linux-syscall-note". All are compatible with GPL-2.0 distribution.
+Linux-syscall-note". Owner, 2026-10-25: the repository is
+GPL-2.0-or-later, so the two headers under GPL-2.0 only (the uapi one
+with the syscall note) are not adapted; the structures and constants they
+annotate are written from the UAC 2.0 specification. The `sound/usb/`
+files are GPL-2.0-or-later.
 
 ReactOS (GPL; files say "See COPYING in the top level directory"):
 `drivers/usb/usbaudio/` is a UAC 1.0 AVStream driver (`KSDEVICE_DISPATCH` in

@@ -730,14 +730,17 @@ ownership lookup, cancellation and teardown rundown).
 ## Rules the owner set (also in AGENTS.md / the docs)
 
 - GPL-2.0-or-later (owner, 2026-10-25; GPL-2.0 before). Sources: specs, Microsoft's published DDK docs and headers,
-  this repo's own code, GPL-compatible code (Linux, ReactOS) with notices
-  and a NOTICE.md row. DDK SAMPLE sources may NOT be read; export tables
+  this repo's own code, open-source code (Linux, ReactOS) under
+  GPL-2.0-or-later or a licence already used here alongside it, with
+  notices and a NOTICE.md row; GPL-2.0-only files give facts only
+  (AGENTS.md, "Sources"). DDK SAMPLE sources may NOT be read; export tables
   (names/ordinals) of in-box binaries MAY be. Never Microsoft or vendor
   binaries' code or disassembly.
 - Standalone: no build, release or run-time dependency on any other repo.
   Don't describe this repo in relation to xHCI98 or the non-free pack;
   xHCI98 may appear only as one tested host stack. Code copied from xHCI98
-  keeps its GPL header.
+  keeps its SPDX and copyright lines and comes only from xHCI98 files
+  tagged GPL-2.0-or-later.
 - User-mode code, VxDs and INF-only packages are allowed when they exist
   to make a driver here work or fill a gap Windows leaves.
 - Multi-function devices: INFs match interface-level IDs only (exception:

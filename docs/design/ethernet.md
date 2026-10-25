@@ -87,7 +87,7 @@ never build inputs (AGENTS.md, "Standalone").
 ## 2. Purpose and devices served: the survey
 
 What decides each candidate: can it be bought today, is there a free and
-mature reference (Linux, GPL-2.0-compatible) for it, how much protocol it
+mature reference (Linux) for it, how much protocol it
 takes, and whether some Windows target already has a driver.
 
 ### 2.1 What the targets already have
@@ -135,8 +135,8 @@ takes, and whether some Windows target already has a driver.
   modes pack many frames into one 16-48 KiB transfer.
 - **No public datasheets.** Realtek and ASIX publish no programming manuals
   for these chips; `r8152.c` (written by Realtek) and `ax88179_178a.c`
-  (written by ASIX) are the only free references, and both are GPL-2.0
-  compatible.
+  (written by ASIX) are the only free references; `r8152.c` is GPL-2.0
+  only and `ax88179_178a.c` GPL-2.0-or-later (section 9).
 
 ### 2.4 Tethering
 
@@ -685,7 +685,9 @@ Specification: USB-IF "Network Control Model" 1.0 (in the CDC 1.2 set).
   NTB ends the transfer, otherwise a ZLP per the spec's rules (Linux
   `cdc_ncm.c` lines 1434 and the `FLAG_SEND_ZLP` variants at 1928-1945 show
   device-specific differences).
-- Linux `cdc_ncm.c` is dual-licensed; this project takes it under GPL-2.0.
+- Linux `cdc_ncm.c` is dual-licensed (GPL-2.0 or BSD-2-Clause); it is
+  consulted for behaviour (facts) only, and `cdcnet`'s NCM code is written
+  from the CDC NCM specification.
 
 The parameter names are device-relative: `In` constrains device-to-host
 NTBs, `Out` constrains host-to-device NTBs. Cap both directions to a local
@@ -991,20 +993,22 @@ another repository:
 
 Specifications first: the CDC/ECM/NCM structures and request codes are
 written from the USB-IF documents, the RNDIS messages from [MS-RNDIS]. Linux
-is adapted where it is the only reference (chip register sequences) and
-consulted for behaviour. Expected `NOTICE.md` rows, each file keeping the
+code under GPL-2.0-or-later is adapted where it is the only reference
+(chip register sequences) and consulted for behaviour; a Linux file under
+GPL-2.0 only gives facts only (owner, 2026-10-25: the repository is
+GPL-2.0-or-later). Expected `NOTICE.md` rows, each file keeping the
 Linux copyright lines and SPDX tag:
 
 | File (planned) | Adapted from | Licence |
 |---|---|---|
 | `src/net/cdcnet/rndis.c` | Linux `drivers/net/usb/rndis_host.c` (Copyright (C) 2005 David Brownell): init/query sequence, quirks | GPL-2.0-or-later |
 | `src/net/cdcnet/ecm.c` | Linux `drivers/net/usb/cdc_ether.c` (Brownell; Ole Andre Vadla Ravnas): descriptor parsing quirks, device table | GPL-2.0-or-later |
-| `src/net/cdcnet/ncm.c` | Linux `drivers/net/usb/cdc_ncm.c` (Copyright (C) ST-Ericsson 2010-2012): NTB sizing and quirks | GPL-2.0 (taken from "Dual BSD/GPL") |
+| `src/net/cdcnet/ncm.c` | Not adapted: NTB sizing from the CDC NCM specification; Linux `drivers/net/usb/cdc_ncm.c` ("Dual BSD/GPL") consulted for quirks as facts | - |
 | `src/net/common/*.c` (where it follows usbnet's pipeline logic) | Linux `drivers/net/usb/usbnet.c` (Brownell; David Hollis) | GPL-2.0-or-later |
 | `src/net/rtl815x/*.c` | Not adapted: written from the chips' register facts (section 6.4; owner, 2026-10-25) | - |
 | `src/net/ax88179/*.c` | Linux `drivers/net/usb/ax88179_178a.c` (Copyright (C) 2011-2013 ASIX) | GPL-2.0-or-later |
 
-All are compatible with this repository's GPL-2.0. `rtl815x` was
+The licence column is the source's. `rtl815x` was
 rewritten from the register facts (section 6.4) and no longer follows
 `r8152.c`'s code. No Realtek firmware blob is redistributed. Not used: Microsoft's
 RNDIS kit binaries, ASIX's or Realtek's Windows drivers, and the vendor INFs

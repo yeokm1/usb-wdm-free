@@ -54,8 +54,8 @@ script may retain the source location as a fallback.
 
 Published documentation and headers are allowed design inputs. DDK/WDK
 sample drivers, sample INFs and sample libraries are not read or used as
-templates. Any setup script adapted from GPL-compatible code is copied
-into this repository with its notices and a `NOTICE.md` row.
+templates. Any setup script adapted from open-source code is copied
+into this repository with its notices and a `NOTICE.md` row, under the source rule of `AGENTS.md` (GPL-2.0-only files: facts only).
 
 ## 3. Build profiles
 

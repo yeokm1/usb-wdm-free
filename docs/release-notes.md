@@ -17,9 +17,10 @@ is 0.1.0's, byte for byte. `ax88179` is version 0.1.1 (`DriverVer`
   passed through to Windows in QEMU, never on a real PC. On 98 SE under
   xHCI98 and under NUSB's EHCI, and on ME under xHCI98: install, DHCP,
   pings to 4000 bytes, removal under traffic and replug passed, with
-  trace builds made before the settle cycle at start; the released
-  source (settle cycle, FCS report) was run again on 98 SE only, under
-  both, with no frame carrying an FCS. `STAGE.TXT` stages `AX179F98.INF` on
+  trace builds made before the settle cycle at start. The settle cycle
+  was then run on 98 SE only, under both, with no frame carrying an
+  FCS; the released source itself (with the FCS report's final form)
+  ran under NUSB's EHCI only. `STAGE.TXT` stages `AX179F98.INF` on
   98 SE and ME; the 2000 INF is copy only (no leg on 2000).
   [Release record](testing/2026-10-25-release-0.1.1.md).
 - **Signing**: x86 only, unsigned, no catalog.

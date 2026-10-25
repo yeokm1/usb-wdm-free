@@ -46,7 +46,7 @@
 
 # ---- audio/uac2
 PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs
-STAGE | W98SE | free/audio/uac2/w98se-me/uac2wdm.inf | every simulator profile passed under xHCI98 (build 16); ME has no leg
+STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1)
 STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg
 STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | playback and capture passed on 7 x86 (simulator, real X4 via VM); Vista and 8 have no leg
 COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24): no XP x64 leg

@@ -12,6 +12,12 @@ Ethernet driver (`AX179F.SYS`, NDIS 5.0 with a WDM lower edge), in
 `free/net/ax88179/w2k/` (`AX179F.INF`). Every other file under `free/`
 is 0.1.0's, byte for byte. `ax88179` is version 0.1.1 (`DriverVer`
 10/25/2026,0.1.1.0); the other drivers keep their 0.1.0 versions.
+`uac2`'s `w98se-me` INF is now staged on ME too (owner, 2026-10-25),
+after its first ME leg passed: the released INF in ME's INF folder, a
+simulated X4 (`uacemu.py x4full`) under xHCI98, playback at 48 and
+44.1 kHz and capture with the simulator's tone. `usbmidi`'s ME INF
+stays copy only: it lists no device (`USBMIDI_BY_HAND`), and ME's own
+`usbaudio.sys` serves USB MIDI.
 
 - **Status**: "Built, not tested", as every folder: the owner's AX88179
   passed through to Windows in QEMU, never on a real PC. On 98 SE under

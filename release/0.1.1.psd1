@@ -29,7 +29,7 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\w98se-me\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\w98se-me\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE', 'every simulator profile passed under xHCI98 (build 16); ME has no leg') } }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', 'every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1)') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\w2k-xp\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\w2k-xp\uac2wdm.inf' }
                    Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', 'playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg') } }

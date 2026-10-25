@@ -46,7 +46,7 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
-| `uac2` | Simulator only (a) | Not evaluated | Not evaluated | Real device (VM) (b) | Not evaluated | Real device (VM) | Not evaluated |
+| `uac2` | Simulator only (a) | Simulator only | Not evaluated | Real device (VM) (b) | Not evaluated | Real device (VM) | Not evaluated |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |

@@ -18,7 +18,7 @@ These drivers are experimental. They may not work with every device and can make
 | `usbcom` | USB CDC-ACM serial, as COM ports | 98 SE, ME; 2000 to 8 and x64 as an INF for Windows' `usbser.sys` |
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
 | `rtl815x` | Realtek RTL8152/8153 USB Ethernet | 98 SE, ME, 2000 |
-| `ax88179` | ASIX AX88179 USB Ethernet | 98 SE, ME, 2000 |
+| `ax88179` | ASIX AX88179 USB Ethernet (not in this release yet) | 98 SE, ME, 2000 |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |

@@ -11,13 +11,15 @@ Ethernet driver (`AX179F.SYS`, NDIS 5.0 with a WDM lower edge), in
 `free/net/ax88179/w98se-me/` (`AX179F98.INF`) and
 `free/net/ax88179/w2k/` (`AX179F.INF`). Every other file under `free/`
 is 0.1.0's, byte for byte. `ax88179` is version 0.1.1 (`DriverVer`
-10/25/2026,0.1.1.0); the other drivers stay 0.1.0.
+10/25/2026,0.1.1.0); the other drivers keep their 0.1.0 versions.
 
 - **Status**: "Built, not tested", as every folder: the owner's AX88179
   passed through to Windows in QEMU, never on a real PC. On 98 SE under
   xHCI98 and under NUSB's EHCI, and on ME under xHCI98: install, DHCP,
-  pings to 4000 bytes, removal under traffic and replug passed, with the
-  trace build of the same source. `STAGE.TXT` stages `AX179F98.INF` on
+  pings to 4000 bytes, removal under traffic and replug passed, with
+  trace builds made before the settle cycle at start; the released
+  source (settle cycle, FCS report) was run again on 98 SE only, under
+  both, with no frame carrying an FCS. `STAGE.TXT` stages `AX179F98.INF` on
   98 SE and ME; the 2000 INF is copy only (no leg on 2000).
   [Release record](testing/2026-10-25-release-0.1.1.md).
 - **Signing**: x86 only, unsigned, no catalog.

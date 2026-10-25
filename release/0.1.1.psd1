@@ -162,7 +162,7 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'AX179F.SYS' = 'out\net\ax88179\ndis5\free\ax179f.sys'; 'AX179F98.INF' = 'out\net\ax88179\ndis5\free\AX179F98.INF' }
-                   Stage = @{ 'AX179F98.INF' = @('STAGE', 'W98SE WME', 'real AX88179 via VM: install, DHCP, ping and removal legs passed on 98 SE under xHCI98 and NUSB EHCI, on ME under xHCI98') } }
+                   Stage = @{ 'AX179F98.INF' = @('STAGE', 'W98SE WME', 'real AX88179 via VM: install, DHCP, ping and removal legs passed on 98 SE under xHCI98 and NUSB EHCI, on ME under xHCI98; the final source (settle cycle) ran again on 98 SE only') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'AX179F.SYS' = 'out\net\ax88179\ndis5\free\ax179f.sys'; 'AX179F.INF' = 'out\net\ax88179\ndis5\free\AX179F.INF' }
                    Stage = @{ 'AX179F.INF' = @('COPY', 'W2K', 'copy only: no leg on 2000') } }

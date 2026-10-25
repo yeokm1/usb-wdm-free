@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * The KS filter graphs this driver offers, and their checks (uactopo.h).
  * Original code from the 2000 DDK's PortCls documentation of

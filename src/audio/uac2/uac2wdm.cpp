@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Experimental UAC 2.0 WaveCyclic/USB streaming: render and capture in
  * the formats and rates the device's descriptors and clocks offer.

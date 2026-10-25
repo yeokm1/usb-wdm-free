@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  *
  * CDCNET pure protocol interface (ethernet.md section 3.3). Nothing here

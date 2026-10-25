@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original Win32 clock diagnostic. No audio, USB or timer-resolution calls.
  * TIMERTST.EXE [/quiet] REPORT.TXT ; automatic exit after20 QPC seconds.

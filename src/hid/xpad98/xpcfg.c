@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  *
  * xpad98: walk a USB configuration descriptor (USB 2.0 section 9.6.3-9.6.6)

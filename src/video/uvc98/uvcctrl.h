@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original wire codec from UVC 1.1 Table 4-47 and 1.5 Table 4-75.
  * No USB requests, allocation, negotiation policy or packed structures.

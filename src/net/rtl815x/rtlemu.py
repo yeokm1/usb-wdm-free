@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 """SIMULATED Realtek RTL8152/RTL8153 USB Ethernet adapter over localhost
 usbredir (test aid only).

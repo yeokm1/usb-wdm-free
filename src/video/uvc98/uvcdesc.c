@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original parser from UVC core and uncompressed/MJPEG payload 3.1;
  * USB 2.0 standard interface/endpoint fields. No copied implementation.

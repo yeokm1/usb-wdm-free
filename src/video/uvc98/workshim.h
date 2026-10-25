@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Host-only deterministic scheduler. Never compiled into a kernel binary.
  * Actual public kit structures are retained; these are injected operations.

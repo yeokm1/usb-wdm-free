@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Test-only GUI for X4 CDC binding and the separately identified simulated
  * ACM device. X4 gets open/GetCommState/close only. Generated echo traffic

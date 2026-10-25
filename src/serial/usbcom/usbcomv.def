@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Module definition of USBCOMV.VXD (98 DDK "Building a Virtual Device":
 ; the module name is the DDB name, the DDB is export ordinal 1). All code
 ; and data stay locked: port functions run at interrupt time.

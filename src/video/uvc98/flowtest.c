@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Executes the actual flow/ownership cores with synchronous notification
  * reentry. This is policy testing, not a kernel callback lifetime proof.

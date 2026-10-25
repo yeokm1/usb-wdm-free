@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Host tests of the actual uvciso.c walker over the actual uvcpay.c core.
  * Transfer buffers end at a no-access page so any read past a packet faults.

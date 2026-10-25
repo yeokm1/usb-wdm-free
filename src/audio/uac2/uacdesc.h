@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original code from USB Audio 2.0 sections 4.7, 4.9 and 4.10.
  * No Windows types, allocation, packed structures or unaligned reads.

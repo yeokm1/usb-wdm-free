@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original WinMM test: real queued PCM, completion events and positions.
  * The GUI never labels enumeration or elapsed time as successful playback.

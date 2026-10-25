@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Release 0.1.0, for ME only. Copy the two parent drivers from ME's own
 ; layout/media; no Microsoft file is included with this package. ME's

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Rewrites the model sections of USBCOM.INF and USBCDC.INF from
 # boardids.txt (boards.ps1). Run after editing boardids.txt; the gates then

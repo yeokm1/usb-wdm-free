@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original bounded UVC payload core from USB-IF UVC1.1 section2.4.3.3.
  * No OS/USB I/O, allocation, image conversion or clock recovery.

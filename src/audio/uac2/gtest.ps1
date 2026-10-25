@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Optional independent host audit with a separately installed named GCC.
 # No downloads, installations, driver builds, staging or device operations.

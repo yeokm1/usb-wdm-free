@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Deterministic host scheduler runs ACTUAL engine timer/bootstrap/job/join.
  * Injected operations are not a kernel, IRQL, SMP or STREAM.SYS runtime.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Actual M1 dispatch routing, injected engine admission/notification.
  * These tests complement actual-engine tests; no fake kernel proof.

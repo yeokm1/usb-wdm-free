@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 setlocal
 if /I not "%~1"=="inf" goto usage
 if /I not "%~2"=="free" if /I not "%~2"=="checked" goto usage

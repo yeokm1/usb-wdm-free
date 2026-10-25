@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 """Actual native probe Engine, mocked libusb; never loads libusb/opens USB."""
 import ctypes as c

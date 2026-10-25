@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 #
 # The LIBUSB0.INF gate (docs/design/libusb.md 6.2, 6.3): fixed sections,

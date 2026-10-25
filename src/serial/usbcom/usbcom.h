@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * usbcom.h - internal declarations of USBCOM.SYS, the WDM half of the
  * Windows 98 SE / ME CDC-ACM driver (docs/design/serial.md 5.1.2).

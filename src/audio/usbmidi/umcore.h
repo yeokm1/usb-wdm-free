@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original USB MIDI 1.0 codec/descriptor core; USB-IF MIDI 1.0 sections 4,6.
  */

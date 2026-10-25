@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Research-only dispatcher host test and real Win98 WDM header compile.
 # Does not build or stage an installable kernel driver.

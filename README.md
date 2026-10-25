@@ -1,6 +1,6 @@
 # usb-wdm-free
 
-Free (GPL-2.0) WDM USB class drivers for Windows 98 SE to Windows 8,
+Free (GPL-2.0-or-later) WDM USB class drivers for Windows 98 SE to Windows 8,
 source and built drivers together. They use Windows' standard USB driver
 interface, so they run under Windows' own USB 2.0 drivers, NUSB's on
 98 SE, or [xHCI98](https://github.com/yeokm1/xhci98), whose releases carry
@@ -102,8 +102,10 @@ Windows capture driver; run it, nothing is installed.
 
 ## License
 
-GPL-2.0 ([LICENSE](LICENSE)); code adapted from other projects is listed
-in [NOTICE.md](NOTICE.md).
+GPL-2.0-or-later: the GNU General Public License version 2
+([LICENSE](LICENSE)) or, at your option, any later version. Code adapted
+from other projects keeps its own licence and is listed in
+[NOTICE.md](NOTICE.md).
 
 ## AI usage
 

@@ -61,7 +61,7 @@ present it works the same.
    (x64).** Windows 2000 has no in-box way to stage a Plug and Play INF,
    and no system in the range has an in-box command that installs a driver
    on a device already present or one bound to a better-ranked in-box
-   driver. The helper is a small GPL-2.0 Win32 console program calling
+   driver. The helper is a small GPL-2.0-or-later Win32 console program calling
    documented SetupAPI and newdev routines (section 7). The batch file stays
    the user-facing tool. Owner, 2026-10-20: the helper is accepted, on
    2000 to 8 behind `INSTALL.BAT`; 98 SE and ME stay pure batch.
@@ -479,7 +479,7 @@ needed (section 13, M5).
 
 ### 7.1 What it is
 
-A Win32 console program in C, GPL-2.0, source in `src/install/wdminst/`.
+A Win32 console program in C, GPL-2.0-or-later, source in `src/install/wdminst/`.
 
 - **x86** `WDMINST.EXE`: MSVC 6.0 with the C runtime linked statically
   (`LIBC`), so one image starts on 2000, XP, Vista, 7 and 8. It is not
@@ -967,7 +967,7 @@ The x64 legs run in test-signing mode and with F8.
 
 Owner, 2026-10-20, on the questions this draft raised:
 
-- **The helper**: `WDMINST.EXE` and `WDMIN64.EXE`, GPL-2.0, are accepted
+- **The helper**: `WDMINST.EXE` and `WDMIN64.EXE`, GPL-2.0-or-later, are accepted
   on 2000 to 8, behind `INSTALL.BAT`; 98 SE and ME stay pure batch
   (sections 3 and 7).
 - **Claim directory**: the shared `%windir%\USBCLAIM\` scheme with its

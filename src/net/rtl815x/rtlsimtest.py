@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 """Host tests of rtlemu.py: the SIMULATED RTL8152/8153 driven by
 rtl815x's own chip core (rtlchip.c and netchip.c, built into

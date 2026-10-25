@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 rem Copyright (C) 2026 Yeo Kheng Meng
 rem Separate2-second WinMM verifier with mandatory independent wall-time gate.
 setlocal

@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 rem Copyright (C) 2026 Yeo Kheng Meng
 rem comtest.cmd - builds COMTEST.EXE, the Win32 guest test tool of the 98 SE /
 rem ME legs (comtest.c), with the repository's MSVC 6.0: a console program for

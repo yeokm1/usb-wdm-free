@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original implementation; see uvcfmt.h. Field use follows the M0/M1
  * single-format metadata in uvcmini.c, repeated per camera frame. The

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * acmhost.c - host tests for acmcore.c, built with the package's own
  * MSVC 6.0 compiler as a Win32 console program (hosttest.ps1).

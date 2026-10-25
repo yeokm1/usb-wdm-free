@@ -5,7 +5,8 @@ CAMCHECK.EXE is this project's own code (src\video\uvc98\camcheck.c in
 usb-wdm-free), written from Microsoft's published Video for Windows
 documentation and headers. Copyright (C) 2026 Yeo Kheng Meng. It is
 under usb-wdm-free's licence, the GNU General Public License version 2
-(GPL-2.0-only); see LICENSE at the top of the usb-wdm-free set.
+or, at your option, any later version (GPL-2.0-or-later); see LICENSE at
+the top of the usb-wdm-free set.
 
 It is built with Microsoft Visual C++ 6.0 (x86) and linked dynamically to
 MSVCRT.DLL, the C runtime. It uses the system's copy of MSVCRT.DLL; none

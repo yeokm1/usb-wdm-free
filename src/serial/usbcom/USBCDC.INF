@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; USBCDC.INF - Windows 2000 to 8, x86 and x64: binds Windows' own usbser.sys
 ; to CDC-ACM functions as COM ports (docs/design/serial.md 5.3). Original

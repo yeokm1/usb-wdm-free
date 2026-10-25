@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original test-only SetupAPI/NewDev installer for ROOT\UVCSIM1 only.
  * Never matches USB devices. Fixed A:\UVCSIM1.INF input/report paths.

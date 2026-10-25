@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original synthetic worker. NOT linked into M0; no USB transport.
  * Default Stream Class synchronization, no ISR: callbacks/timer DISPATCH.

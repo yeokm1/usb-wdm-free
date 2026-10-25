@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Preserve INF semantics while producing deterministic ANSI/CRLF media.
 param([Parameter(Mandatory)][string]$Source,[Parameter(Mandatory)][string]$Destination)

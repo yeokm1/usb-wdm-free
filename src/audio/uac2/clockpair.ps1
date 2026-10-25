@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Diagnostic pair: exact retained main/descriptor/rate/resource objects;
 # only uacusb.c is compiled twice. Does not overwrite/stage any package SYS.

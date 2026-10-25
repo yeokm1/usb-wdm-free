@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Host tests of the actual uvcneg.c sequence over the actual descriptor and
  * control code, using the physical Brio 100 configuration fixture and a

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Imports LIBUSB0.DLL may use (MODULE!name). Being listed is the package's
 # declaration; the gate also requires each name in the Windows 98 SE DDK's
 # import library for its module (a declaration for 98, not proof of export).

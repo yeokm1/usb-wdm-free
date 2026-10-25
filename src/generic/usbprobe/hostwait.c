@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original process-local wait diagnostic. No USB/audio/device access.
  * HOSTWAIT.EXE [/quiet] [/honor] E:\absolute\REPORT.TXT

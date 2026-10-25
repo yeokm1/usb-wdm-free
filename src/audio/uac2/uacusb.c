@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original bounded UAC 2.0 isochronous transport from USB Audio 2.0
  * control facts (sections 4.7.2, 5.2), USB 2.0 chapters 5 and 9 and the

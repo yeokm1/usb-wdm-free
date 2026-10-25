@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Executes production dispatcher with real Win32 threads and mocked WDM
  * object/event/lock primitives. This tests ownership, not NTKERN availability.

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Imports UVCDEC.DLL may use (MODULE!name); the gate also requires each in
 # exports98/kernel32-98.txt and kernel32-me.txt.
 KERNEL32.DLL!CloseHandle

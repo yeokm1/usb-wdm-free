@@ -22,4 +22,4 @@ Tested only in virtual machines (QEMU): a real Mitsumi drive passed
 through, read under 98 SE's UHCI and under xHCI98 on 98 SE and ME. No
 leg on a real PC, and no USB 2.0 (EHCI) leg.
 
-Licence: GPL-2.0 (https://github.com/yeokm1/usb-wdm-free).
+Licence: GPL-2.0-or-later (https://github.com/yeokm1/usb-wdm-free).

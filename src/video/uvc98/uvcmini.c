@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original STREAM.SYS metadata/STOP-pin experiment from strmini.h,
  * ks.h/ksmedia.h and published Stream Class API/SRB documentation.

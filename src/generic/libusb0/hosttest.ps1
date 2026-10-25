@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Builds tests\lutest.c with the DLL's own src\descriptors.c and
 # src\error.c as an x86 console test, using the repository's MSVC 6.0

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Small package policy gate; not a general INF parser or Setup substitute.
 function Assert-FloppyInf([string]$Text, [ValidateSet('nt','9x','me')][string]$Variant) {

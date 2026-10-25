@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Compile the driver's own chip core (rtlchip.c, netchip.c) into an x64 DLL
 # for the Python host tests of rtlemu.py (rtlsimtest.py). No kernel I/O;

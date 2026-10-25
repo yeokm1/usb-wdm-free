@@ -729,7 +729,7 @@ ownership lookup, cancellation and teardown rundown).
 
 ## Rules the owner set (also in AGENTS.md / the docs)
 
-- GPL-2.0. Sources: specs, Microsoft's published DDK docs and headers,
+- GPL-2.0-or-later (owner, 2026-10-25; GPL-2.0 before). Sources: specs, Microsoft's published DDK docs and headers,
   this repo's own code, GPL-compatible code (Linux, ReactOS) with notices
   and a NOTICE.md row. DDK SAMPLE sources may NOT be read; export tables
   (names/ordinals) of in-box binaries MAY be. Never Microsoft or vendor

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * M2 stream formats built from the camera's own descriptors (KS data ranges
  * from published ks.h/ksmedia.h). The camera's uncompressed YUY2 frames, and

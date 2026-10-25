@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Compile the driver's own descriptor core (uacdesc.c) into an x64 DLL for
 # the Python host tests of uacemu.py's profiles (uacsimtest.py). No kernel

@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Original ROOT-only STREAM.SYS M0 experiment. No USB match, no release.
 ; Metadata/STOP pin only: RUN and frame delivery are not implemented.

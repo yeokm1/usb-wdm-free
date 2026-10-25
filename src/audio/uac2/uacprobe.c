@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Test-only Win32 GUI: device status, M0 registry diagnostics, WinMM
  * enumeration and format/open results. No playback data is submitted.

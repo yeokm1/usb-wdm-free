@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original experimental NT2000+ UVC USB transport (see uvcusb.h). Built from
  * USB 2.0, UVC 1.1/1.5 and the published DDK usbdi.h/usbioctl.h/wdm.h

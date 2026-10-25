@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Actual NT2000+ hooks; not linked into M0. M1 native start/cleanup and
  * mapped frame delivery remain unresolved; see the worker run record.

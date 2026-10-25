@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 rem Copyright (C) 2026 Yeo Kheng Meng
 rem Native x64 test helper: NewDev installation must not run through WOW64.
 setlocal

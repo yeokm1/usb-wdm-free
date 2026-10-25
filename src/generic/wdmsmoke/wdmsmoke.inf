@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ;
 ; wdmsmoke - test INF for the disposable build/lifetime driver
 ; (build.md section 6). Installs on a root-enumerated devnode only,

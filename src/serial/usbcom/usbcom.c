@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * usbcom.c - USBCOM.SYS: the WDM driver of the Windows 98 SE / ME CDC-ACM
  * package (docs/design/serial.md 5.1.2 route B). It is the function driver

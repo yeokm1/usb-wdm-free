@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original adapter from published Stream Class/KS contracts and headers.
  * No kit sample code. Caller-owned lifetime/locking obligations in header.

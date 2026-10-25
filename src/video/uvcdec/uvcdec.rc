@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Copyright (C) 2026 Yeo Kheng Meng */
 #include <winver.h>
 1 VERSIONINFO
@@ -18,7 +18,7 @@ BEGIN
    VALUE "FileDescription", "uvcdec MJPEG decompressor (VfW ICM), based in part on the work of the Independent JPEG Group\0"
    VALUE "FileVersion", "0.1.0.0\0"
    VALUE "InternalName", "uvcdec\0"
-   VALUE "LegalCopyright", "GPL-2.0; libjpeg-turbo 3.2.0 (C) 1991-2026 Thomas G. Lane, Guido Vollbeding, D. R. Commander and others (IJG, BSD-3-Clause, zlib licences)\0"
+   VALUE "LegalCopyright", "GPL-2.0-or-later; libjpeg-turbo 3.2.0 (C) 1991-2026 Thomas G. Lane, Guido Vollbeding, D. R. Commander and others (IJG, BSD-3-Clause, zlib licences)\0"
    VALUE "OriginalFilename", "UVCDEC.DLL\0"
    VALUE "ProductName", "usb-wdm-free uvc98\0"
    VALUE "ProductVersion", "0.1.0.0\0"

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Negative tests for the text import gate; never build or read an OS binary.
 # Existing reports come only from this package's own x86/x64 builds.

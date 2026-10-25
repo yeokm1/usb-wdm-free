@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original bounded read-only removable-file probe. Report writes A:FREAD.TXT
  * on the explicitly staged virtual floppy. No physical disk write API.

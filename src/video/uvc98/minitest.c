@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Direct tests of actual original M0 miniport callbacks with mock class.
  * Public DDK structures only; not a Windows kernel or USB test.

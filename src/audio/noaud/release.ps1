@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Release noaud: copy NOAUD98.INF and README.TXT into free/audio/noaud/w98se/
 # (ASCII, CRLF) and rewrite SHA256.TXT over every file under free/.

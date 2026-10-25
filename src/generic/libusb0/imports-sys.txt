@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Imports LIBUSB0.SYS may use (MODULE!name), the 35 of upstream 0.1.12.2's
 # driver (docs/design/libusb.md 2.3). Being listed is the package's
 # declaration; the gate also requires each name in the Windows 98 SE DDK's

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Test-only console probe for the 9x kernel-streaming audio stack: lists the
  * KSCATEGORY_AUDIO / RENDER / TOPOLOGY / SYSAUDIO / MIXER interfaces, reads

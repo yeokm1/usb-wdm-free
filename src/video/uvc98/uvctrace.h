@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original VM-only diagnostic. QEMU isa-debugcon must own port0xE9.
  * Never enabled by normal builds or intended for physical-machine use.

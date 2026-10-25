@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Build the original C codec as an import-free x64 host-test DLL.
 $ErrorActionPreference = 'Stop'

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original PortCls adapter with one IMiniportMidi filter per MIDI port pair
  * (design 5), from the DDK headers and Microsoft's published PortCls, KS

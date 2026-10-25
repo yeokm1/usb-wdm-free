@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * ucif.h - the direct-call interface between USBCOMV.VXD (the VCOMM port
  * driver) and USBCOM.SYS (the WDM driver) on Windows 98 SE and ME

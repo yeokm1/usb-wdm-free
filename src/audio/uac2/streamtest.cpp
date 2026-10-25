@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Direct host contract tests; kernel services are deterministic test doubles. */
 #define PC_NEW_NAMES
 #define _NTHAL_

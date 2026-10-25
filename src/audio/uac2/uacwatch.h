@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original feedback deadline predicate, independent of Windows types.
  * Inputs MUST be the same monotonic100ns clock domain, never wall time.

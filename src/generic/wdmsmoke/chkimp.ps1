@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Import and PE gate for a binary built here (build.md section 5.2).
 # Reads DUMPBIN /HEADERS and /IMPORTS output of OUR binary only. Fails

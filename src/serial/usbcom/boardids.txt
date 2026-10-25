@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # boardids.txt - the USB ids the usbcom INFs list beyond the Uno R3 and the
 # Pico (Owner, 2026-10-22: Leonardo/Micro and bootloaders, STM32 VCP,
 # CH9102, Espressif 303A, Adafruit 239A, SparkFun 1B4F). The gates

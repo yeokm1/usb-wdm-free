@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Copyright (C) 2026 Yeo Kheng Meng */
 /*
  * uvcdec.dll: a Video for Windows Installable Compression Manager (ICM)

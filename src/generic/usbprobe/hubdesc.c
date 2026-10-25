@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original read-only Windows 2000 hub descriptor diagnostic, using published
  * SetupAPI/USB hub IOCTL documentation and ntddk/inc/usbioctl.h declarations.

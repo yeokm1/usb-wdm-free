@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # M2 gate: x86 native 4.00 PE, kernel-only dependencies (no usbd.sys: URBs are
 # built by hand), an exact import allowlist and the class-matched INFs.

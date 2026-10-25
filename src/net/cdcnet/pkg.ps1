@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 #
 # pkg.ps1 - stage CDCNET's release folders under out\net\cdcnet\pkg\ and run

@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; x64 copy of ..\uac2wdm.inf, identical but for the Signature and these three
 ; lines: 64-bit Windows refuses a $CHICAGO$ INF (7 x64 pnputil: "Invalid INF

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * comtest.c - COMTEST.EXE, the Win32 test tool of usbcom's guest legs
  * (docs/design/serial.md 11, "a Win32 test tool built with MSVC 6"). It

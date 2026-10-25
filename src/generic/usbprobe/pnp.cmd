@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 setlocal
 set SRC=%~dp0
 for %%I in ("%SRC%..\..\..") do set ROOT=%%~fI

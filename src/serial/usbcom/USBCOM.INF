@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; USBCOM.INF - Windows 98 SE / ME: binds USBCOM.SYS to listed CDC-ACM
 ; boards (docs/design/serial.md 5.1.2, 5.2, 8). Original INF.

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Gates for the Windows 98 SE / ME half of usbcom (build.md section 5.2).
 # They inspect only this package's own built files and its own INFs.

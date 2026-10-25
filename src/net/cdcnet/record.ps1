@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Hashes of the package sources and of the built files, for record.txt.
 param([Parameter(Mandatory)][string]$Output)
 $ErrorActionPreference = 'Stop'

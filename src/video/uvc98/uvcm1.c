@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original NT2000+ ROOT-only synthetic RUN experiment. No USB transport.
  * Reuse this repository's original M0 metadata without changing M0; the

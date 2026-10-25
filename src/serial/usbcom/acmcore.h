@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * acmcore.h - the operating-system-independent part of usbcom: the CDC-ACM
  * descriptor walk, line coding, SERIAL_STATE decoding, the VCOMM-style

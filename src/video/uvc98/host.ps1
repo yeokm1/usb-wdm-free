@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Compile owned portable C for Python host integration tests, no kernel I/O.
 $ErrorActionPreference = 'Stop'

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original USB MIDI 1.0 transport from the USB-IF MIDI 1.0 specification,
  * the USB 2.0 specification and the Windows 2000 DDK USB/WDM headers and

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Policy gate for this deliberately small, INF-only experimental package.
 # This is not a general INF parser and does not replace Windows Setup.

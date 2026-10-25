@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Imports TESTLIBU.EXE may use (MODULE!name); LIBUSB0.DLL names must also be
 # exported by the DLL built alongside it.
 LIBUSB0.DLL!usb_close

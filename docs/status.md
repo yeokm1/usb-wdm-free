@@ -10,7 +10,7 @@ was evaluated.
 ## About the drivers
 
 Free-software USB class drivers for Windows 98 SE through Windows 8,
-written for this project under GPL-2.0 ([LICENSE](../LICENSE)). They are WDM
+written for this project under GPL-2.0-or-later ([LICENSE](../LICENSE)). They are WDM
 (Windows Driver Model) drivers, the one driver model every one of those
 systems shares, so one driver can serve Windows 98 SE, ME, 2000, XP,
 Vista, 7 and 8, in 32-bit and, from XP on, 64-bit builds; each driver's

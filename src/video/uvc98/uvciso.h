@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original isochronous-IN packet walker for the UVC payload core.
  * No OS/USB I/O or allocation. UVC 1.1 section 2.4.3.3: each isochronous

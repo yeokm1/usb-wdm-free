@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Read-only PnP metadata: default synthetic USB VID FFFF, or explicit VID:PID.
  * Published SetupAPI/Configuration Manager contracts; no binary inspection.

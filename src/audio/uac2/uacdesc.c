@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original implementation. Sources and limitations: docs/testing/
  * 2026-10-21-wave1.md. No DDK samples or third-party code used.

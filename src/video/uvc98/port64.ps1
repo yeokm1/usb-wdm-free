@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Compile-only check of actual adapter/hooks/core against WDK7.1 amd64 ABI.
 $ErrorActionPreference = 'Stop'

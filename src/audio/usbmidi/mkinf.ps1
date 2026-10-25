@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Writes one usbmidi.inf per release folder from the usbmidi.inf template
 # (design 8, 4.2) and checks each: ASCII, CRLF, every %string% defined,

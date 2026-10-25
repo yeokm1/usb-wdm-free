@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original bounded Winsock load/removal test; no console or Internet peer.
  * IP MIB declarations come from the installed Platform SDK's iprtrmib.h.

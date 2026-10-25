@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Host test: the shipped wave and topology link tables meet the rules of
  * uactopo.h, and each rule rejects the graph it names.

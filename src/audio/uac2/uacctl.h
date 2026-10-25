@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original UAC2 scalar controls, USB-IF Audio2 September2026 chapter5.
  * No Windows dependency, allocation, packed structs or unaligned loads.

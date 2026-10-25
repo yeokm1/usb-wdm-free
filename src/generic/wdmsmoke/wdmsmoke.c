@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-2.0-only
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * wdmsmoke - a disposable WDM function driver that proves the build
  * chain and the basic PnP lifetime (build.md section 6). It attaches to

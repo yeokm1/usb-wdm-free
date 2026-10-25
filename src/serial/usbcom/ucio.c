@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * ucio.c - USBCOM.SYS port I/O: the URB pump, the direct-call table the
  * VxD uses (ucif.h), pipe resets and teardown (design 6.2, 7.9, 7.10).

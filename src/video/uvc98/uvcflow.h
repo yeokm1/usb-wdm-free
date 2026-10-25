@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original asynchronous synthetic-stream policy; no Windows objects/USB.
  * All operations require one external lock. Request/stream addresses are

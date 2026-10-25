@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original stream planning over a parsed UAC 2.0 function (uacdesc.h):
  * which formats a direction offers, which alternate carries a format at

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Direct actual-player host regression. All audio, time, report-file and
  * event operations below are mocks; no audio device or A: is accessed.

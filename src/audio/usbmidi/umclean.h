@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original Windows 98 cleanup dispatcher RESEARCH; no DDK sample sources.
  * Not integrated: synchronous worker-triggered unload may self-join.

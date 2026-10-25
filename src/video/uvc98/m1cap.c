@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original ROOT\UVCSIM1-only user-mode KS read diagnostic. No camera/USB.
  * Public ks.h/ksmedia.h, SetupAPI, KsCreatePin and KS IOCTL documentation.

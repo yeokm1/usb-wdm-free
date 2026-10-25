@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original MIDIStreaming descriptor parser from USB-IF MIDI 1.0 section 6
  * (Tables 6-1..6-7). Tolerance rules follow the behaviour the design cites

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # The model lines of USBCOM.INF (98 SE/ME) and USBCDC.INF (2000 to 8), derived
 # from boardids.txt (owner decisions in docs/design/serial.md 13). Used by the

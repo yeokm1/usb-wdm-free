@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 rem Copyright (C) 2026 Yeo Kheng Meng
 rem Original experimental x86 STREAM.SYS miniport M2 (UVC over USB), not a release package.
 setlocal EnableDelayedExpansion

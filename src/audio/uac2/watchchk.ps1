@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
 # Isolated guest safety check: recompiles all four native source units with
 # watchdog/cleanup changes and never overwrites ordinary package outputs.

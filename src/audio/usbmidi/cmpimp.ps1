@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Compares two DUMPBIN /IMPORTS reports of binaries built here: the driver
 # as linked with the 2000 DDK libraries and the 98 SE DDK link probe. Every

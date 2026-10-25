@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Original Windows 2000 form of uvc98 (UVCM298.INF is the 98 SE / ME form):
 ; USB Video Class 1.0 to 1.5 cameras, matched by their video function's

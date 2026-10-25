@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original PROBE/COMMIT negotiation sequence (UVC 1.1 section 4.3.1.1;
  * docs/design/uvc.md section 5.2) over the bounded descriptor model and

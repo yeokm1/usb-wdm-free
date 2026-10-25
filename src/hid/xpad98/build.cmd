@@ -1,5 +1,5 @@
 @echo off
-rem SPDX-License-Identifier: GPL-2.0-only
+rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
 rem build.cmd <wdmx86|wdm64> <free|checked|trace>
 rem   trace: wdmx86 only, a free build that also writes a trace to QEMU's

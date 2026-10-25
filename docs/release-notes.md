@@ -4,6 +4,39 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.1 (2026-10-25): `ax88179`
+
+Release 0.1.0 plus `ax88179`, the ASIX AX88179 / AX88178A USB Gigabit
+Ethernet driver (`AX179F.SYS`, NDIS 5.0 with a WDM lower edge), in
+`free/net/ax88179/w98se-me/` (`AX179F98.INF`) and
+`free/net/ax88179/w2k/` (`AX179F.INF`). Every other file under `free/`
+is 0.1.0's, byte for byte. `ax88179` is version 0.1.1 (`DriverVer`
+10/25/2026,0.1.1.0); the other drivers stay 0.1.0.
+
+- **Status**: "Built, not tested", as every folder: the owner's AX88179
+  passed through to Windows in QEMU, never on a real PC. On 98 SE under
+  xHCI98 and under NUSB's EHCI, and on ME under xHCI98: install, DHCP,
+  pings to 4000 bytes, removal under traffic and replug passed, with the
+  trace build of the same source. `STAGE.TXT` stages `AX179F98.INF` on
+  98 SE and ME; the 2000 INF is copy only (no leg on 2000).
+  [Release record](testing/2026-10-25-release-0.1.1.md).
+- **Signing**: x86 only, unsigned, no catalog.
+- **Known limitations**:
+  - In the first session after the dongle was plugged in, the chip
+    delivered every received frame with its Ethernet FCS (seen once
+    under NUSB's EHCI on 98 SE, and in a host-side run before). The
+    driver checks each frame and strips a valid FCS, so traffic works,
+    and it writes one NDIS error-log entry (hardware failure) per adapter
+    when it happens. What the chip's state is, and whether the settle
+    cycle at start avoids it, is not known: QEMU cannot power the dongle
+    off, so the first session after a physical plug is owed on a bench
+    ([ax88179-fcs](testing/2026-10-22-ax88179-fcs.md)).
+  - Windows 2000 not evaluated; ME under xHCI98 only; no bulk
+    throughput test; standby and resume, cable unplug, disable and
+    enable and `NetworkAddress` not run.
+  - The listed AX88179 / AX88178A adapters only, by their VID/PID; the
+    driver is bound whole to the device.
+
 ## Release 0.1.0 (2026-10-24): the first driver folders
 
 `uac2`, `usbmidi`, `uvc98`, `usbcom`, `cdcnet`, `rtl815x`, `xpad98`,

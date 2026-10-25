@@ -44,6 +44,10 @@ cdb53be87dc83f8cef3e2f838f0e059aeebf21c6ea098ce61a925d81312841ea  free/hid/xpad9
 5669dfaa14ff01a361267c41ba5236cb051259abf083e29bce31fe46cb0514e3  free/hid/xpad98/wxp-x64/xpxpv.inf
 3b9d29b45d187742174b67776e9d2fce88ce19b45cf6a72690a4534b7258d40f  free/hid/xpad98/wxp/xpad98.sys
 5669dfaa14ff01a361267c41ba5236cb051259abf083e29bce31fe46cb0514e3  free/hid/xpad98/wxp/xpxpv.inf
+d8f81328cc8c88b93d134ac3f4034ee3ff9c271551e5608e089117434ca01dea  free/net/ax88179/w2k/AX179F.INF
+3643d0dfdfc7e6dff0f1e23b3945dad3c2041f6a416abbd4a8d8a60d1ad636bd  free/net/ax88179/w2k/AX179F.SYS
+3643d0dfdfc7e6dff0f1e23b3945dad3c2041f6a416abbd4a8d8a60d1ad636bd  free/net/ax88179/w98se-me/AX179F.SYS
+515d0053a1bcedb7c7304685926553968b5cfbc8a7e8d2ed67b9b2ad2f9c696d  free/net/ax88179/w98se-me/AX179F98.INF
 0ddea6311dcd15d20936904ba3db6f5146bfa415bfbc3a98ebb43a9d099319fb  free/net/cdcnet/w2k-xp/CDCNET.INF
 e2467df780ca9cc4a9e6742d6e0b00235eff4ecf736b9a781bb99e32ac04b573  free/net/cdcnet/w2k-xp/CDCNET.SYS
 b33ef57860603a85947afd2ee01a80d749bb2582eff3624551e9f8cdb0eb6f25  free/net/cdcnet/w2k-xp/CDCRNDIS.INF

@@ -18,7 +18,7 @@ These drivers are experimental. They may not work with every device and can make
 | `usbcom` | USB CDC-ACM serial, as COM ports | 98 SE, ME; 2000 to 8 and x64 as an INF for Windows' `usbser.sys` |
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
 | `rtl815x` | Realtek RTL8152/8153 USB Ethernet | 98 SE, ME, 2000 |
-| `ax88179` | ASIX AX88179 USB Ethernet (not in this release yet) | 98 SE, ME, 2000 |
+| `ax88179` | ASIX AX88179 and AX88178A USB Gigabit Ethernet | 98 SE, ME, 2000 |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
@@ -88,9 +88,9 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.0` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.1` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.0). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.1). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers

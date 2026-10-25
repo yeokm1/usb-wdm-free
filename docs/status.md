@@ -53,6 +53,8 @@ unsigned and x64 test-signed, every folder "Built, not tested" (no leg on a
 real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 `free/tools/camcheck/` carries the CamCheck webcam preview (owner,
 2026-10-24), a tool, not a driver package.
+Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
+staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
 Earlier: `noaud` 1.0.0.0, an INF-only Windows 98 SE workaround
 (below and [docs/release-notes.md](release-notes.md)). Wave 1 has experimental source builds: UAC2 X4 M1
 integration (simulated playback passes; physical playback pending), the USB floppy INFs and the NT CDC-ACM INF. Build and test
@@ -180,7 +182,7 @@ it is tested there too.
 | `usbmidi` | Built, not tested | Built, not tested (1) | Built, not tested | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) |
 | `cdcnet` | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Not a target | Not a target |
 | `rtl815x` | Built, not tested | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
-| `ax88179` | Planned | Planned | Planned | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
+| `ax88179` | Built, not tested | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
 | `usbcom` | Built, not tested | Built, not tested | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) |
 | `xpad98` | Built, not tested | Built, not tested | Built, not tested | Built, not tested (3) | Built, not tested (3) | Built, not tested (3) | Built, not tested | Not a target (8) | Not a target (8) | Not a target (8) | Not a target (8) |
 | `usbprn` | Planned | Planned (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |

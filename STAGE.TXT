@@ -90,6 +90,11 @@ PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): adapters with a Realte
 COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device
 COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
 
+# ---- net/ax88179
+PACKAGE  | net/ax88179 | DEVICE | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip
+STAGE | W98SE WME | free/net/ax88179/w98se-me/AX179F98.INF | real AX88179 via VM: install, DHCP, ping and removal legs passed on 98 SE under xHCI98 and NUSB EHCI, on ME under xHCI98
+COPY  | W2K | free/net/ax88179/w2k/AX179F.INF | copy only: no leg on 2000
+
 # ---- hid/xpad98
 PACKAGE  | hid/xpad98 | DEVICE | Game pads (xpad98): for Xbox 360 and Xbox One controllers
 STAGE | W98SE WME | free/hid/xpad98/w98se-me/xp98me.inf | xHCI98, UHCI and NUSB EHCI legs passed (simulated pads)
@@ -116,6 +121,7 @@ COPY  | W98SE | free/audio/noaud/w98se/NOAUD98.INF | opt-in (owner, 2026-10-23):
 # ---- Relations (set-qualified)
 EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids
 EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
+EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
 EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | both bind the Play and Charge Kit 045E:028F
 COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: xpad98 takes the pads outside x360c list and the Xbox One pads
 COEXISTS | free:video/uvc98 | free:audio/noaud | W98SE | one webcam, different interfaces: uvc98 the video function, noaud the microphone

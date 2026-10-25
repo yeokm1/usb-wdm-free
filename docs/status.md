@@ -254,7 +254,6 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | 7 x86 | Windows' EHCI | emulated: `uacemu.py` `x4full`, build 16, TCG | playback 48 and 44.1 kHz PASS; capture PASS, 1 kHz tone, 2 of 2 | [uac2-profiles](testing/2026-10-24-uac2-profiles.md) |
 | XP SP3 x86 | Windows' EHCI | real device via VM: Sound Blaster X4, build 16, TCG | no STOP 0x7E; 2 s plays 3 of 3 and a 30 s play PASS; unplug during playback survives; replug and play PASS | [uac2-profiles](testing/2026-10-24-uac2-profiles.md) |
 | 7 x86 | Windows' EHCI | real device via VM: Sound Blaster X4, build 16, TCG | 2 s play PASS; 30 s soak PASS 2 of 2 (e2's failure not reproduced; a real 7 PC settles it) | [uac2-profiles](testing/2026-10-24-uac2-profiles.md) |
-
 | ME | xHCI98 3.1.0.0 | emulated: `uacemu.py` `x4full` over `usb-redir`, the released 0.1.0 `uac2wdm.sys` and `uac2wdm.inf` (`w98se-me`) | the INF in ME's INF folder before the first arrival: installed at the plug (KS file prompts skipped), `waveOut=1`, `waveIn=1`; playback 48 and 44.1 kHz 8/8 PASS, signal at the simulator; capture PASS (1 kHz tone); unplug clean; no freeze at the first arrival | [release 0.1.1](testing/2026-10-25-release-0.1.1.md) |
 
 No 2000 leg; ME under xHCI98 only. Real PC: none yet - owner's bench session.

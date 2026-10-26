@@ -1,4 +1,4 @@
-USBFLOP.INF - USB floppy drives (UFI), 98 SE and ME (usb-wdm-free 0.1.0)
+USBFLOP.INF - USB floppy drives (UFI), 98 SE and ME (usb-wdm-free 0.1.2)
 ========================================================================
 
 An INF only: it binds Windows' own USB storage driver (USBSTOR.SYS, with

@@ -20,7 +20,7 @@ $bad = @{
     'missing AMD64 section' = $source.Replace('[Models.NTamd64]','[Renamed]')
     'unresolved string' = $source.Replace('%Generic%=ACM','%Missing%=ACM')
     'duplicate section' = $source + "`n[Version]`nClass=USB`n"
-    'invalid calendar date' = $source.Replace('10/24/2026','02/30/2026')
+    'invalid calendar date' = $source.Replace('10/26/2026','02/30/2026')
     'non-ASCII text' = $source + [char]0x100
     'composite board whole on XP' = $source.Replace('%Stm32%=ACM,USB\VID_0483&PID_5740' + "`r`n%Ch9102%",
         '%Stm32%=ACM,USB\VID_0483&PID_5740' + "`r`n%Arduino%=ACM,USB\VID_2341&PID_8036`r`n%Ch9102%")

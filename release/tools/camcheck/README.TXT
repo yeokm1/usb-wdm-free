@@ -1,4 +1,4 @@
-CAMCHECK.EXE - CamCheck webcam preview (usb-wdm-free 0.1.0)
+CAMCHECK.EXE - CamCheck webcam preview (usb-wdm-free 0.1.2)
 ===========================================================
 
 CamCheck shows a webcam's live picture, to check that the camera and its

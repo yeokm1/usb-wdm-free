@@ -18,7 +18,7 @@ $badP = @{
     'wrong destination'    = $p.Replace('UsbCom.Copy=10,System32\Drivers', 'UsbCom.Copy=11')
     'missing string'       = $p.Replace('%Pico%=', '%Nope%=')
     'NT signature'         = $p.Replace('$CHICAGO$', '$Windows NT$')
-    'bad date'             = $p.Replace('10/24/2026', '13/40/2026')
+    'bad date'             = $p.Replace('10/26/2026', '13/40/2026')
     'non-ASCII'            = $p + [char]0x100
     'duplicate section'    = $p + "`n[Strings]`nX=""y""`n"
     'manual id broadened'  = $p.Replace('USBCOM\MANUAL_CDC_ACM', 'USB\Class_02&SubClass_00&Prot_00')

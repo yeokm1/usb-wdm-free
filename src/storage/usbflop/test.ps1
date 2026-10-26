@@ -14,7 +14,7 @@ foreach ($variant in @('nt','9x','me')) {
         'CBI model uses CB' = $text.Replace('%CBI%=UFI_CBI','%CBI%=UFI_CB')
         'foreign executable copy' = $text.Replace('[Strings]', "[CopyPayload]`nforeign.sys`n[Strings]")
         'duplicate section' = $text + "`n[Version]`nClass=USB`n"
-        'bad date' = $text.Replace('10/24/2026','02/30/2026')
+        'bad date' = $text.Replace('10/26/2026','02/30/2026')
         'undefined string' = $text.Replace('Provider="usb-wdm-free"','Renamed="usb-wdm-free"')
         'non-ASCII' = $text + [char]0x100
     }

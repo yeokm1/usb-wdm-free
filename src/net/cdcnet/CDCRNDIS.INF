@@ -16,7 +16,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models,NTx86.5.1,NTx86.6.0,NTx86.6.1,NTamd64,NTamd64.6.0,NTamd64.6.1

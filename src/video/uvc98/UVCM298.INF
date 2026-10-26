@@ -13,7 +13,7 @@ Provider=%Provider%
 ; The KS and capture files that Needs= pulls come from the Windows CD:
 ; name its layout files, as the stock wdma_usb.inf does.
 LayoutFile=layout.inf, layout1.inf, layout2.inf
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 [Manufacturer]
 %Provider%=Models
 [Models]

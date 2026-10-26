@@ -55,6 +55,9 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.2 (owner, 2026-10-26): every package re-released under
+GPL-2.0-or-later, `rtl815x` with its rewritten chip core
+([release 0.1.2](testing/2026-10-26-release-0.1.2.md)).
 Earlier: `noaud` 1.0.0.0, an INF-only Windows 98 SE workaround
 (below and [docs/release-notes.md](release-notes.md)). Wave 1 has experimental source builds: UAC2 X4 M1
 integration (simulated playback passes; physical playback pending), the USB floppy INFs and the NT CDC-ACM INF. Build and test

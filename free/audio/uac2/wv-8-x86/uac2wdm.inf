@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Experimental UAC 2.0 WaveCyclic/USB playback and capture: the formats
 ; and rates the device describes. 98 SE, XP and 7 x86 run in VMs; others
@@ -8,7 +8,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86

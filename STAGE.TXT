@@ -87,7 +87,7 @@ COPY  | WVISTA64 W7X64 | free/net/cdcnet/wv-7-x64/CDCRNDIS.INF | binds Windows R
 
 # ---- net/rtl815x
 PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or RTL8153 chip
-COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device
+COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device; chip core rewritten in 0.1.2
 COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
 
 # ---- net/ax88179

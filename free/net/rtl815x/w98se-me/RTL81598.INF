@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ;
 ; RTL81598.INF - usb-wdm-free RTL815X: Realtek RTL8152/RTL8153 USB
@@ -23,7 +23,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models

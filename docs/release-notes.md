@@ -4,6 +4,30 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.2 (2026-10-26): GPL-2.0-or-later
+
+The repository moved from GPL-2.0-only to GPL-2.0-or-later (owner,
+2026-10-25 and 2026-10-26). Every package whose released files carried
+the old licence text is re-released: `uac2`, `usbmidi`, `cdcnet`,
+`usbcom`, `usbflop`, `uvc98`, `ax88179` and `rtl815x` at 0.1.2.0
+(`DriverVer` 10/26/2026), `noaud` at 1.0.1.0, and CamCheck's texts. Their
+INFs change only in the licence line and `DriverVer`; their images are
+0.1.1's, byte for byte (the six x64 images still the owner's signed
+0.1.0 builds), except `rtl815x`. `xpad98` and `libusb0` are unchanged.
+
+- **`rtl815x` 0.1.2.0**: its chip core is rewritten from the chips'
+  register facts (`docs/design/ethernet.md` section 6.4); against the
+  earlier core, under one register model, every control request, sleep
+  and result is the same. Simulator only: RTL8153 under xHCI98 and NUSB's
+  EHCI, RTL8153B and RTL8152 under xHCI98 on 98 SE, DHCP and ping
+  ([rewrite](testing/2026-10-25-rtl815x-rewrite.md),
+  [0.1.2](testing/2026-10-26-rtl815x-0.1.2.md)). Still copy only in
+  `STAGE.TXT`.
+- **Status**: unchanged for every other package; "Built, not tested" as
+  before. [Release record](testing/2026-10-26-release-0.1.2.md).
+- **Signing**: no new signature: the x64 images are the signed 0.1.0
+  ones; x86 unsigned; no catalog.
+
 ## Release 0.1.1 (2026-10-25): `ax88179`
 
 Release 0.1.0 plus `ax88179`, the ASIX AX88179 / AX88178A USB Gigabit

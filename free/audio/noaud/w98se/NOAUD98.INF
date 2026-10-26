@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Opt-in Windows 98 SE workaround (owner, 2026-10-23): binds no driver to
 ; the USB Audio Class 1.0 function of the listed devices, so 98 SE's own
@@ -15,7 +15,7 @@ Signature="$CHICAGO$"
 Class=USB
 ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
-DriverVer=10/23/2026,1.0.0.0
+DriverVer=10/26/2026,1.0.1.0
 [Manufacturer]
 %Provider%=Models
 [Models]

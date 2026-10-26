@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Release 0.1.0, for ME only. Copy the two parent drivers from ME's own
 ; layout/media; no Microsoft file is included with this package. ME's
@@ -9,7 +9,7 @@ Class=USB
 ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf,layout1.inf,layout2.inf
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models

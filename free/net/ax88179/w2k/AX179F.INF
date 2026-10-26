@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ;
 ; AX179F.INF - usb-wdm-free AX179F: ASIX AX88179 / AX88178A USB Gigabit
@@ -18,7 +18,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/25/2026,0.1.1.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models

@@ -1,4 +1,4 @@
-; SPDX-License-Identifier: GPL-2.0-only
+; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; x64 copy of ..\uac2wdm.inf, identical but for the Signature and these three
 ; lines: 64-bit Windows refuses a $CHICAGO$ INF (7 x64 pnputil: "Invalid INF
@@ -11,7 +11,7 @@ Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=10/26/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86

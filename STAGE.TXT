@@ -70,7 +70,7 @@ STAGE | W2K | free/video/uvc98/w2k/UVCM2.INF | Windows EHCI legs passed (simulat
 # ---- serial/usbcom
 PACKAGE  | serial/usbcom | CLASS | USB serial (usbcom): CDC ACM serial ports and modems
 STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOMP.INF | its COM port (USBCOM\COMPORT)
-STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOM.INF | the USB device; xHCI98, UHCI and NUSB EHCI legs passed
+STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOM.INF | the USB device; xHCI98, UHCI and NUSB EHCI legs passed (listed boards); the CDC-ACM class match from 0.1.3: ranking read from the INFs, no leg
 STAGE | W7X64 | free/serial/usbcom/w2k-8/USBCDC.INF | binds Windows usbser.sys; 7 x64 echoes passed; 2000 and XP copy only (owner, 2026-10-24)
 
 # ---- net/cdcnet

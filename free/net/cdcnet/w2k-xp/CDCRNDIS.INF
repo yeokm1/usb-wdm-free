@@ -16,7 +16,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=10/26/2026,0.1.3.0
 
 [Manufacturer]
 %Provider%=Models,NTx86.5.1,NTx86.6.0,NTx86.6.1,NTamd64,NTamd64.6.0,NTamd64.6.1
@@ -33,11 +33,12 @@ DriverVer=10/26/2026,0.1.2.0
 %Rndis%=Rndis5,USB\Class_EF&SubClass_01&Prot_01
 %Rndis%=Rndis5,USB\Class_EF&SubClass_04&Prot_01
 
+; 7: not EF/04/01, which Windows' own rndiscmp.inf matches (owner,
+; 2026-10-26; build.md section 7.1).
 [Models.NTx86.6.1]
 %Rndis%=Rndis6,USB\Class_02&SubClass_02&Prot_FF
 %Rndis%=Rndis6,USB\Class_E0&SubClass_01&Prot_03
 %Rndis%=Rndis6,USB\Class_EF&SubClass_01&Prot_01
-%Rndis%=Rndis6,USB\Class_EF&SubClass_04&Prot_01
 
 [Models.NTamd64]
 %Rndis%=Rndis5,USB\Class_02&SubClass_02&Prot_FF
@@ -55,7 +56,6 @@ DriverVer=10/26/2026,0.1.2.0
 %Rndis%=Rndis6,USB\Class_02&SubClass_02&Prot_FF
 %Rndis%=Rndis6,USB\Class_E0&SubClass_01&Prot_03
 %Rndis%=Rndis6,USB\Class_EF&SubClass_01&Prot_01
-%Rndis%=Rndis6,USB\Class_EF&SubClass_04&Prot_01
 
 [ControlFlags]
 ExcludeFromSelect=*

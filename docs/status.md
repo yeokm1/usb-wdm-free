@@ -55,6 +55,11 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.3 (owner, 2026-10-26): `usbcom` matches the CDC-ACM class on
+98 SE, ME and 2000, where Windows has no CDC-ACM driver of its own, and
+`cdcnet`'s `CDCRNDIS.INF` leaves 7's own RNDIS match alone
+([release 0.1.3](testing/2026-10-26-release-0.1.3.md); the class matches per
+system: [build.md section 7.1](design/build.md)).
 Release 0.1.2 (owner, 2026-10-26): every package re-released under
 GPL-2.0-or-later, `rtl815x` with its rewritten chip core
 ([release 0.1.2](testing/2026-10-26-release-0.1.2.md)).

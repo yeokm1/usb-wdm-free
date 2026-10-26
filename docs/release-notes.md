@@ -4,6 +4,29 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.3 (2026-10-26): class matches
+
+Each class driver matches its USB class on the systems where Windows has
+no driver of its own for that class, and lists devices elsewhere, so
+Windows' own class driver stays the default there (owner, 2026-10-26;
+`docs/design/build.md` section 7.1 has the table and its sources). `uac2`
+(USB Audio Class 2.0, every target), `usbmidi` (98 SE and 2000), `cdcnet`,
+`usbflop` and `uvc98` already did. New: `usbcom` 0.1.3.0 matches any
+CDC-ACM function a bus presents on its own (`USB\Class_02&SubClass_02`)
+on 98 SE and ME (`USBCOM.INF`) and on 2000 (`USBCDC.INF`, Windows' own
+`usbser.sys`), as it did on XP and later; the listed boards keep their
+lines. `cdcnet`'s `CDCRNDIS.INF` 0.1.3.0 no longer claims
+`USB\Class_EF&SubClass_04&Prot_01` on 7, which Windows 7's own RNDIS INF
+matches. Every other file is 0.1.2's.
+
+- **Legs**: on 98 SE under xHCI98, a simulated UAC 2.0 device and a lone
+  MIDIStreaming interface at ids no INF lists got `uac2` and `usbmidi` by
+  their class lines over Windows' `usbaudio.sys` (`USB\CLASS_01`) at the
+  first arrival, with both attached at boot (a hot plug after the desktop
+  hit the known 98 SE audio freeze). `usbcom`'s new class line: ranking
+  read from the INFs, no leg. [Release record](testing/2026-10-26-release-0.1.3.md).
+- **Signing**: no image changed; nothing signed.
+
 ## Release 0.1.2 (2026-10-26): GPL-2.0-or-later
 
 The repository moved from GPL-2.0-only to GPL-2.0-or-later (owner,

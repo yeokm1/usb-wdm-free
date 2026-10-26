@@ -49,12 +49,17 @@ function Get-UsbcomModels([string]$Inf, [string]$Section, [string]$BoardIds) {
             [void]$m.Add(@($s, (& $id $r)))
             if ($r.Kind -eq 'composite') { [void]$m.Add(@($s, ((& $id $r) + '&MI_00'))) }
         }
+        # Owner, 2026-10-26 (xHCI98 roadmap 44.44): 98 SE and ME have no
+        # CDC-ACM COM-port driver of their own (serial.md 2.5, 5.4).
+        [void]$m.Add(@('Generic', 'USB\Class_02&SubClass_02'))
         [void]$m.Add(@('Manual', $UsbcomManualId))
     } elseif ($Section -eq 'Models') {                 # USBCDC, Windows 2000
         [void]$m.Add(@('Uno', 'USB\VID_2341&PID_0043'))
         [void]$m.Add(@('Uno', 'USB\VID_2A03&PID_0043'))
         [void]$m.Add(@('PicoWhole', 'USB\VID_2E8A&PID_000A'))
         foreach ($r in $rows) { [void]$m.Add(@((Get-BoardString $r), (& $id $r))) }
+        # As on XP: no in-box INF binds a CDC-ACM function (serial.md 2.5).
+        [void]$m.Add(@('Generic', 'USB\Class_02&SubClass_02'))
         [void]$m.Add(@('Manual', $UsbcomManualId))
     } else {                                            # USBCDC, XP and later
         [void]$m.Add(@('Uno', 'USB\VID_2341&PID_0043'))

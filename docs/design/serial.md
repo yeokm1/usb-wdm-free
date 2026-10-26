@@ -647,6 +647,26 @@ If 2000 fails, M4 adds an NT front end to `USBCOM.SYS` for 2000. It
 implements the `ntddser.h` IOCTL set with `serial.sys` semantics (section 7)
 and is installed with `msports.dll` as a Ports-class driver.
 
+### 5.4 The CDC-ACM class match on 98 SE, ME and 2000 (owner, 2026-10-26)
+
+Owner, 2026-10-26 (xHCI98 roadmap 44.44): a class driver matches its class
+where Windows has none of its own (build.md section 7.1). 98 SE, ME and
+2000 have no CDC-ACM COM-port driver (section 2.5), so `USBCOM.INF` (98 SE,
+ME) and `USBCDC.INF`'s 2000 section match `USB\Class_02&SubClass_02`, the
+CDC-ACM function, as `USBCDC.INF` already did on XP and later. Never bare
+`USB\Class_02`, which CDC Ethernet shares (section 5.3). The listed boards
+keep their lines; a hardware id still outranks the class line.
+
+What the line reaches: a CDC-ACM function that a bus presents on its own,
+as xHCI98 does for an IAD function (section 5.2), which gets the function
+class's compatible ids. A device of class 02 at the device level (the Uno
+R3's shape) reports `USB\Class_02&SubClass_00` and is not reached, as
+before. On a stack that splits a composite device per interface, the
+CDC communication interface alone would match; the driver could not reach
+the data interface there and would refuse its start (Code 10; not run),
+where no driver was found before. The Q5 exception (whole-device lines for the
+listed boards) is unchanged.
+
 ## 6. USB side
 
 ### 6.1 Finding the CDC-ACM function

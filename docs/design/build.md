@@ -295,6 +295,36 @@ Nothing under `free/` is edited by hand. The release gate also checks that
 released batch files and INFs get the encoding and line endings required
 by the target and their package design.
 
+### 7.1 Class matches, per system (owner, 2026-10-26)
+
+Owner, 2026-10-26 (xHCI98 roadmap 44.44): a class driver here matches its
+USB class's compatible ids, not only the devices read with it, on every
+system where Windows has no driver of its own for that class; where Windows
+has one, the INF lists devices only, so Windows' own driver stays the
+default. Each class line is as specific as the class defines the function
+(class and subclass, and protocol where it names the function, as UAC 2's
+`0x20`), so on 98 SE and ME it outranks Windows' broader matches (the
+in-box `wdma_usb.inf`'s bare `USB\CLASS_01`). The vendor-chip drivers
+(`ax88179`, `rtl815x`, `xpad98`) and `noaud` stay device-listed.
+
+| Driver (class) | System | Windows' own driver for the class | Class line here | Source |
+|---|---|---|---|---|
+| `uac2` (UAC 2.0, `01/0x/20`) | 98 SE to 8, x64 XP to 8 | None: Microsoft's first is `usbaudio2.sys`, Windows 10 1703. Every target's `wdma_usb.inf` binds `usbaudio.sys` (UAC 1.0) by the bare `USB\CLASS_01` | `USB\Class_01&SubClass_00&Prot_20`, `&SubClass_01&Prot_20`, everywhere (since 0.1.0) | uac2.md section 1 (Microsoft Learn "USB Audio 2.0 Drivers"; the targets' `wdma_usb.inf`, ME's unread) |
+| `usbmidi` (MIDIStreaming, `01/03/00`) | 98 SE, 2000 | None: `usbaudio.sys` there is audio only | `USB\Class_01&SubClass_03&Prot_00` (since 0.1.0) | usbmidi.md section 3.1 (Microsoft Learn "USB Audio Class System Driver (Usbaudio.sys)"; 98 SE and 2000 SP4 `wdma_usb.inf`) |
+| `usbmidi` | ME, XP to 8 | `usbaudio.sys` serves USB MIDI | none: listed devices only | the same (ME from the Microsoft page; its INF unread) |
+| `cdcnet` (CDC ECM `02/06/00`, NCM `02/0D/00`) | 98 SE to 7, x64 XP and 7 | None: no stock INF binds a CDC class id | the ECM and NCM function ids, everywhere (since 0.1.0) | ethernet.md section 2.1 |
+| `cdcnet` (RNDIS) | 98 SE, ME, 2000 | None in the box (Microsoft's RNDIS kit came with devices) | the four RNDIS function ids (since 0.1.0) | ethernet.md section 2.1 |
+| `cdcnet` (RNDIS) | XP, Vista, 7 | `usb8023.sys`/`rndismp.sys` in the box, no INF that matches the class (7: `rndiscmp.inf`, `EF/04/01` only) | `CDCRNDIS.INF` binds Windows' own driver by the class ids (since 0.1.0) | ethernet.md section 2.1 |
+| `usbcom` (CDC ACM, `02/02`) | 98 SE, ME | None: the in-box `usbcdc.inf` binds three modems by id, as modems | `USB\Class_02&SubClass_02` in `USBCOM.INF`: **new in 0.1.3** | serial.md sections 2.5 and 5.4 |
+| `usbcom` | 2000 | `usbser.sys` present, bound only as a modem's lower filter; no INF matches `USB\Class_02` | `USB\Class_02&SubClass_02` in `USBCDC.INF`'s 2000 section (Windows' own `usbser.sys`): **new in 0.1.3** | serial.md sections 2.5 and 5.4 |
+| `usbcom` | XP to 8 | as 2000 | `USB\Class_02&SubClass_02` in `USBCDC.INF` (since 0.1.0) | serial.md section 5.3 |
+| `usbflop` (UFI, `08/04/00`, `08/04/01`) | 98 SE (NUSB's `usbstor`), ME to 8 | No `usbstor.inf` matches `USB\Class_08&SubClass_04` in any form | the two UFI protocol ids, binding `usbstor.sys` (since 0.1.0) | floppy.md section 2.2 |
+| `uvc98` (UVC, `0E/01`, `0E/03`) | 98 SE, ME, 2000 | None (`usbvideo.sys` from XP SP2) | the VideoControl and IAD function ids (since 0.1.0) | uvc.md section 2.2 |
+
+So 0.1.3 changes `usbcom` only; every other class driver already matched
+its class on the systems where Windows has none. Bare class ids are never
+used: `USB\Class_02` is shared by CDC ACM and CDC Ethernet.
+
 ## 8. Test records and remaining decisions
 
 Proposed records live under `docs/testing/`. A run names the date, source

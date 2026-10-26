@@ -10,7 +10,7 @@ Signature="$CHICAGO$"
 Class=Ports
 ClassGUID={4D36E978-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=10/26/2026,0.1.3.0
 
 [Manufacturer]
 %Provider%=Models

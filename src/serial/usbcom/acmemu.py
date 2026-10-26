@@ -489,10 +489,16 @@ def main():
                     help='send no zero-length packet after a full-packet echo: after one, no '
                          'further IN request from Windows 2000 usbser.sys appeared during the '
                          'failing read (2000 legs use this)')
+    ap.add_argument('--ids', metavar='VID:PID',
+                    help="present these hex ids instead of the profile's (the class match legs: "
+                         "an unlisted board of the same shape, e.g. 1209:0001, a pid.codes test id)")
     ap.add_argument('--no-bulk32', action='store_true',
                     help='do not offer 32-bit bulk lengths: QEMU then does not pipeline '
                          '(combine) bulk IN packets; not usable on xHCI ports')
     args = ap.parse_args()
+    if args.ids:
+        vid, pid = (int(x, 16) for x in args.ids.split(':'))
+        PROFILES[args.profile] = (vid, pid)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
         server.bind(('127.0.0.1', args.port))

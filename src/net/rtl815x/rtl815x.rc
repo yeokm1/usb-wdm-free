@@ -15,10 +15,10 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "usb-wdm-free\0"
             VALUE "FileDescription", "usb-wdm-free RTL815X USB Ethernet (Realtek RTL8152, RTL8153)\0"
-            VALUE "FileVersion", "0.1.0.0\0"
+            VALUE "FileVersion", "0.1.2.0\0"
             VALUE "OriginalFilename", "rtl815x.sys\0"
             VALUE "ProductName", "usb-wdm-free\0"
-            VALUE "ProductVersion", "0.1.0.0\0"
+            VALUE "ProductVersion", "0.1.2.0\0"
         END
     END
     BLOCK "VarFileInfo"

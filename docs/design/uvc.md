@@ -735,7 +735,7 @@ As xHCI98 builds its x86 drivers (`AGENTS.md` lines 201-202 there):
 | `src/video/uvc98/sys/uvcquirk.c` | Linux `drivers/media/usb/uvc/uvc_driver.c` device table; the quirk flags as facts, not code from `uvcvideo.h` (GPL-2.0) | GPL-2.0-or-later |
 | `src/video/uvc98/sys/uvcctrl.c` | Linux `drivers/media/usb/uvc/uvc_ctrl.c` (control info table) | GPL-2.0-or-later |
 | `src/video/uvc98/sys/uvc.h` | Not adapted: constants from the UVC 1.1 and 1.5 specifications, not from Linux `include/uapi/linux/usb/video.h` (GPL-2.0 WITH Linux-syscall-note) | - |
-| `src/video/uvcdec/turbo/` | libjpeg-turbo 3.2.0, four files patched for MSVC 6.0 (section 14.2; `NOTICE.md` rows for it and the configuration headers) | IJG licence; zlib licence for the SIMD; BSD-3-Clause for parts not built; all GPL-compatible |
+| `src/video/uvcdec/turbo/` | libjpeg-turbo 3.2.0, four files patched for MSVC 6.0 (section 14.2; `NOTICE.md` rows for it and the configuration headers) | IJG licence; zlib licence for the SIMD; BSD-3-Clause for parts not built (as `turbo/LICENSE.md` states them) |
 
 SPDX tags checked on the current Linux master: `uvc_driver.c`, `uvc_video.c`,
 `uvc_ctrl.c`, `uvc_queue.c`, `uvc_status.c` are `GPL-2.0-or-later`;
@@ -970,8 +970,7 @@ replaced IJG libjpeg 9f, which the codec was first built on the same day.
   licence (`turbo/README.ijg`, kept unaltered), the SIMD code under the
   zlib licence, which `LICENSE.md` says the IJG licence subsumes there; the
   Modified BSD licence covers the TurboJPEG API, the programs and the build
-  system, none of which is built here. All are permissive and
-  GPL-compatible. A binary distribution states that the software "is based
+  system, none of which is built here. A binary distribution states that the software "is based
   in part on the work of the Independent JPEG Group" (the package README,
   `UVCDEC.INF` and the DLL's version resource do). `NOTICE.md` has the
   rows.

@@ -1,7 +1,7 @@
 SPDX-License-Identifier: GPL-2.0-or-later
 Experimental QEMU Windows libusb host-poll candidate.
 Apply AFTER qemu-iso.patch to QEMU v11.1.0 commit84f07211cc5b4fc6a371559bf8a5de4fb068e648.
-Retains the original MIT permission/copyright notice below; the emulator as a whole is GPL2-compatible.
+Retains the original MIT permission/copyright notice below.
 Source-only tests and build do not establish physical correctness.
 
 /*

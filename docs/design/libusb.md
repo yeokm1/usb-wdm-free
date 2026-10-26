@@ -153,22 +153,22 @@ Public License (LGPL)"):
 
 | Part | Files | Licence as stated |
 |---|---|---|
-| Driver `libusb0.sys` | `src/driver/*.c`, `*.h` (Stephan Meyer, 2002-2005) | GPL, "version 2 of the License, or (at your option) any later version", i.e. GPL-2.0-or-later |
-| DLL, Windows parts | `src/windows.c`, `registry.c`, `install.c`, `install_filter.c`, `libusb_dyn.c`, `registry.h` | "GNU Lesser General Public License ... version 2 of the License, or (at your option) any later version" (there is no "Lesser" GPL version 2; the shipped `COPYING_LGPL.txt` is LGPL 2.1); treat as LGPL-2.1-or-later |
+| Driver `libusb0.sys` | `src/driver/*.c`, `*.h` (Stephan Meyer, 2002-2005) | GPL, "version 2 of the License, or (at your option) any later version" (recorded here as GPL-2.0-or-later) |
+| DLL, Windows parts | `src/windows.c`, `registry.c`, `install.c`, `install_filter.c`, `libusb_dyn.c`, `registry.h` | "GNU Lesser General Public License ... version 2 of the License, or (at your option) any later version"; the shipped `COPYING_LGPL.txt` is the LGPL version 2.1 text (recorded here as LGPL-2.1-or-later) |
 | DLL, libusb-0.1 core | `src/usb.c`, `descriptors.c`, `error.c` (Johannes Erdfelt, 2000-2003), and `usb.h`, `usbi.h`, `error.h` (no header) | "This library is covered by the LGPL, read LICENSE for details", no version given |
 | INF wizard | `src/inf_wizard.c` | GPL-2.0-or-later |
 | Test programs | `tests/testlibusb.c` (no header), `testlibusb_win.c` | LGPL per `installer_license.txt` |
 | GCC-only header | `src/driver/usbdlib_gcc.h` | no header; a MinGW-era copy of DDK declarations. Not needed with a DDK build, and not to be copied |
 
-The SourceForge project page's metadata says "GPLv3, LGPLv3". That
-disagrees with every file header and is not a licence grant; the headers
-govern.
+The SourceForge project page's metadata says "GPLv3, LGPLv3"; the file
+headers say what the table quotes. This repository records each file by
+its header.
 
-All of this is compatible with this repository. The driver is
-GPL-2.0-or-later and is taken in as such. Owner, 2026-10-20: the DLL
-stays LGPL-2.1-or-later. Its callers include closed-source programs that
-load `libusb0.dll`, and relicensing it to GPL (which LGPL 2.1 section 3
-permits) would make shipping it with them questionable. The core files
+The driver files keep their header ("version 2 ... or (at your option)
+any later version") and are recorded as GPL-2.0-or-later. Owner,
+2026-10-20: the DLL stays under its LGPL headers (recorded as
+LGPL-2.1-or-later), because its callers include closed-source programs
+that load `libusb0.dll`. The core files
 whose header names no LGPL version are recorded as LGPL-2.1-or-later, the
 version shipped in the same package's `COPYING_LGPL.txt` (Owner,
 2026-10-20).
@@ -347,7 +347,8 @@ IOCTL interface and device naming byte for byte, or no existing program
 could use it. That is (b) with more work and less history. Rejected.
 
 **(d) Not worth it.** Against: the cost of (b) is small (below), the
-code is GPL-compatible, and the users (AVR programmers, V-USB gadgets)
+code's headers are GPL and LGPL "version 2 or later" (section 2.4), and
+the users (AVR programmers, V-USB gadgets)
 have no other 98 driver.
 
 ## 6. Decision: (b), from 0.1.12.2, for 98 SE and ME

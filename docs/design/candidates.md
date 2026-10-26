@@ -158,7 +158,7 @@ a camera as a drive letter is a different and much larger project (a
 synthetic file system under IOS) and is not proposed.
 
 **Reference.** No Linux kernel driver; libgphoto2's `camlibs/ptp2`
-(LGPL-2.0-or-later per `ptp.c`'s header, which allows use under GPL-2.0)
+(LGPL-2.0-or-later per `ptp.c`'s header)
 holds the PTP protocol and per-vendor quirks. QEMU has `usb-mtp`
 (`hw/usb/dev-mtp.c`), an MTP responder over a host directory, but it is
 not in this host's Windows QEMU 11.1 build (`-device help` does not list

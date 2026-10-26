@@ -216,7 +216,7 @@ under the IJG licence (`turbo/README.ijg`); the SIMD code is under the zlib
 licence, which `LICENSE.md` says the IJG licence subsumes for the libjpeg
 API library; the Modified (3-clause) BSD licence covers the TurboJPEG API,
 the applications and the build system, none of which is built here, and is
-listed in `LICENSE.md`. All are permissive and GPL-compatible. For binaries,
+listed in `LICENSE.md`. For binaries,
 `LICENSE.md` asks only for the statement that the software "is based in
 part on the work of the Independent JPEG Group" when, as here, neither the
 TurboJPEG API nor its programs are included; this file, `UVCDEC.INF` and

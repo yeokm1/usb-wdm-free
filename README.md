@@ -53,7 +53,7 @@ that Windows.
 | `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
-| `rtl815x` | Simulator only | Not evaluated | Not evaluated | - | - | - | - |
+| `rtl815x` | Simulator only | Not evaluated | Not evaluated | Not evaluated | Not evaluated | Not evaluated | - |
 | `ax88179` | Real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |

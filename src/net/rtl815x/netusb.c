@@ -584,17 +584,14 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
         }
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (!NT_SUCCESS(status)) Fault(d, status, usb);
         else d->Recoveries = 0;
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
     } else {
         void *packets[NET_TX_BATCH];
         ULONG count = 0;
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (NT_SUCCESS(status) && s->Stage == TX_DATA && s->Zlp && d->Open) {
             s->Stage = TX_ZLP_READY;   /* the ZLP before any later payload */
         } else {
@@ -605,11 +602,17 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
             if (!NT_SUCCESS(status)) Fault(d, status, usb);
             else d->Recoveries = 0;
         }
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
         if (count) d->Cb.TxDone(d->Cb.Context, packets, count, NT_SUCCESS(status));
     }
     Pump(d);
+    /* The IRP stays counted until here, its slot free since above: Quiesce,
+     * and so the free in NetUsbStop, waits for this routine's last use of
+     * the device and of the callbacks. Nothing touches d after the lock. */
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Outstanding--;
+    CheckDrained(d);
+    KeReleaseSpinLock(&d->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
@@ -1135,6 +1138,22 @@ void NetUsbStop(void *device)
 void NetUsbKick(void *device)
 {
     Pump(device);
+}
+
+/* NDIS 5.1's surprise-removal notice, as cdcnet's: the device is gone, so
+ * close the gate (nothing new is submitted) and let the worker report it.
+ * MiniportHalt follows and drains what is still outstanding. */
+void NetUsbSurpriseRemoved(void *device)
+{
+    NET_DEV *d = device;
+    KIRQL old;
+    if (!d) return;
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Gone = TRUE;
+    d->Open = FALSE;
+    d->Work |= WORK_RECOVER;
+    KeSetEvent(&d->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&d->Lock, old);
 }
 
 int NetUsbRequest(void *device, int request, nc_u32 value, const nc_u8 *data, nc_u32 length)

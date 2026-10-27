@@ -398,7 +398,7 @@ class Tests(CoreCase):
 
 # Chips the driver's core does not know yet (uwf-rtl-new, 2026-10-27): their
 # driver-core tests are expected to fail until the core's tables land.
-PENDING_CORE = {'8153d', '8156', '8156-7020', '8156b', '8156b-7400', '8157', '8159'}
+PENDING_CORE = {'8157', '8159'}
 
 MAC, USB = r.RTL_SPACE_MAC, 0
 

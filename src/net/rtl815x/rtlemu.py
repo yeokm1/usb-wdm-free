@@ -13,8 +13,8 @@ the PHY window at MAC 0xB000-0xBFFF behind MR_PHY_PAGE, the chip id in
 MR_TX_CONFIG, the bits the bring-up polls (CMD_RESET self-clearing,
 OOB_LIST_READY, OOB_FIFOS_EMPTY, TXC_EMPTY, BOOT_LOADED, the PHY reset bit,
 PATCH_GRANTED), the MAC address in MR_NODE_ID_SAVED (and MR_NODE_ID for the
-4C00), link in MR_LINK with an interrupt-IN report (IRQ_LINK) on each
-change, receive framing (record header, frame length with FCS, alignment,
+4C00), link in MR_LINK with an interrupt-IN report on each change (its
+IRQ_LINK bit is the link state: set up, clear down), receive framing (record header, frame length with FCS, alignment,
 several frames per bulk-IN transfer) and transmit framing. Register
 semantics follow rtltest.c's register-file model.
 
@@ -218,7 +218,8 @@ class Chip:
     def phy_written(self, addr, value):
         if addr == PR_MII:                     # BMCR
             if value & MIICTL_AN_RESTART or \
-                    (self.newer and (value & MIICTL_RESET or not value & MIICTL_AN_ENABLE)):
+                    (self.newer and (value & MIICTL_RESET or not value & MIICTL_AN_ENABLE or
+                                     (value ^ self.phy[addr // 2]) & MIICTL_POWERDOWN)):
                 self.autoneg += 1
             value &= ~MIICTL_RESET                     # the reset completes
         if addr == PR_PATCH_CMD:
@@ -311,6 +312,8 @@ class Chip:
         """(Mb/s, full duplex) of the link with a partner whose fastest speed
         is partner, from the PHY's control and advertisement; None if none."""
         bmcr, top = self.phy_word(PR_MII), min(self.top, partner)
+        if self.phy_state() != PHYST_LAN_ON:
+            return None                                # powered down or still in external init
         if not bmcr & MIICTL_AN_ENABLE:
             mbps = 100 if bmcr & MIICTL_SPEED100 else 1000 if bmcr & MIICTL_SPEED1000 else 10
             full = bool(bmcr & MIICTL_FULL)
@@ -338,7 +341,8 @@ class Chip:
             if full and autoneg and self.phy_word(PR_MII + 8) & ANADV_PAUSE:
                 word |= LNK_RX_FLOW | LNK_TX_FLOW        # the partner offers pause
             status |= MIIST_LINK | (MIIST_AN_DONE if autoneg else 0)
-            peer = (ANADV_10H | ANADV_10F | ANADV_100H | ANADV_100F | ANADV_PAUSE | 1) if autoneg else 0
+            peer = (ANADV_10H | ANADV_10F | (ANADV_100H | ANADV_100F if partner >= 100 else 0) |
+                    ANADV_PAUSE | 1) if autoneg else 0
             peer_gig = GIGST_PEER_1000_FULL if autoneg and partner >= 1000 else 0
             peer_xg = (XGST_PEER_2500 if partner >= 2500 else 0) | (XGST_PEER_5000 if partner >= 5000 else 0) | \
                 (XGST_PEER_10000 if partner >= 10000 else 0) if autoneg else 0
@@ -516,13 +520,17 @@ def config_descriptor(speed, kind=2):
     return bytes((9, kind)) + struct.pack('<HBBBBB', 9 + len(body), 1, 1, 0, 0xa0, 50) + body
 
 
-def bos_descriptor(kind):
-    """BOS at SuperSpeed: USB 2.0 extension (LPM), SuperSpeed capability,
-    and for a bcdUSB 0x0320 chip a SuperSpeedPlus capability of one
-    symmetric 10 Gb/s sublink (Gen 2x1)."""
-    caps = [bytes((7, 16, 2)) + struct.pack('<I', 0x02),
-            bytes((10, 16, 3, 0)) + struct.pack('<HBBH', 0x000e, 1, 10, 0x07ff)]
-    if kind.usb3 >= 0x0320:
+def bos_descriptor(kind, speed):
+    """BOS: the USB 2.0 extension (LPM); at SuperSpeed also the SuperSpeed
+    capability, and for a bcdUSB 0x0320 chip a SuperSpeedPlus capability of
+    one symmetric 10 Gb/s sublink (Gen 2x1). None at Full Speed (bcdUSB
+    0x0200)."""
+    if speed == 'full':
+        return None
+    caps = [bytes((7, 16, 2)) + struct.pack('<I', 0x02)]
+    if speed == 'super':
+        caps.append(bytes((10, 16, 3, 0)) + struct.pack('<HBBH', 0x000e, 1, 10, 0x07ff))
+    if speed == 'super' and kind.usb3 >= 0x0320:
         caps.append(bytes((20, 16, 0x0a, 0)) + struct.pack('<IHH', 1, 0x1100, 0) +
                     struct.pack('<II', 0x000a4030, 0x000a40b0))
     body = b''.join(caps)
@@ -550,7 +558,7 @@ class Model:
         self.config_desc = config_descriptor(self.speed)
         self.other = None if self.speed == 'super' else \
             config_descriptor('full' if self.speed == 'high' else 'high', 7)
-        self.bos = bos_descriptor(kind) if self.speed == 'super' else None
+        self.bos = bos_descriptor(kind, self.speed)
         self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
                         2: usb_string('%s Ethernet - SIMULATED' % kind.name)}
         self.bulk_max = bulk_size(self.speed)
@@ -621,19 +629,20 @@ class Model:
         if self.chip.newer:
             got = self.chip.negotiate(self.partner) if up else None
             if up and got is None:
-                self.log('no_common_speed', why=why, partner=self.partner)
-                self.totals['no_common_speed'] += 1
+                why = 'no_common_speed' if self.chip.phy_state() == PHYST_LAN_ON else 'phy_not_on'
+                self.log(why, partner=self.partner, phy_state=self.chip.phy_state())
+                self.totals[why] += 1
                 return
             self.chip.show_link(got, self.partner)
             self.link_mbps, self.link_full = got if got else (0, False)
-            if got and got[0] > 1000 and self.speed != 'super':
+            if got and got[0] > 1000 and self.speed != 'super':   # off Linux's default advertisement
                 self.totals['multigig_below_superspeed'] += 1
         else:
             self.chip.pla[MR_LINK] = (LNK_UP | self.chip.rate_bit | LNK_FULL) if up else 0
             self.link_mbps, self.link_full = (self.chip.kind.top, True) if up else (0, False)
         self.link = up
         self.log('link', up=up, why=why, mbps=self.link_mbps, full=self.link_full)
-        self.irq.append(bytes((IRQ_LINK, 0)))
+        self.irq.append(bytes((IRQ_LINK if up else 0, 0)))   # the bit is the link state
         self.flush_irq()
 
     def flush_irq(self):
@@ -683,11 +692,13 @@ class Model:
     def aggregate(self, length):
         """One bulk-IN transfer: record header + frame + FCS, each record
         aligned, as many as fit in length (one if UR_CTRL turns aggregation
-        off). The RTL8157/8159's 16-byte header carries the length in bits
+        off; on the newer chips, none more once the early size is reached).
+        The RTL8157/8159's 16-byte header carries the length in bits
         17-31 of its first dword; the others' 24-byte header in bits 0-14."""
         out = bytearray()
         desc_len, align = self.chip.rx_desc
         single = self.chip.usb_word(UR_CTRL) & CTRL_RX_AGG_OFF
+        early = self.chip.early_bytes()
         while self.rx:
             frame = self.rx[0]
             record = desc_len + len(frame) + 4
@@ -700,7 +711,7 @@ class Model:
             out += desc + frame + struct.pack('<I', zlib.crc32(frame))
             out += b'\xee' * (padded - record)
             self.totals['rx_frames'] += 1
-            if single:
+            if single or (early and len(out) >= early):
                 break
         if len(out) > length:
             out = out[:length]
@@ -735,7 +746,8 @@ class Model:
         """One bulk-OUT transfer: header + frame, each record aligned. The
         8-byte header has the length in bits 0-17 of its first dword; the
         RTL8157/8159's 16-byte one in bits 4-21 of its third, with the
-        signature 0x15 in bits 27-31 of its fourth."""
+        signature 0x15 in bits 27-31 of its fourth, and the same length in
+        bits 0-17 of its first, as Linux writes it."""
         frames, off = [], 0
         hlen, align = self.chip.tx_desc
         while off + hlen <= len(data):
@@ -746,7 +758,7 @@ class Model:
                 length = opts3 >> 4 & 0x3ffff
                 if opts4 != TX_SIGNATURE:
                     raise ValueError('transmit header without the signature')
-                if opts1 & 0x3ffff not in (0, length):
+                if opts1 & 0x3ffff != length:
                     raise ValueError('transmit header lengths disagree')
             if not length or off + hlen + length > len(data):
                 raise ValueError('transmit header length beyond the transfer')
@@ -802,10 +814,10 @@ class Model:
             status = 0                                  # U1/U2 enable features
         elif request in (48, 49) and rt == 0 and self.speed == 'super':
             status = 0                                  # SET_SEL, SET_ISOCH_DELAY
-        elif request == 5 and rt == 0xc0 and self.config:
+        elif request == 5 and rt == 0xc0:               # also unconfigured: Linux reads the id first
             got = self.chip.read(value, index, length)
             status, data = (0, got) if got is not None else (4, b'')
-        elif request == 5 and rt == 0x40 and self.config:
+        elif request == 5 and rt == 0x40:
             status = 0 if self.chip.write(value, index, payload) else 4
             if not status:
                 self.pump()

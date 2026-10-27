@@ -28,13 +28,16 @@ chips' power-up register values) are this model's choices and are marked
   1, bulk OUT endpoint 2, interrupt IN endpoint 3: what Linux checks
   [linux 8518-8547]; Linux selects the configuration whose first interface
   is class FF [linux 10456-10483], and the model has that one
-  configuration only. `--speed super` (the newer chips' default): bulk
+  configuration only. Vendor register requests are answered before a
+  configuration is chosen too: Linux reads the chip id to choose one
+  [linux 10464-10465, 10012-10017]. `--speed super` (the newer chips' default): bulk
   1024 bytes with a SuperSpeed companion (bMaxBurst 3, chosen), interrupt
   2 bytes, bInterval 8; a BOS with the USB 2.0 extension and the
   SuperSpeed capability. usbredir carries "super" as its fastest speed,
   so SuperSpeedPlus shows only in the descriptors (below). `--speed high`:
-  bcdUSB 0x0210, bulk 512, no BOS. Linux advertises 2.5G and faster only
-  when the USB link is SuperSpeed or faster [linux 10259-10280].
+  bcdUSB 0x0210, bulk 512, a BOS of the USB 2.0 extension only. Linux's
+  default advertisement has 2.5G and faster only when the USB link is
+  SuperSpeed or faster [linux 10259-10280].
 - PHY SRAM: two address/data pairs in the PHY, `PR_SRAM_ADDR`/`DATA`
   (0xA436/0xA438) and `PR_SRAM2_ADDR`/`DATA` (0xB87C/0xB87E) [linux 206-207, 220-221,
   1804-1814, 1956-1975]. A data write stores at the address and steps it by
@@ -48,6 +51,8 @@ chips' power-up register values) are this model's choices and are marked
   there [linux 8421, 7746, 7988]); power-down (5) while the PHY's
   control register has its power-down bit (Linux clears it, then waits for
   LAN on [linux 8426-8432]); else LAN on (3) [linux 201, 634-637, 4172-4194].
+  No link comes up unless the state is LAN on (`phy_not_on`); a write that
+  sets or clears power-down restarts negotiation.
 - Polled bits that complete: `MR_BOOT` autoload done (0xE004 bit 1) [linux
   410, 8402-8410]; MAC 0xE000 bit 8 after ALDPS off [linux 6101-6119]; the PHY
   patch request (0xB820 bit 4) answered by 0xB800 bit 6, and its release
@@ -66,7 +71,8 @@ chips' power-up register values) are this model's choices and are marked
   forced 100 0x2000, 1000 0x0040, full duplex 0x0100), advertisement
   0xA408 (10/100 half and full, pause 0x0400), 1000BASE-T control 0xA412
   (1000 full 0x0200), multi-gigabit control `PR_XG_CTRL` 0xA5D4 (2.5G
-  0x0080, 5G 0x0100, 10G 0x1000) [linux 212, 6470-6627]. The fastest
+  0x0080, 5G 0x0100, 10G 0x1000) [linux 212, 6470-6627] (the partner
+  offers 100 only when `--partner` is 100 or more). The fastest
   speed both sides offer and the chip supports wins. A restart is a write
   of the control register with autonegotiation restart, reset, or
   autonegotiation off. Link status, MAC side: `MR_LINK` (0xE908, word):
@@ -76,14 +82,19 @@ chips' power-up register values) are this model's choices and are marked
   link and autonegotiation-complete bits, partner 0xA40A, 1000BASE-T
   status 0xA414 (0x0800), multi-gigabit status `PR_XG_STAT` 0xA5D6 (2.5G
   0x0020, 5G 0x0040, 10G 0x0800) [linux 213, 8923-8999].
-- Interrupt report: 2 bytes, link change 0x0004 in the first word, on
-  every link change [linux 773, 2302-2350], as for the older chips.
+- Interrupt report: 2 bytes on every link change; bit 0x0004 of the first
+  word is the link state, set when up and clear when down [linux 773,
+  2342-2353]. This is a fix for every chip: before this record the model
+  set the bit on every change, down included, so a driver could only see
+  link-down by reading `MR_LINK` (as the 2026-10-23 legs did).
 - Receive: a frame is refused when its length with FCS exceeds
   `MR_RX_MAX_LEN` (0xC016; Linux writes 1522 [linux 6810-6822]); with
   aggregation off (`UR_CTRL` 0xD406 bit 4) one frame per transfer, else as
   many records as fit the request [linux 3037-3131]. Early size: the
-  chip ends a transfer once `UR_RX_EARLY_LEN` (0xD42E) times the chip's unit
-  is passed, which may add one record; a bulk-IN request shorter than that
+  newer chips end a transfer once `UR_RX_EARLY_LEN` (0xD42E) times the
+  chip's unit is reached, after the record that reaches it (an assumption
+  of the model: the rule is not in `r8152.c`; the chip's early timeout is
+  not modelled); a bulk-IN request shorter than that
   plus `MR_RX_MAX_LEN` plus one descriptor and its alignment is counted
   (`rx_request_below_early_size`). Linux sets the early size to its
   buffer less (1522 + descriptor + alignment), in units of 8 bytes for
@@ -141,7 +152,7 @@ is not modelled.
   2637, 2744-2760]), the third dword the length shifted left 4, the
   fourth the signature 0x15 << 27. The model takes the length from the
   third dword and refuses a record without the signature or whose first
-  dword names another length.
+  dword does not carry the same length.
 - Receive format: Linux clears `UR_CTRL` bits 4 and 10 (and on the 8159 bit
   11) for "RX aggregation / 16 bytes RX descriptor" [linux 8491-8498]. The
   model starts with bits 10 (and 11) set (chosen) and refuses received
@@ -191,28 +202,33 @@ not stated; the model takes 5G.
   duplex [linux 6476-6510]. The model refuses forced 1000 half (no link,
   `no_common_speed`) and ignores multi-gigabit advertisement bits a chip
   does not have (the 8153D's 2.5G bits).
-- Linux advertises 2.5G and faster only on a SuperSpeed (or faster) USB
-  link [linux 10259-10280]; the model counts a multi-gigabit link below
-  SuperSpeed (`multigig_below_superspeed`).
+- Linux's default advertisement has 2.5G and faster only on a SuperSpeed
+  (or faster) USB link [linux 10259-10280]; an explicit setting can still
+  ask for them [linux 9036-9051, 6581-6605]. The model counts a
+  multi-gigabit link below SuperSpeed (`multigig_below_superspeed`) as a
+  diagnostic of that default policy, not as a chip refusal.
+- A powered-down PHY, or one still in external init, does not link.
 - Nothing advertised that the partner has: no link (`no_common_speed`).
 
 ## Tests
 
-`python -B rtlsimtest.py` (after `host.ps1`): 27 tests, OK with 7 expected
+`python -B rtlsimtest.py` (after `host.ps1`): 29 tests, OK with 7 expected
 failures.
 
-- `NewerModelTests` (11 tests, no driver core): identity and descriptors per
-  chip at SuperSpeed and High Speed; the SRAM step; polled bits; external
-  init and power cut; the ADV window; link at each partner speed (10 to
+- `NewerModelTests` (14 tests, no driver core): identity and descriptors
+  per chip at SuperSpeed and High Speed (the id read before a
+  configuration); the SRAM step; polled bits; external init and power cut;
+  no link while powered down or in external init; the ADV window; link at each partner speed (10 to
   10000 Mb/s) for each chip, and the 8159 with and without its patch, with
   `MR_LINK`, the PHY status and the interrupt report; refused and needed
   speed settings; transmit and receive framing per chip; the 16-byte
-  receive mode and the signature bit; aggregation off; early-size units.
+  receive mode and the signature bit; aggregation off; early-size units,
+  and the early size ending a transfer.
 - `NewerDriverTests` (7 tests, one per newer `--chip`): the driver's own
   core (`rtlcore.dll`) brought up on the chip at SuperSpeed, version, MAC,
   header sizes (16/16 for the 8157/8159, else 8/4), the 8157/8159 receive
   and transmit bits cleared, link at the chip's fastest speed through the
-  interrupt report and `Link`, ARP and ICMP through `TxHeader` and
+  interrupt report (`Status` 1 up, 0 down) and `Link`, ARP and ICMP through `TxHeader` and
   `RxParse`, the early size against the core's receive buffer, a cable
   pull, a 1000 Mb/s partner, High Speed (1000 Mb/s, no multi-gigabit
   advertised), the 8159 with its patch at 10000, and `Stop`. All seven are
@@ -220,7 +236,16 @@ failures.
   chips land (worker uwf-rtl-new, branch `rtl-new`): today `Start` refuses
   the ids. The same checks pass on the RTL8153 and RTL8153B at SuperSpeed
   (an ad-hoc run of the same method), so the harness itself works.
-- The 8 older tests are unchanged and pass.
+- The 8 older tests pass; the interrupt test now also checks the
+  link-down report (`Status` 0).
+
+Review: Codex (static review, against `r8152.c` v7.3), findings fixed in
+the second commit: the interrupt report's link bit (P1), vendor requests
+before a configuration (P1), no link with the PHY powered down (P1), the
+early size ending a transfer (P1), the transmit length required in both
+dwords (P2), the partner's 100 Mb/s abilities (P2), a BOS at High Speed
+(P2), the multi-gigabit counter described as a default-policy diagnostic
+(P2), the test count (P3).
 
 ## Limits
 

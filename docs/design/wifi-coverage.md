@@ -286,6 +286,7 @@ Wi-Fi driver is planned).
 | Realtek ids the INFs leave out | XP to 7 | For example RTL8188CU/8192CU: 17 of 82 ids on XP to Vista, 15 on 7. RTL8188EU: 5 of 15. RTL8812BU/8822BU: 26 of 36 (section 3.1, best of (c), (d), (e)). Stays uncovered |
 | RT2870 to RT5572, MT7601U, MT7610U, MT7612U | 98 SE, ME | No 9x build after 2007. (g)'s 9x folders hold RT73, RT2500USB and PCI parts only. Stays uncovered |
 | The same | 2000 to 7 | (g)'s early RT2870 build serves RT2770/RT2870 ids only (16 of Linux's ids, 2000 to Vista). The rest only in (h) (owner question 2). Uncovered until the owner decides. On 7 the in-box `netr28u` serves 110 ids |
+| RT2800 USB family, MT7601U, MT7610U, MT7612U | 2000 to 7, even with (h) | Ids (h) leaves out: 62 of 334 RT2800 USB, 4 of 17 MT7601U, 6 of 25 MT7610U, 13 of 16 MT7612U. Stays uncovered |
 | RT2500USB, RT73 | 98 SE to Vista | Ids (g) leaves out: 10 of 31 RT2500USB, 46 of 75 RT73 (44 on Vista). On 7, 18 RT73 ids are not in the in-box INF. Stays uncovered |
 | AR9170 | 2000 to 7 | 18 of 28 Linux ids are not in (j). Stays uncovered |
 | ZD1211 | 98 SE to XP x64 | 14 of 26 Linux ids are not in (k). Stays uncovered |
@@ -335,8 +336,8 @@ Corp." (2009 for 7). Both packages hold Realtek's InstallShield setup
 and its utility. The 98 SE and ME INFs (`RTL8187/Win98/`, `WinME/`) and
 the others copy their own files (`CopyFiles` lines active).
 
-**(b) Realtek RTL8187B, XP to 7** (`rtl8187b/wxp-7/`, the zip's one
-folder, whole)
+**(b) Realtek RTL8187B, XP to 7** (`rtl8187b/wxp-7/`, the contents of
+the zip's one folder)
 
 - Archive: `0001-RTL8187B_Auto_Install_Program.zip`, 17,212,818 bytes,
   SHA-256 `aa503063bfad2e6987161388b0736bcf0f3e00ac6fc7b72a8451bf0fdd55b82a`,

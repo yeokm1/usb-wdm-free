@@ -612,6 +612,10 @@ static void ResetV2(nc_u16 id)
     m->Phy[PR_EEE_ADV2 / 2] = 0;
     m->Phy[PR_MGIG_CTRL / 2] = (MGIG_2G5 | MGIG_5G | MGIG_10G) | 0x0020;
     m->Sram[0][0x8011] = 0x0011;
+    m->Pla[MR_PHY_POWER] = 0x41;                   /* bits Start clears, and one it keeps */
+    m->Pla[0xd3c8] = 0x03;
+    m->Phy[PR_LITE_A / 2] = 0x0201;
+    m->Phy[PR_LITE_B / 2] = 0x0007;
 }
 
 static void BringUpV2(nc_u16 id, nc_u8 speed)
@@ -650,7 +654,9 @@ static void BringUpV2(nc_u16 id, nc_u8 speed)
     CHECK((m->Phy[PR_POWER / 2] & 0x8007) == 0x8007);              /* clocks, ALDPS and 0-1 */
     CHECK((m->Phy[PR_SPEED_DOWN / 2] & 0x3800) == 0x0800);
     CHECK((Word(m->Pla, MR_POWER4) & 1) && (m->Phy[PR_PATCH_CMD / 2] & PATCH_ASK) == 0);
-    CHECK((Word(m->Pla, MR_PHY_POWER) & 0x0040) == 0);
+    CHECK((Word(m->Pla, MR_PHY_POWER) & 0x0041) == 0x0001);
+    CHECK(m->Phy[PR_LITE_A / 2] == 0x0001 && m->Phy[PR_LITE_B / 2] == 0x0004);
+    CHECK(m->Pla[0xd3c8] == (id == ID_2020 ? 0x02 : 0x03));
     /* a few tuning values of each chip */
     if (id == ID_1030) {
         CHECK(m->Sram[0][0x8183] == 0x5900 && m->Sram[1][0x8647] == 0xe600);

@@ -347,7 +347,7 @@ static const STEP SqEeeOff[] = {                       /* 8153 and later only */
 };
 static const STEP SqEeeOn[] = {
     SET(MAC, 2, MR_EEE, 0x0003),
-    ONLY(K_8152, U_ANY, 9),
+    ONLY(K_8152, U_ANY, 8),
     PHY_EDIT(PR_EEE_A1, 0x0070, 0x3310),
     PHY_SET(PR_EEE_A2, 0x0600),
     PHY_EDIT(PR_EEE_A3, 0xff80, 0x1500),

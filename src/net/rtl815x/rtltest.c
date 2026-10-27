@@ -695,7 +695,7 @@ static void PathsV2(nc_u16 id)
     NET_PROBE p = Probe(NC_SPEED_SUPER);
     NET_PARAMS par;
     RTL_STATE *s = (RTL_STATE *)state;
-    nc_u32 plain;
+    nc_u32 plain, plainSlept;
     /* external init: both bits let go of, then LAN on */
     ResetV2(id);
     m->Phy[PR_STATE / 2] = PHYST_EXT_INIT;
@@ -703,13 +703,16 @@ static void PathsV2(nc_u16 id)
     m->Phy[0xa468 / 2] = 0x00ff;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 0);
     CHECK(m->Phy[0xa466 / 2] == 0x0002 && m->Phy[0xa468 / 2] == 0x00f5);
-    /* flash loading: waited for while not done (100 reads), not when done */
+    /* flash loading: waited for while not done (100 reads 1 ms apart, at
+     * each of the two checks), not when done */
     ResetV2(id);
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     plain = m->Count;
+    plainSlept = m->Slept;
     ResetV2(id);
     m->Pla[MR_GPHY_FLASH] = 0x02;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 2);
+    CHECK(m->Count == plain + 2 * 101 && m->Slept == plainSlept + 2 * 100);
     ResetV2(id);
     m->Pla[MR_GPHY_FLASH] = 0x02;
     m->Usb[UR_GPHY] = GPHY_PATCH_DONE;
@@ -749,19 +752,22 @@ static void PathsV2(nc_u16 id)
     m->BmcrResets = 0;
     CHECK(NetPackageChip.Resume(state, &io, &p, &par) == NC_OK && m->BmcrResets == 1);
     CHECK(m->Phy[PR_EEE_ADV2 / 2] == (EEEADV2_2G5 | EEEADV2_5G));
-    /* a stuck indirect window: given up after 11 reads 2 ms apart */
+    /* a stuck indirect window: each wait given up after 10 reads 2 ms
+     * apart; the U2P3 access waits once after its command, the buffer
+     * unit's access once before it, and neither moves data */
     ResetV2(id);
     m->IndStuck = 1;
-    m->Slept = 0;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     CHECK(s->Timeouts == 2 && m->Ind[1][0xc2c0 / 4] == (0x20000000UL | 0x5));
+    CHECK(m->Ind[0][0x2300 / 4] == 0x0000010f);
+    CHECK(m->Slept == plainSlept + 2 * 20 && m->Count == plain + (13 + 10) - 2 * 9);
     /* Every failing request stops the bring-up at once. */
     ResetV2(id);
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     plain = m->Count;
     {
         nc_u32 n;
-        for (n = 2; n <= plain; n += 5) {
+        for (n = 2; n <= plain; n++) {
             ResetV2(id);
             m->FailAt = n;
             CHECK(NetPackageChip.Start(state, &io, &p, &par) < 0);
@@ -811,7 +817,7 @@ static void LinkV2(nc_u16 id)
     CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0);
     /* 10 half: the long gap; EEE+ on the 8157 only */
     m->Pla[MR_LINK] = LNK_UP | LNK_10;
-    m->Pla[MR_EEE_PLUS] = 0x02;
+    m->Pla[MR_EEE_PLUS] = (nc_u8)(id == ID_2020 ? 0x02 : 0x00);   /* the bit must move */
     CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 10 && !l.FullDuplex);
     CHECK((Word(m->Pla, MR_TX_CONFIG1) & IFG_FIELD) == IFG_LONG);
     CHECK((Word(m->Pla, MR_EEE_PLUS) & 2) == (id == ID_2020 ? 0 : 2));

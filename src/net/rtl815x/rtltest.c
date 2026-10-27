@@ -44,6 +44,7 @@ typedef struct MODEL {
     int NoGrant;                /* the PHY refuses patch windows (after GrantFirst granted) */
     int GrantFirst, Asks;
     nc_u32 Trail[64];           /* writes to MR_COMMAND, UR_BMU, UR_CTRL in order (TrailOn) */
+    nc_u32 TrailV[64];          /* and the dword each wrote */
     int TrailN, TrailOn;
     ENTRY Last[64];             /* ring of the last requests */
     nc_u32 Ind[2][16384];       /* behind the indirect window: BMU, IP (addr / 4) */
@@ -137,7 +138,10 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
     if (m->TrailOn && m->TrailN < 64 &&
         (((index & RTL_SPACE_MAC) && value == (MR_COMMAND & ~3)) ||
          (!(index & RTL_SPACE_MAC) && (value == UR_BMU || value == (UR_CTRL & ~3)))))
+    {
+        m->TrailV[m->TrailN] = (nc_u32)b[0] | ((nc_u32)b[1] << 8) | ((nc_u32)b[2] << 16) | ((nc_u32)b[3] << 24);
         m->Trail[m->TrailN++] = ((index & RTL_SPACE_MAC) ? 0x10000UL : 0) | value;
+    }
     CHECK(length <= 512);
     /* A partial-dword write carries exactly one dword. */
     if (byen != RTL_LANES_ALL) CHECK(length == 4 && byen);
@@ -497,6 +501,7 @@ static void Multigig(void)
             CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
             m->Pla[MR_LINK] = 0;
             m->TrailOn = 1;
+            m->CmdResets = 0;
             CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up);
             m->TrailOn = 0;
             if (k == 0) {
@@ -504,10 +509,16 @@ static void Multigig(void)
                 for (j = 0; j < m->TrailN && m->Trail[j] != order56a[0]; j++) {}
                 CHECK(j + 6 <= m->TrailN);
                 CHECK(memcmp(m->Trail + j, order56a, sizeof(order56a)) == 0);
+                /* the transmitter off first (receiver still on), then the receiver */
+                CHECK(((m->TrailV[j] >> 24) & (CMD_TX_ON | CMD_RX_ON)) == CMD_RX_ON);
+                CHECK(((m->TrailV[j + 3] >> 24) & (CMD_TX_ON | CMD_RX_ON)) == 0);
+                CHECK(((m->TrailV[j + 2] >> 16) & CTRL_ECM) && !((m->TrailV[j + 5] >> 16) & CTRL_ECM));
+                CHECK(!(m->TrailV[j + 1] & 1) && (m->TrailV[j + 4] & 1) && m->CmdResets == 0);
                 CHECK((Word(m->Usb, UR_CTRL) & CTRL_ECM) == 0 && (m->Usb[UR_BMU] & 0x03) == 0x03);
                 CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == 0);
             } else {
                 CHECK(m->TrailN >= 3 && m->Trail[0] == (0x10000UL | (MR_COMMAND & ~3)));
+                CHECK(m->CmdResets == 1);              /* a MAC reset, not a clear of RX/TX */
             }
         }
     }

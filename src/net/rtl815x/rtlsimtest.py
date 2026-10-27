@@ -244,9 +244,15 @@ class Tests(CoreCase):
         self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 1)
         self.assertTrue(self.link().Up)
         self.settle(3.1)                              # cable out
+        # The report's link bit is the link state: clear when down.
+        data = self.wire.take(103)[-1][2][4:]
+        self.assertEqual(data, b'\0\0')
+        self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 0)
         self.assertFalse(self.link().Up)
         self.assertFalse(self.m.chip.receiving() and self.m.chip.pla[r.MR_LINK])
         self.settle(1.1)                              # cable in
+        data = self.wire.take(103)[-1][2][4:]
+        self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 1)
         self.assertTrue(self.link().Up)
         events = [json.loads(x)['why'] for x in self.trace.getvalue().splitlines() if '"link"' in x]
         self.assertEqual(events[-3:], ['autoneg_done', 'cable_out', 'cable_in'])
@@ -548,15 +554,19 @@ class NewerModelTests(unittest.TestCase):
                 caps = [bos[i + 2] for i in self.walk(bos)]
                 self.assertEqual(caps, [2, 3] + ([0x0a] if bcd == 0x0320 else []))
                 self.assertEqual(self.descriptor(6)[0], 4)            # no qualifier at SuperSpeed
-                m.handle(6, 1, b'\x01')
+                # The id reads before any configuration is chosen (Linux's
+                # configuration choice reads it first).
                 tcr = Regs(m).get(MAC, r.MR_TX_CONFIG, 4)
                 self.assertEqual(tcr >> 16 & 0x7cf0, cid)
                 self.assertTrue(tcr & r.TXC_EMPTY)
-                # High Speed: a USB 2.1 device with 512-byte bulk packets, no BOS.
-                hs = r.Model(Wire(), io.StringIO(), chip, 'high')
-                self.assertEqual(struct.unpack_from('<H', hs.device, 2)[0], 0x0210)
-                self.assertEqual([s for _, _, s, _ in parse_config(hs.config_desc)[1]], [512, 512, 2])
-                self.assertIsNone(hs.bos)
+                # High Speed: a USB 2.1 device with 512-byte bulk packets and a
+                # BOS of the USB 2.0 extension only.
+                self.wire = Wire()
+                m = self.m = r.Model(self.wire, io.StringIO(), chip, 'high')
+                self.assertEqual(struct.unpack_from('<H', m.device, 2)[0], 0x0210)
+                self.assertEqual([s for _, _, s, _ in parse_config(m.config_desc)[1]], [512, 512, 2])
+                status, bos = self.descriptor(15)
+                self.assertEqual((status, [bos[i + 2] for i in self.walk(bos)]), (0, [2]))
 
     @staticmethod
     def walk(bos):
@@ -610,6 +620,24 @@ class NewerModelTests(unittest.TestCase):
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_POWER_DOWN)
                 g.phy(r.PR_MII, r.MIICTL_AN_ENABLE)
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_LAN_ON)
+
+    def test_powered_down_phy_has_no_link(self):
+        g = self.make('8156b')
+        self.advertise(g, 2500)
+        self.settle(1.1)
+        self.assertEqual(self.m.link_mbps, 2500)
+        g.phy(r.PR_MII, r.MIICTL_AN_ENABLE | r.MIICTL_AN_RESTART | r.MIICTL_POWERDOWN)
+        self.settle(1.1)
+        self.assertEqual((self.m.link, self.m.totals['phy_not_on']), (False, 1))
+        self.assertEqual(g.get(MAC, r.MR_LINK), 0)
+        g.phy(r.PR_MII, r.MIICTL_AN_ENABLE)               # powered up: negotiates again
+        self.settle(1.1)
+        self.assertEqual(self.m.link_mbps, 2500)
+        # Still in external init: no link either.
+        g = self.make('8156b', ext_init=True)
+        self.advertise(g, 2500)
+        self.settle(1.1)
+        self.assertFalse(self.m.link)
 
     def test_external_init_and_power_cut(self):
         g = self.make('8159', ext_init=True, power_cut=True)
@@ -699,8 +727,9 @@ class NewerModelTests(unittest.TestCase):
         g.phy(r.PR_MII, r.MIICTL_AN_ENABLE | r.MIICTL_AN_RESTART)
         self.settle(1.1)
         self.assertFalse(self.m.link)
-        # 2.5G advertised below SuperSpeed is counted (Linux advertises it
-        # only at SuperSpeed or faster).
+        # 2.5G advertised below SuperSpeed is counted: a diagnostic of
+        # Linux's default advertisement, which has 2.5G and faster only at
+        # SuperSpeed or faster (a user's explicit setting may still ask).
         g = self.make('8156', 'high')
         self.advertise(g, 2500)
         self.settle(1.1)
@@ -760,6 +789,9 @@ class NewerModelTests(unittest.TestCase):
                     bad[0] = 61
                     with self.assertRaises(ValueError):
                         self.m.transmit(bytes(bad))
+                    bad[0] = 0                               # the length in the third dword only
+                    with self.assertRaises(ValueError):
+                        self.m.transmit(bytes(bad))
                 with self.assertRaises(ValueError):
                     self.m.transmit(tx_record(bytes(60), wide)[:-1])
 
@@ -803,6 +835,26 @@ class NewerModelTests(unittest.TestCase):
                 g.put(USB, r.UR_RX_EARLY_LEN, 2, early // 8)
                 self.m.handle(101, 10, struct.pack('<BBHIH', r.EP_IN, 0, kind.rxbuf & 0xffff, 0, kind.rxbuf >> 16))
                 self.assertEqual(self.m.totals['rx_request_below_early_size'], 1 if kind.unit == 16 else 0)
+
+    def test_early_size_ends_a_transfer(self):
+        for chip in ('8156', '8157'):
+            wide = r.CHIPS[chip].family == 'c'
+            with self.subTest(chip=chip):
+                g = self.make(chip)
+                self.receiver_on(g, chip)
+                self.advertise(g, 1000)
+                self.settle(1.1)
+                g.put(USB, r.UR_RX_EARLY_LEN, 2, 200 // r.CHIPS[chip].unit)    # 200 bytes
+                for n in range(6):
+                    self.m.deliver(b'\xff' * 6 + r.HOST_MAC + b'\x08\x00' + bytes([n]) * 46)
+                sizes = []
+                for ident in range(2):
+                    self.m.handle(101, 20 + ident, struct.pack('<BBHIH', r.EP_IN, 0, 16384, 0, 0))
+                    sizes.append(len(parse_rx(self.wire.take(101)[-1][2][10:], wide)))
+                # Records of 80 (16 + 64) or 88 (24 + 64) bytes: the third
+                # passes 200 bytes and ends the transfer.
+                self.assertEqual(sizes, [3, 3])
+                self.assertFalse(self.m.rx)
 
 
 def pending(chip):
@@ -863,8 +915,12 @@ class NewerDriverTests(CoreCase):
         self.assertEqual(self.m.totals['rx_request_below_early_size'], 0)
         # Cable out and in: the interrupt report and the link state follow.
         self.settle(3.1)
+        data = self.wire.take(103)[-1][2][4:]
+        self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 0)
         self.assertFalse(self.link().Up)
         self.settle(1.1)
+        data = self.wire.take(103)[-1][2][4:]
+        self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 1)
         self.assertEqual(self.link().Mbps, top)
         # The 8159 above 5 Gb/s, as if its PHY patch had been loaded.
         if chip == '8159':

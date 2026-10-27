@@ -41,7 +41,10 @@ typedef struct MODEL {
     nc_u32 Writes;              /* SET_REGS */
     nc_u32 VersionTcr0;
     int LinkUp;
-    int NoGrant;                /* the PHY never grants a patch window */
+    int NoGrant;                /* the PHY refuses patch windows (after GrantFirst granted) */
+    int GrantFirst, Asks;
+    nc_u32 Trail[64];           /* writes to MR_COMMAND, UR_BMU, UR_CTRL in order (TrailOn) */
+    int TrailN, TrailOn;
     ENTRY Last[64];             /* ring of the last requests */
     nc_u32 Ind[2][16384];       /* behind the indirect window: BMU, IP (addr / 4) */
     int IndStuck;               /* the indirect window stays busy */
@@ -80,7 +83,9 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
     if (addr == PR_PATCH_CMD) {
         /* PATCH_GRANTED follows PATCH_ASK. */
         nc_u16 st = m->Phy[PR_PATCH_STATE / 2];
-        m->Phy[PR_PATCH_STATE / 2] = (nc_u16)((v & PATCH_ASK) && !m->NoGrant ? st | PATCH_GRANTED : st & ~PATCH_GRANTED);
+        int grant = (v & PATCH_ASK) && (!m->NoGrant || m->Asks < m->GrantFirst);
+        if (v & PATCH_ASK) m->Asks++;
+        m->Phy[PR_PATCH_STATE / 2] = (nc_u16)(grant ? st | PATCH_GRANTED : st & ~PATCH_GRANTED);
     }
     m->Phy[addr / 2] = v;
 }
@@ -129,6 +134,10 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
         return 0;
     }
     m->Writes++;
+    if (m->TrailOn && m->TrailN < 64 &&
+        (((index & RTL_SPACE_MAC) && value == (MR_COMMAND & ~3)) ||
+         (!(index & RTL_SPACE_MAC) && (value == UR_BMU || value == (UR_CTRL & ~3)))))
+        m->Trail[m->TrailN++] = ((index & RTL_SPACE_MAC) ? 0x10000UL : 0) | value;
     CHECK(length <= 512);
     /* A partial-dword write carries exactly one dword. */
     if (byen != RTL_LANES_ALL) CHECK(length == 4 && byen);
@@ -458,6 +467,50 @@ static void Multigig(void)
     CHECK((m->Phy[(MII(MII_CONTROL)) / 2] & MIICTL_AN_RESTART) && m->Phy[PR_MGIG_CTRL / 2] == MGIG_2G5);
     CHECK(m->BmcrResets == 0);                      /* no PHY reset after a PHY setup that gave up */
     CHECK((m->Pla[MR_OOB] & OOB_ACTIVE) == 0 && Dword(m->Usb, UR_RX_BUF_TH) == 0x00600400UL);
+
+    /* The 7400's second window refused (its first granted): the table's
+     * own window ran, the common clocks and the rest did not. */
+    Reset(0x7400UL << 16);
+    m->NoGrant = 1; m->GrantFirst = 1;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && m->Asks == 2);
+    CHECK((m->Phy[0xb896 / 2] & 1) && m->Phy[0xb890 / 2] == 0x1416);
+    CHECK((Word(m->Pla, MR_POWER4) & 1) == 0 && m->Phy[PR_EEE_ADV / 2] == 0 && m->BmcrResets == 0);
+    CHECK((m->Phy[PR_PATCH_CMD / 2] & PATCH_ASK) == 0);
+    /* The 7030's window refused: nothing after it in its table */
+    Reset(0x7030UL << 16);
+    m->NoGrant = 1;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && m->Asks == 1);
+    CHECK((m->Phy[0xd068 / 2] & 0x2000) == 0 && (m->Phy[PR_INTR / 2] & 0x0008) == 0);
+    CHECK(m->Sram[0][0x80ea] == 0x7843 && m->Phy[PR_EEE_ADV / 2] == 0 && m->BmcrResets == 0);
+
+    /* The receiver and transmitter reset at link down: the 7030's
+     * interleaved order; the 7410's MAC reset. */
+    {
+        static const nc_u32 order56a[6] = {
+            0x10000UL | (MR_COMMAND & ~3), UR_BMU, UR_CTRL & ~3, 0x10000UL | (MR_COMMAND & ~3), UR_BMU, UR_CTRL & ~3 };
+        nc_u16 ids[2] = { 0x7030, 0x7410 };
+        int k, j;
+        for (k = 0; k < 2; k++) {
+            Reset((nc_u32)ids[k] << 16);
+            CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+            m->Pla[MR_LINK] = LNK_UP | LNK_FULL | LNK_1000;
+            CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
+            m->Pla[MR_LINK] = 0;
+            m->TrailOn = 1;
+            CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up);
+            m->TrailOn = 0;
+            if (k == 0) {
+                /* gate first, then the six reset writes, then the buffer-unit reset */
+                for (j = 0; j < m->TrailN && m->Trail[j] != order56a[0]; j++) {}
+                CHECK(j + 6 <= m->TrailN);
+                CHECK(memcmp(m->Trail + j, order56a, sizeof(order56a)) == 0);
+                CHECK((Word(m->Usb, UR_CTRL) & CTRL_ECM) == 0 && (m->Usb[UR_BMU] & 0x03) == 0x03);
+                CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == 0);
+            } else {
+                CHECK(m->TrailN >= 3 && m->Trail[0] == (0x10000UL | (MR_COMMAND & ~3)));
+            }
+        }
+    }
 
     /* An RTL8156 with its pairs reversed: the PHY's pair tables swapped. */
     Reset(0x7030UL << 16);
@@ -908,9 +961,16 @@ static void DatapathV2(nc_u16 id)
     CHECK(NetPackageChip.RxParse(state, b, n + 32, Emit, NULL, &st) == 4 && emitted == 4);
     for (len = 0; len <= n; len++) {
         long r;
+        nc_u32 at = 0, i, cut = 0;
         emitted = 0;
         r = NetPackageChip.RxParse(state, b, len, Emit, NULL, &st);
         CHECK(r < 0 ? emitted == 0 : (nc_u32)r == emitted);
+        /* a cut inside any record's frame (its header complete) is malformed */
+        for (i = 0; i < 5; i++) {
+            if (len >= 60 && len > at + 16 && len < at + 16 + lens[i] + 4) cut = 1;
+            at = (at + 16 + lens[i] + 4 + 15) & ~15UL;
+        }
+        CHECK(cut ? r == NC_E_MALFORMED : r >= 0);
     }
     /* a length of 0x7fff runs past the end */
     b[3] = 0xff; b[2] = 0xfe;

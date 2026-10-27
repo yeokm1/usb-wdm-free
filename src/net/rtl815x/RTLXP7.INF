@@ -11,19 +11,22 @@
 ; Models, one section per system (owner, 2026-10-27):
 ;   [Models]                  none: 2000, which ignores decorations, has
 ;                             RTL815X.INF.
-;   NTx86.5.1, NTamd64.5.2    XP and XP x64: the RTL8156 and 8156B
-;                             (0BDA:8156), the RTL8157 (0BDA:8157) and
-;                             the RTL8159 (0BDA:815A).
+;   NTx86.5.1, NTamd64.5.2    XP and XP x64: the RTL8153D (0BDA:8053),
+;                             the RTL8156 and 8156B (0BDA:8156), the
+;                             RTL8157 (0BDA:8157) and the RTL8159
+;                             (0BDA:815A).
 ;   NTx86.6.0, NTamd64.6.0    Vista: as XP.
 ;   NTx86.6.1, NTamd64.6.1    7: the RTL8157 and RTL8159 only. Realtek's 7
-;                             driver in usb-wdm-nonfree lists 0BDA:8156.
+;                             driver in usb-wdm-nonfree lists 0BDA:8053
+;                             and 0BDA:8156.
 ;   NTx86.6.2, NTamd64.6.2    none: Windows 8 and later have no NDIS 5
 ;                             (ethernet.md section 4.1).
-; The RTL8152 and RTL8153 ids (0BDA:8050, 8053, 8152, 8153, 8155 and every
+; The RTL8152 and RTL8153 ids (0BDA:8050, 8152, 8153, 8155 and every
 ; rebrand) are never listed here: usb-wdm-nonfree's Realtek INFs list them
 ; on XP to 7, and STAGE.TXT allows one INF per id per system. The ids are
-; those of Linux r8152.c at f47d2236 for these chips. Linux names no
-; rebrand's chip, so no rebrand is listed.
+; those of Linux r8152.c at f47d2236 for these chips: 0BDA:8053 came into
+; its table with the RTL8153C and RTL8153D. Realtek's XP and Vista INFs do
+; not list it. Linux names no rebrand's chip, so no rebrand is listed.
 
 [Version]
 Signature="$Windows NT$"
@@ -38,21 +41,25 @@ DriverVer=10/27/2026,0.2.0.0
 [Models]
 
 [Models.NTx86.5.1]
+%D8153D%=RTL,USB\VID_0BDA&PID_8053
 %D8156%=RTL,USB\VID_0BDA&PID_8156
 %D8157%=RTL,USB\VID_0BDA&PID_8157
 %D8159%=RTL,USB\VID_0BDA&PID_815A
 
 [Models.NTamd64.5.2]
+%D8153D%=RTL,USB\VID_0BDA&PID_8053
 %D8156%=RTL,USB\VID_0BDA&PID_8156
 %D8157%=RTL,USB\VID_0BDA&PID_8157
 %D8159%=RTL,USB\VID_0BDA&PID_815A
 
 [Models.NTx86.6.0]
+%D8153D%=RTL,USB\VID_0BDA&PID_8053
 %D8156%=RTL,USB\VID_0BDA&PID_8156
 %D8157%=RTL,USB\VID_0BDA&PID_8157
 %D8159%=RTL,USB\VID_0BDA&PID_815A
 
 [Models.NTamd64.6.0]
+%D8153D%=RTL,USB\VID_0BDA&PID_8053
 %D8156%=RTL,USB\VID_0BDA&PID_8156
 %D8157%=RTL,USB\VID_0BDA&PID_8157
 %D8159%=RTL,USB\VID_0BDA&PID_815A
@@ -142,6 +149,7 @@ Provider="usb-wdm-free"
 Disk="RTL815X installation disk"
 Service="usb-wdm-free RTL815X USB Ethernet"
 AddressDesc="Network Address"
+D8153D="Realtek RTL8153D USB Gigabit Ethernet (RTL815X)"
 D8156="Realtek RTL8156 USB 2.5G Ethernet (RTL815X)"
 D8157="Realtek RTL8157 USB 5G Ethernet (RTL815X)"
 D8159="Realtek RTL8159 USB 10G Ethernet (RTL815X)"

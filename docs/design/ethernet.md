@@ -85,10 +85,9 @@ never build inputs (AGENTS.md, "Standalone").
    XP to 7 are therefore not targets of `rtl815x` and `ax88179`.
 
    Owner, 2026-10-27: `rtl815x` also serves XP to 7, for the chips
-   Realtek's XP to 7 drivers do not list: the RTL8156 and 8156B on XP and
-   Vista, the RTL8157 and 8159 on XP, Vista and 7, x86 and x64. Its
-   RTL8152 and RTL8153 ids stay off XP to 7. The RTL8153D there is open
-   (section 7.6).
+   Realtek's XP to 7 drivers do not list: the RTL8153D, 8156 and 8156B on
+   XP and Vista, the RTL8157 and 8159 on XP, Vista and 7, x86 and x64. Its
+   RTL8152 and RTL8153 ids stay off XP to 7 (section 7.6).
 
 ## 2. Purpose and devices served: the survey
 
@@ -986,21 +985,23 @@ rebrand is listed.
 | Models section | Systems | Ids |
 |---|---|---|
 | `[Models]` | 2000, which ignores decorations (`RTL815X.INF` serves it) | none |
-| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8156` (RTL8156, 8156B), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
-| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same three |
+| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
+| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same four |
 | `NTx86.6.1`, `NTamd64.6.1` | 7 x86 and x64 | `0BDA:8157`, `0BDA:815A` |
 | `NTx86.6.2`, `NTamd64.6.2` | 8 and later | none: no NDIS 5 there (section 4.1) |
 
 Read against `usb-wdm-nonfree`'s Realtek INFs (2026-10-27): its XP 5.23
 and Vista 6.27 INFs list `0BDA:8050`, `8152` and `8153` (bare and by
-revision) and rebrands, and no `8156`, `8157` or `815A`. Its 7 7.61.20
-INFs add `8053`, `8155`, `8156` and `8056`, and no `8157` or `815A`. So
-no id here is matched by both packs on one system. The RTL8152 and
-RTL8153 ids stay off XP to 7. The owner's scope also names the RTL8153D
-for XP and Vista, but it is not listed yet: Linux gives it no product id
-of its own (it is `0BDA:8153` or a rebrand), and Realtek's XP and Vista
-INFs match `0BDA:8153` at any revision. An id for it would match a
-device both packs serve. Open for the owner (section 12.2).
+revision) and rebrands, and no `8053`, `8156`, `8157` or `815A`. Its 7
+7.61.20 INFs add `8053`, `8155`, `8156` and `8056`, and no `8157` or
+`815A`. So no id here is matched by both packs on one system. The
+RTL8152 and RTL8153 ids stay off XP to 7.
+
+`0BDA:8053` is the RTL8153D's id here. Linux added it to its table in the
+commit that added the RTL8153C and RTL8153D, and the simulator models the
+RTL8153D on it. Linux does not say which of the two chips uses it. An
+RTL8153C on `0BDA:8053` would also bind on XP and Vista. The chip core
+serves it, and Realtek's XP and Vista INFs do not list that id.
 
 The x86 folders take the NDIS 5.0 binary, the x64 folders the NDIS 5.1
 build of section 4.2 (`build.cmd ndis51`, as `cdcnet`'s), with the
@@ -1236,8 +1237,8 @@ After that reading:
 
 Owner, 2026-10-27 (xHCI98 roadmap 44.70): `rtl815x` adds the RTL8153D,
 8156, 8156B, 8157 and 8159. On XP to 7 it serves only the chips
-`usb-wdm-nonfree`'s Realtek drivers leave out: the RTL8156 and 8156B on
-XP and Vista, the RTL8157 and 8159 on XP, Vista and 7, through
+`usb-wdm-nonfree`'s Realtek drivers leave out: the RTL8153D, 8156 and
+8156B on XP and Vista, the RTL8157 and 8159 on XP, Vista and 7, through
 `RTLXP7.INF` (section 7.6), with an x64 NDIS 5.1 build.
 
 Also: NUSB's EHCI stack on 98 SE is fully supported; signing follows
@@ -1282,10 +1283,9 @@ After the first `ax88179` and `rtl815x` builds
 - Realtek bring-up without firmware patches: possible link quirks on some
   revisions.
 - 98 SE TCP/IP throughput ceiling, unknown until measured.
-- The RTL8153D on XP and Vista (section 7.6): the owner's scope names it,
-  but with no product id of its own it cannot be listed without matching
-  devices Realtek's XP and Vista INFs serve. A `&REV_` id would need the
-  RTL8153D's `bcdDevice` from a source this repository may use. Open.
+- `0BDA:8053` on XP and Vista (section 7.6): which chips use it, the
+  RTL8153D only or the RTL8153C too, is not stated by Linux. A real
+  adapter settles it.
 - ME's NDIS version, and Android's current tethering protocols, unverified
   (sections 4.1, 2.4). ME is not tested, so the first stays unverified
   unless the ME DDK is read (section 11.1).

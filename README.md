@@ -32,8 +32,8 @@ These drivers are experimental. They may not work with every device and can make
    receiver: 98 SE and ME.
 4. 98 SE needs a USB storage driver set (such as NUSB's) installed first.
 5. ME only if its own USB printing proves unable to print.
-6. XP and Vista: the RTL8156 and 8156B. XP, Vista and 7: the RTL8157 and
-   8159. Realtek's own drivers serve the other chips there.
+6. XP and Vista: the RTL8153D, 8156 and 8156B. XP, Vista and 7: the
+   RTL8157 and 8159. Realtek's own drivers serve the other chips there.
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 

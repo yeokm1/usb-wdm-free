@@ -58,17 +58,18 @@ Rows are chip families. "Linux" is the Linux file that drives them.
 | Realtek RTL8723AU (`rtl8xxxu`) | **gap** | **gap** | **gap** | step 2 (c) | step 2 (c) | step 2 (c) | step 2 (c) | in box 8.1 |
 | Realtek RTL8188SU, RTL8191SU, RTL8192SU (none in `v7.3`) | **gap** | **gap** | step 2 (f) | step 2 (f) | step 2 (f) | step 2 (f) | step 2 (f) | in box |
 | Realtek RTL8188EU (`rtl8xxxu`) | **gap** | **gap** | **gap** | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | in box 8.1 (3 ids) |
-| Realtek RTL8188FU, RTL8192EU, RTL8723BU, RTL8710BU (`rtl8xxxu`) | **gap** | **gap** | **gap** | step 2 (d) | step 2 (d) | step 2 (d) | step 2 (d) | Realtek 8+ |
+| Realtek RTL8192EU (`rtl8xxxu`) | **gap** | **gap** | **gap** | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | in box 8.1 (1 id) |
+| Realtek RTL8188FU, RTL8723BU, RTL8710BU (`rtl8xxxu`) | **gap** | **gap** | **gap** | step 2 (d) | step 2 (d) | step 2 (d) | step 2 (d) | Realtek 8+ |
 | Realtek RTL8192FU (`rtl8xxxu`) | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | U |
 | Realtek RTL8723DU (`rtw88`) | **gap** | **gap** | **gap** | step 2 (d) | step 2 (d) | step 2 (d) | step 2 (d) | Realtek 8+ |
 | Realtek RTL8811AU, RTL8821AU, RTL8812AU, RTL8814AU (`rtw88`) | **gap** | **gap** | **gap** | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | in box 8.1 (8812AU, some 8811AU) |
 | Realtek RTL8811CU, RTL8821CU (`rtw88`) | **gap** | **gap** | **gap** | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | Realtek 8+ |
 | Realtek RTL8812BU, RTL8822BU (`rtw88`) | **gap** | **gap** | **gap** | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | step 2 (d, e) | Realtek 8+ |
-| Realtek RTL8822CU (`rtw88`) | **gap** | **gap** | **gap** | 1 Linksys id in (e) | same | same | same | U |
+| Realtek RTL8822CU (`rtw88`) | **gap** | **gap** | **gap** | gap, but Linksys `13B1:0043` in (e) | same | same | same | U |
 | Realtek RTL8851BU, RTL8852AU/8832AU, RTL8852BU/8832BU, RTL8852CU/8832CU, RTL8922AU (`rtw89`) | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | brands: 10 and 11 |
 | Ralink RT2500USB / RT2570 (`rt2500usb`) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | U (Vista INF, undecorated) | - |
 | Ralink RT2501USB / RT73 family (`rt73usb`) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | step 2 (g) | in box (57 of 75 ids) | in box |
-| Ralink/MediaTek RT2870, RT3070, RT3072, RT3370, RT3572, RT5370, RT5372, RT5572 (`rt2800usb`) | **gap** | **gap** | candidate (h, U on 2000) | candidate (h) | candidate (h) | candidate (h) | in box (110 ids), candidate (h) | in box |
+| Ralink/MediaTek RT2870, RT3070, RT3072, RT3370, RT3572, RT5370, RT5372, RT5572 (`rt2800usb`) | **gap** | **gap** | candidate (h, U on 2000). RT2770/RT2870 ids: step 2 (g) | candidate (h). (g) as 2000 | candidate (h). (g) as 2000 | candidate (h). (g) as 2000 | in box (110 ids), candidate (h) | in box |
 | MediaTek MT7601U (`mt7601u`) | **gap** | **gap** | candidate (h, U) | candidate (h) | candidate (h) | candidate (h) | candidate (h) | in box 8.1 (2 ids) |
 | MediaTek MT7610U (`mt76x0u`), MT7612U (`mt76x2u`) | **gap** | **gap** | candidate (h, U) | candidate (h) | candidate (h) | candidate (h) | candidate (h) | in box 8.1 (MT7610U, 11 ids) |
 | MediaTek MT7921AU, MT7925U, MT7663U (`mt76`) | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | U |
@@ -83,7 +84,8 @@ Rows are chip families. "Linux" is the Linux file that drives them.
 
 "step 2": a maker's package this survey found and proposes for
 `usb-wdm-nonfree` (section 8). The letter names the package. "candidate":
-found, but its licence text limits distribution (owner question 2).
+found, but its licence text reads "Copies of the Software may be distributed
+only with your own product" (owner question 2).
 "in box": Windows' own INF (section 2). "gap": nothing found. It stays
 uncovered (section 7). `usb-wdm-nonfree` carries no Wi-Fi driver today,
 and `usb-wdm-free` has none planned.
@@ -97,9 +99,9 @@ and `usb-wdm-free` has none planned.
 | XP SP3 x86 | none |
 | XP x64 | not read (U) |
 | Vista SP2 x86, x64 | none |
-| 7 SP1 x86, x64 | `net8187bv32.inf` / `net8187bv64.inf` 6.1159.0323.2009 (Realtek RTL8187B: `0BDA:8187`, `8189`, `8197`, `8198`, `8199`, all `REV_0200`); `netr73.inf` / `netr7364.inf` 4.00.00.0015 (Ralink RT73 family, 57 ids); `netr28u.inf` / `netr28ux.inf` 3.00.00.0061 (Ralink RT2870 family, 110 ids) |
-| 8 x86 RTM | 7's three (RT73 at 4.00.10.0000, 62 ids; RT2870 at 4.0.0.201, 226 ids), plus `net8192su32.inf` (RTL8188SU/8191SU/8192SU, 88 ids) and `netrtwlanu.inf` 1015.4.711.2012 (RTL8188CU/8192CU, 62 ids) |
-| 8.1 x64 Update | 8's, with `netr28ux.inf` 5.01.02.0000 (285 ids, adding MT7601U and MT7610U ids), `netrtwlanu.inf` 1025.1.0423.2013 (139 ids, adding RTL8188EU, RTL8192EU, RTL8723AU, RTL8812AU and RTL8811AU ids), and `mwlu97w8x64.inf` (Marvell, Surface only) |
+| 7 SP1 x86, x64 | `net8187bv32.inf` / `net8187bv64.inf` 6.1159.0323.2009 (Realtek RTL8187B: `0BDA:8187`, `8189`, `8197`, `8198`, `8199`, all `REV_0200`). `netr73.inf` / `netr7364.inf` 4.00.00.0015 (Ralink RT73 family, 57 ids). `netr28u.inf` / `netr28ux.inf` 3.00.00.0061 (Ralink RT2870 family, 110 ids) |
+| 8 x86 RTM | 7's three (RT73 at 4.00.10.0000, 62 ids. RT2870 at 4.0.0.201, 226 ids), plus `net8192su32.inf` (RTL8188SU/8191SU/8192SU, 88 ids) and `netrtwlanu.inf` 1015.4.711.2012 (RTL8188CU/8192CU, 62 ids) |
+| 8.1 x64 Update | 8's, with `netr28ux.inf` 5.01.02.0000 (285 ids, adding MT7601U and MT7610U ids), `netrtwlanu.inf` 1025.1.0423.2013 (139 ids, adding RTL8188EU, RTL8192EU, RTL8192DU (15 of Linux's 19), RTL8723AU, RTL8812AU and RTL8811AU ids), and `mwlu97w8x64.inf` (Marvell, Surface only) |
 
 So on 98 SE to Vista no USB Wi-Fi adapter has an in-box driver. On 7,
 three families do (RTL8187B, RT73, RT2870).
@@ -132,7 +134,7 @@ is how many of them the maker's INF lists (section 4 has the files).
 | RTL8811CU, RTL8821CU | `rtw88/rtw8821cu.c` | 15 | (d), (e) | 4 (d), 2 (e) |
 | RTL8812BU, RTL8822BU | `rtw88/rtw8822bu.c` | 36 | (d), (e) | 7 (d), 10 (e) |
 | RTL8822CU | `rtw88/rtw8822cu.c` | 7 | (e) lists one of them, Linksys `13B1:0043` | 1 |
-| RTL8851BU, RTL8852AU/8832AU, RTL8852BU/8832BU, RTL8852CU/8832CU, RTL8922AU | `rtw89/rtw88*u.c` | 6, 14, 15, 12, 15 | none for 98 SE to 7. TP-Link's Archer TX20U and TX20U Nano pages offer Windows 10 and 11 only (V; the chip is not named on those pages, U) | - |
+| RTL8851BU, RTL8852AU/8832AU, RTL8852BU/8832BU, RTL8852CU/8832CU, RTL8922AU | `rtw89/rtw8851bu.c`, `rtw8852au.c`, `rtw8852bu.c`, `rtw8852cu.c`, `rtw8922au.c` | 6, 14, 15, 12, 15 | none for 98 SE to 7. TP-Link's Archer TX20U and TX20U Nano pages offer Windows 10 and 11 only (V. The chip is not named on those pages, U) | - |
 
 Realtek's own current pages for RTL8192EU, RTL8811AU, RTL8811CU,
 RTL8812AU, RTL8812BU and RTL8814AU (archived 2023) list one package,
@@ -166,10 +168,10 @@ not downloaded, as Realtek's own (c) and (d) serve the same systems.
 
 | Chip | Linux | Linux ids | Maker's package found (systems, version) | INF ids |
 |---|---|---|---|---|
-| RT2500USB (RT2570) | `ralink/rt2x00/rt2500usb.c` | 31 | (g) Ralink 2007 package `IS_AP_STA_7x_..._062807_0.1.0.23.exe`: 98 SE and ME (`RT2500USB_Driver_9x`), 2000 and XP (`_XP2k`), XP x64, all 2.01.01.0000 (2006-11-08); Vista x86/x64 3.00.02.0000 (2006-12-27). Also the 2005 package `IS_STA_2500USB_..._1.0.3.0.exe` (98 SE, ME, 2000, XP, 2.00.03.0000) and `RT2500USBV2.0.3.0x64.zip` (XP x64), both older | 21 |
-| RT2501USB, RT2571W, RT2573, RT2671 (RT73) | `ralink/rt2x00/rt73usb.c` | 75 | (g): 98 SE and ME (`RT73_Driver_9x`), 2000 and XP, XP x64, all 1.02.01.0000 (2007-05-14); Vista x86/x64 3.00.06.0000 (2007-06-26). 7: in box | 29 (98 SE to XP x64), 31 (Vista) |
-| RT2770, RT2870 | `ralink/rt2x00/rt2800usb.c` | 334 (whole RT2800 USB family) | (g) also holds an early RT2870 build: 2000 and XP, XP x64 1.00.03.0000 (2007-05-09), Vista 1.00.04.0000, `148F:2770`, `2870` only | 16 to 17 |
-| RT2870, RT3070, RT3071, RT3072, RT3370, RT3572, RT3573, RT5370, RT5372, RT5572 | same file | 334 | (h) MediaTek `IS_Setup_ICS_011916_1.5.39.173` (one setup program): 2000 and XP (`RT2870_Driver_XP2k`), XP x64, Vista x86/x64, all `RT2870.inf` 5.01.25.0 (2015-10-28); 7, 8, 8.1, 10 `netr28u(x).inf` 5.01.25.0 | 272 |
+| RT2500USB (RT2570) | `ralink/rt2x00/rt2500usb.c` | 31 | (g) Ralink 2007 package `IS_AP_STA_7x_..._062807_0.1.0.23.exe`: 98 SE and ME (`RT2500USB_Driver_9x`), 2000 and XP (`_XP2k`), XP x64, all 2.01.01.0000 (2006-11-08). Vista x86/x64 3.00.02.0000 (2006-12-27). Also the 2005 package `IS_STA_2500USB_..._1.0.3.0.exe` (98 SE, ME, 2000, XP, 2.00.03.0000) and `RT2500USBV2.0.3.0x64.zip` (XP x64), both older | 21 |
+| RT2501USB, RT2571W, RT2573, RT2671 (RT73) | `ralink/rt2x00/rt73usb.c` | 75 | (g): 98 SE and ME (`RT73_Driver_9x`), 2000 and XP, XP x64, all 1.02.01.0000 (2007-05-14). Vista x86/x64 3.00.06.0000 (2007-06-26). 7: in box | 29 (98 SE to XP x64), 31 (Vista) |
+| RT2770, RT2870 | `ralink/rt2x00/rt2800usb.c` | 334 (whole RT2800 USB family) | (g) also holds an early RT2870 build: 2000 and XP, XP x64 1.00.03.0000 (2007-05-09), Vista 1.00.04.0000. Ralink's own ids `148F:2770`, `2870` only, the rest brand ids | 16 to 17 |
+| RT2870, RT3070, RT3071, RT3072, RT3370, RT3572, RT3573, RT5370, RT5372, RT5572 | same file | 334 | (h) MediaTek `IS_Setup_ICS_011916_1.5.39.173` (one setup program): 2000 (U: folder name only) and XP (`RT2870_Driver_XP2k`), XP x64, Vista x86/x64, all `RT2870.inf` 5.01.25.0 (2015-10-28). 7, 8, 8.1, 10 `netr28u(x).inf` 5.01.25.0 | 272 |
 | MT7601U | `mediatek/mt7601u/usb.c` | 17 | (h) | 13 |
 | MT7610U | `mediatek/mt76/mt76x0/usb.c` | 25 | (h) | 19 |
 | MT7612U | `mediatek/mt76/mt76x2/usb.c` | 16 | (h) (it carries `FW_7662.bin`) | 3 |
@@ -192,10 +194,10 @@ archived files found: `RT2770_2870_RT307x.zip` (holding the older
 
 | Chip | Linux | Linux ids | Maker's package found (systems, version) | INF ids |
 |---|---|---|---|---|
-| AR9271, AR7010 | `ath/ath9k/hif_usb.c` | 27 | (i) TP-Link `TL-WN721N_V1_140915` (TL-WN721N v1; the TL-WN722N v1 package `131113` has the same XP to 7 builds): XP and XP x64 `netathuw(x).inf` 7.7.0.102 (2011-07-28), Vista 8.0.0.84 (2011-04-20), 7 2.0.0.62 (2011-04-20), 8 10.0.0.25, 8.1 10.0.0.28. No 2000 build | 4 (XP to 7: `0CF3:9271`, `1006`, `7010`, `7015`), 16 (8, 8.1) |
+| AR9271, AR7010 | `ath/ath9k/hif_usb.c` | 27 | (i) TP-Link `TL-WN721N_V1_140915` (TL-WN721N v1. The TL-WN722N v1 package `131113` has the same XP to 7 builds): XP and XP x64 `netathuw(x).inf` 7.7.0.102 (2011-07-28), Vista 8.0.0.84 (2011-04-20), 7 2.0.0.62 (2011-04-20), 8 10.0.0.25, 8.1 10.0.0.28. No 2000 build | 4 (XP to 7: `0CF3:9271`, `1006`, `7010`, `7015`), 16 (8, 8.1) |
 | AR9170 | `ath/carl9170/usb.c` | 28 | (j) TP-Link `TL-WN821N_WN822N_100629` (TL-WN821N v2, TL-WN822N v1): 2000 (`Windows 2000`, `arusb_2k.sys`), XP and XP x64 `arusb_xp.inf` 3.0.0.165 (2010-02-25), Vista 3.1.0.131 (2010-03-01), 7 3.5.0.12 (2009-11-26) | 10 |
 | ZD1211 | `zydas/zd1211rw/zd_usb.c` | 26 | (k) ZyDAS `ZD1211USB_Install_4_13_0_0_ALL`: 98 SE, ME, 2000, XP, XP x64, 4.13.0.0 (2006-02-27). One setup program | 12, and 3 ids Linux lacks |
-| ZD1211B | same file | 30 | ZyDAS listed `ZD1211BWinPkgS_6_17_0_0_ALL.zip` and `6_3_1_0` (2006-2007); no archived copy (404 only) | 0 |
+| ZD1211B | same file | 30 | ZyDAS listed `ZD1211BWinPkgS_6_17_0_0_ALL.zip` and `6_3_1_0` (2006-2007). No archived copy (404 only) | 0 |
 | BCM4320 (RNDIS) | `rndis_wlan.c` (at `v6.6`; gone by `v7.3`) | 11 (Linksys WUSB54GS/GSC, Belkin F5D7051, U.S. Robotics USR5420/5421, Buffalo WLI-U2-KG125S, ASUS WL169gE, others) | not fetched. Linksys's `WUSB54GS_20050428.exe` is archived as a redirect only (U) | - |
 | BCM43235 (Linksys AE2500) | `broadcom/brcm80211/brcmfmac/usb.c` | 1 (`13B1:0039`) | (l) Linksys AE2500: XP and XP x64 `bcmwlhigh5.inf` 5.100.68.46 (2011-03-28), Vista `bcmwlhigh6.inf` 5.100.243.6 (2011-03-30), 7 `bcmwlhigh6.inf` 5.100.68.46 | `13B1:0039`, `003A` |
 | BCM43143, BCM43236, BCM43242, BCM43569, Cypress 4373 | same file | 7 more | not searched (U) | - |
@@ -219,16 +221,16 @@ adapted. The table only records where the ids came from.
 | `realtek/rtl8xxxu/core.c` | GPL-2.0-only | 8295 | 122 |
 | `realtek/rtlwifi/rtl8192cu/sw.c` | GPL-2.0 | 385 | 72 |
 | `realtek/rtlwifi/rtl8192du/sw.c` | GPL-2.0 | 398 | 19 |
-| `realtek/rtw88/rtw88??u.c` (8723du, 8812au, 8814au, 8821au, 8821cu, 8822bu, 8822cu) | GPL-2.0 OR BSD-3-Clause | 36 to 104 each | 2 to 36 each |
-| `realtek/rtw89/rtw88??u.c`, `rtw8922au.c` | GPL-2.0 OR BSD-3-Clause | 72 to 146 each | 6 to 15 each |
+| `realtek/rtw88/rtw8723du.c`, `rtw8812au.c`, `rtw8814au.c`, `rtw8821au.c`, `rtw8821cu.c`, `rtw8822bu.c`, `rtw8822cu.c` | GPL-2.0 OR BSD-3-Clause | 36 to 104 each | 2 to 36 each |
+| `realtek/rtw89/rtw8851bu.c`, `rtw8852au.c`, `rtw8852bu.c`, `rtw8852cu.c`, `rtw8922au.c` | GPL-2.0 OR BSD-3-Clause | 72 to 146 each | 6 to 15 each |
 | `ralink/rt2x00/rt2500usb.c` | GPL-2.0-or-later | 1984 | 31 |
 | `ralink/rt2x00/rt73usb.c` | GPL-2.0-or-later | 2543 | 75 |
 | `ralink/rt2x00/rt2800usb.c` | GPL-2.0-or-later | 1276 | 334 |
 | `mediatek/mt7601u/usb.c` | GPL-2.0-only | 379 | 17 |
 | `mediatek/mt76/mt76x0/usb.c` | GPL-2.0-only | 356 | 25 |
 | `mediatek/mt76/mt76x2/usb.c`, `mt7921/usb.c`, `mt7925/usb.c`, `mt7615/usb.c` | BSD-3-Clause-Clear | 154 to 372 | 16, 6, 4, 2 |
-| `ath/ath9k/hif_usb.c` | no SPDX; ISC-style "Permission to use" | 1517 | 27 |
-| `ath/carl9170/usb.c` | no SPDX; "GNU General Public License" | 1231 | 28 |
+| `ath/ath9k/hif_usb.c` | no SPDX. ISC-style "Permission to use" | 1517 | 27 |
+| `ath/carl9170/usb.c` | no SPDX. "GNU General Public License" | 1231 | 28 |
 | `zydas/zd1211rw/zd_usb.c` | GPL-2.0-or-later | 2040 | 56 |
 | `broadcom/brcm80211/brcmfmac/usb.c` | ISC | 1607 | 9 |
 | `legacy/rndis_wlan.c` (`v6.6`) | GPL-2.0-or-later | 3760 | 11 |
@@ -247,7 +249,7 @@ were not read here). From Vista on, Windows does it itself.
 | (a) RTL8187L | Realtek's `RtWLan` utility, with an EAP packet protocol driver | `Release_87.txt`: "2005.10.07 1.180 1. Implement AES and WPA2", "2005.11.04 1.187 1. Solve WPA-none AES issue in win98se with eappkt9x.vxd", "2006.05.12 1.229 1. Revise for WPA2" |
 | (f) RTL8188SU/8191SU/8192SU | Realtek's utility (2000) | `DATA/8192SU.ini` and `Utility_Release.txt` name WPA2 |
 | (c) RTL8188CU/8192CU | none needed below XP (no 2000 build) | `DATA/8192CU.ini` names WPA2 |
-| (d), (e) Realtek 1030 | none (driver-only package; XP uses Windows, with Realtek's `Eappkt` protocol "for WinXP") | not stated |
+| (d), (e) Realtek 1030 | none (driver-only package. XP uses Windows, with Realtek's `Eappkt` protocol "for WinXP") | not stated |
 | (g) Ralink 2007 | Ralink's `RaUI` (`RaUI_9x`, `RaUI_XP2k`), with Meetinghouse Data Communications' AEGIS client (`MeetingHouse/AegisI2.exe`, `AegisI5.exe`) as Ralink ships it | WPA2 not found in the text files read (U: the help files were not read) |
 | (h) MediaTek | `RaUI` (2000 and XP) | `RaUI_Languages/Lang_USA.ini` names WPA2 |
 | (k) ZyDAS ZD1211 | ZyDAS's `ZDWlan` utility, with its own 802.1X DLL and OpenSSL's `libeay32.dll`/`ssleay32.dll` | `ZDWlan.INI`: `WPAMode=1`, `WPA2Mode=1`. `ZDMLa.INI` lists "WPA", "WPA PSK", "WPA2", "WPA2 PSK" |
@@ -256,13 +258,13 @@ were not read here). From Vista on, Windows does it itself.
 
 So the systems where WPA2 is documented below XP are: 98 SE and ME with
 the RTL8187L and the ZD1211, and 2000 with those two and the RTL8192SU
-family. The Ralink RT73 and RT2500USB serve 98 SE to 2000 too, but
+family. MediaTek's (h) names WPA2 too, if it runs on 2000 (U). The Ralink RT73 and RT2500USB serve 98 SE to 2000 too, but
 WPA2 there is not shown in what was read.
 
 ## 6. Testability
 
-The owner has no USB Wi-Fi adapter (no Wi-Fi hardware was named for
-44.71). QEMU emulates no USB Wi-Fi device. The makers' drivers proposed
+Whether the owner has any USB Wi-Fi adapter is not known (owner
+question 12). QEMU emulates no USB Wi-Fi device. The makers' drivers proposed
 below are carried untested, as the pack's README says of every driver it
 holds.
 
@@ -279,11 +281,14 @@ Wi-Fi driver is planned).
 | RTL8187B | 98 SE, ME, 2000 | Realtek's package starts at XP. Stays uncovered |
 | RTL8188SU, RTL8191SU, RTL8192SU | 98 SE, ME | Package starts at 2000 (its setup notes name a 98 tool, but no 9x INF is in it). Stays uncovered |
 | RTL8192FU | 98 SE to 7 | In no Realtek INF read. Stays uncovered |
-| RTL8822CU | 98 SE to 7 | Only Linksys `13B1:0043` is in (e). Stays uncovered |
+| RTL8822CU | 98 SE to 7 (on XP to 7, all but Linksys `13B1:0043`, which (e) lists) | No other id in any Realtek INF read. Stays uncovered |
 | RTL8851BU, RTL8852AU/8832AU, RTL8852BU/8832BU, RTL8852CU/8832CU, RTL8922AU | 98 SE to 7 | Makers and brands offer 10 and 11 only. Stays uncovered |
-| Realtek ids the INFs leave out | XP to 7 | For example 17 of 82 RTL8188CU/8192CU ids, 5 of 15 RTL8188EU ids, 26 of 36 RTL8812BU/8822BU ids (section 3.1, best of (c), (d), (e)). Stays uncovered |
+| Realtek ids the INFs leave out | XP to 7 | For example RTL8188CU/8192CU: 17 of 82 ids on XP to Vista, 15 on 7. RTL8188EU: 5 of 15. RTL8812BU/8822BU: 26 of 36 (section 3.1, best of (c), (d), (e)). Stays uncovered |
 | RT2870 to RT5572, MT7601U, MT7610U, MT7612U | 98 SE, ME | No 9x build after 2007. (g)'s 9x folders hold RT73, RT2500USB and PCI parts only. Stays uncovered |
-| The same | 2000 to 7 | Only (h), whose licence text limits distribution (owner question 2). Uncovered until the owner decides. On 7 the in-box `netr28u` serves 110 ids |
+| The same | 2000 to 7 | (g)'s early RT2870 build serves RT2770/RT2870 ids only (16 of Linux's ids, 2000 to Vista). The rest only in (h) (owner question 2). Uncovered until the owner decides. On 7 the in-box `netr28u` serves 110 ids |
+| RT2500USB, RT73 | 98 SE to Vista | Ids (g) leaves out: 10 of 31 RT2500USB, 46 of 75 RT73 (44 on Vista). On 7, 18 RT73 ids are not in the in-box INF. Stays uncovered |
+| AR9170 | 2000 to 7 | 18 of 28 Linux ids are not in (j). Stays uncovered |
+| ZD1211 | 98 SE to XP x64 | 14 of 26 Linux ids are not in (k). Stays uncovered |
 | RT2500USB | 7 | No 7 build. Vista's undecorated INF would install (U, owner question 8). Stays uncovered until then |
 | MT7921AU, MT7925U, MT7663U | 98 SE to 7 | Nothing found. Stays uncovered |
 | AR9271, AR7010 | 98 SE, ME, 2000 | TP-Link's package starts at XP. Stays uncovered |
@@ -321,7 +326,7 @@ and 3.
 | Folder | Systems | Version, date | Archive (size, SHA-256) | Archived URL | INF ids |
 |---|---|---|---|---|---|
 | `w98se-vista/` (the contents of the zip's `87-USB/`, the whole "UI 1.00.0023" package as released) | 98 SE, ME, 2000, XP, XP x64, Vista x86/x64 | 5.1313.0613.2008 (XP x64 5.1312.0416.2008, Vista 6.1313.0613.2008), `DriverVer` 2008-06-13 | `0001-8187_1313.0613_UI_1.00.0023.zip` (10,459,616, `761c9f420c0f2636b429ddbc1905f45f38727cdfbca6b84f5cb39139c74d7898`) | `20240219095753/https://www.realtek.com/rtdrivers/cn/wlan/0001-8187_1313.0613_UI_1.00.0023.zip` (also `20151231070225`, on `12244.wpc.azureedge.net/8012244/drivers/rtdrivers/cn/wlan/`) | `0BDA:8187`, `0769:11F2`, `0789:010C`, `0DF6:000D`, `114B:0150`, `1371:9401`, `13D1:ABE6`, `18E8:6232`, all `REV_0100` |
-| `w7/` (the zip's one folder, whole) | 7 x86/x64 | 6.1316.1209.2009 | `0001-RTL8187L_Win7_6.1316.1209.2009.L.zip` (18,383,978, `063c2a3193b454b8a43e80a55122aa758aeba287a99b0a33d62d5812b161a9f3`) | `20240219102145/https://www.realtek.com/rtdrivers/cn/wlan/0001-RTL8187L_Win7_6.1316.1209.2009.L.zip` | the above, plus `145F:0161`, `1B75:8187`, `7392:7612`, all `REV_0100` |
+| `w7/` (the contents of the zip's one folder) | 7 x86/x64 | 6.1316.1209.2009 | `0001-RTL8187L_Win7_6.1316.1209.2009.L.zip` (18,383,978, `063c2a3193b454b8a43e80a55122aa758aeba287a99b0a33d62d5812b161a9f3`) | `20240219102145/https://www.realtek.com/rtdrivers/cn/wlan/0001-RTL8187L_Win7_6.1316.1209.2009.L.zip` | the above, plus `145F:0161`, `1B75:8187`, `7392:7612`, all `REV_0100` |
 
 Linked from Realtek's old RTL8187L download list
 (`realtek.com.tw/downloads/RedirectFTPSite.aspx?...DownID=437&PFid=1`,
@@ -347,7 +352,7 @@ folder, whole)
   Semiconductor Corp." (2009 for 7).
 
 **(c) Realtek RTL8188CU, RTL8192CU, RTL8192DU, RTL8723AU, XP to 7**
-(`rtl8192cu/wxp-7/`, the zip's one folder, whole)
+(`rtl8192cu/wxp-7/`, the contents of the zip's one folder)
 
 - Archive: `0001-RTL819xCU_AutoInstallPackage.zip`, 35,282,265 bytes,
   SHA-256 `ad686d0e08c390f074e989950b70b4b94c03a5114c79f3cf265a912b20f4f1ef`,
@@ -366,7 +371,7 @@ folder, whole)
   INF copyright: "Copyright (C) 2012 Realtek Semiconductor Corp."
 
 **(d) Realtek 1030.25, USB 802.11n and 802.11ac parts, XP to 7**
-(`rtwlanu/wxp-7/`, the zip's one folder, whole)
+(`rtwlanu/wxp-7/`, the contents of the zip's one folder)
 
 - Archive: `0002-Realtek_WindowsDriver_1030.25.0701.2017.zip`,
   52,899,174 bytes, SHA-256
@@ -392,7 +397,7 @@ folder, whole)
   copyright: "Copyright (C) 2012 Realtek Semiconductor Corp."
 
 **(e) Realtek 1030.17, the same chips with more brand ids, XP to 7**
-(`rtwlanu17/wxp-7/`, the zip's one folder, whole; owner question 5)
+(`rtwlanu17/wxp-7/`, the contents of the zip's one folder. Owner question 5)
 
 - Archive: `0001-Realtek_USB_Windows_Driver_1030.17.1101.2016.zip`,
   25,710,952 bytes, SHA-256
@@ -409,7 +414,7 @@ folder, whole)
   (d), and 17 of (d)'s 39 are not in it. INF copyright: as (d).
 
 **(f) Realtek RTL8188SU, RTL8191SU, RTL8192SU, 2000 to 7**
-(`rtl8192su/w2k-7/`, the zip's one folder, whole)
+(`rtl8192su/w2k-7/`, the contents of the zip's one folder)
 
 - Archive: `0001-RTL8192SU_AutoInstallPackage.zip`, 29,820,529 bytes,
   SHA-256 `535ffcf7822c827d2bdaa1358ba57b7a1b7cc6245839054407b334fcebdad331`,
@@ -454,7 +459,7 @@ folder, whole)
   2005 RT2500USB package carries the same text for "Windows
   98/ME/2000/XP".
 
-**(h) MediaTek RT2870 to MT7612U, 2000 to 7** (`mtk-rt2870/w2k-7/`,
+**(h) MediaTek RT2870 to MT7612U, XP to 7 (2000 U)** (`mtk-rt2870/w2k-7/`,
 owner question 2)
 
 - Archive: `IS_Setup_ICS_011916_1.5.39.173.zip`, 42,835,761 bytes,
@@ -464,7 +469,7 @@ owner question 2)
 - URL: `https://web.archive.org/web/20180131104148/https://d86o2zu8ugzlg.cloudfront.net/mediatek-craft/drivers/IS_Setup_ICS_011916_1.5.39.173.zip`,
   linked from MediaTek's RT2070 and MT7612U pages (archived 2021).
 - Inside: `RT2870_Driver_XP2k/RT2870.inf` (`$Chicago$`, undecorated
-  models), `_XPX64`, `_VistaX86`, `_VistaX64` (`RT2870.inf`),
+  models. Whether 2000 runs it is U, owner question 7), `_XPX64`, `_VistaX86`, `_VistaX64` (`RT2870.inf`),
   `_Win7X86/X64`, `_Win8*`, `_Win8.1*`, `_Win10*` (`netr28u(x).inf`), all
   5.01.25.0 (2015-10-28), with firmware for RT2870, RT3573, MT7601U,
   MT7610U, MT7662. Also `RaUI`, `SoftAP`, an NDIS protocol driver and
@@ -522,7 +527,8 @@ zip's `TL-WN821N_WN822N/`)
   3.1.0.131 (2010-03-01), 7 3.5.0.12 (2009-11-26). With TP-Link's
   `Setup.exe`, `QSS.exe` and two user guides.
 - Ids (10): `0CF3:1002`, `9170`, Netgear `0846:9001`, `9010`, `9040`,
-  D-Link DWA-160 `07D1:3C10`, `3A09`, Arcadyan `083A:F522`, `1435:0804`.
+  D-Link DWA-160 `07D1:3C10`, `3A09`, Arcadyan `083A:F522`, `1435:0326`,
+  `0804`.
   INF copyright: "Copyright (c) 2009, TP-LINK TECHNOLOGIES CO., LTD.All
   Rights Reserved."
 
@@ -534,7 +540,7 @@ question 4)
   holding one setup program `ZD1211USB_Install_4_13_0_0_ALL.exe`
   (2006-04-12).
 - URL: `https://web.archive.org/web/20060626171824/http://www.zydas.com.tw:80/web_driver/ZD1211_USB/Windows/ZD1211USB_Install_4_13_0_0_ALL.zip`.
-- Inside: `ZD1211U.inf` 4.13.0.0 (2006-02-27; models undecorated, `NT.5.1`
+- Inside: `ZD1211U.inf` 4.13.0.0 (2006-02-27. Models undecorated, `NT.5.1`
   and `ntamd64`), `ZD1211U.sys` for 98 SE and ME, `ZD11U2K.sys`,
   `ZD11UXP.sys`, `ZD11U64.sys`, a catalog, the `ZDWlan` utility and its
   protocol drivers. The INF's `CopyFiles` file lines are commented out
@@ -564,18 +570,18 @@ question 9.
 A new `### non-free/wifi/` table:
 
 ```
-| All files in `rtl8187/w98se-vista/` | Realtek Semiconductor Corp.; its setup engine is Flexera's InstallShield, as Realtek ships it | 5.1313.0613.2008 (`Win98\Netrtuw.inf` `DriverVer` 06/13/2008; XP x64 5.1312.0416.2008; Vista 6.1313.0613.2008) |
+| All files in `rtl8187/w98se-vista/` | Realtek Semiconductor Corp. Its setup engine is Flexera's InstallShield, as Realtek ships it | 5.1313.0613.2008 (`Win98\Netrtuw.inf` `DriverVer` 06/13/2008. XP x64 5.1312.0416.2008. Vista 6.1313.0613.2008) |
 | All files in `rtl8187/w7/` | as `rtl8187/w98se-vista/` | 6.1316.1209.2009 |
 | All files in `rtl8187b/wxp-7/` | as `rtl8187/w98se-vista/` | XP 5.1162.0610.2009, XP x64 5.1160.0415.2009, Vista 6.1162.0610.2009, 7 62.1181.1105.2009 |
 | All files in `rtl8192cu/wxp-7/` | as `rtl8187/w98se-vista/` | 1021.3.0912.2012 |
 | All files in `rtwlanu/wxp-7/` | as `rtl8187/w98se-vista/` | 1030.25.0701.2017 (`DriverVer` 12/25/2017) |
 | All files in `rtwlanu17/wxp-7/` | Realtek Semiconductor Corp. | 1030.17.1101.2016 (`DriverVer` 04/06/2017) |
 | All files in `rtl8192su/w2k-7/` | as `rtl8187/w98se-vista/` | 1084.53.0809.2011 (2000 to Vista), 1086.48.0809.2011 (7) |
-| `ralink/w98se-vista/IS_AP_STA_7x_..._0.1.0.23.exe` | Ralink Technology Corp. (now MediaTek Inc.); InstallShield setup; inside it Meetinghouse Data Communications' AEGIS client, as Ralink ships it | 0.1.0.23 (RT73 1.02.01.0000 / 3.00.06.0000, RT2500USB 2.01.01.0000 / 3.00.02.0000) |
-| `mtk-rt2870/w2k-7/IS_Setup_ICS_011916_1.5.39.173.exe` (if the owner accepts its terms) | MediaTek Inc. (Ralink's line); InstallShield setup | 1.5.39.173 (`RT2870.inf` 5.01.25.0) |
+| `ralink/w98se-vista/IS_AP_STA_7x_D-1.2.1.0_VA-3.0.6.0_2500_D-2.1.1.0_VA-3.0.2.0_RU-2.0.2.0_VA-1.0.12.0_AU-1.1.9.0_062807_0.1.0.23.exe` | Ralink Technology Corp. (now MediaTek Inc.). InstallShield setup. Inside it Meetinghouse Data Communications' AEGIS client, as Ralink ships it | 0.1.0.23 (RT73 1.02.01.0000 / 3.00.06.0000, RT2500USB 2.01.01.0000 / 3.00.02.0000) |
+| `mtk-rt2870/w2k-7/IS_Setup_ICS_011916_1.5.39.173.exe` (if the owner accepts its terms) | MediaTek Inc. (Ralink's line). InstallShield setup | 1.5.39.173 (`RT2870.inf` 5.01.25.0) |
 | All files in `ar9271/wxp-7/` | Qualcomm Atheros, Inc. (Atheros Communications), as TP-LINK Technologies Co., Ltd. ships it for the TL-WN721N | 7.7.0.102 (XP), 8.0.0.84 (Vista), 2.0.0.62 (7), 10.0.0.25 (8), 10.0.0.28 (8.1) |
 | All files in `ar9170/w2k-7/` | Atheros Communications, Inc., as TP-LINK Technologies Co., Ltd. ships it for the TL-WN821N and TL-WN822N (the INFs' copyright: TP-LINK) | 3.0.0.165 (2000, XP), 3.1.0.131 (Vista), 3.5.0.12 (7) |
-| `zd1211/w98se-xp/ZD1211USB_Install_4_13_0_0_ALL.exe` | ZyDAS Technology Corporation; InstallShield setup; OpenSSL's DLLs inside, as ZyDAS ships them | 4.13.0.0 |
+| `zd1211/w98se-xp/ZD1211USB_Install_4_13_0_0_ALL.exe` | ZyDAS Technology Corporation. InstallShield setup. OpenSSL's DLLs inside, as ZyDAS ships them | 4.13.0.0 |
 | All files in `ae2500/wxp/`, `wvista/`, `w7/` | Broadcom Corporation, as Cisco-Linksys ships it for the AE2500 | 5.100.68.46, 5.100.243.6, 5.100.68.46 |
 ```
 
@@ -610,13 +616,15 @@ STAGE | WVISTA64         | non-free/wifi/rtl8187b/wxp-7/RTL8187B/VistaX64/net818
 STAGE | W7               | non-free/wifi/rtl8187b/wxp-7/RTL8187B/Win7X86/net8187b.inf  | 62.1181, newer than 7's in-box 6.1159
 STAGE | W7X64            | non-free/wifi/rtl8187b/wxp-7/RTL8187B/Win7X64/net8187b.inf  | 62.1181
 # ---- Wi-Fi: Realtek RTL8188CU / RTL8192CU / RTL8192DU / RTL8723AU, 1021.3
-STAGE | WXP              | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinXP/netrtwlanu.inf    | 1021.3 (2012). 0BDA:8179 also in rtwlanu: worker to resolve
-STAGE | WXP64            | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinX64/netrtwlanu.inf   | 1021.3
-STAGE | WVISTA           | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/VistaX86/netrtwlanu.inf | 1021.3
-STAGE | WVISTA64         | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/VistaX64/netrtwlanu.inf | 1021.3
-STAGE | W7               | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/Win7X86/netrtwlanu.inf  | 1021.3
-STAGE | W7X64            | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/Win7X64/netrtwlanu.inf  | 1021.3
-COPY  | WXP WXP64        | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinXP/RTLBt.inf         | RTL8723AU Bluetooth half. Windows' own Bluetooth stack
+# COPY until owner question 13: its INFs also list 0BDA:8179 and A179 (rtwlanu, RTL8188EU)
+# and 0BDA:8192 at any revision (rtl8192su lists 8192 at REV_0100 and REV_0200)
+COPY  | WXP              | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinXP/netrtwlanu.inf    | 1021.3 (2012)
+COPY  | WXP64            | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinX64/netrtwlanu.inf   | 1021.3
+COPY  | WVISTA           | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/VistaX86/netrtwlanu.inf | 1021.3
+COPY  | WVISTA64         | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/VistaX64/netrtwlanu.inf | 1021.3
+COPY  | W7               | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/Win7X86/netrtwlanu.inf  | 1021.3
+COPY  | W7X64            | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/Win7X64/netrtwlanu.inf  | 1021.3
+COPY  | WXP              | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinXP/RTLBt.inf         | RTL8723AU Bluetooth half. Windows' own Bluetooth stack
 COPY  | WXP64            | non-free/wifi/rtl8192cu/wxp-7/RTWLANU_Driver/WinX64/RTLBt.inf        | as above
 # ---- Wi-Fi: Realtek 1030.25 (RTL8188EU/FU, 8192EU, 8723BU/DU, 8710BU, 8812AU, 8811AU/8821AU, 8814AU, 8811CU/8821CU, 8812BU/8822BU)
 STAGE | WXP              | non-free/wifi/rtwlanu/wxp-7/RTWLANU_Driver/WinXP/netrtwlanu_XP.inf       | 1030.25 (DriverVer 2017-12-25). Realtek's page lists 7 and later (owner question 6)
@@ -633,7 +641,7 @@ COPY  | WVISTA64         | non-free/wifi/rtwlanu17/wxp-7/VistaX64/netrtwlanu_Vis
 COPY  | W7               | non-free/wifi/rtwlanu17/wxp-7/Win7X86/netrtwlanu.inf        |
 COPY  | W7X64            | non-free/wifi/rtwlanu17/wxp-7/Win7X64/netrtwlanu.inf        |
 # ---- Wi-Fi: Realtek RTL8188SU / RTL8191SU / RTL8192SU
-STAGE | W2K              | non-free/wifi/rtl8192su/w2k-7/88_91_92_SU_Driver/Win2K/net8192su.inf    | 1084.53 (2011). 0BDA:8192 also in rtl8192cu: worker to check revisions
+STAGE | W2K              | non-free/wifi/rtl8192su/w2k-7/88_91_92_SU_Driver/Win2K/net8192su.inf    | 1084.53 (2011). rtl8192cu's rev-less 0BDA:8192 line is why that package is COPY
 STAGE | WXP              | non-free/wifi/rtl8192su/w2k-7/88_91_92_SU_Driver/WinXP/net8192su.inf    | 1084.53
 STAGE | WXP64            | non-free/wifi/rtl8192su/w2k-7/88_91_92_SU_Driver/WinX64/net8192su.inf   | 1084.53
 STAGE | WVISTA           | non-free/wifi/rtl8192su/w2k-7/88_91_92_SU_Driver/VistaX86/net8192su.inf | 1084.53
@@ -722,6 +730,12 @@ newer if carried.
     themselves?
 12. Which USB Wi-Fi adapters does the owner have, if any? Every row here
     is untested.
+13. Realtek (c) 1021.3 shares ids with (d) (`0BDA:8179`, `A179`,
+    RTL8188EU) and with (f) (`0BDA:8192`, listed in (c) without a
+    revision). Only one INF may be staged per id. The proposal stages (d)
+    and (f) and leaves (c) `COPY`. An RTL8188CU or RTL8192CU dongle then
+    needs Update Driver by hand. Or stage (c) and make (d) and (f)
+    `COPY` instead?
 
 ## 11. Sources
 

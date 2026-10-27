@@ -4,7 +4,8 @@
  * RTL815X chip core behind the netchip.h interface (ethernet.md section
  * 6.4): Realtek RTL8152 (ids 4C00, 4C10, 4800), RTL8153 (5C00 to 5C30),
  * RTL8153B (6000, 6010), RTL8153C (6400), RTL8156 (7020, 7030), RTL8156B
- * (7400, 7410) and RTL8153D (7420) in their vendor configuration.
+ * (7400, 7410), RTL8153D (7420), RTL8157 (1030, 5 Gb/s) and RTL8159
+ * (2020, 10 Gb/s) in their vendor configuration.
  *
  * Every chip-side sequence is a table of register steps (STEP), run by
  * one small interpreter (Run). A step names a register, what to clear and
@@ -36,11 +37,10 @@
 /* ------------------------------------------------------------------ */
 /* Chips and guards */
 
-/* One bit per supported id, in the order of Ids[]. The 8157/8159 work
- * adds ID_1030 and ID_2020 here, in that order (bits K_1030, K_2020). */
+/* One bit per supported id, in the order of Ids[]. */
 static const nc_u16 Ids[] = {
     ID_4C00, ID_4C10, ID_4800, ID_5C00, ID_5C10, ID_5C20, ID_5C30, ID_6000, ID_6010, ID_6400,
-    ID_7020, ID_7030, ID_7400, ID_7410, ID_7420
+    ID_7020, ID_7030, ID_7400, ID_7410, ID_7420, ID_1030, ID_2020
 };
 #define K_4C00  0x0001
 #define K_4C10  0x0002
@@ -57,8 +57,8 @@ static const nc_u16 Ids[] = {
 #define K_7400  0x1000UL
 #define K_7410  0x2000UL
 #define K_7420  0x4000UL
-#define K_1030  0x8000UL                    /* RTL8157: 8157/8159 work */
-#define K_2020  0x10000UL                   /* RTL8159: 8157/8159 work */
+#define K_1030  0x8000UL                    /* RTL8157 */
+#define K_2020  0x10000UL                   /* RTL8159 */
 #define K_8152  (K_4C00 | K_4C10 | K_4800)
 #define K_8153  (K_5C00 | K_5C10 | K_5C20 | K_5C30)
 #define K_8153B (K_6000 | K_6010)
@@ -240,7 +240,7 @@ enum {
     Q_RX_ON, Q_RX_OFF, Q_BIAS_FULL, Q_BIAS_LOW,
     Q_SETUP_MG, Q_PHY_56A, Q_PHY_7020, Q_PHY_7030, Q_PHY_56B, Q_PHY_7400_PRE, Q_PHY_7400,
     Q_PHY_7410, Q_PHY_7420, Q_PHY_MG_TAIL, Q_NIC_RESET_MG, Q_DRAIN_MG, Q_WAKE_MG, Q_RX_ON_MG,
-    Q_RX_OFF_MG, Q_SLEEP_MG, Q_DETACH_MG
+    Q_RX_OFF_MG, Q_SLEEP_MG, Q_DETACH_MG, Q_PHY_57, Q_PHY_1030, Q_PHY_2020
 };
 
 /* Hook numbers (Hook()) */
@@ -347,7 +347,7 @@ static const STEP SqEeeOff[] = {                       /* 8153 and later only */
 };
 static const STEP SqEeeOn[] = {
     SET(MAC, 2, MR_EEE, 0x0003),
-    ONLY(K_8152, U_ANY, 9),
+    ONLY(K_8152, U_ANY, 8),
     PHY_EDIT(PR_EEE_A1, 0x0070, 0x3310),
     PHY_SET(PR_EEE_A2, 0x0600),
     PHY_EDIT(PR_EEE_A3, 0xff80, 0x1500),
@@ -358,12 +358,17 @@ static const STEP SqEeeOn[] = {
     ONLY(K_GIG, U_ANY, 2),
     PHY_SET(PR_EEE_CFG, 0x0010),
     PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
-    /* The 8156 core: 2.5G EEE advertised too (also by the 1G 8153D);
-     * the 8157/8159 work adds its own advertisement lines here. */
+    /* The 8156 core: 2.5G EEE advertised too (also by the 1G 8153D) */
     ONLY(K_56, U_ANY, 3),
     PHY_SET(PR_EEE_CFG, 0x0010),
     PHY_EDIT(PR_EEE_ADV2, EEEADV2_2G5 | EEEADV2_5G, EEEADV2_2G5),
     PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
+    /* The 8157 and 8159: 2.5G and 5G, and on the 8159 10G */
+    ONLY(K_57, U_ANY, 2),
+    PHY_SET(PR_EEE_CFG, 0x0010),
+    PHY_SET(PR_EEE_ADV2, EEEADV2_2G5 | EEEADV2_5G),
+    ONLY(K_1030, U_ANY, 1), PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
+    ONLY(K_2020, U_ANY, 1), PHY_PUT(PR_EEE_ADV, EEEADV_10GT | EEEADV_1000T | EEEADV_100TX),
     END
 };
 
@@ -987,8 +992,9 @@ static const STEP SqPhy7420[] = {                      /* 7410 and 7420 */
 static const STEP SqPhyMGTail[] = {
     SRAM_SET(SR_GREEN, 0x8000),
     PHY_CLR(PR_LITE_A, 0x0200),
-    PHY_CLR(PR_LITE_B, 0x0001),
-    ONLY(K_7030 | K_56B, U_ANY, 1), RUN(Q_EEE_ON),
+    ONLY(K_56, U_ANY, 1), PHY_CLR(PR_LITE_B, 0x0001),
+    ONLY(K_57, U_ANY, 1), PHY_CLR(PR_LITE_B, 0x0003),
+    ONLY(K_7030 | K_56B | K_57, U_ANY, 1), RUN(Q_EEE_ON),
     RUN(Q_ALDPS_ON),
     PHY_SET(MII(MII_AN_ADV), ANADV_PAUSE),
     END
@@ -1119,6 +1125,266 @@ static const STEP SqDetachMG[] = {
     END
 };
 
+/* The RTL8157 and RTL8159 (1030, 2020): the chip's PHY tuning values, then
+ * EEE clock division in a patch window, then the common end. */
+static const STEP SqPhy57[] = {
+    HOOK(H_FLASH_WAIT),
+    TRIM(USB, 2, UR_MISC0, 0x0001),
+    HOOK(H_EXT_INIT_PHY),
+    PHY_TRIM(MII(MII_CONTROL), MIICTL_POWERDOWN),
+    RUN(Q_ALDPS_OFF),
+    RUN(Q_EEE_OFF),
+    PHY_STATE(ST_LAN_ON),
+    CLR(MAC, 2, MR_PHY_POWER, 0x0040),
+    PHY_SET(PR_POWER, 0x0003),
+    PHY_CLR(0xa44a, 0x0004),                        /* ALDPS not forced */
+    ONLY(K_1030, U_ANY, 1), RUN(Q_PHY_1030),
+    ONLY(K_2020, U_ANY, 1), RUN(Q_PHY_2020),
+    PATCH_OPEN,
+    SET(MAC, 2, MR_POWER4, 0x0001),
+    PHY_EDIT(PR_SPEED_DOWN, 0x3000, 0x0800),
+    PHY_SET(PR_POWER, 0x8000),
+    PATCH_CLOSE,
+    RUN(Q_PHY_MG_TAIL),
+    END
+};
+
+/* PHY tuning values of the RTL8157 (1030): (address, mask, value) facts
+ * of the chip, through the PHY window and its two SRAM windows. */
+static const STEP SqPhy1030[] = {
+    SRAM_EDIT(0x8183, 0xff00, 0x5900),
+    PHY_SET(0xa654, 0x0800),
+    PHY_SET(0xb648, 0x4000),
+    PHY_CLR(0xad2c, 0x8000),
+    PHY_SET(0xad94, 0x0020),
+    PHY_SET(0xada0, 0x0002),
+    PHY_EDIT(0xae06, 0xfc00, 0x7c00),
+    SRAM2_EDIT(0x8647, 0xff00, 0xe600),
+    SRAM2_EDIT(0x8036, 0xff00, 0x3000),
+    SRAM2_EDIT(0x8078, 0xff00, 0x3000),
+    SRAM2_EDIT(0x89e9, 0xff00, 0),
+    SRAM2_EDIT(0x8ffd, 0xff00, 0x0100),
+    SRAM2_EDIT(0x8ffe, 0xff00, 0x0200),
+    SRAM2_EDIT(0x8fff, 0xff00, 0x0400),
+    SRAM_EDIT(0x8018, 0xff00, 0x7700),
+    PHY_PUT(PR_SRAM_ADDR, 0x8f9c),
+    PHY_PUT(PR_SRAM_DATA, 0x0005),
+    PHY_PUT(PR_SRAM_DATA, 0x0000),
+    PHY_PUT(PR_SRAM_DATA, 0x00ed),
+    PHY_PUT(PR_SRAM_DATA, 0x0502),
+    PHY_PUT(PR_SRAM_DATA, 0x0b00),
+    PHY_PUT(PR_SRAM_DATA, 0xd401),
+    SRAM_EDIT(0x8fa8, 0xff00, 0x2900),
+    SRAM2_EDIT(0x814b, 0xff00, 0x1100),
+    SRAM2_EDIT(0x814d, 0xff00, 0x1100),
+    SRAM2_EDIT(0x814f, 0xff00, 0x0b00),
+    SRAM2_EDIT(0x8142, 0xff00, 0x0100),
+    SRAM2_EDIT(0x8144, 0xff00, 0x0100),
+    SRAM2_EDIT(0x8150, 0xff00, 0x0100),
+    SRAM2_EDIT(0x8118, 0xff00, 0x0700),
+    SRAM2_EDIT(0x811a, 0xff00, 0x0700),
+    SRAM2_EDIT(0x811c, 0xff00, 0x0500),
+    SRAM2_EDIT(0x810f, 0xff00, 0x0100),
+    SRAM2_EDIT(0x8111, 0xff00, 0x0100),
+    SRAM2_EDIT(0x811d, 0xff00, 0x0100),
+    PHY_CLR(0xad1c, 0x0100),
+    PHY_EDIT(0xade8, 0xffc0, 0x1400),
+    SRAM2_EDIT(0x864b, 0xff00, 0x9d00),
+    SRAM2_EDIT(0x862c, 0xff00, 0x1200),
+    PHY_PUT(PR_SRAM_ADDR, 0x8566),
+    PHY_PUT(PR_SRAM_DATA, 0x003f),
+    PHY_PUT(PR_SRAM_DATA, 0x3f02),
+    PHY_PUT(PR_SRAM_DATA, 0x023c),
+    PHY_PUT(PR_SRAM_DATA, 0x3b0a),
+    PHY_PUT(PR_SRAM_DATA, 0x1c00),
+    PHY_PUT(PR_SRAM_DATA, 0x0000),
+    PHY_PUT(PR_SRAM_DATA, 0x0000),
+    PHY_PUT(PR_SRAM_DATA, 0x0000),
+    PHY_PUT(PR_SRAM_DATA, 0x0000),
+    PHY_SET(0xad9c, 0x0020),
+    SRAM2_EDIT(0x8122, 0xff00, 0x0c00),
+    PHY_PUT(PR_SRAM2_ADDR, 0x82c8),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ed),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ff),
+    PHY_PUT(PR_SRAM2_DATA, 0x0009),
+    PHY_PUT(PR_SRAM2_DATA, 0x03fe),
+    PHY_PUT(PR_SRAM2_DATA, 0x000b),
+    PHY_PUT(PR_SRAM2_DATA, 0x0021),
+    PHY_PUT(PR_SRAM2_DATA, 0x03f7),
+    PHY_PUT(PR_SRAM2_DATA, 0x03b8),
+    PHY_PUT(PR_SRAM2_DATA, 0x03e0),
+    PHY_PUT(PR_SRAM2_DATA, 0x0049),
+    PHY_PUT(PR_SRAM2_DATA, 0x0049),
+    PHY_PUT(PR_SRAM2_DATA, 0x03e0),
+    PHY_PUT(PR_SRAM2_DATA, 0x03b8),
+    PHY_PUT(PR_SRAM2_DATA, 0x03f7),
+    PHY_PUT(PR_SRAM2_DATA, 0x0021),
+    PHY_PUT(PR_SRAM2_DATA, 0x000b),
+    PHY_PUT(PR_SRAM2_DATA, 0x03fe),
+    PHY_PUT(PR_SRAM2_DATA, 0x0009),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ff),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ed),
+    SRAM2_EDIT(0x80ef, 0xff00, 0x0c00),
+    PHY_PUT(PR_SRAM2_ADDR, 0x82a0),
+    PHY_PUT(PR_SRAM2_DATA, 0x000e),
+    PHY_PUT(PR_SRAM2_DATA, 0x03fe),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ed),
+    PHY_PUT(PR_SRAM2_DATA, 0x0006),
+    PHY_PUT(PR_SRAM2_DATA, 0x001a),
+    PHY_PUT(PR_SRAM2_DATA, 0x03f1),
+    PHY_PUT(PR_SRAM2_DATA, 0x03d8),
+    PHY_PUT(PR_SRAM2_DATA, 0x0023),
+    PHY_PUT(PR_SRAM2_DATA, 0x0054),
+    PHY_PUT(PR_SRAM2_DATA, 0x0322),
+    PHY_PUT(PR_SRAM2_DATA, 0x00dd),
+    PHY_PUT(PR_SRAM2_DATA, 0x03ab),
+    PHY_PUT(PR_SRAM2_DATA, 0x03dc),
+    PHY_PUT(PR_SRAM2_DATA, 0x0027),
+    PHY_PUT(PR_SRAM2_DATA, 0x000e),
+    PHY_PUT(PR_SRAM2_DATA, 0x03e5),
+    PHY_PUT(PR_SRAM2_DATA, 0x03f9),
+    PHY_PUT(PR_SRAM2_DATA, 0x0012),
+    PHY_PUT(PR_SRAM2_DATA, 0x0001),
+    PHY_PUT(PR_SRAM2_DATA, 0x03f1),
+    PHY_EDIT(0xb54c, 0xffc0, 0x3700),
+    PHY_SET(0xb648, 0x0040),
+    SRAM2_EDIT(0x8082, 0xff00, 0x5d00),
+    SRAM2_EDIT(0x807c, 0xff00, 0x5000),
+    SRAM2_EDIT(0x809d, 0xff00, 0x5000),
+    END
+};
+
+/* PHY tuning values of the RTL8159 (2020). */
+static const STEP SqPhy2020[] = {
+    CLR(MAC, 1, 0xd3c8, 0x0001),
+    SRAM_EDIT(0x8415, 0xff00, 0x9300),
+    SRAM_EDIT(0x81a3, 0xff00, 0x0f00),
+    SRAM_EDIT(0x81ae, 0xff00, 0x0f00),
+    SRAM_EDIT(0x81b9, 0xff00, 0xb900),
+    SRAM2_EDIT(0x83b0, 0x0e00, 0),
+    SRAM2_EDIT(0x83c5, 0x0e00, 0),
+    SRAM2_EDIT(0x83da, 0x0e00, 0),
+    SRAM2_EDIT(0x83ef, 0x0e00, 0),
+    SRAM_PUT(0x8173, 0x8620),
+    SRAM_PUT(0x8175, 0x8671),
+    SRAM_EDIT(0x817c, 0, 0x2000),
+    SRAM_EDIT(0x8187, 0, 0x2000),
+    SRAM_EDIT(0x8192, 0, 0x2000),
+    SRAM_EDIT(0x819d, 0, 0x2000),
+    SRAM_EDIT(0x81a8, 0x2000, 0),
+    SRAM_EDIT(0x81b3, 0x2000, 0),
+    SRAM_EDIT(0x81be, 0, 0x2000),
+    SRAM_EDIT(0x817d, 0xff00, 0xa600),
+    SRAM_EDIT(0x8188, 0xff00, 0xa600),
+    SRAM_EDIT(0x8193, 0xff00, 0xa600),
+    SRAM_EDIT(0x819e, 0xff00, 0xa600),
+    SRAM_EDIT(0x81a9, 0xff00, 0x1400),
+    SRAM_EDIT(0x81b4, 0xff00, 0x1400),
+    SRAM_EDIT(0x81bf, 0xff00, 0xa600),
+    PHY_CLR(0xaeaa, 0x0028),
+    SRAM2_PUT(0x84f0, 0x201c),
+    SRAM2_PUT(0x84f2, 0x3117),
+    PHY_PUT(0xaec6, 0x0000),
+    PHY_PUT(0xae20, 0xffff),
+    PHY_PUT(0xaece, 0xffff),
+    PHY_PUT(0xaed2, 0xffff),
+    PHY_PUT(0xaec8, 0x0000),
+    PHY_CLR(0xaed0, 0x0001),
+    PHY_PUT(0xadb8, 0x0150),
+    SRAM2_EDIT(0x8197, 0xff00, 0x5000),
+    SRAM2_EDIT(0x8231, 0xff00, 0x5000),
+    SRAM2_EDIT(0x82cb, 0xff00, 0x5000),
+    SRAM2_EDIT(0x82cd, 0xff00, 0x5700),
+    SRAM2_EDIT(0x8233, 0xff00, 0x5700),
+    SRAM2_EDIT(0x8199, 0xff00, 0x5700),
+    SRAM2_PUT(0x815a, 0x0150),
+    SRAM2_PUT(0x81f4, 0x0150),
+    SRAM2_PUT(0x828e, 0x0150),
+    SRAM2_PUT(0x81b1, 0x0000),
+    SRAM2_PUT(0x824b, 0x0000),
+    SRAM2_PUT(0x82e5, 0x0000),
+    SRAM2_EDIT(0x84f7, 0xff00, 0x2800),
+    PHY_SET(0xaec2, 0x1000),
+    SRAM2_EDIT(0x81b3, 0xff00, 0xad00),
+    SRAM2_EDIT(0x824d, 0xff00, 0xad00),
+    SRAM2_EDIT(0x82e7, 0xff00, 0xad00),
+    PHY_EDIT(0xae4e, 0x000f, 0x0001),
+    SRAM2_EDIT(0x82ce, 0xf000, 0x4000),
+    SRAM2_EDIT(0x83a5, 0xff00, 0x0400),
+    SRAM2_EDIT(0x83a6, 0xff00, 0x0400),
+    SRAM2_EDIT(0x83a7, 0xff00, 0x0400),
+    SRAM2_EDIT(0x83a8, 0xff00, 0x0400),
+    SRAM2_PUT(0x84ac, 0x0000),
+    SRAM2_PUT(0x84ae, 0x0000),
+    SRAM2_PUT(0x84b0, 0xf818),
+    SRAM2_EDIT(0x84b2, 0xff00, 0x6000),
+    SRAM2_PUT(0x8ffc, 0x6008),
+    SRAM2_PUT(0x8ffe, 0xf450),
+    SRAM2_EDIT(0x8015, 0, 0x0200),
+    SRAM2_EDIT(0x8016, 0, 0x0800),
+    SRAM2_EDIT(0x8fe6, 0xff00, 0x0800),
+    SRAM2_PUT(0x8fe4, 0x2114),
+    SRAM2_PUT(0x8647, 0xa7b1),
+    SRAM2_PUT(0x8649, 0xbbca),
+    SRAM2_EDIT(0x864b, 0xff00, 0xdc00),
+    SRAM2_EDIT(0x8154, 0xc000, 0x4000),
+    SRAM2_EDIT(0x8158, 0xc000, 0),
+    SRAM2_PUT(0x826c, 0xffff),
+    SRAM2_PUT(0x826e, 0xffff),
+    SRAM2_EDIT(0x8872, 0xff00, 0x0e00),
+    SRAM_EDIT(0x8012, 0, 0x0800),
+    SRAM_EDIT(0x8012, 0, 0x4000),
+    PHY_SET(0xb576, 0x0001),
+    SRAM_EDIT(0x834a, 0xff00, 0x0700),
+    SRAM2_EDIT(0x8217, 0x3f00, 0x2a00),
+    SRAM_EDIT(0x81b1, 0xff00, 0x0b00),
+    SRAM2_EDIT(0x8fed, 0xff00, 0x4e00),
+    SRAM2_EDIT(0x88ac, 0xff00, 0x2300),
+    PHY_SET(0xbf0c, 0x3800),
+    SRAM2_EDIT(0x88de, 0xff00, 0),
+    SRAM2_PUT(0x80b4, 0x5195),
+    SRAM_PUT(0x8370, 0x8671),
+    SRAM_PUT(0x8372, 0x86c8),
+    SRAM_PUT(0x8401, 0x86c8),
+    SRAM_PUT(0x8403, 0x86da),
+    SRAM_EDIT(0x8406, 0x1800, 0x1000),
+    SRAM_EDIT(0x8408, 0x1800, 0x1000),
+    SRAM_EDIT(0x840a, 0x1800, 0x1000),
+    SRAM_EDIT(0x840c, 0x1800, 0x1000),
+    SRAM_EDIT(0x840e, 0x1800, 0x1000),
+    SRAM_EDIT(0x8410, 0x1800, 0x1000),
+    SRAM_EDIT(0x8412, 0x1800, 0x1000),
+    SRAM_EDIT(0x8414, 0x1800, 0x1000),
+    SRAM_EDIT(0x8416, 0x1800, 0x1000),
+    SRAM_PUT(0x82bd, 0x1f40),
+    PHY_EDIT(0xbfb4, 0x07ff, 0x0328),
+    PHY_PUT(0xbfb6, 0x3e14),
+    PHY_PUT(PR_SRAM_ADDR, 0x81c4),
+    PHY_PUT(PR_SRAM_DATA, 0x003b),
+    PHY_PUT(PR_SRAM_DATA, 0x0086),
+    PHY_PUT(PR_SRAM_DATA, 0x00b7),
+    PHY_PUT(PR_SRAM_DATA, 0x00db),
+    PHY_PUT(PR_SRAM_DATA, 0x00fe),
+    PHY_PUT(PR_SRAM_DATA, 0x00fe),
+    PHY_PUT(PR_SRAM_DATA, 0x00fe),
+    PHY_PUT(PR_SRAM_DATA, 0x00fe),
+    PHY_PUT(PR_SRAM_DATA, 0x00c3),
+    PHY_PUT(PR_SRAM_DATA, 0x0078),
+    PHY_PUT(PR_SRAM_DATA, 0x0047),
+    PHY_PUT(PR_SRAM_DATA, 0x0023),
+    SRAM2_PUT(0x88d7, 0x01a0),
+    SRAM2_PUT(0x88d9, 0x01a0),
+    SRAM2_PUT(0x8ffa, 0x002a),
+    SRAM2_PUT(0x8fee, 0xffdf),
+    SRAM2_PUT(0x8ff0, 0xffff),
+    SRAM2_PUT(0x8ff2, 0x0a4a),
+    SRAM2_PUT(0x8ff4, 0xaa5a),
+    SRAM2_PUT(0x8ff6, 0x0a4a),
+    SRAM2_PUT(0x8ff8, 0xaa5a),
+    SRAM2_EDIT(0x88d5, 0xff00, 0x0200),
+    END
+};
+
 static const STEP *const Seq[] = {
     SqRxGate, SqRxUngate, SqTeredoOff, SqResetMac, SqResetBmu, SqRebuildList,
     SqLeaveOob, SqQuiesce, SqPowerCutOff, SqU1U2Off, SqU1U2On, SqAldpsOff, SqAldpsOn,
@@ -1128,7 +1394,7 @@ static const STEP *const Seq[] = {
     SqRxOn, SqRxOff, SqBiasFull, SqBiasLow,
     SqSetupMG, SqPhy56A, SqPhy7020, SqPhy7030, SqPhy56B, SqPhy7400Pre, SqPhy7400,
     SqPhy7410, SqPhy7420, SqPhyMGTail, SqNicResetMG, SqDrainMG, SqWakeMG, SqRxOnMG,
-    SqRxOffMG, SqSleepMG, SqDetachMG
+    SqRxOffMG, SqSleepMG, SqDetachMG, SqPhy57, SqPhy1030, SqPhy2020
 };
 
 /* ------------------------------------------------------------------ */
@@ -1286,7 +1552,8 @@ static nc_u16 MultiGig(const RTL_STATE *s)
 {
     if (s->UsbSpeed != NC_SPEED_SUPER) return 0;
     if (s->Kind & K_2G5) return MGIG_2G5;
-    /* K_1030, K_2020: the 8157/8159 work */
+    if (s->Kind & K_1030) return MGIG_2G5 | MGIG_5G;
+    if (s->Kind & K_2020) return MGIG_2G5 | MGIG_5G | MGIG_10G;
     return 0;
 }
 
@@ -1310,6 +1577,12 @@ static void Negotiate(RTL_STATE *s, NET_IO *io)
         now = (nc_u16)((was & ~(MGIG_2G5 | MGIG_5G | MGIG_10G)) | MultiGig(s));
         if (now != was) PhyPut(s, io, PR_MGIG_CTRL, now);
     }
+    if (s->NoReset) {
+        /* An 8156-core PHY setup that gave up asks for no PHY reset. */
+        PhyPut(s, io, MII(MII_CONTROL), MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
+        s->NoReset = 0;
+        return;
+    }
     PhyPut(s, io, MII(MII_CONTROL), MIICTL_RESET | MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
     WaitFor(s, io, &reset, 0);
 }
@@ -1322,7 +1595,7 @@ static int SeqFor(const RTL_STATE *s, int role)
     if (s->Kind & K_MG) {
         switch (role) {
         case R_SETUP: return Q_SETUP_MG;
-        case R_PHY: return (s->Kind & K_56A) ? Q_PHY_56A : Q_PHY_56B;   /* K_57: 8157/8159 work */
+        case R_PHY: return (s->Kind & K_56A) ? Q_PHY_56A : (s->Kind & K_57) ? Q_PHY_57 : Q_PHY_56B;
         case R_WAKE: return Q_WAKE_MG;
         case R_RX_ON: return Q_RX_ON_MG;
         case R_RX_OFF: return Q_RX_OFF_MG;
@@ -1353,10 +1626,11 @@ static int PhySequence(const RTL_STATE *s)
 static void PhySetup(RTL_STATE *s, NET_IO *io)
 {
     Run(s, io, PhySequence(s));
+    s->NoReset = (nc_u8)((s->Kind & K_MG) && s->Abort);
     s->Abort = 0;
 }
 
-/* Descriptor formats (DESC_*). The 8157/8159 work adds the second. */
+/* Descriptor formats (DESC_*). */
 typedef struct FORMAT {
     nc_u8 RxDesc, RxAlign;      /* receive record header and record alignment */
     nc_u8 TxDesc, TxAlign;      /* transmit header and its alignment */
@@ -1364,7 +1638,8 @@ typedef struct FORMAT {
 } FORMAT;
 
 static const FORMAT Formats[] = {
-    { RX_DESC_LEN, RX_RECORD_ALIGN, TX_DESC_LEN, TX_ALIGN, 8 }      /* DESC_V1 */
+    { RX_DESC_LEN, RX_RECORD_ALIGN, TX_DESC_LEN, TX_ALIGN, 8 },     /* DESC_V1 */
+    { RX2_DESC_LEN, RX2_ALIGN, TX2_DESC_LEN, TX2_ALIGN, 16 }        /* DESC_V2 */
 };
 
 static const FORMAT *Fmt(const RTL_STATE *s)
@@ -1482,7 +1757,7 @@ static void Hook(RTL_STATE *s, NET_IO *io, int h)
 
     /* ---- the 8156 core ---- */
     case H_FLASH_WAIT: { /* a PHY that loads its code from flash: up to 100 ms for it */
-        static const STEP loaded = WAIT(USB, 2, UR_GPHY, GPHY_PATCH_DONE, GPHY_PATCH_DONE, 100, 1);
+        static const STEP loaded = WAIT(USB, 2, UR_GPHY, GPHY_CODE_LOADED, GPHY_CODE_LOADED, 100, 1);
         if ((Get(io, RTL_SPACE_MAC, MR_GPHY_FLASH, 2) & 0x0002) &&
             !(Get(io, RTL_SPACE_USB, UR_GPHY, 2) & GPHY_NO_FLASH))
             WaitFor(s, io, &loaded, 0);
@@ -1629,7 +1904,7 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
     s->Carrier = 0;
     s->Abort = 0;
     s->Failed = 0;
-    s->Desc = DESC_V1;          /* the 8157/8159 work sets its format here */
+    s->Desc = (nc_u8)((s->Kind & K_57) ? DESC_V2 : DESC_V1);
 
     Run(s, io, SeqFor(s, R_SETUP));
     if (s->Failed) {
@@ -1793,14 +2068,15 @@ static int RtlStatus(void *chip, const nc_u8 *data, nc_u32 length)
 static nc_u32 RxWire(const RTL_STATE *s, const nc_u8 *desc)
 {
     switch (s ? s->Desc : DESC_V1) {
-    /* DESC_V2: the 8157/8159 work */
+    case DESC_V2: return Le32(desc) >> RX2_LEN_SHIFT;   /* bits 17-31 */
     default: return Le32(desc) & 0x7fff;     /* bits 0-14 */
     }
 }
 
 /* One bulk-IN transfer holds records: a header (24 bytes in the first
- * format) whose first dword gives the frame length with its 4-byte FCS,
- * then the frame, then padding to the format's record alignment (8). A
+ * format, 16 in the second) whose first dword gives the frame length with
+ * its 4-byte FCS, then the frame, then padding to the format's record
+ * alignment (8, or 16). A
  * length below 60 marks the end. The transfer is checked whole (first
  * pass) before any frame is handed up (second pass); a frame running past
  * its end rejects it. Frames longer than NC_ETH_MAX are counted as
@@ -1839,13 +2115,20 @@ long RtlRxParse(void *chip, const nc_u8 *data, nc_u32 length, NET_EMIT emit, voi
 }
 
 /* Each frame is preceded by a header: in the first format 8 bytes, the
- * first and last segment bits and the length; no offloads. */
+ * first and last segment bits and the length; no offloads. The second
+ * format's 16 bytes add the length again, shifted left 4, and the
+ * signature the chip checks. */
 static void RtlTxHeader(void *chip, nc_u8 *hdr, nc_u32 length, nc_u32 maxPacket, int single)
 {
     const RTL_STATE *s = chip;
     (void)maxPacket; (void)single;
     switch (s ? s->Desc : DESC_V1) {
-    /* DESC_V2: the 8157/8159 work */
+    case DESC_V2:
+        SetLe32(hdr, TX_FIRST_LAST | length);
+        SetLe32(hdr + 4, 0);
+        SetLe32(hdr + 8, length << TX2_LEN_SHIFT);
+        SetLe32(hdr + 12, TX2_SIGNATURE);
+        break;
     default:
         SetLe32(hdr, TX_FIRST_LAST | length);
         SetLe32(hdr + 4, 0);
@@ -1862,7 +2145,7 @@ static int RtlTxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, n
 
 const NET_CHIP NetPackageChip = {
     "rtl815x",
-    "usb-wdm-free RTL815X (Realtek RTL8152/RTL8153/RTL8156 USB Ethernet)",
+    "usb-wdm-free RTL815X (Realtek RTL8152/8153/8156/8157/8159 USB Ethernet)",
     0x0001,
     RtlProbe, RtlStart, RtlSetMac, RtlLink, RtlPoll, RtlSetFilter, RtlStop, RtlSuspend, RtlResume,
     RtlStatus, RtlRxParse, RtlTxHeader, RtlTxEnd

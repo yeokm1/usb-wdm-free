@@ -1,18 +1,18 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ;
-; RTL815X.INF - usb-wdm-free RTL815X: Realtek RTL8152/RTL8153/RTL8156 USB
-; Ethernet in vendor mode, Windows 2000 (ethernet.md sections 1 item 8, 7.2, 7.4).
+; RTL815X.INF - usb-wdm-free RTL815X: Realtek RTL8152, RTL8153, RTL8156,
+; RTL8157 and RTL8159 USB Ethernet in vendor mode, Windows 2000
+; (ethernet.md sections 1 item 8, 7.2, 7.4).
 ; RTL81598.INF is the Windows 98 SE and ME INF. Written from the Windows
 ; 2000 DDK network guide's INF pages; no DDK sample INF was read.
 ;
 ; Whole-device hardware ids: each is a dedicated network device whose
 ; configuration with a vendor-class first interface RTL815X selects
-; (ethernet.md 5.1, 6.5). The ids are those of Linux r8152.c at f47d2236
-; except 0BDA:8157 and 815A, the 5 and 10 Gb/s parts (RTL8157, RTL8159,
-; not served yet). The driver tells the chips apart by the chip id they
-; report, not by these ids: an id here carrying a chip it does not serve
-; is refused at start (unknown chip version), with an event-log entry.
+; (ethernet.md 5.1, 6.5). The ids are those of Linux r8152.c at f47d2236.
+; The driver tells the chips apart by the chip id they report, not by
+; these ids: an id here carrying a chip it does not serve is refused at
+; start (unknown chip version), with an event-log entry.
 ; 0BDA:8153 moves here from CDCNET.INF's 98 SE/ME/2000 models when this
 ; package ships (owner decision, ethernet.md 6.5).
 
@@ -59,6 +59,8 @@ DriverVer=10/27/2026,0.2.0.0
 %D29%=RTL,USB\VID_20F4&PID_E02C
 %D30%=RTL,USB\VID_0BDA&PID_8155
 %D31%=RTL,USB\VID_0BDA&PID_8156
+%D32%=RTL,USB\VID_0BDA&PID_8157
+%D33%=RTL,USB\VID_0BDA&PID_815A
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -150,3 +152,5 @@ D28="TRENDnet USB Ethernet adapter (RTL815X)"
 D29="TRENDnet USB Ethernet adapter (RTL815X)"
 D30="Realtek USB Ethernet (RTL815X)"
 D31="Realtek RTL8156 USB 2.5G Ethernet (RTL815X)"
+D32="Realtek RTL8157 USB 5G Ethernet (RTL815X)"
+D33="Realtek RTL8159 USB 10G Ethernet (RTL815X)"

@@ -17,7 +17,7 @@ These drivers are experimental. They may not work with every device and can make
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
 | `usbcom` | USB CDC-ACM serial, as COM ports | 98 SE, ME; 2000 to 8 and x64 as an INF for Windows' `usbser.sys` |
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
-| `rtl815x` | Realtek RTL8152/8153 USB Ethernet | 98 SE, ME, 2000 |
+| `rtl815x` | Realtek RTL8152, 8153, 8156, 8157 and 8159 USB Ethernet | 98 SE, ME, 2000. Newer chips also XP to 7, x64 too (6) |
 | `ax88179` | ASIX AX88179 and AX88178A USB Gigabit Ethernet | 98 SE, ME, 2000 |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
@@ -32,6 +32,8 @@ These drivers are experimental. They may not work with every device and can make
    receiver: 98 SE and ME.
 4. 98 SE needs a USB storage driver set (such as NUSB's) installed first.
 5. ME only if its own USB printing proves unable to print.
+6. XP and Vista: the RTL8156 and 8156B. XP, Vista and 7: the RTL8157 and
+   8159. Realtek's own drivers serve the other chips there.
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 

@@ -2,7 +2,8 @@
 # read by release\release.ps1: release 0.1.3 plus rtl815x 0.2.0 (owner,
 # 2026-10-27; xHCI98 roadmap 44.70): the RTL8156, 8156B, 8157 and 8159 on
 # XP to 7 through RTLXP7.INF, x86 NDIS 5.0 and x64 NDIS 5.1 (ethernet.md
-# section 7.6). rtl815x's images and INFs come from out\; its x64 image is
+# section 7.6). Every rtl815x image and INF is 0.2.0 from out\ (the chip core's
+# new chips on 98 SE, ME and 2000 too); its x64 image is
 # the owner's signed copy of out\net\rtl815x\ndis51\free\rtl815x.sys.
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
@@ -146,10 +147,10 @@
             Services = @('rtl815x')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\w98se-me\RTL815X.SYS'; 'RTL81598.INF' = 'tree:free\net\rtl815x\w98se-me\RTL81598.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL81598.INF' = 'out\net\rtl815x\ndis5\free\RTL81598.INF' }
                    Stage = @{ 'RTL81598.INF' = @('COPY', 'W98SE WME', 'copy only (owner, 2026-10-24): simulator legs only, no device; chip core rewritten in 0.1.2') } }
                 @{ Name = 'w2k'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\w2k\RTL815X.SYS'; 'RTL815X.INF' = 'tree:free\net\rtl815x\w2k\RTL815X.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL815X.INF' = 'out\net\rtl815x\ndis5\free\RTL815X.INF' }
                    Stage = @{ 'RTL815X.INF' = @('COPY', 'W2K', 'copy only (owner, 2026-10-24): no leg') } }
                 # XP to 7 (owner, 2026-10-27): the new chips only, one INF with a models
                 # section per system (ethernet.md section 7.6).
@@ -267,7 +268,8 @@
     )
     Relations = @(
         'EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids'
-        'EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips'
+        'EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | the same chips'
+        'COEXISTS | free:net/rtl815x | nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: RTLXP7.INF lists only chips the nonfree INFs leave out on each system'
         'EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips'
         'EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | both bind the Play and Charge Kit 045E:028F'
         'COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: xpad98 takes the pads outside x360c list and the Xbox One pads'

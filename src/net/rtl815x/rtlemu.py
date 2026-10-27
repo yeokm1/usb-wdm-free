@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Yeo Kheng Meng
-"""SIMULATED Realtek RTL8152/RTL8153 USB Ethernet adapter over localhost
-usbredir (test aid only).
+"""SIMULATED Realtek RTL815x USB Ethernet adapter over localhost usbredir
+(test aid only).
 
 No RTL815x is on the bench, so this is the vehicle for rtl815x's legs. It
 models what rtl815x's own chip core (rtlchip.c) reads and writes, not the
@@ -14,10 +14,21 @@ MR_TX_CONFIG, the bits the bring-up polls (CMD_RESET self-clearing,
 OOB_LIST_READY, OOB_FIFOS_EMPTY, TXC_EMPTY, BOOT_LOADED, the PHY reset bit,
 PATCH_GRANTED), the MAC address in MR_NODE_ID_SAVED (and MR_NODE_ID for the
 4C00), link in MR_LINK with an interrupt-IN report (IRQ_LINK) on each
-change, receive framing (24-byte record header, frame length with FCS,
-8-byte alignment, several frames per bulk-IN transfer) and transmit framing
-(8-byte header, 4-byte alignment). Register semantics follow rtltest.c's
-register-file model.
+change, receive framing (record header, frame length with FCS, alignment,
+several frames per bulk-IN transfer) and transmit framing. Register
+semantics follow rtltest.c's register-file model.
+
+The newer chips (RTL8153D, RTL8156, RTL8156B, RTL8157, RTL8159) add, from
+the facts in docs/testing/2026-10-27-rtl815x-sim-newchips.md: the PHY SRAM
+windows (address and data pairs, the address stepping by 2 per data
+write), the indirect "ADV" window of the 8157/8159 (BMU and IP spaces),
+the PHY state (external init, power-down, LAN on), the PHY flash and
+power-cut bits the bring-up polls, link speed and duplex from the PHY's
+advertisement against a link partner (--partner), up to 2.5, 5 and 10
+Gb/s, the 16-byte receive and transmit descriptors of the 8157/8159 and
+the receive early size in each chip's units. No firmware patch is
+modelled: the chip runs as with none loaded, so the 8159 links at 5 Gb/s
+at most unless --phy-patched.
 
 Behind the adapter sits a SIMULATED network of one host, 192.168.77.1
 (02:00:5E:77:00:01): it answers ARP, ICMP echo and DHCP (offering
@@ -26,10 +37,17 @@ the guest only while the receiver is on (MR_COMMAND CMD_RX_ON) and the receive
 configuration (MR_RX_ACCEPT, MR_HASH) accepts them.
 
 Chips (--chip): 8152 (id 4C10, 0BDA:8152, 100 Mb/s), 8153 (id 5C10,
-0BDA:8153, 1000 Mb/s, default), 8153b (id 6010, 0BDA:8153). --speed
-high|full; --link-after seconds after the PHY's autonegotiation restart
-(default 1.0); --flap-after/--flap-for take the cable out once. No
-physical USB device is accessed.
+0BDA:8153, 1000 Mb/s, default), 8153b (id 6010, 0BDA:8153), 8153d (id 7420,
+0BDA:8053, 1000 Mb/s), 8156 (id 7030; 8156-7020 id 7020; 0BDA:8156,
+2500 Mb/s), 8156b (id 7410; 8156b-7400 id 7400; 0BDA:8156, 2500 Mb/s),
+8157 (id 1030, 0BDA:8157, 5000 Mb/s), 8159 (id 2020, 0BDA:815A,
+10000 Mb/s). --speed super|high|full (super: the newer chips' default);
+--partner the link partner's fastest speed in Mb/s (default 10000);
+--link-after seconds after the PHY's autonegotiation restart (default
+1.0); --flap-after/--flap-for take the cable out once; --ext-init and
+--power-cut start the PHY in its external-init state or after a power cut;
+--phy-patched lets the 8159 link above 5 Gb/s, as with its PHY patch.
+No physical USB device is accessed.
 """
 import argparse
 import collections
@@ -45,39 +63,101 @@ from pathlib import Path
 CAP_VERSION, CAP_EP_MAX, CAP_ID64, CAP_BULK32 = 1, 4, 5, 6
 CAPS = (1 << CAP_VERSION) | (1 << CAP_EP_MAX) | (1 << CAP_ID64) | (1 << CAP_BULK32)
 
-# Register names and values: rtlchip.h.
+# Register names and values: rtlchip.h, and for the newer chips the facts
+# listed in docs/testing/2026-10-27-rtl815x-sim-newchips.md.
 RTL_SPACE_MAC = 0x0100
 RTL_LANES_ALL = 0xff
-MR_NODE_ID, MR_RX_ACCEPT, MR_HASH, MR_NODE_ID_SAVED = 0xc000, 0xc010, 0xcd00, 0xd000
+MR_NODE_ID, MR_RX_ACCEPT, MR_RX_MAX_LEN, MR_HASH = 0xc000, 0xc010, 0xc016, 0xcd00
+MR_NODE_ID_SAVED, MR_GPHY_FLASH = 0xd000, 0xd3ae
 MR_BOOT, MR_TX_CONFIG, MR_COMMAND, MR_OOB = 0xe004, 0xe610, 0xe813, 0xe84f
 MR_CPLUS, MR_PHY_PAGE, MR_LINK = 0xe854, 0xe86c, 0xe908
-UR_CTRL = 0xd406
-PR_MII, PR_STATE, PR_PATCH_STATE, PR_PATCH_CMD = 0xa400, 0xa420, 0xb800, 0xb820
-MIICTL_RESET, MIICTL_AN_RESTART = 0x8000, 0x0200
+UR_GPHY, UR_CTRL, UR_RX_EARLY_LEN, UR_TX_SIG_CHECK = 0xd284, 0xd406, 0xd42e, 0xd4ae
+UR_ADV_ADDR, UR_ADV_DATA, UR_ADV_CMD, UR_MISC0 = 0xd5d6, 0xd5d8, 0xd5dc, 0xd81a
+PR_MII, PR_STATE, PR_INIT_GATE = 0xa400, 0xa420, 0xa468
+PR_SRAM_ADDR, PR_SRAM_DATA, PR_XG_CTRL, PR_XG_STAT = 0xa436, 0xa438, 0xa5d4, 0xa5d6
+PR_PATCH_STATE, PR_PATCH_CMD, PR_SRAM2_ADDR, PR_SRAM2_DATA = 0xb800, 0xb820, 0xb87c, 0xb87e
+MIICTL_RESET, MIICTL_SPEED100, MIICTL_AN_ENABLE = 0x8000, 0x2000, 0x1000
+MIICTL_POWERDOWN, MIICTL_AN_RESTART, MIICTL_FULL, MIICTL_SPEED1000 = 0x0800, 0x0200, 0x0100, 0x0040
+MIIST_LINK, MIIST_AN_DONE = 0x0004, 0x0020
+ANADV_10H, ANADV_10F, ANADV_100H, ANADV_100F, ANADV_PAUSE = 0x0020, 0x0040, 0x0080, 0x0100, 0x0400
+GIGCTL_1000_FULL, GIGST_PEER_1000_FULL = 0x0200, 0x0800
+XGCTL_2500, XGCTL_5000, XGCTL_10000 = 0x0080, 0x0100, 0x1000
+XGST_PEER_2500, XGST_PEER_5000, XGST_PEER_10000 = 0x0020, 0x0040, 0x0800
 PATCH_ASK, PATCH_GRANTED = 0x0010, 0x0040
 CMD_RESET, CMD_RX_ON, CMD_TX_ON = 0x10, 0x08, 0x04
 OOB_LIST_READY, OOB_FIFOS_EMPTY, OOB_ACTIVE = 0x02, 0x30, 0x80
-TXC_EMPTY, BOOT_LOADED, PHYST_LAN_ON = 0x0800, 0x0002, 3
+TXC_EMPTY, BOOT_LOADED = 0x0800, 0x0002
+PHYST_EXT_INIT, PHYST_LAN_ON, PHYST_POWER_DOWN = 2, 3, 5
+INIT_GATE_BITS = 0x000a                         # PR_INIT_GATE bits 3 and 1
+GPHY_HAS_FLASH = 0x02                           # MR_GPHY_FLASH
+GPHY_LOADED, GPHY_RESTORED = 0x04, 0x40         # UR_GPHY
+PCUT_SEEN = 0x01                                # UR_MISC0
+CTRL_RX_AGG_OFF, CTRL_RX_ZERO, CTRL_RX_DESC_LONG, CTRL_8159_B11 = 0x0010, 0x0080, 0x0400, 0x0800
+TXSIG_CHECK = 0x02                              # UR_TX_SIG_CHECK
+ADV_BUSY, ADV_WRITE, ADV_IP = 0x0001, 0x0002, 0x0004
+IR_U2P3, U2P3_V2_ON = 0xc2c0, 1 << 29           # ADV IP space
+BR_RX_ZLP, BMU_RX_ZLP = 0x2300, 0x08            # ADV BMU space
 ACC_ALL_PHYS, ACC_MY_PHYS, ACC_MCAST, ACC_BCAST = 1, 2, 4, 8
-LNK_1000, LNK_100, LNK_UP, LNK_FULL = 0x10, 0x08, 0x02, 0x01
+LNK_1000, LNK_100, LNK_10, LNK_UP, LNK_FULL = 0x10, 0x08, 0x04, 0x02, 0x01
+LNK_RX_FLOW, LNK_TX_FLOW = 0x20, 0x40
+LNK_SPEED = {10: LNK_10, 100: LNK_100, 1000: LNK_1000, 2500: 0x0400, 5000: 0x1000, 10000: 0x4000}
 IRQ_LINK = 0x04
-RX_DESC_LEN, TX_DESC_LEN = 24, 8
+RX_DESC_LEN, TX_DESC_LEN = 24, 8                # the RTL8152 to RTL8156B
+WIDE_DESC_LEN, WIDE_ALIGN = 16, 16              # the RTL8157 and RTL8159, both ways
+TX_FIRST_LAST, TX_SIGNATURE = 0xc0000000, 0x15 << 27
+RMS_DEFAULT = 1522
 
-CHIPS = {'8152': (0x4c10, 0x8152, LNK_100), '8153': (0x5c10, 0x8153, LNK_1000),
-         '8153b': (0x6010, 0x8153, LNK_1000)}
+# Chips. id: MR_TX_CONFIG's high word; pid: the USB product id; family: 'a'
+# the RTL8152/8153/8153B, 'b' the RTL8156/8156B/8153D, 'c' the
+# RTL8157/8159 (16-byte descriptors, ADV window); top: the fastest link in
+# Mb/s; usb3: bcdUSB at SuperSpeed (0: a USB 2.0 chip); unit: bytes per count
+# of UR_RX_EARLY_LEN (checked for families 'b' and 'c'); rxbuf: the bulk-IN
+# buffer Linux uses at SuperSpeed (the early size is set against it).
+Kind = collections.namedtuple('Kind', 'id pid family top usb3 unit rxbuf name')
+CHIPS = {
+    '8152': Kind(0x4c10, 0x8152, 'a', 100, 0, 0, 16384, 'RTL8152'),
+    '8153': Kind(0x5c10, 0x8153, 'a', 1000, 0x0300, 4, 32768, 'RTL8153'),
+    '8153b': Kind(0x6010, 0x8153, 'a', 1000, 0x0300, 8, 32768, 'RTL8153B'),
+    '8153d': Kind(0x7420, 0x8053, 'b', 1000, 0x0300, 8, 49152, 'RTL8153D'),
+    '8156': Kind(0x7030, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156'),
+    '8156-7020': Kind(0x7020, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156'),
+    '8156b': Kind(0x7410, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156B'),
+    '8156b-7400': Kind(0x7400, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156B'),
+    '8157': Kind(0x1030, 0x8157, 'c', 5000, 0x0320, 16, 32768, 'RTL8157'),
+    '8159': Kind(0x2020, 0x815a, 'c', 10000, 0x0320, 16, 49152, 'RTL8159'),
+}
+NEWER = sorted(k for k, v in CHIPS.items() if v.family != 'a')
+PARTNERS = (10, 100, 1000, 2500, 5000, 10000)
 BACKUP_MAC = bytes.fromhex('00e04c770002')
 HOST_MAC, HOST_IP = bytes.fromhex('02005e770001'), bytes((192, 168, 77, 1))
 GUEST_IP = bytes((192, 168, 77, 2))
 EP_IN, EP_OUT, EP_INT = 0x81, 0x02, 0x83
+SPEED_CODE = {'full': 1, 'high': 2, 'super': 3}  # usbredir speeds
+
+
+def default_speed(chip):
+    return 'super' if CHIPS[chip].family != 'a' else 'high'
 
 
 class Chip:
-    """The register file (rtltest.c's MODEL in Python)."""
+    """The register file (rtltest.c's MODEL in Python), with the newer chips'
+    indirect windows, PHY state and link resolution."""
 
-    def __init__(self, chip='8153'):
-        self.tcr0, self.pid, self.rate_bit = CHIPS[chip]
+    def __init__(self, chip='8153', ext_init=False, power_cut=False, phy_patch=False):
+        self.kind = k = CHIPS[chip]
+        self.tcr0, self.pid = k.id, k.pid
+        # The RTL8159's PHY needs its patch for links above 5 Gb/s; with
+        # none loaded the model's PHY tops out at 5 Gb/s (phy_patch: as if
+        # one had been loaded; no patch itself is modelled).
+        self.top = 5000 if k.id == 0x2020 and not phy_patch else k.top
+        self.rate_bit = LNK_100 if k.top == 100 else LNK_1000
+        self.newer, self.wide = k.family != 'a', k.family == 'c'
+        self.ext_init = ext_init
         self.pla, self.usb = bytearray(65536), bytearray(65536)
         self.phy = [0] * 32768
+        self.sram, self.sram2 = {}, {}               # PHY SRAM, addressed in bytes
+        self.sram_at = self.sram2_at = 0
+        self.adv = {'bmu': {}, 'ip': {}}             # the 8157/8159's ADV window
         self.pla[MR_OOB] = OOB_LIST_READY | OOB_FIFOS_EMPTY
         self.pla[MR_TX_CONFIG + 1] = TXC_EMPTY >> 8
         self.pla[MR_BOOT] = BOOT_LOADED
@@ -86,25 +166,77 @@ class Chip:
         self.pla[MR_NODE_ID_SAVED:MR_NODE_ID_SAVED + 6] = BACKUP_MAC
         self.pla[MR_NODE_ID:MR_NODE_ID + 6] = BACKUP_MAC if self.tcr0 != 0x4c00 else bytes.fromhex('00e04c770003')
         self.pla[MR_RX_ACCEPT] = ACC_ALL_PHYS | ACC_MY_PHYS | ACC_MCAST | ACC_BCAST
-        self.usb[UR_CTRL] = 0x90
+        self.usb[UR_CTRL] = CTRL_RX_ZERO | CTRL_RX_AGG_OFF
         self.pla[MR_CPLUS] = 0x40
+        if self.newer:
+            # Power-up values the facts do not give are chosen so that the
+            # bring-up's clears and polls are visible (the record, "Limits").
+            self.pla[MR_GPHY_FLASH] = GPHY_HAS_FLASH
+            self.usb[UR_GPHY] = GPHY_LOADED | (GPHY_RESTORED if power_cut else 0)
+            if power_cut:
+                self.usb[UR_MISC0] |= PCUT_SEEN
+            if self.wide:
+                self.usb[UR_CTRL + 1] = (CTRL_RX_DESC_LONG | (CTRL_8159_B11 if k.id == 0x2020 else 0)) >> 8
+                self.usb[UR_TX_SIG_CHECK] = TXSIG_CHECK
+                self.adv['ip'][IR_U2P3] = U2P3_V2_ON
+                self.adv['bmu'][BR_RX_ZLP] = BMU_RX_ZLP
+            xg = (XGCTL_2500 if k.top >= 2500 else 0) | (XGCTL_5000 if k.top >= 5000 else 0) | \
+                (XGCTL_10000 if k.top >= 10000 else 0)
+            for reg, value in ((PR_MII, MIICTL_AN_ENABLE | MIICTL_SPEED1000), (PR_MII + 2, 0x7949),
+                               (PR_MII + 8, ANADV_10H | ANADV_10F | ANADV_100H | ANADV_100F | 1),
+                               (PR_MII + 18, GIGCTL_1000_FULL), (PR_XG_CTRL, xg)):
+                self.phy[reg // 2] = value
+            if ext_init:
+                self.phy[PR_INIT_GATE // 2] = INIT_GATE_BITS
         self.autoneg = 0                             # restarts seen
         self.writes = self.reads = 0
 
+    # -- the PHY window ------------------------------------------------------
     def phy_address(self, pla):
         base = self.pla[MR_PHY_PAGE] | self.pla[MR_PHY_PAGE + 1] << 8
         return (base | (pla & 0x0fff)) & 0xffff
 
+    def phy_word(self, addr):
+        return self.phy[addr // 2]
+
+    def phy_state(self):
+        if self.ext_init and self.phy[PR_INIT_GATE // 2] & INIT_GATE_BITS:
+            return PHYST_EXT_INIT
+        if self.phy[PR_MII // 2] & MIICTL_POWERDOWN:
+            return PHYST_POWER_DOWN
+        return PHYST_LAN_ON
+
+    def phy_read(self, addr):
+        if addr == PR_SRAM_DATA:
+            return self.sram.get(self.sram_at, 0)
+        if addr == PR_SRAM2_DATA:
+            return self.sram2.get(self.sram2_at, 0)
+        if addr == PR_STATE and self.newer:
+            return (self.phy[addr // 2] & ~7) | self.phy_state()
+        return self.phy[addr // 2]
+
     def phy_written(self, addr, value):
         if addr == PR_MII:                     # BMCR
-            if value & MIICTL_AN_RESTART:
+            if value & MIICTL_AN_RESTART or \
+                    (self.newer and (value & MIICTL_RESET or not value & MIICTL_AN_ENABLE)):
                 self.autoneg += 1
             value &= ~MIICTL_RESET                     # the reset completes
         if addr == PR_PATCH_CMD:
             st = self.phy[PR_PATCH_STATE // 2]
             self.phy[PR_PATCH_STATE // 2] = st | PATCH_GRANTED if value & PATCH_ASK else st & ~PATCH_GRANTED
+        if addr == PR_SRAM_ADDR:
+            self.sram_at = value
+        elif addr == PR_SRAM_DATA:
+            self.sram[self.sram_at] = value
+            self.sram_at = (self.sram_at + 2) & 0xffff
+        elif addr == PR_SRAM2_ADDR:
+            self.sram2_at = value
+        elif addr == PR_SRAM2_DATA:
+            self.sram2[self.sram2_at] = value
+            self.sram2_at = (self.sram2_at + 2) & 0xffff
         self.phy[addr // 2] = value & 0xffff
 
+    # -- vendor requests -------------------------------------------------------
     def read(self, value, index, length):
         if value & 3 or not length or length & 3 or value + length > 0x10000 or index & ~0x1ff or length > 64:
             return None
@@ -114,7 +246,7 @@ class Chip:
         for k in range(length):
             a = value + k
             if index & RTL_SPACE_MAC and 0xb000 <= a < 0xc000:
-                w = self.phy[self.phy_address(a & ~1) // 2]
+                w = self.phy_read(self.phy_address(a & ~1))
                 out[k] = (w >> 8 if a & 1 else w) & 255
             else:
                 out[k] = space[a]
@@ -142,17 +274,102 @@ class Chip:
                 continue
             space[a] = data[k]
         self.pla[MR_COMMAND] &= ~CMD_RESET & 0xff
+        if self.wide and not index & RTL_SPACE_MAC and value <= UR_ADV_CMD < value + length:
+            self.adv_command()
         return True
+
+    def adv_command(self):
+        """The 8157/8159's indirect window: UR_ADV_CMD with ADV_BUSY moves one
+        dword between UR_ADV_DATA and the BMU or IP space at UR_ADV_ADDR; the
+        busy bit clears at once."""
+        cmd = self.usb_word(UR_ADV_CMD)
+        if not cmd & ADV_BUSY:
+            return
+        space = self.adv['ip' if cmd & ADV_IP else 'bmu']
+        addr = self.usb_word(UR_ADV_ADDR)
+        if cmd & ADV_WRITE:
+            space[addr] = struct.unpack_from('<I', self.usb, UR_ADV_DATA)[0]
+        else:
+            struct.pack_into('<I', self.usb, UR_ADV_DATA, space.get(addr, 0))
+        struct.pack_into('<H', self.usb, UR_ADV_CMD, cmd & ~ADV_BUSY)
 
     def dword(self, a):
         return struct.unpack_from('<I', self.pla, a)[0]
+
+    def usb_word(self, a):
+        return struct.unpack_from('<H', self.usb, a)[0]
+
+    def pla_word(self, a):
+        return struct.unpack_from('<H', self.pla, a)[0]
 
     @property
     def mac(self):
         return bytes(self.pla[MR_NODE_ID:MR_NODE_ID + 6])
 
+    # -- link ----------------------------------------------------------------
+    def negotiate(self, partner):
+        """(Mb/s, full duplex) of the link with a partner whose fastest speed
+        is partner, from the PHY's control and advertisement; None if none."""
+        bmcr, top = self.phy_word(PR_MII), min(self.top, partner)
+        if not bmcr & MIICTL_AN_ENABLE:
+            mbps = 100 if bmcr & MIICTL_SPEED100 else 1000 if bmcr & MIICTL_SPEED1000 else 10
+            full = bool(bmcr & MIICTL_FULL)
+            if mbps > min(top, 1000) or (mbps == 1000 and not full):
+                return None
+            return mbps, full
+        xg, gig, adv = self.phy_word(PR_XG_CTRL), self.phy_word(PR_MII + 18), self.phy_word(PR_MII + 8)
+        for mbps, bit, full in ((10000, xg & XGCTL_10000, True), (5000, xg & XGCTL_5000, True),
+                                (2500, xg & XGCTL_2500, True), (1000, gig & GIGCTL_1000_FULL, True),
+                                (100, adv & ANADV_100F, True), (100, adv & ANADV_100H, False),
+                                (10, adv & ANADV_10F, True), (10, adv & ANADV_10H, False)):
+            if bit and mbps <= top:
+                return mbps, full
+        return None
+
+    def show_link(self, got, partner):
+        """MR_LINK and the PHY's status registers for a link (None: down)."""
+        status = self.phy_word(PR_MII + 2) & ~(MIIST_LINK | MIIST_AN_DONE)
+        if got is None:
+            word, peer, peer_gig, peer_xg = 0, 0, 0, 0
+        else:
+            mbps, full = got
+            autoneg = bool(self.phy_word(PR_MII) & MIICTL_AN_ENABLE)
+            word = LNK_UP | LNK_SPEED[mbps] | (LNK_FULL if full else 0)
+            if full and autoneg and self.phy_word(PR_MII + 8) & ANADV_PAUSE:
+                word |= LNK_RX_FLOW | LNK_TX_FLOW        # the partner offers pause
+            status |= MIIST_LINK | (MIIST_AN_DONE if autoneg else 0)
+            peer = (ANADV_10H | ANADV_10F | ANADV_100H | ANADV_100F | ANADV_PAUSE | 1) if autoneg else 0
+            peer_gig = GIGST_PEER_1000_FULL if autoneg and partner >= 1000 else 0
+            peer_xg = (XGST_PEER_2500 if partner >= 2500 else 0) | (XGST_PEER_5000 if partner >= 5000 else 0) | \
+                (XGST_PEER_10000 if partner >= 10000 else 0) if autoneg else 0
+        struct.pack_into('<H', self.pla, MR_LINK, word)
+        self.phy[(PR_MII + 2) // 2], self.phy[(PR_MII + 10) // 2] = status, peer
+        self.phy[(PR_MII + 20) // 2], self.phy[PR_XG_STAT // 2] = peer_gig, peer_xg
+
+    # -- receive ---------------------------------------------------------------
     def receiving(self):
         return bool(self.pla[MR_COMMAND] & CMD_RX_ON) and not self.pla[MR_OOB] & OOB_ACTIVE
+
+    def refusal(self, frame):
+        """Why the newer chips would not hand this frame to the host, or None."""
+        if self.wide and self.usb_word(UR_CTRL) & CTRL_RX_DESC_LONG:
+            return 'rx_desc_mode'                  # the driver left the 16-byte format off
+        rms = self.pla_word(MR_RX_MAX_LEN)
+        if self.newer and rms and len(frame) + 4 > rms:
+            return 'rx_too_long'
+        return None
+
+    @property
+    def rx_desc(self):
+        return (WIDE_DESC_LEN, WIDE_ALIGN) if self.wide else (RX_DESC_LEN, 8)
+
+    @property
+    def tx_desc(self):
+        return (WIDE_DESC_LEN, WIDE_ALIGN) if self.wide else (TX_DESC_LEN, 4)
+
+    def early_bytes(self):
+        """The receive early size the driver set, in bytes (newer chips)."""
+        return self.usb_word(UR_RX_EARLY_LEN) * self.kind.unit if self.newer else 0
 
     def accepts(self, frame):
         """MR_RX_ACCEPT/MR_HASH receive decision for a destination address."""
@@ -271,18 +488,45 @@ class Network:
         return [self.frame(b'\xff' * 6, 0x0800, ipv4(HOST_IP, b'\xff' * 4, 17, udp))]
 
 
-def device_descriptor(pid, speed):
-    return struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x0210 if speed == 'high' else 0x0200, 0, 0, 0, 64,
-                       0x0bda, pid, 0x3000, 1, 2, 0, 1)
+def device_descriptor(kind, speed):
+    bcd = kind.usb3 if speed == 'super' else 0x0210 if speed == 'high' else 0x0200
+    return struct.pack('<BBHBBBBHHHBBBB', 18, 1, bcd, 0, 0, 0, 9 if speed == 'super' else 64,
+                       0x0bda, kind.pid, 0x3000, 1, 2, 0, 1)
+
+
+def bulk_size(speed):
+    return {'super': 1024, 'high': 512, 'full': 64}[speed]
+
+
+def int_interval(speed):
+    return 16 if speed == 'full' else 8
 
 
 def config_descriptor(speed, kind=2):
-    bulk = 512 if speed == 'high' else 64
-    body = bytes((9, 4, 0, 0, 3, 0xff, 0xff, 0, 0)) + \
-        bytes((7, 5, EP_IN, 2)) + struct.pack('<HB', bulk, 0) + \
-        bytes((7, 5, EP_OUT, 2)) + struct.pack('<HB', bulk, 0) + \
-        bytes((7, 5, EP_INT, 3)) + struct.pack('<HB', 2, 8 if speed == 'high' else 16)
+    """The vendor configuration: one interface, class FF, bulk IN 1, bulk OUT
+    2, interrupt IN 3 (what Linux checks); at SuperSpeed each endpoint has
+    its companion (bMaxBurst 3 for bulk is this model's choice)."""
+    bulk, ss = bulk_size(speed), speed == 'super'
+    body = bytes((9, 4, 0, 0, 3, 0xff, 0xff, 0, 0))
+    for ep, attr, size, interval, burst in ((EP_IN, 2, bulk, 0, 3), (EP_OUT, 2, bulk, 0, 3),
+                                            (EP_INT, 3, 2, int_interval(speed), 0)):
+        body += bytes((7, 5, ep, attr)) + struct.pack('<HB', size, interval)
+        if ss:
+            body += bytes((6, 0x30, burst, 0)) + struct.pack('<H', 2 if attr == 3 else 0)
     return bytes((9, kind)) + struct.pack('<HBBBBB', 9 + len(body), 1, 1, 0, 0xa0, 50) + body
+
+
+def bos_descriptor(kind):
+    """BOS at SuperSpeed: USB 2.0 extension (LPM), SuperSpeed capability,
+    and for a bcdUSB 0x0320 chip a SuperSpeedPlus capability of one
+    symmetric 10 Gb/s sublink (Gen 2x1)."""
+    caps = [bytes((7, 16, 2)) + struct.pack('<I', 0x02),
+            bytes((10, 16, 3, 0)) + struct.pack('<HBBH', 0x000e, 1, 10, 0x07ff)]
+    if kind.usb3 >= 0x0320:
+        caps.append(bytes((20, 16, 0x0a, 0)) + struct.pack('<IHH', 1, 0x1100, 0) +
+                    struct.pack('<II', 0x000a4030, 0x000a40b0))
+    body = b''.join(caps)
+    return bytes((5, 15)) + struct.pack('<HB', 5 + len(body), len(caps)) + body
 
 
 def usb_string(text):
@@ -292,17 +536,24 @@ def usb_string(text):
 
 class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
-                 link_after=1.0, flap_after=None, flap_for=2.0):
+                 link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
+                 power_cut=False, phy_patch=False):
         self.connection, self.trace, self.now = connection, trace, now
-        self.chip_name, self.speed = chip, speed
-        self.chip = Chip(chip)
+        self.chip_name, self.speed = chip, speed or default_speed(chip)
+        self.chip = Chip(chip, ext_init, power_cut, phy_patch)
+        kind = self.chip.kind
+        if self.speed == 'super' and not kind.usb3:
+            raise ValueError('%s is a USB 2.0 chip' % kind.name)
+        self.partner = partner
         self.net = Network(self.log)
-        self.device = device_descriptor(self.chip.pid, speed)
-        self.config_desc = config_descriptor(speed)
-        self.other = config_descriptor('full' if speed == 'high' else 'high', 7)
+        self.device = device_descriptor(kind, self.speed)
+        self.config_desc = config_descriptor(self.speed)
+        self.other = None if self.speed == 'super' else \
+            config_descriptor('full' if self.speed == 'high' else 'high', 7)
+        self.bos = bos_descriptor(kind) if self.speed == 'super' else None
         self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
-                        2: usb_string('RTL%s Ethernet - SIMULATED' % chip.upper())}
-        self.bulk_max = 512 if speed == 'high' else 64
+                        2: usb_string('%s Ethernet - SIMULATED' % kind.name)}
+        self.bulk_max = bulk_size(self.speed)
         self.link_after, self.flap_after, self.flap_for = link_after, flap_after, flap_for
         self.peer_caps = 0
         self.config = 0
@@ -310,6 +561,7 @@ class Model:
         self.pending = collections.OrderedDict()   # bulk-IN request id -> length
         self.rx = collections.deque()              # frames waiting for the guest
         self.link = False
+        self.link_mbps, self.link_full = 0, False
         self.link_at = self.flap_at = self.restore_at = None
         self.flapped = False
         self.autoneg_seen = 0
@@ -341,11 +593,11 @@ class Model:
         types, intervals, interfaces = bytearray([255] * 32), bytearray(32), bytearray(32)
         packets = [0] * 32
         types[0] = types[16] = 0
-        packets[0] = packets[16] = 64
+        packets[0] = packets[16] = 512 if self.speed == 'super' else 64
         if self.config:
             for slot, kind, interval, size in ((16 + (EP_IN & 15), 2, 0, self.bulk_max),
                                                (EP_OUT, 2, 0, self.bulk_max),
-                                               (16 + (EP_INT & 15), 3, 8 if self.speed == 'high' else 16, 2)):
+                                               (16 + (EP_INT & 15), 3, int_interval(self.speed), 2)):
                 types[slot], intervals[slot], packets[slot] = kind, interval, size
         data = bytes(types + intervals + interfaces)
         if self.peer_caps & (1 << CAP_EP_MAX):
@@ -366,9 +618,21 @@ class Model:
     def set_link(self, up, why):
         if up == self.link:
             return
+        if self.chip.newer:
+            got = self.chip.negotiate(self.partner) if up else None
+            if up and got is None:
+                self.log('no_common_speed', why=why, partner=self.partner)
+                self.totals['no_common_speed'] += 1
+                return
+            self.chip.show_link(got, self.partner)
+            self.link_mbps, self.link_full = got if got else (0, False)
+            if got and got[0] > 1000 and self.speed != 'super':
+                self.totals['multigig_below_superspeed'] += 1
+        else:
+            self.chip.pla[MR_LINK] = (LNK_UP | self.chip.rate_bit | LNK_FULL) if up else 0
+            self.link_mbps, self.link_full = (self.chip.kind.top, True) if up else (0, False)
         self.link = up
-        self.chip.pla[MR_LINK] = (LNK_UP | self.chip.rate_bit | LNK_FULL) if up else 0
-        self.log('link', up=up, why=why)
+        self.log('link', up=up, why=why, mbps=self.link_mbps, full=self.link_full)
         self.irq.append(bytes((IRQ_LINK, 0)))
         self.flush_irq()
 
@@ -407,25 +671,37 @@ class Model:
             return
         if len(frame) < 60:
             frame += bytes(60 - len(frame))
+        why = self.chip.refusal(frame)
+        if why:
+            self.totals[why] += 1
+            self.log('rx_refused', why=why, length=len(frame))
+            return
         if len(self.rx) < 256:
             self.rx.append(frame)
         self.drain()
 
     def aggregate(self, length):
-        """One bulk-IN transfer: record header + frame + FCS, each record 8-byte
-        aligned, as many as fit in length."""
+        """One bulk-IN transfer: record header + frame + FCS, each record
+        aligned, as many as fit in length (one if UR_CTRL turns aggregation
+        off). The RTL8157/8159's 16-byte header carries the length in bits
+        17-31 of its first dword; the others' 24-byte header in bits 0-14."""
         out = bytearray()
+        desc_len, align = self.chip.rx_desc
+        single = self.chip.usb_word(UR_CTRL) & CTRL_RX_AGG_OFF
         while self.rx:
             frame = self.rx[0]
-            record = RX_DESC_LEN + len(frame) + 4
-            padded = (record + 7) & ~7
+            record = desc_len + len(frame) + 4
+            padded = (record + align - 1) & ~(align - 1)
             if len(out) + record > length:
                 break
             self.rx.popleft()
-            desc = struct.pack('<I', len(frame) + 4) + bytes(RX_DESC_LEN - 4)
+            size = len(frame) + 4
+            desc = struct.pack('<I', size << 17 if self.chip.wide else size) + bytes(desc_len - 4)
             out += desc + frame + struct.pack('<I', zlib.crc32(frame))
             out += b'\xee' * (padded - record)
             self.totals['rx_frames'] += 1
+            if single:
+                break
         if len(out) > length:
             out = out[:length]
         return bytes(out)
@@ -441,22 +717,49 @@ class Model:
             self.totals['rx_transfers'] += 1
             self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
+    def check_rx_request(self, length):
+        """The newer chips end a bulk-IN transfer once the early size is
+        passed, which may add one whole record: a request shorter than the
+        early size plus one record can be overrun."""
+        early = self.chip.early_bytes()
+        if not early:
+            return
+        desc_len, align = self.chip.rx_desc
+        need = early + (self.chip.pla_word(MR_RX_MAX_LEN) or RMS_DEFAULT) + desc_len + align
+        if length < need:
+            if not self.totals['rx_request_below_early_size']:
+                self.log('rx_request_below_early_size', length=length, early=early, need=need)
+            self.totals['rx_request_below_early_size'] += 1
+
     def transmit(self, data):
-        """One bulk-OUT transfer: 8-byte header + frame, each 4-byte aligned."""
+        """One bulk-OUT transfer: header + frame, each record aligned. The
+        8-byte header has the length in bits 0-17 of its first dword; the
+        RTL8157/8159's 16-byte one in bits 4-21 of its third, with the
+        signature 0x15 in bits 27-31 of its fourth."""
         frames, off = [], 0
-        while off + TX_DESC_LEN <= len(data):
+        hlen, align = self.chip.tx_desc
+        while off + hlen <= len(data):
             opts1 = struct.unpack_from('<I', data, off)[0]
             length = opts1 & 0x3ffff
-            if not length or off + TX_DESC_LEN + length > len(data):
+            if self.chip.wide:
+                opts3, opts4 = struct.unpack_from('<II', data, off + 8)
+                length = opts3 >> 4 & 0x3ffff
+                if opts4 != TX_SIGNATURE:
+                    raise ValueError('transmit header without the signature')
+                if opts1 & 0x3ffff not in (0, length):
+                    raise ValueError('transmit header lengths disagree')
+            if not length or off + hlen + length > len(data):
                 raise ValueError('transmit header length beyond the transfer')
-            if opts1 & 0xc0000000 != 0xc0000000:
+            if opts1 & TX_FIRST_LAST != TX_FIRST_LAST:
                 raise ValueError('transmit header without the first and last segment bits')
-            frames.append(data[off + TX_DESC_LEN:off + TX_DESC_LEN + length])
-            off = (off + TX_DESC_LEN + length + 3) & ~3
+            frames.append(data[off + hlen:off + hlen + length])
+            off = (off + hlen + length + align - 1) & ~(align - 1)
         if off < len(data) and any(data[off:]):
             raise ValueError('trailing bytes after the last frame')
         if not (self.chip.pla[MR_COMMAND] & CMD_TX_ON):
             self.totals['tx_while_disabled'] += 1
+        if self.chip.wide and self.chip.usb[UR_TX_SIG_CHECK] & TXSIG_CHECK:
+            self.totals['tx_sig_check_left_on'] += 1
         for frame in frames:
             self.totals['tx_frames'] += 1
             self.log('tx_frame', length=len(frame), destination=frame[:6].hex(),
@@ -467,6 +770,15 @@ class Model:
         return frames
 
     # -- control -------------------------------------------------------------
+    def descriptor(self, kind, number):
+        if kind == 3:
+            return self.strings.get(number)
+        if number:
+            return None
+        if kind == 6 and self.speed != 'super':
+            return struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0, 0, 0, 64, 1, 0)
+        return {1: self.device, 2: self.config_desc, 7: self.other, 15: self.bos}.get(kind)
+
     def control(self, ident, packet):
         if len(packet) < 10:
             raise ValueError('short control header')
@@ -476,12 +788,7 @@ class Model:
             raise ValueError('control length mismatch')
         status, data = 4, b''
         if rt == 0x80 and request == 6:
-            kind, number = value >> 8, value & 255
-            data = self.device if kind == 1 and not number else \
-                self.config_desc if kind == 2 and not number else \
-                self.strings.get(number) if kind == 3 else \
-                (struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0, 0, 0, 64, 1, 0) if kind == 6 and not number else
-                 self.other if kind == 7 and not number else None)
+            data = self.descriptor(value >> 8, value & 255)
             status, data = (0, data) if data is not None else (4, b'')
         elif request == 0 and rt in (0x80, 0x81, 0x82):
             status, data = 0, b'\0\0'
@@ -491,6 +798,10 @@ class Model:
             status, data = 0, b'\0'
         elif request in (1, 3) and rt == 2 and value == 0:
             status = 0
+        elif request in (1, 3) and rt == 0 and self.speed == 'super':
+            status = 0                                  # U1/U2 enable features
+        elif request in (48, 49) and rt == 0 and self.speed == 'super':
+            status = 0                                  # SET_SEL, SET_ISOCH_DELAY
         elif request == 5 and rt == 0xc0 and self.config:
             got = self.chip.read(value, index, length)
             status, data = (0, got) if got is not None else (4, b'')
@@ -570,6 +881,7 @@ class Model:
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:
                     raise ValueError('invalid bulk IN request')
+                self.check_rx_request(length)
                 self.pending[ident] = length
                 self.drain()
         else:
@@ -577,11 +889,12 @@ class Model:
 
     def connect(self):
         self.info()
-        data = struct.pack('<BBBBHH', 2 if self.speed == 'high' else 1, 0, 0, 0, 0x0bda, self.chip.pid)
+        data = struct.pack('<BBBBHH', SPEED_CODE[self.speed], 0, 0, 0, 0x0bda, self.chip.pid)
         if self.peer_caps & (1 << CAP_VERSION):
             data += struct.pack('<H', 0x3000)
         self.send(1, data=data)
-        self.log('connected', model='SIMULATED RTL%s' % self.chip_name, speed=self.speed,
+        self.log('connected', model='SIMULATED %s' % self.chip.kind.name, chip=self.chip_name,
+                 chip_id='%04x' % self.chip.tcr0, speed=self.speed, partner=self.partner,
                  mac=self.chip.mac.hex(), config_sha256=hashlib.sha256(self.config_desc).hexdigest())
 
     def run(self):
@@ -628,21 +941,32 @@ def main():
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--log', type=Path, required=True, help='new JSONL trace (must not exist)')
     ap.add_argument('--chip', choices=sorted(CHIPS), default='8153')
-    ap.add_argument('--speed', choices=('high', 'full'), default='high')
+    ap.add_argument('--speed', choices=('super', 'high', 'full'),
+                    help='USB speed (default: super for the newer chips, high for the others)')
+    ap.add_argument('--partner', type=int, choices=PARTNERS, default=10000,
+                    help="the link partner's fastest speed in Mb/s (newer chips)")
     ap.add_argument('--link-after', type=float, default=1.0)
     ap.add_argument('--flap-after', type=float, help='seconds after link-up to take the cable out, once')
     ap.add_argument('--flap-for', type=float, default=2.0)
+    ap.add_argument('--ext-init', action='store_true', help='the PHY starts in its external-init state')
+    ap.add_argument('--power-cut', action='store_true', help='the chip reports a power cut at start')
+    ap.add_argument('--phy-patched', action='store_true',
+                    help='8159: links above 5 Gb/s as if its PHY patch were loaded (none is modelled)')
     args = ap.parse_args()
+    speed = args.speed or default_speed(args.chip)
+    if speed == 'super' and not CHIPS[args.chip].usb3:
+        ap.error('%s is a USB 2.0 chip' % CHIPS[args.chip].name)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
         server.bind(('127.0.0.1', args.port))
         server.listen(1)
-        print(f'SIMULATED RTL{args.chip} listening on 127.0.0.1:{args.port}', flush=True)
+        print(f'SIMULATED {CHIPS[args.chip].name} ({args.chip}) listening on 127.0.0.1:{args.port}', flush=True)
         connection, _ = server.accept()
         with connection:
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            model = Model(connection, trace, args.chip, args.speed, link_after=args.link_after,
-                          flap_after=args.flap_after, flap_for=args.flap_for)
+            model = Model(connection, trace, args.chip, speed, link_after=args.link_after,
+                          flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
+                          ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

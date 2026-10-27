@@ -4,8 +4,8 @@ Status: survey, 2026-10-27 (task 44.68 part 1, for xHCI98 3.3.0.0). No
 code. Owner, 2026-10-27: "Check if have existing os supported, then put in
 none free. Then make for those os not covered by nonefree." Owner, later
 the same day: 44.68 writes no new free drivers (beyond `ax88179`, which
-exists); the work is this survey and adding the redistributable makers'
-drivers to `usb-wdm-nonfree`. This document therefore lists, per chip and
+exists); the work is this survey and adding makers' drivers to
+`usb-wdm-nonfree` where the owner accepts their terms (section 7). This document therefore lists, per chip and
 Windows version, what already serves it, what the non-free pack could
 carry, and the gaps that stay uncovered. It reverses nothing in
 [ethernet.md](ethernet.md) by itself: the "not planned" verdicts of its
@@ -45,28 +45,34 @@ section 2.6 stand as far as free drivers go.
 | Chip family | 98 SE | ME | 2000 | XP | XP x64 | Vista x86/x64 | 7 x86/x64 | 8 / 8.1 / 10 |
 |---|---|---|---|---|---|---|---|---|
 | ASIX AX88179, AX88178A | free `ax88179` | free `ax88179` | free `ax88179` (built, no leg) | nonfree | nonfree | nonfree | nonfree | in box 8.1 |
-| ASIX AX88179A/B, AX88772D, AX88279 (CDC-NCM) | free `cdcnet` NCM | free `cdcnet` | free `cdcnet` | free `cdcnet` (U: ASIX XP INF also matches `0B95:1790`) | free `cdcnet` | free `cdcnet` | free `cdcnet` | ASIX 8+ |
+| ASIX AX88179A, AX88772D, AX88279 (CDC-NCM by default) | free `cdcnet` NCM (per ethernet.md; no such device run, U) | same | same | same (U: the ASIX XP INF also matches `0B95:1790` at any revision) | same | same | same | ASIX 8+ |
+| ASIX AX88179B | U (id and protocol not read) | U | U | U | U | U | U | ASIX 8+ |
+| ASIX AX88279A | gap (U: id) | gap | gap | gap | gap | gap | gap | ASIX 10+ |
 | ASIX AX88772, AX88772A | nonfree | nonfree | nonfree | nonfree | step 2 | step 2 | step 2 | in box 8 |
 | ASIX AX88772B, AX88772C | **gap** | **gap** | step 2 | step 2 | step 2 | step 2 | step 2 (5.12.12.0, live) | in box 8 |
 | ASIX AX88772E | gap (U: id) | gap | gap | gap | gap | gap | gap | ASIX 8+ |
 | ASIX AX88178 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | ASIX 7/8 build |
-| ASIX AX88172 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
+| ASIX AX88172 | step 2 (U: INF Signature `$Windows NT$`) | step 2 (same U) | step 2 | step 2 | **gap** | **gap** | **gap** | - |
 | ASIX AX88172A | **gap** | **gap** | step 2 | step 2 | step 2 | step 2 | step 2 | - |
 | MosChip/ASIX MCS7830/7832/7730 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | - |
-| Realtek RTL8152(B), RTL8153 (A/B/C/D) | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | nonfree | nonfree | nonfree | nonfree | in box 8.1 |
+| Realtek RTL8152(B), RTL8153 (A), RTL8153B | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | nonfree | nonfree | nonfree | nonfree | in box 8.1 |
+| Realtek RTL8153C | free `rtl815x` (chip id `6400`) | same | same | nonfree INF matches (revision-less `0BDA:8153` line; U whether the driver runs it) | same U | same U | nonfree | in box 8.1 |
+| Realtek RTL8153D (`0BDA:8053`) | U (`RTL815X.INF` lists the id; its chip id is not among `rtl815x`'s, which refuses unknown ids) | U | U | gap (no `8053` line) | gap | gap | nonfree | Realtek 8+ |
+| Realtek RTL8155 | gap (`rtl815x` leaves `8155` out) | gap | gap | gap | gap | gap | nonfree | Realtek 8+ |
 | Realtek RTL8156, RTL8156B | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | nonfree | Realtek 8/10 |
 | Realtek RTL8157, RTL8159 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | Realtek 10+ |
-| Realtek RTL8150 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 (Vista INF, U on 7) | - |
+| Realtek RTL8150 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | candidate (Vista INF would install, owner question 8) | - |
 | Davicom DM9601 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
-| Davicom DM9620/9621/9621A/9622 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | Davicom 8 |
+| Davicom DM9620/9621/9621A | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | Davicom 8 |
+| Davicom DM9622 (`0A46:9622`) | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | **gap** | - |
 | CoreChips SR9700, SR9800 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | - |
 | WCH CH9200 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | gap (U: WCH 7+ driver reported) | U |
 | Microchip LAN9500/9505/9530/9730/9900/EC00 | **gap** | **gap** | **gap** | step 2 (U licence) | step 2 (U) | step 2 (U) | step 2 (U) | in box (11; 10 U) |
 | Microchip LAN7500/7505 | **gap** | **gap** | **gap** | gap (U: package not obtained) | gap (U) | gap (U) | gap (U) | in box (11) |
 | Microchip LAN7800/7801/7850 | **gap** | **gap** | **gap** | **gap** | **gap** | step 2 (U licence) | step 2 (U) | in box (11) |
-| Aquantia/Marvell AQC111U/112U | free `cdcnet` ECM | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` (U: Marvell 7 driver reported) | Marvell |
-| ADMtek Pegasus (ADM8511 and OEMs) | gap | gap | gap | in box (23 ids of 74) | gap (U) | gap | gap | - |
-| KLSI KL5KUSB101 (`kaweth`) | gap | gap | gap | in box (23 ids of 35) | gap (U) | gap | gap | - |
+| Aquantia/Marvell AQC111U/112U | U: `cdcnet` binds ECM by interface class only if the stack selects the ECM configuration (no descriptor read) | U | U | U | U | U | U (Marvell 7 driver reported) | Marvell |
+| ADMtek Pegasus (ADM8511 and OEMs) | gap | gap | gap | in box for 17 of Linux's 70 distinct ids (and 6 Linux lacks); the rest gap | gap (U) | gap | gap | - |
+| KLSI KL5KUSB101 (`kaweth`) | gap | gap | gap | in box for 19 of Linux's 35 ids (and 4 Linux lacks); the rest gap | gap (U) | gap | gap | - |
 | CATC Netmate, Belkin F5U011/F5U111 | gap | gap | gap | gap | gap | gap | gap | - |
 | CDC-ECM, CDC-NCM | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | free `cdcnet` | NCM in box (11) |
 | RNDIS | free `cdcnet` | free `cdcnet` (ME: one in-box id) | free `cdcnet` | `CDCRNDIS.INF` over in-box | same | same | same | in box |
@@ -137,7 +143,7 @@ on Vista; the AX88772B/C 7 INF adds `2001:1A02` (D-Link DUB-E100 C1).
 | RTL8152 / RTL8152B (`4C00`, `4C10`, `4800`) | `0BDA:8152`, `0BDA:8050` | `r8152.c` | XP 5.23 (live list, 2021/07/27) | XP, XP x64, Vista, 7: any revision |
 | RTL8153 (A) (`5C00`-`5C30`) | `0BDA:8153` revs `30xx` | `r8152.c`; `r8153_ecm.c` for its ECM configuration | XP 5.23 | XP to 7 |
 | RTL8153B (`6000`, `6010`) | `0BDA:8153` revs `31xx` | `r8152.c` | XP 5.23 | XP to 7 (XP/Vista INF sections `RTL8153B*`) |
-| RTL8153C (`6400`) | `0BDA:8153` revs `32xx` (U: from the 7 INF's revision list, not named) | `r8152.c` | 7 (U) | 7 only (`32xx` revs are in the 7 INF only) |
+| RTL8153C (`6400`) | `0BDA:8153` revs `32xx` (U: from the 7 INF's revision list, not named) | `r8152.c` | 7 (U) | explicit `32xx` lines in the 7 INF only; the XP and Vista INFs also match `0BDA:8153` without a revision, so Windows would offer them (U whether those drivers run the chip) |
 | RTL8153D | `0BDA:8053` (revs `33xx`, the 7 INF's `RTL8153D*` sections); the 7 INF also lists `0BDA:8153` at revs `33xx` (chip not named, U) | `r8152.c` matches `0BDA:8053` | 7 | 7 only |
 | RTL8156 (`7020`, `7030`) | `0BDA:8156` revs `30xx` | `r8152.c` | 7 7.61.20 (2021/12/28) | 7 only |
 | RTL8156B(G) (`7410`, `7420`) | `0BDA:8156` revs `31xx`, `0BDA:8056` | `r8152.c` | 7 7.61.20 | 7 only |
@@ -188,8 +194,8 @@ Linux's table (none has its own row in `r8152.c`); their dongles match by
 | Microchip LAN7500/7505 | `0424:7500`, `7505` | `smsc75xx.c` | the package `lan7500-wdf-v18.12.18.0.zip` is named in Microchip's readme (XP to 10, per a search summary: U); no copy obtained | none |
 | Microchip LAN7800/7801/7850 | `0424:7800`, `7801`, `7850`, `07C9:0012` | `lan78xx.c` | `lan7800-wdf-v18.12.14.0.zip`: Vista 3.5.2.0, 7 3.8.4.0 (KMDF 1.9); no XP | none |
 | Aquantia/Marvell AQC111U, AQC112U (ASIX-branded too) | `2ECA:C101`, `0B95:2790`, `2791`, `20F4:E05A`, `1C04:0015` | `aqc111.c` (vendor) and `cdc_ether.c` (ECM) | Marvell "AQ_USBdongle" 1.8.0.0 for 7, reported by third-party listings (U) | none |
-| ADMtek Pegasus/Pegasus II | 74 entries in `pegasus.h` | `pegasus.c` | XP in box (23 ids); makers' 98/ME/2000 drivers not searched (ADMtek, later Infineon; U) | none |
-| KLSI KL5KUSB101 | 35 ids | `kaweth.c` | XP in box (23 ids); not searched otherwise (U) | none |
+| ADMtek Pegasus/Pegasus II | 74 entries (70 distinct ids) in `pegasus.h` | `pegasus.c` | XP in box (`net8511.inf`, 23 ids, 17 of them in Linux's table); makers' 98/ME/2000 drivers not searched (ADMtek, later Infineon; U) | none |
+| KLSI KL5KUSB101 | 35 ids | `kaweth.c` | XP in box (`netklsi.inf`, 23 ids, 19 of them in Linux's table); not searched otherwise (U) | none |
 | CATC Netmate / Belkin F5U011/F5U111 / smartNIC | 3 ids | `catc.c` | not searched (U) | none |
 | Intellon INT51x1 powerline | `09E1:5121` | `int51x1.c` | not searched (U) | none |
 
@@ -227,12 +233,15 @@ row; from GPL-2.0-only files it takes facts only (AGENTS.md, "Sources").
 | `cdc_subset.c` | GPL-2.0-or-later | 357 | link cables, PDAs, Linux gadget subset mode |
 | `usbnet.c` | GPL-2.0-or-later | 2294 | the common framework |
 
-Protocol size, from the files: the CDC classes and the ASIX/MosChip/Davicom
-/CoreChips/WCH parts frame one Ethernet frame behind a short header (2 to
-4 bytes) or none, with a few vendor control requests for registers and a
-MII PHY; AX88179 and the Realtek RTL815x family add receive aggregation
-with per-packet descriptors and per-revision bring-up (`r8152.c` is ten
-times the size of the small drivers); the LAN78xx and LAN95xx need
+Protocol size, from the files and ethernet.md section 2.2: CDC-ECM moves
+one frame per transfer with no header; RNDIS puts a 44-byte header on each
+packet and runs a control channel; CDC-NCM aggregates frames in transfer
+blocks (NTB16). The ASIX AX8817x/AX88772 family, MosChip, Davicom,
+CoreChips and WCH parts frame each frame behind a short header (2 to 4
+bytes) or none, with a few vendor control requests for registers and a MII
+PHY; AX88179 and the Realtek RTL815x family add receive aggregation with
+per-packet descriptors and per-revision bring-up (`r8152.c` is ten times
+the size of the small drivers); the LAN78xx and LAN95xx need
 register setup with checksum offload words. Not used further here: no free
 driver is planned beyond `ax88179`.
 
@@ -248,7 +257,7 @@ carried untested, as the pack's README says of every driver it holds.
 
 ## 6. Gaps
 
-Cells with no redistributable maker's driver found, no in-box driver and no
+Cells with no maker's driver found (or proposed in section 7), no in-box driver and no
 `usb-wdm-free` driver. Each stays uncovered (owner, 2026-10-27: no new free
 drivers in 44.68).
 
@@ -267,11 +276,20 @@ drivers in 44.68).
 | LAN9500 family | 98 SE, ME, 2000 | Microchip's oldest is XP. Stays uncovered |
 | LAN7500/7505 | 98 SE to 7 | package not obtained (U); Microchip site refused this host. Stays uncovered until read |
 | LAN7800 family | 98 SE to XP x64 | Microchip's oldest is Vista. Stays uncovered |
-| Pegasus, KLSI | all but XP x86 | XP in box only; makers' drivers not searched. Stays uncovered |
+| Pegasus, KLSI | all but XP x86; on XP x86 the 53 Pegasus and 16 KLSI ids Linux lists that `net8511.inf`/`netklsi.inf` do not | XP in box only; makers' drivers not searched. Stays uncovered |
 | CATC Netmate, INT51x1 | all | not searched (1999-2003 USB 1.1 parts). Stays uncovered |
 | CDC-EEM | all | `cdcnet` has ECM, NCM and RNDIS only. Stays uncovered |
 | Rebranded Realtek ids `045E:07AB/07C6/0927/0C5E`, `0955:09FF` | XP to 7 | no Realtek XP-7 INF lists them; on 98 SE to 2000 `rtl815x` lists them. Stays uncovered |
-| Rebranded ASIX ids `04B4:3610`, `2001:4A00` | XP to 7 | no ASIX INF lists them; on 98 SE to 2000 `AX179F98.INF`/`AX179F.INF` list only `0B95:1790` rev `0100` (U for the rebrands). Stays uncovered |
+| Rebranded ASIX ids `04B4:3610`, `2001:4A00` | XP to 7 | no ASIX INF lists them (on 98 SE to 2000 `AX179F98.INF`/`AX179F.INF` list them, with every other Linux AX88179 id). Stays uncovered |
+| ASIX AX88179 OEM ids `04E8:A100`, `050D:0128`, `0711:0179`, `07C9:000E`/`000F`/`0010` | XP, XP x64, Vista | only ASIX's 7 INF lists them. Stays uncovered |
+| ASIX AX88772C `0B95:7E2B` | 2000 to Vista | only the 7 INF (5.12.12.0) lists it. Stays uncovered |
+| Realtek OEM ids `17EF:3098`, `721E`, `A387`, `2001:B301`, `413C:B097`, `0B05:1976`, `20F4:E02B`, `E02C` | XP, XP x64, Vista | only Realtek's 7 INF lists them (`rtl815x` lists them on 98 SE to 2000). Stays uncovered |
+| RTL8150 OEM ids `0411:0012`, `3980:0003`, `07B8:401A`, `1557:8150`, `0586:401A` | 98 SE to 7 | Realtek's INFs list only `0BDA:8150`. Stays uncovered |
+| DM9622 `0A46:9622` | XP to 7 | Davicom's XP to 7 INFs omit it. Stays uncovered |
+| LAN7800 OEM id `07C9:0012` | Vista, 7 | Microchip's INFs list only `0424:78xx`. Stays uncovered |
+| RTL8153D `0BDA:8053` | 98 SE to Vista | `rtl815x` does not know its chip id (U); Realtek's XP/Vista INFs have no `8053` line. Stays uncovered |
+| RTL8155 `0BDA:8155` | 98 SE to Vista | `rtl815x` leaves it out; Realtek's XP/Vista INFs do not list it. Stays uncovered |
+| AX88179B, AQC111U/112U | 98 SE to 7 | U: whether `cdcnet` reaches them (NCM/ECM configuration selection, not read from a device). Uncovered until shown |
 
 ## 7. Step 2: drivers for `usb-wdm-nonfree`
 
@@ -455,7 +473,8 @@ INF copyright: "Copyright (c) SMSC. All rights reserved." (XP) and
 
 ```
 | `ax88772/wxp64/`, `wvista/`, `wvista64/`, `w7/`, `w7_64/`: `ax88772.sys`, `Ax88772.inf`, the catalog, `history.txt` where shipped | ASIX Electronics Corporation | 3.6.3.18 (XP x64), 3.8.3.22 (Vista), 3.10.3.14 (Vista x64), 3.12.3.2 (7), 3.14.3.2 (7 x64) |
-| `ax88772/wvista/WdfCoInstaller01007.dll`, `ax88772/w7/WdfCoInstaller01009.dll`, `ax88772/w7_64/WdfCoInstaller01009.dll` | Microsoft Corporation, the KMDF co-installer, as ASIX ships it with that driver | as shipped |
+| `ax88772/wvista/WdfCoInstaller01007.dll` | Microsoft Corporation, the KMDF 1.7 co-installer, as ASIX ships it with that driver | 1.7.6001.0 (U: the version resource of this copy not read; the pack's other copy is 1.7.6001.0) |
+| `ax88772/w7/WdfCoInstaller01009.dll`, `ax88772/w7_64/WdfCoInstaller01009.dll` | Microsoft Corporation, the KMDF 1.9 co-installer, as ASIX ships it with that driver | 1.9.7600.16385 (U, as above) |
 | All files in `ax88772b/w2k-xp/`, `wxp64/`, `wvista/`, `wvista64/`, `w7/`, `w7_64/` | ASIX Electronics Corporation (`WdfCoInstaller01007.dll`: Microsoft Corporation, as ASIX ships it) | 5.4.3.0, 5.6.3.0, 5.8.2.0, 5.10.2.0, 5.12.12.0, 5.14.12.0 |
 | All files in `ax88178/w98se-me/`, `w2k-xp/`, `wxp64/`, `wvista/`, `wvista64/`, `w7/`, `w7_64/` | ASIX Electronics Corporation (KMDF co-installers: Microsoft Corporation, as ASIX ships them) | 1.0.3.46, 1.4.3.64, 1.6.3.64, 1.8.3.14, 1.10.3.14, 1.12.6.0, 1.14.6.0 |
 | All files in `ax88172/w98se-me/`, `w2k/`, `wxp/` | ASIX Electronics Corporation | 1.0.0.11, 2.3.0.2, 2.0.0.5 |
@@ -466,7 +485,8 @@ INF copyright: "Copyright (c) SMSC. All rights reserved." (XP) and
 | All files in `lan9500/`, `lan7800/` | Microchip Technology Inc. (SMSC for the NDIS 5.1 build; `WdfCoInstaller01009.dll`: Microsoft Corporation) | 18.12.18.0; 18.12.14.0 |
 ```
 
-Each needs its provenance block (vendor, package, original and archived
+The pack counts files per folder ("All 4 files in ..."); the worker
+replaces "All files" with the counts when copying. Each needs its provenance block (vendor, package, original and archived
 URL, obtained date, archive name/size/SHA-256, "Licence: none found" with
 the INF's copyright line, modification: none), copied from the tables
 above.
@@ -528,8 +548,10 @@ STAGE | W98SE WME W2K    | non-free/ethernet/dm96xx/w98se-2k/DM9USB.inf | 5.0.1.
 STAGE | WXP              | non-free/ethernet/dm96xx/wxp/Dm9usb.inf      | 1.90 (2002), DM9601 only; the DM962x ids are in wxp-7 (no clash)
 STAGE | WXP              | non-free/ethernet/dm96xx/wxp-7/Winxp/DM9USB.inf     | 5.0.2.0709, DM962x
 STAGE | WXP64            | non-free/ethernet/dm96xx/wxp-7/XP_x64/DM9USB.inf    | 5.0.2.0709
-STAGE | WVISTA WVISTA64  | non-free/ethernet/dm96xx/wxp-7/Vista_x86/DM9USB.inf | 5.0.2.0406 (Vista_x64 for WVISTA64)
-STAGE | W7 W7X64         | non-free/ethernet/dm96xx/wxp-7/Win7_x86/DM9USB.inf  | 5.0.3.0703 (Win7_x64 for W7X64)
+STAGE | WVISTA           | non-free/ethernet/dm96xx/wxp-7/Vista_x86/DM9USB.inf | 5.0.2.0406
+STAGE | WVISTA64         | non-free/ethernet/dm96xx/wxp-7/Vista_x64/DM9USB.inf | 5.0.2.0406
+STAGE | W7               | non-free/ethernet/dm96xx/wxp-7/Win7_x86/DM9USB.inf  | 5.0.3.0703
+STAGE | W7X64            | non-free/ethernet/dm96xx/wxp-7/Win7_x64/DM9USB.inf  | 5.0.3.0703
 # ---- Ethernet: Microchip LAN9500 / LAN7800 (owner to confirm the licence)
 STAGE | WXP              | non-free/ethernet/lan9500/ndis51/x86/net9500-x86-n51f.inf  | 2.6.5.0
 STAGE | WXP64            | non-free/ethernet/lan9500/ndis51/x64/net9500-x64-n51f.inf  | 2.6.5.0
@@ -543,8 +565,7 @@ STAGE | W7               | non-free/ethernet/lan7800/ndis620/x86/net7800-x86-n62
 STAGE | W7X64            | non-free/ethernet/lan7800/ndis620/x64/net7800-x64-n620f.inf | 3.8.4.0
 ```
 
-The two Davicom and Microchip lines written with two systems stand for
-one line each per folder in the real file. The packages' other INFs (8,
+The packages' other INFs (8,
 10, the ARM builds, Davicom's `Win2k`/`Win98`/`Win8_*` folders) are
 `COPY` lines. The worker must check the "one INF per id per system" rule
 by reading each INF's `[Models]` for each system, as the pack's existing
@@ -595,6 +616,8 @@ minimum). Nothing is needed for 3.3.0.0 beyond what 0.1.3 already ships.
 7. Older builds found but newer ones listed and not archived (AX88772 XP
    x64 3.6.3.38, Vista 3.8.3.23 / 3.10.3.23): accept the older archived
    builds?
+8. RTL8150 on 7: Realtek lists no 7 driver, but its Vista INFs (undecorated
+   `NTx86`/`NTamd64`) would install there. Stage them on 7 too?
 
 ## 11. Sources
 

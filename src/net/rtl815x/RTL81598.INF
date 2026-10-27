@@ -1,8 +1,8 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ;
-; RTL81598.INF - usb-wdm-free RTL815X: Realtek RTL8152/RTL8153 USB
-; Ethernet in vendor mode, Windows 98 SE and ME (ethernet.md sections 4.4,
+; RTL81598.INF - usb-wdm-free RTL815X: Realtek RTL8152/RTL8153/RTL8156
+; USB Ethernet in vendor mode, Windows 98 SE and ME (ethernet.md sections 4.4,
 ; 7.1, 7.4). NDIS.VXD loads the WDM miniport (DevLoader=*ndis,
 ; DeviceVxDs). A $Chicago$ INF is refused for Net on Windows 2000
 ; (cdcnet's 2000 run), so RTL815X.INF is the 2000 INF. Written from the
@@ -12,8 +12,9 @@
 ; Whole-device hardware ids: each is a dedicated network device whose
 ; configuration with a vendor-class first interface RTL815X selects
 ; (ethernet.md 5.1, 6.5). The ids are those of Linux r8152.c at f47d2236
-; except 0BDA:8155, 8156, 8157 and 815A, the 2.5/5/10 Gb/s parts (RTL8156
-; and later, not served yet). Another id in this list carrying such a chip
+; except 0BDA:8157 and 815A, the 5 and 10 Gb/s parts (RTL8157, RTL8159,
+; not served yet). The driver tells the chips apart by the chip id they
+; report, not by these ids: an id here carrying a chip it does not serve
 ; is refused at start (unknown chip version), with an event-log entry.
 ; 0BDA:8153 moves here from CDCNET.INF's 98 SE/ME/2000 models when this
 ; package ships (owner decision, ethernet.md 6.5).
@@ -23,7 +24,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=10/27/2026,0.2.0.0
 
 [Manufacturer]
 %Provider%=Models
@@ -59,6 +60,8 @@ DriverVer=10/26/2026,0.1.2.0
 %D27%=RTL,USB\VID_0B05&PID_1976
 %D28%=RTL,USB\VID_20F4&PID_E02B
 %D29%=RTL,USB\VID_20F4&PID_E02C
+%D30%=RTL,USB\VID_0BDA&PID_8155
+%D31%=RTL,USB\VID_0BDA&PID_8156
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -141,3 +144,5 @@ D26="Dell USB Ethernet adapter (RTL815X)"
 D27="ASUS USB Ethernet adapter (RTL815X)"
 D28="TRENDnet USB Ethernet adapter (RTL815X)"
 D29="TRENDnet USB Ethernet adapter (RTL815X)"
+D30="Realtek USB Ethernet (RTL815X)"
+D31="Realtek RTL8156 USB 2.5G Ethernet (RTL815X)"

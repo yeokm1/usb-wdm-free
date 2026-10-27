@@ -305,6 +305,11 @@ licence is unverified; it is not proposed for this repository). HID
 game controllers that need a start-up sequence belong to
 [gamepad.md](gamepad.md).
 
+### 14. USB Wi-Fi adapters
+
+Not a free driver: the makers' drivers and their gaps on 98 SE to 7 are
+surveyed in [wifi-coverage.md](wifi-coverage.md) (task 44.71).
+
 ## Ranking
 
 USB serial and game controllers are planned ([serial.md](serial.md),

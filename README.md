@@ -53,7 +53,7 @@ that Windows.
 | `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
-| `rtl815x` | Simulator only | Not evaluated | Not evaluated | Not evaluated | Not evaluated | Not evaluated | - |
+| `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Not evaluated | Not evaluated | Not evaluated | - |
 | `ax88179` | Real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
@@ -70,6 +70,7 @@ that Windows.
 - (g) The Xbox 360 wireless receiver fails under xHCI98 3.1.0.0 and works under 3.2.0.0.
 - (h) The real drive was recognised but no disk was read; reading passed with a simulated drive.
 - (i) Install and device listing only; no data transfers.
+- (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

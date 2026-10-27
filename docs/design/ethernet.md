@@ -1154,7 +1154,9 @@ serves it, and Realtek's XP and Vista INFs do not list that id.
 The x86 folders take the NDIS 5.0 binary, the x64 folders the NDIS 5.1
 build of section 4.2 (`build.cmd ndis51`, as `cdcnet`'s), with the
 release's embedded test signature (section 7.3). Every line is copy-only
-in `STAGE.TXT` while the legs are simulator legs.
+in `STAGE.TXT` while the legs are simulator legs. The legs (XP to 7, x86 and x64,
+simulated chips at High Speed) are in
+[testing/2026-10-27-rtl815x-xp7.md](../testing/2026-10-27-rtl815x-xp7.md).
 
 ## 8. Build toolchain
 

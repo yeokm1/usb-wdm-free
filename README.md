@@ -53,7 +53,7 @@ that Windows.
 | `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
-| `rtl815x` | Simulator only | Not evaluated | Not evaluated | Not evaluated | Not evaluated | Not evaluated | - |
+| `rtl815x` | Simulator only | Not evaluated | Not evaluated | Simulator only, x86 and x64 (j) | Simulator only, x86 and x64 (j) | Simulator only, x86 and x64 (j) | - |
 | `ax88179` | Real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
@@ -70,6 +70,7 @@ that Windows.
 - (g) The Xbox 360 wireless receiver fails under xHCI98 3.1.0.0 and works under 3.2.0.0.
 - (h) The real drive was recognised but no disk was read; reading passed with a simulated drive.
 - (i) Install and device listing only; no data transfers.
+- (j) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

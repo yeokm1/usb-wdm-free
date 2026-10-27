@@ -86,9 +86,11 @@ STAGE | W7X64 | free/net/cdcnet/wv-7-x64/CDCNET.INF | UHCI ECM leg on 7 x64 ran 
 COPY  | WVISTA64 W7X64 | free/net/cdcnet/wv-7-x64/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
 
 # ---- net/rtl815x
-PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or RTL8153 chip
+PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): Realtek RTL8152, 8153, 8156, 8157 and 8159 adapters
 COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device; chip core rewritten in 0.1.2
 COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
+COPY  | WXP | free/net/rtl815x/wxp/RTLXP7.INF | copy only: simulator legs only, no device
+COPY  | WVISTA W7 | free/net/rtl815x/wv-7-x86/RTLXP7.INF | copy only: simulator legs only, no device
 
 # ---- net/ax88179
 PACKAGE  | net/ax88179 | DEVICE | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip
@@ -120,7 +122,8 @@ COPY  | W98SE | free/audio/noaud/w98se/NOAUD98.INF | opt-in (owner, 2026-10-23):
 
 # ---- Relations (set-qualified)
 EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids
-EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
+EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | the same chips
+COEXISTS | free:net/rtl815x | nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: RTLXP7.INF lists only chips the nonfree INFs leave out on each system
 EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
 EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | both bind the Play and Charge Kit 045E:028F
 COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: xpad98 takes the pads outside x360c list and the Xbox One pads

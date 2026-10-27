@@ -4,6 +4,30 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.4 (2026-10-28): newer Realtek chips in rtl815x
+
+`rtl815x` 0.2.0.0 adds the Realtek RTL8153D (1 Gb/s), RTL8156 and
+RTL8156B (2.5 Gb/s), RTL8157 (5 Gb/s) and RTL8159 (10 Gb/s). Every other
+file is 0.1.3's.
+
+- **98 SE, ME and 2000**: `RTL81598.INF` and `RTL815X.INF` add
+  `0BDA:8155`, `8156`, `8157` and `815A`. The driver serves the chip
+  that the adapter reports, whatever listed id it has.
+- **XP to 7**: a new `RTLXP7.INF` in `wxp` and `wv-7-x86`. It lists only
+  chips that Realtek's driver in the non-free set does not serve on that
+  system. XP and Vista get the RTL8153D, 8156 and 8156B. XP, Vista and 7
+  get the RTL8157 and 8159. Windows 8 and later are not targets.
+- **x64 (XP x64, Vista x64, 7 x64)**: built (NDIS 5.1). Its folders are
+  added when the owner has test-signed the image.
+- **Firmware**: none is loaded. Linux runs these chips without their
+  patches too. Without its patch an RTL8159 links at 5 Gb/s at most.
+- **Legs**: simulator only. No adapter with any of these chips has run.
+  98 SE, ME and 2000 under xHCI98, with each chip at its top speed and a
+  lower one: DHCP, pings, a cable pull and unplug. The XP to 7 legs ran
+  at High Speed. [Release record](testing/2026-10-28-release-0.1.4.md).
+- **Signing**: the x86 images are unsigned, as always. No x64 image
+  changed in this commit.
+
 ## Release 0.1.3 (2026-10-26): class matches
 
 Each class driver matches its USB class on the systems where Windows has

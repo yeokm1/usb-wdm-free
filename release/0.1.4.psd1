@@ -160,12 +160,14 @@
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA W7', 'copy only: simulator legs only, no device') } }
-                @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP64', 'copy only: simulator legs only, no device') } }
-                @{ Name = 'wv-7-x64'; Arch = 'x64'
-                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only: simulator legs only, no device; test-signed') } }
+                # The x64 folders wait for the owner's test signature on the new x64 image
+                # (SIGN-0.1.4.txt): uncomment and run again with -X64Dir, before the tag.
+                # @{ Name = 'wxp-x64'; Arch = 'x64'
+                # Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                # Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP64', 'copy only: simulator legs only, no device') } }
+                # @{ Name = 'wv-7-x64'; Arch = 'x64'
+                # Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                # Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only: simulator legs only, no device; test-signed') } }
             )
         }
         @{

@@ -55,6 +55,11 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.4 (owner, 2026-10-27): `rtl815x` 0.2.0.0 serves the Realtek
+RTL8153D, RTL8156, RTL8156B, RTL8157 and RTL8159 on 98 SE, ME and 2000,
+and these chips on XP to 7 where Realtek's driver in the non-free set does
+not (`RTLXP7.INF`); simulator legs only
+([release 0.1.4](testing/2026-10-28-release-0.1.4.md)).
 Release 0.1.3 (owner, 2026-10-26): `usbcom` matches the CDC-ACM class on
 98 SE, ME and 2000, where Windows has no CDC-ACM driver of its own, and
 `cdcnet`'s `CDCRNDIS.INF` leaves 7's own RNDIS match alone

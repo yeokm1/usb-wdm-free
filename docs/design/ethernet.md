@@ -794,6 +794,67 @@ request count, status and register state match; the diagnostic
   (line 10453); whether xHCI98 enables U1/U2 for such a device, and what the
   driver must do about it, is a question for xHCI98's maintainer (owner).
 
+#### 6.4.0 RTL8156, RTL8156B and RTL8153D (the 8156 core)
+
+Owner, 2026-10-27 (xHCI98 3.3.0.0, task 44.70 part B): the core serves the
+RTL8156 (chip ids `7020` and `7030`, Linux's `RTL_VER_10` and `11`), the
+RTL8156B (`7400`, `7410`; `RTL_VER_12`, `13`) and the RTL8153D (`7420`,
+`RTL_VER_15`, a 1 Gb/s chip on the RTL8156B's core) [linux] lines
+10055-10075. The id `7010` (Linux's `RTL_TEST_01`) stays refused. No such
+adapter is on the bench; the runs are against `rtltest.c`'s model and the
+simulator (`docs/testing/2026-10-27-rtl815x-newchips.md`). [linux] means
+`r8152.c` at v7.3, the same file as `f47d2236`; only its register facts
+are used (GPL-2.0-only), restated as this core's own step tables.
+
+- **Tables**: one base setup (`SqSetupMG`) for the 8156 core and its
+  successors, with lines guarded per chip ([linux] lines 8366-8508); PHY
+  setup per family, `SqPhy56A` for the RTL8156 ([linux] lines 7502-7714)
+  and `SqPhy56B` for the RTL8156B and RTL8153D ([linux] lines 7716-7973),
+  each with per-chip tuning tables (`SqPhy7020`, `SqPhy7030`,
+  `SqPhy7400Pre`, `SqPhy7400`, `SqPhy7410`, `SqPhy7420`); wake
+  (`SqWakeMG`, [linux] lines 6824-6886), link up (`SqRxOnMG`, lines
+  6408-6460, 3597-3618), link down (`SqRxOffMG`, lines 6381-6387,
+  6462-6468), sleep (`SqSleepMG`, lines 6888-6935) and detach
+  (`SqDetachMG`, lines 9681-9691). The receiver and transmitter reset
+  differs per chip: the RTL8156 turns its receiver and transmitter off
+  around a buffer-unit reset with the ECM bit set, the RTL8156B and
+  RTL8153D reset the MAC [linux] lines 3421-3456.
+- **New step kinds**: the second PHY SRAM window (`0xb87c`/`0xb87e`), the
+  indirect window (section 6.4.1) and the PHY patch window as steps. A
+  patch window the PHY does not grant within 5 s is withdrawn, the PHY
+  setup ends there, and the autonegotiation after it restarts without a
+  PHY reset [linux] lines 4577-4610, 7598-7599, 7943-7944, 6610-6613.
+- **Firmware**: Linux names `rtl_nic/rtl8156a-2.fw` (`7030`) and
+  `rtl8156b-2.fw` (`7410`, `7420`) [linux] lines 9969-9976; none is loaded
+  here, and Linux's PHY setup goes on without one [linux] lines 5579,
+  7509-7520. The `7400`'s PHY setup has its own patch-window block of PHY
+  writes, which needs no file [linux] lines 7873-7893.
+- **Autonegotiation**: 2.5G is advertised (`0xa5d4` bit 7) by the
+  `7020` to `7410` at USB SuperSpeed only; at High Speed and below the
+  chips advertise 1000 at most, as Linux does [linux] lines 10250-10270.
+  The RTL8153D advertises no multi-gigabit speed.
+- **EEE**: off on the `7020` (Linux enables it only from the `7030`);
+  100 and 1000 advertised, and 2.5G in EEE advertisement 2 (`0xa6d4`
+  bit 0) on the others, the RTL8153D included [linux] lines 9806-9835,
+  5773-5843.
+- **An RTL8156 with reversed pairs**: when `0xd842` bit 5 and the PHY's
+  `0xd068` bit 1 say so, the PHY's per-pair values are exchanged, pair A
+  with D and B with C [linux] lines 7636-7691.
+- **Link up**: early receive timeout 640 ns, the extra aggregation timer
+  15 us, early receive size in 8-byte units from the buffer; at 2.5G the
+  idle slowdown off; the RTL8156's EEE wake time by speed; at USB High
+  Speed the L1 timing by flow control [linux] lines 6408-6460, 3637-3714.
+- **Buffers**: Linux uses 48 KiB bulk IN on the 8156 core [linux] lines
+  9823, 9848; this core uses 32 KiB (`RX_BUFFER_MAX`), with the early
+  receive size set from it. Receive and transmit records are the first
+  format (24-byte and 8-byte headers).
+- **Link speed**: `0xe908` bit 10 gives 2500 Mb/s; NDIS gets 25,000,000
+  in 100 b/s units.
+- **USB ids**: the 98 SE/ME and 2000 INFs add Realtek's `0BDA:8155` and
+  `0BDA:8156` [linux] lines 10402-10403 to the ids they had; the core
+  takes the chip from its id register, so any listed id serves any of
+  these chips. Linux's table does not say which id an RTL8153D uses.
+
 #### 6.4.1 RTL8157 (5G) and RTL8159 (10G)
 
 Owner, 2026-10-27 (xHCI98 3.3.0.0, task 44.70): the core serves the
@@ -841,8 +902,8 @@ independently, gave the same requests as the shared tables
   5G, and 10G on the RTL8159, [linux] lines 9872-9874, 9894-9896,
   5773-5843), ALDPS and pause. A request not granted ends the PHY setup
   there (Linux also leaves out the PHY reset of the autonegotiation after
-  it, [linux] lines 8323-8324, 8351, 6610-6611; this core resets the PHY
-  anyway, as for the RTL8156B).
+  it, [linux] lines 8323-8324, 8351, 6610-6611; so does this core, for
+  every chip of the 8156 core, section 6.4.0).
 - **Autonegotiation**: 10/100/1000 as before, and 2.5G and 5G (and 10G on
   the RTL8159) in MMD 7 register 32 (`0xa5d4`), at USB SuperSpeed only;
   below SuperSpeed those bits are cleared [linux] lines 6580-6603,

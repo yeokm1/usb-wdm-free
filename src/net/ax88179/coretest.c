@@ -42,6 +42,7 @@ typedef struct CHIP_MODEL {
     nc_u32 Filter, FilterCount;
     int LinkApplied;
     nc_u32 Fcs;                 /* RxParse reports this many frames per transfer as FCS-stripped */
+    nc_u32 Mbps;                /* link speed Link reports; 0: 100 */
 } CHIP_MODEL;
 static CHIP_MODEL chip;
 
@@ -93,7 +94,7 @@ static long CLink(void *s, NET_IO *io, NET_LINK *l)
     chip.Links++;
     NcIoRead(io, 0x20, 0, 0, &up, 1);
     if (io->Status < 0) return io->Status;
-    l->Up = up; l->Mbps = up ? 100 : 0; l->FullDuplex = up; l->RxLength = 2048;
+    l->Up = up; l->Mbps = up ? (chip.Mbps ? chip.Mbps : 100) : 0; l->FullDuplex = up; l->RxLength = 2048;
     chip.LinkApplied = up;
     return NC_OK;
 }
@@ -618,6 +619,29 @@ static void Lifecycle(int wdm110)
     Balanced();
 }
 
+/* OID_GEN_LINK_SPEED in 100 b/s units for every speed a chip reports,
+ * up to 10 Gb/s (100000000, within a ULONG). */
+static void LinkSpeeds(void)
+{
+    static const nc_u32 mbps[] = { 10, 100, 1000, 2500, 5000, 10000, 1000 };
+    unsigned i;
+    Fresh();
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    UNTIL(Queued(P_INT) == 1, 2000);
+    for (i = 0; i < sizeof(mbps) / sizeof(mbps[0]); i++) {
+        int connects = nd.Connects, disconnects = nd.Disconnects;
+        chip.Mbps = mbps[i];
+        Interrupt(1);
+        UNTIL(nd.Connects == connects + 1, 3000);
+        CHECK(QueryUlong(OID_GEN_LINK_SPEED) == mbps[i] * 10000);
+        Interrupt(0);
+        UNTIL(nd.Disconnects == disconnects + 1, 3000);
+        CHECK(QueryUlong(OID_GEN_LINK_SPEED) == mbps[i] * 10000);   /* the last speed stays */
+    }
+    Halt();
+    Balanced();
+}
+
 static void ReceivePath(void)
 {
     UCHAR b[2048];
@@ -1028,6 +1052,7 @@ int main(void)
     ndLock = FwLockNew();
     Lifecycle(1);
     Lifecycle(0);                 /* Windows 98: no wait on the thread object */
+    LinkSpeeds();
     ReceivePath();
     InlineStorm();
     HoldAndResources();

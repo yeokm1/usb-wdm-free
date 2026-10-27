@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Yeo Kheng Meng
  *
  * RTL815X chip core: the register map this package uses on Realtek
- * RTL8152/8153-family USB Ethernet controllers, under this project's own
+ * RTL8152/8153/8156-family USB Ethernet controllers, under this project's own
  * names (ethernet.md section 6.4). Addresses and bit values are facts of
  * the chips' vendor register interface; only the ones the core and its
  * tests touch are listed.
@@ -35,11 +35,14 @@
 /* ---- MAC space -------------------------------------------------------- */
 #define MR_NODE_ID       0xc000 /* station address, 6 bytes */
 #define MR_RX_ACCEPT     0xc010 /* receive accept bits (dword) */
+#define MR_RX_CONFIG1    0xc012 /* receive VLAN handling, 8156 family */
 #define MR_RX_MAX_LEN    0xc016
 #define MR_RXFIFO_TH1    0xc0a0
 #define MR_RXFIFO_TH1_HI 0xc0a2
 #define MR_RXFIFO_TH2    0xc0a4
+#define MR_RX_FIFO_FULL  0xc0a6 /* pause-on threshold, 16-byte units (8156 family) */
 #define MR_RXFIFO_TH3    0xc0a8
+#define MR_RX_FIFO_EMPTY 0xc0aa /* pause-off threshold, 16-byte units */
 #define MR_SPARE0        0xc0b0
 #define MR_FILTER_MCU    0xc0b4
 #define MR_WOL           0xc0b6
@@ -53,7 +56,9 @@
 #define MR_SUSPEND_FLAG  0xd38a
 #define MR_INDICATE      0xd38c
 #define MR_EXTRA_STATUS  0xd398
+#define MR_GPHY_FLASH    0xd3ae /* bit 1: the PHY loads its code from flash */
 #define MR_PACKAGE       0xdc00
+#define MR_GPIO          0xdc6a /* bit 15: DACK detection */
 #define MR_EFUSE_DATA    0xdd00
 #define MR_EFUSE_CMD     0xdd02
 #define MR_LED           0xdd92
@@ -62,6 +67,8 @@
 #define MR_LANWAKE       0xe007
 #define MR_PHY_IRQ_MASK  0xe022
 #define MR_EEE           0xe040
+#define MR_EEE_TW        0xe04c /* EEE wake time, 8156 */
+#define MR_EEE_TW_2G5    0xe058 /* the same at 2.5 Gb/s */
 #define MR_EEE_PLUS      0xe080
 #define MR_POWER1        0xe0c0
 #define MR_POWER2        0xe0ca
@@ -86,6 +93,7 @@
 #define MR_SFF7          0xe8de
 #define MR_LINK          0xe908
 #define MR_CFG6          0xe90a
+#define MR_USB_CFG       0xe952 /* bits 1-2: link-idle power saving at 1G and above */
 #define MR_PHY_WINDOW    0xb000 /* 0xb000-0xbfff: PHY register page | offset */
 
 /* MR_RX_ACCEPT */
@@ -121,6 +129,12 @@
 #define WOL_MAGIC        0x0001
 #define CFG5_WAKE_FRAMES 0x0070
 /* MR_LINK (word) */
+#define LNK_10000        0x4000
+#define LNK_5000         0x1000
+#define LNK_2500         0x0400
+#define LNK_500          0x0100 /* a reduced-power 1000 mode, 8156 */
+#define LNK_TX_FLOW      0x40
+#define LNK_RX_FLOW      0x20
 #define LNK_1000         0x10
 #define LNK_100          0x08
 #define LNK_10           0x04
@@ -131,6 +145,7 @@
 #define UR_U2_PHY        0xb41e
 #define UR_SS_LINK1      0xb426
 #define UR_SS_LINK2      0xb428
+#define UR_L1_CTRL       0xb45e
 #define UR_U2P3          0xb460
 #define UR_DUMMY1        0xb464
 #define UR_DUMMY2        0xb466
@@ -139,7 +154,13 @@
 #define UR_MSC_TMR       0xcbfc
 #define UR_BURST         0xcfc0
 #define UR_LPM_CFG       0xcfd8
+#define UR_ECM_OPTION    0xcfee
 #define UR_MISC2         0xcfff
+#define UR_ECM_OP        0xd26b
+#define UR_GPHY          0xd284 /* PHY code loading status, 8156B on */
+#define UR_SPEED_OPT     0xd32a
+#define UR_FW_CTRL       0xd334
+#define UR_FC_TIMER      0xd340
 #define UR_CTRL          0xd406
 #define UR_TX_AGG        0xd40a
 #define UR_RX_BUF_TH     0xd40c
@@ -151,8 +172,13 @@
 #define UR_RXDMA_OWN     0xd437
 #define UR_U1U2          0xd490 /* 6 bytes */
 #define UR_BMU           0xd4b0
+#define UR_BMU_CFG       0xd4b4
 #define UR_U1U2_TMR      0xd4da
 #define UR_FW_TASK       0xd4e8
+#define UR_RX_AGG_NUM    0xd4ee
+#define UR_ADV_ADDR      0xd5d6 /* the indirect window: address, data (dword), command */
+#define UR_ADV_DATA      0xd5d8
+#define UR_ADV_CMD       0xd5dc
 #define UR_UPS           0xd800
 #define UR_POWER_CUT     0xd80a
 #define UR_MISC0         0xd81a
@@ -161,8 +187,19 @@
 #define UR_WDT11         0xe43c
 
 /* UR_CTRL */
+#define CTRL_ECM         0x0008
 #define CTRL_RX_AGG_OFF  0x0010
 #define CTRL_RX_ZERO     0x0080
+#define CTRL_RX_DESC16   0x0400
+/* UR_ADV_CMD: bit 0 busy, bit 1 write, bit 2 the "IP" space (else BMU) */
+#define ADV_BUSY         0x0001
+#define ADV_WRITE        0x0002
+#define ADV_BMU          0x0000
+#define ADV_IP           0x0004
+/* UR_GPHY */
+#define GPHY_PATCH_DONE  0x0004
+#define GPHY_NO_FLASH    0x0020
+#define GPHY_RESTORED    0x0040
 
 /* ---- PHY registers (through the window) -------------------------------- */
 /* IEEE 802.3 clause 22 registers sit at PR_MII + 2 * number. */
@@ -182,6 +219,14 @@
 /* IEEE 802.3 clause 45, MMD 7 (auto-negotiation) register 60: EEE advertisement */
 #define EEEADV_100TX     0x0002
 #define EEEADV_1000T     0x0004
+#define EEEADV_10GT      0x0008
+/* register 7.62 (EEE advertisement 2) and 7.32 (multi-gigabit advertisement) */
+#define EEEADV2_2G5      0x0001
+#define EEEADV2_5G       0x0002
+#define MGIG_2G5         0x0080
+#define MGIG_5G          0x0100
+#define MGIG_10G         0x1000
+#define MGIG_FAST_RETRAIN 0x0020
 
 #define PR_ALDPS_A       0x2010 /* 8152 family */
 #define PR_EEE_A1        0x2080
@@ -190,15 +235,25 @@
 #define PR_MMD_CTRL      0xa41a
 #define PR_MMD_DATA      0xa41c
 #define PR_STATE         0xa420
+#define PR_INTR          0xa424
 #define PR_NCTL          0xa42c
 #define PR_POWER         0xa430
 #define PR_EEE_CFG       0xa432
 #define PR_SRAM_ADDR     0xa436
 #define PR_SRAM_DATA     0xa438
 #define PR_SPEED_DOWN    0xa442
+#define PR_LITE_A        0xa428
+#define PR_EXT_A         0xa466 /* the 8156 family's external-init flags */
+#define PR_EXT_B         0xa468
+#define PR_FORCE_SEL     0xa5b4 /* bit 15: forced speed through MMD, else MII */
 #define PR_EEE_ADV       0xa5d0
+#define PR_MGIG_CTRL     0xa5d4 /* IEEE 802.3 clause 45 register 7.32 */
+#define PR_LITE_B        0xa5ea
+#define PR_EEE_ADV2      0xa6d4 /* IEEE 802.3 clause 45 register 7.62 */
 #define PR_PATCH_STATE   0xb800
 #define PR_PATCH_CMD     0xb820
+#define PR_SRAM2_ADDR    0xb87c /* a second PHY SRAM window */
+#define PR_SRAM2_DATA    0xb87e
 #define PR_ADC_CFG       0xbc06
 #define PR_ADC_OFFSET    0xbcfc
 #define PR_SYSCLK        0xc416
@@ -225,6 +280,9 @@
 
 /* ---- interrupt-IN report and descriptors ------------------------------ */
 #define IRQ_LINK         0x0004 /* in the first word of the interrupt report */
+/* The first descriptor format (every chip up to the 8156B and 8153D);
+ * a later one is chosen by RTL_STATE.Desc (DESC_*, rtlchip.c Formats). */
+#define DESC_V1          0
 #define RX_DESC_LEN      24     /* receive record header; frame length in bits 0-14 */
 #define RX_RECORD_ALIGN  8
 #define TX_DESC_LEN      8
@@ -232,10 +290,14 @@
 #define TX_FIRST_LAST    0xc0000000UL
 #define RX_MAX_LEN       1522   /* 1500 + Ethernet header + VLAN tag + FCS */
 #define TX_BUFFER        16384UL
+#define RX_BUFFER_MAX    32768UL /* the lower edge's largest bulk-IN buffer */
 
 /* ---- chip ids (MR_TX_CONFIG high word & TXC_ID_MASK) ------------------
  * RTL8152 family: 4C00, 4C10, 4800. RTL8153: 5C00, 5C10, 5C20, 5C30.
- * RTL8153B: 6000, 6010. RTL8153C: 6400. */
+ * RTL8153B: 6000, 6010. RTL8153C: 6400. RTL8156 (2.5G): 7020, 7030.
+ * RTL8156B (2.5G): 7400, 7410. RTL8153D (1G, on the 8156B's core): 7420.
+ * RTL8157 (5G) 1030 and RTL8159 (10G) 2020 are named for the 8157/8159
+ * work; until it lands RtlChipId does not accept them. */
 #define ID_4C00          0x4c00
 #define ID_4C10          0x4c10
 #define ID_4800          0x4800
@@ -246,17 +308,26 @@
 #define ID_6000          0x6000
 #define ID_6010          0x6010
 #define ID_6400          0x6400
+#define ID_7020          0x7020
+#define ID_7030          0x7030
+#define ID_7400          0x7400
+#define ID_7410          0x7410
+#define ID_7420          0x7420
+#define ID_1030          0x1030
+#define ID_2020          0x2020
 
 /* The core's state, in the NET_CHIP_STATE bytes the lower edge provides. */
 typedef struct RTL_STATE {
     nc_u16 Id;                /* ID_*; 0 until Start accepted the chip */
-    nc_u16 Kind;              /* the chip's K_* bit (rtlchip.c) */
+    nc_u16 PhyPage;           /* page in MR_PHY_PAGE; 0xffff unknown */
+    nc_u32 Kind;              /* the chip's K_* bit (rtlchip.c) */
     nc_u8 UsbSpeed;           /* NC_SPEED_* */
     nc_u8 Carrier;            /* Link last applied "up" */
     nc_u8 SetUpOnce;          /* an 8153B/C finished its first setup */
-    nc_u8 Spare;
-    nc_u16 PhyPage;           /* page in MR_PHY_PAGE; 0xffff unknown */
-    nc_u16 Spare2;
+    nc_u8 Desc;               /* DESC_*: the chip's descriptor format */
+    nc_u8 Abort;              /* a step gave up: the sequences running end */
+    nc_u8 Failed;             /* the chip did not come out of its setup */
+    nc_u16 Spare;
     nc_u32 Accept;            /* ACC_* bits beyond ACC_BCAST | ACC_MY_PHYS */
     nc_u8 Hash[8];            /* MR_HASH bytes as written */
     nc_u8 Mac[6];

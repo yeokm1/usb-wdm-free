@@ -6,7 +6,7 @@
  * and USB register spaces with the byte-lane rules of the vendor request
  * (rtlchip.h), the PHY window behind MR_PHY_PAGE, and the self-clearing
  * bits the bring-up waits for. The model and every descriptor here are
- * synthetic; no RTL8152/8153 was read. The expected values are register
+ * synthetic; no RTL8152/8153/8156 was read. The expected values are register
  * facts of the chips (outcomes of the bring-up, link and filter
  * sequences), not code.
  */
@@ -41,6 +41,7 @@ typedef struct MODEL {
     nc_u32 Writes;              /* SET_REGS */
     nc_u32 VersionTcr0;
     int LinkUp;
+    int NoGrant;                /* the PHY never grants a patch window */
     ENTRY Last[64];             /* ring of the last requests */
 } MODEL;
 
@@ -56,7 +57,7 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
     if (addr == PR_PATCH_CMD) {
         /* PATCH_GRANTED follows PATCH_ASK. */
         nc_u16 st = m->Phy[PR_PATCH_STATE / 2];
-        m->Phy[PR_PATCH_STATE / 2] = (nc_u16)((v & PATCH_ASK) ? st | PATCH_GRANTED : st & ~PATCH_GRANTED);
+        m->Phy[PR_PATCH_STATE / 2] = (nc_u16)((v & PATCH_ASK) && !m->NoGrant ? st | PATCH_GRANTED : st & ~PATCH_GRANTED);
     }
     m->Phy[addr / 2] = v;
 }
@@ -166,7 +167,8 @@ static void Encoding(void)
 {
     nc_u32 tcr;
     static const nc_u16 map[] = {
-        0x4c00, 0x4c10, 0x5c00, 0x5c10, 0x5c20, 0x5c30, 0x4800, 0x6000, 0x6010, 0x6400
+        0x4c00, 0x4c10, 0x5c00, 0x5c10, 0x5c20, 0x5c30, 0x4800, 0x6000, 0x6010, 0x6400,
+        0x7020, 0x7030, 0x7400, 0x7410, 0x7420
     };
     unsigned i;
     for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
@@ -174,7 +176,7 @@ static void Encoding(void)
         /* bits outside TXC_ID_MASK are ignored */
         CHECK(RtlChipId(((nc_u32)map[i] << 16) | 0x830f0000UL | 0xffff) == map[i]);
     }
-    /* RTL8156/8156B/8157/8159 and the test chip: later, not this core. */
+    /* RTL8157/8159 (1030, 2020) and the test chip 7010: not this core. */
     for (tcr = 0; tcr < 0x10000; tcr++) {
         nc_u16 v = RtlChipId(tcr << 16);
         int known = 0;
@@ -187,6 +189,8 @@ static void Encoding(void)
 
 static int Is8152(nc_u16 id) { return id == ID_4C00 || id == ID_4C10 || id == ID_4800; }
 static int Is8153(nc_u16 id) { return (id & 0xff00) == 0x5c00; }
+static int Is8156(nc_u16 id) { return id == ID_7020 || id == ID_7030 || id == ID_7400 || id == ID_7410 || id == ID_7420; }
+static int Is2G5(nc_u16 id) { return Is8156(id) && id != ID_7420; }
 
 static void BringUp(nc_u16 id, nc_u8 speed)
 {
@@ -213,7 +217,8 @@ static void BringUp(nc_u16 id, nc_u8 speed)
      * RMS 1522, the MAC not yet receiving (CR RE/TE clear). */
     CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0);
     CHECK((Word(m->Usb, UR_CTRL) & (CTRL_RX_AGG_OFF | CTRL_RX_ZERO)) == 0);
-    CHECK((Word(m->Pla, MR_CPLUS) & CPLUS_RX_VLAN) == 0);
+    if (Is8156(id)) CHECK((Word(m->Pla, MR_RX_CONFIG1) & 0x00c0) == 0);
+    else CHECK((Word(m->Pla, MR_CPLUS) & CPLUS_RX_VLAN) == 0);
     CHECK(Word(m->Pla, MR_RX_MAX_LEN) == RX_MAX_LEN);
     CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == 0);
     CHECK(m->Pla[MR_OOB] & OOB_LIST_READY);
@@ -227,9 +232,30 @@ static void BringUp(nc_u16 id, nc_u8 speed)
         CHECK(m->Phy[(MII(MII_GIG_CONTROL)) / 2] == 0);
     else
         CHECK(m->Phy[(MII(MII_GIG_CONTROL)) / 2] == GIGCTL_1000_FULL);
-    /* EEE advertisement */
-    if (!Is8152(id))
+    /* EEE advertisement: none on the 7020 (EEE stays off there) */
+    if (id == ID_7020)
+        CHECK(m->Phy[PR_EEE_ADV / 2] == 0 && m->Phy[PR_EEE_ADV2 / 2] == 0);
+    else if (!Is8152(id))
         CHECK(m->Phy[PR_EEE_ADV / 2] == (EEEADV_1000T | EEEADV_100TX));
+    if (Is8156(id) && id != ID_7020) CHECK(m->Phy[PR_EEE_ADV2 / 2] == EEEADV2_2G5);
+    /* 2.5G advertised only at SuperSpeed; never by the 8153D or older chips */
+    CHECK(m->Phy[PR_MGIG_CTRL / 2] == (((Is2G5(id) && speed == NC_SPEED_SUPER) ? MGIG_2G5 : 0) |
+                                       (id == ID_7030 ? MGIG_FAST_RETRAIN : 0)));
+    if (Is8156(id)) {
+        /* 8156 core: FIFO and size thresholds for a 1500-byte MTU, aggregation on */
+        CHECK(Word(m->Pla, MR_RX_FIFO_FULL) == 512 && Word(m->Pla, MR_RX_FIFO_EMPTY) == 1024);
+        CHECK(Word(m->Pla, MR_TXFIFO_FULL) == 128 && Word(m->Pla, MR_TXFIFO_TH) == 8);
+        CHECK(m->Pla[MR_TX_MAX_PKT] == 12 * 1024 / 64);
+        CHECK(Dword(m->Usb, UR_RX_BUF_TH) == 0x00600400UL);
+        CHECK(Word(m->Pla, MR_POWER1) == 0x0403 && (Word(m->Pla, MR_POWER2) & 0x80ff) == 0x8003);
+        CHECK(Word(m->Usb, UR_U1U2_TMR) == 500 && Word(m->Usb, UR_MSC_TMR) == 0x0fff);
+        CHECK((m->Usb[UR_ECM_OPTION] & 0x20) && !(m->Usb[UR_ECM_OP] & 0x01));
+        CHECK(Word(m->Usb, UR_U2P3) & 0x0001);
+        CHECK((Word(m->Usb, UR_LPM_CFG) & 1) == (speed == NC_SPEED_SUPER));
+        if (id == ID_7400 || id == ID_7410 || id == ID_7420)
+            CHECK(Word(m->Usb, UR_FC_TIMER) == (0x8000 | 75) && (Word(m->Usb, UR_FW_TASK) & 2) &&
+                  (Word(m->Usb, UR_FW_CTRL) & 0x0108) == 0x0100);
+    }
     /* No wake-up source left on. */
     CHECK((Word(m->Pla, MR_WOL) & WOL_MAGIC) == 0);
     CHECK((Word(m->Pla, MR_CFG5) & CFG5_WAKE_FRAMES) == 0);
@@ -315,6 +341,95 @@ static void LinkAndFilter(nc_u16 id)
     CHECK(m->Pla[MR_OOB] & OOB_ACTIVE);
 }
 
+/* The 8156 core: multi-gigabit link reports, the receive settings at
+ * link-up, a PHY that loads from flash, a refused patch window, and an
+ * RTL8156 with its pairs reversed. */
+static void Multigig(void)
+{
+    NET_PROBE p = Probe(NC_SPEED_SUPER);
+    NET_PARAMS par;
+    NET_LINK l;
+    RTL_STATE *s = (RTL_STATE *)state;
+
+    Reset(0x7410UL << 16);
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 0);
+    m->Pla[MR_LINK] = LNK_UP | LNK_FULL | LNK_TX_FLOW | LNK_RX_FLOW;
+    m->Pla[MR_LINK + 1] = (nc_u8)(LNK_2500 >> 8);
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up && l.Mbps == 2500 && l.FullDuplex);
+    CHECK((Word(m->Pla, MR_POWER4) & 0x0040) == 0);                 /* idle slow-down off at 2.5G */
+    CHECK(Word(m->Usb, UR_RX_EARLY_TMO) == 640 / 8 && Word(m->Usb, UR_PM_STATUS) == 15000 / 8);
+    CHECK(Word(m->Usb, UR_RX_EARLY_LEN) == (32768 - (1522 + 24 + 8)) / 8);
+    CHECK((Word(m->Usb, UR_RX_AGG_NUM) & 0x01ff) == 0);
+    CHECK(m->Usb[UR_RXDMA_OWN] == 0x03);
+    CHECK((m->Pla[MR_COMMAND] & (CMD_RX_ON | CMD_TX_ON)) == (CMD_RX_ON | CMD_TX_ON));
+    CHECK((Word(m->Pla, MR_MISC1) & MISC1_RX_GATE) == 0);
+    /* 5G and 10G report as such; 1000 brings the idle slow-down back */
+    m->Pla[MR_LINK + 1] = (nc_u8)(LNK_5000 >> 8);
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 5000);
+    m->Pla[MR_LINK + 1] = (nc_u8)(LNK_10000 >> 8);
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 10000);
+    m->Pla[MR_LINK + 1] = 0;
+    m->Pla[MR_LINK] = LNK_UP | LNK_FULL | LNK_1000;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 1000);
+    m->Pla[MR_LINK] = 0;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up);
+    CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0 && (Word(m->Pla, MR_MISC1) & MISC1_RX_GATE));
+    m->Pla[MR_LINK] = LNK_UP | LNK_FULL | LNK_1000;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up && (Word(m->Pla, MR_POWER4) & 0x0040));
+    CHECK(NetPackageChip.Stop(state, &io) == NC_OK && (m->Pla[MR_OOB] & OOB_ACTIVE));
+    CHECK((Word(m->Pla, MR_RX_CONFIG1) & 0x00c0) == 0x00c0 && Word(m->Pla, MR_RX_FIFO_EMPTY) == 4096 / 16);
+    CHECK(s->Timeouts == 0);
+
+    /* The RTL8156 at High Speed: 1000 is its top; the FIFO thresholds
+     * zeroed when the link goes down. */
+    p = Probe(NC_SPEED_HIGH);
+    Reset(0x7030UL << 16);
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK((m->Phy[PR_MGIG_CTRL / 2] & MGIG_2G5) == 0);
+    m->Pla[MR_LINK] = LNK_UP | LNK_FULL | LNK_1000;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Mbps == 1000);
+    CHECK(Word(m->Pla, MR_EEE_TW) == 0x11 && (Word(m->Usb, UR_L1_CTRL) & 0x000f) == 0x0001);
+    m->Pla[MR_LINK] = 0;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && !l.Up);
+    CHECK(Word(m->Pla, MR_RX_FIFO_FULL) == 0 && Word(m->Pla, MR_RX_FIFO_EMPTY) == 0);
+
+    /* A PHY loading from flash that never reports done: 100 ms, counted. */
+    p = Probe(NC_SPEED_SUPER);
+    Reset(0x7420UL << 16);
+    m->Pla[MR_GPHY_FLASH] = 0x02;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 2);
+    Reset(0x7420UL << 16);
+    m->Pla[MR_GPHY_FLASH] = 0x02;
+    m->Usb[UR_GPHY] = GPHY_PATCH_DONE;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 0);
+
+    /* A patch window refused: the rest of the PHY setup is skipped (no
+     * EEE), autonegotiation and the rest of bring-up go on. */
+    Reset(0x7400UL << 16);
+    m->NoGrant = 1;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK((m->Phy[PR_PATCH_CMD / 2] & PATCH_ASK) == 0);
+    CHECK(m->Phy[PR_EEE_ADV / 2] == 0 && (m->Phy[0xa86a / 2] & 1) == 0);
+    CHECK((m->Phy[(MII(MII_CONTROL)) / 2] & MIICTL_AN_RESTART) && m->Phy[PR_MGIG_CTRL / 2] == MGIG_2G5);
+    CHECK((m->Pla[MR_OOB] & OOB_ACTIVE) == 0 && Dword(m->Usb, UR_RX_BUF_TH) == 0x00600400UL);
+
+    /* An RTL8156 with its pairs reversed: the PHY's pair tables swapped. */
+    Reset(0x7030UL << 16);
+    m->Usb[UR_UPS_CFG] = 0x20;
+    m->Phy[0xd068 / 2] = 0x0002;
+    m->Phy[0xbd5a / 2] = 0x0102; m->Phy[0xbd5c / 2] = 0x0304;
+    m->Phy[0xbc18 / 2] = 0x1f00; m->Phy[0xbc1a / 2] = 0x0011;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK(m->Phy[0xd068 / 2] == 0x2011);
+    CHECK(m->Phy[0xbd5a / 2] == 0x0403 && m->Phy[0xbd5c / 2] == 0x0201);
+    CHECK(m->Phy[0xbc18 / 2] == 0x1100 && m->Phy[0xbc1a / 2] == 0x001f);
+    /* and without the reversal, untouched */
+    Reset(0x7030UL << 16);
+    m->Phy[0xbd5a / 2] = 0x0102; m->Phy[0xbd5c / 2] = 0x0304;
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK(m->Phy[0xbd5a / 2] == 0x0102 && m->Phy[0xbd5c / 2] == 0x0304);
+}
+
 static void Failures(void)
 {
     NET_PROBE p = Probe(NC_SPEED_HIGH);
@@ -322,7 +437,7 @@ static void Failures(void)
     nc_u32 total, n;
     static const nc_u8 laa[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
     /* Unknown version: refused after reading TCR0, nothing written. */
-    Reset(0x7020UL << 16);                        /* an RTL8156: not this core's */
+    Reset(0x7010UL << 16);                        /* a test chip: not this core's */
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_E_UNSUPPORTED);
     CHECK(m->Count == 1 && m->Writes == 0);
     /* The lower edge's cleanup after a refused start touches nothing. */
@@ -514,10 +629,23 @@ int main(void)
     BringUp(0x6000, NC_SPEED_SUPER);
     BringUp(0x6010, NC_SPEED_HIGH);
     BringUp(0x6400, NC_SPEED_SUPER);
+    BringUp(0x7020, NC_SPEED_SUPER);
+    BringUp(0x7020, NC_SPEED_HIGH);
+    BringUp(0x7030, NC_SPEED_SUPER);
+    BringUp(0x7030, NC_SPEED_HIGH);
+    BringUp(0x7400, NC_SPEED_SUPER);
+    BringUp(0x7410, NC_SPEED_SUPER);
+    BringUp(0x7410, NC_SPEED_HIGH);
+    BringUp(0x7420, NC_SPEED_SUPER);
+    BringUp(0x7420, NC_SPEED_FULL);
     LinkAndFilter(0x4c10);
     LinkAndFilter(0x5c30);
     LinkAndFilter(0x6010);
     LinkAndFilter(0x6400);
+    LinkAndFilter(0x7030);
+    LinkAndFilter(0x7410);
+    LinkAndFilter(0x7420);
+    Multigig();
     Failures();
     ByteEnables();
     Datapath();

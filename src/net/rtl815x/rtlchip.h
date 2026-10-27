@@ -283,6 +283,7 @@
 /* The first descriptor format (every chip up to the 8156B and 8153D);
  * a later one is chosen by RTL_STATE.Desc (DESC_*, rtlchip.c Formats). */
 #define DESC_V1          0
+#define DESC_V2          1      /* RTL8157 and RTL8159 */
 #define RX_DESC_LEN      24     /* receive record header; frame length in bits 0-14 */
 #define RX_RECORD_ALIGN  8
 #define TX_DESC_LEN      8
@@ -291,13 +292,24 @@
 #define RX_MAX_LEN       1522   /* 1500 + Ethernet header + VLAN tag + FCS */
 #define TX_BUFFER        16384UL
 #define RX_BUFFER_MAX    32768UL /* the lower edge's largest bulk-IN buffer */
+/* The second format (RTL8157, RTL8159): a 16-byte receive header with the
+ * frame length (FCS included) in bits 17-31 of its first dword, records
+ * 16-byte aligned; a 16-byte transmit header, 16-byte aligned: the first
+ * and last segment bits with the length, zero, the length shifted left 4,
+ * and a fixed signature. */
+#define RX2_DESC_LEN     16
+#define RX2_ALIGN        16
+#define RX2_LEN_SHIFT    17
+#define TX2_DESC_LEN     16
+#define TX2_ALIGN        16
+#define TX2_LEN_SHIFT    4
+#define TX2_SIGNATURE    0xa8000000UL
 
 /* ---- chip ids (MR_TX_CONFIG high word & TXC_ID_MASK) ------------------
  * RTL8152 family: 4C00, 4C10, 4800. RTL8153: 5C00, 5C10, 5C20, 5C30.
  * RTL8153B: 6000, 6010. RTL8153C: 6400. RTL8156 (2.5G): 7020, 7030.
  * RTL8156B (2.5G): 7400, 7410. RTL8153D (1G, on the 8156B's core): 7420.
- * RTL8157 (5G) 1030 and RTL8159 (10G) 2020 are named for the 8157/8159
- * work; until it lands RtlChipId does not accept them. */
+ * RTL8157 (5G): 1030. RTL8159 (10G): 2020. */
 #define ID_4C00          0x4c00
 #define ID_4C10          0x4c10
 #define ID_4800          0x4800

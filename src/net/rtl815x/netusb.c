@@ -136,9 +136,13 @@ struct NET_DEV {
 static void Out(char c)
 {
 #if defined(NET_TRACE_E9)
+#if defined(_M_AMD64)
+    __outbyte(0xe9, (unsigned char)c);
+#else
     __asm { mov dx, 0xe9
             mov al, c
             out dx, al }
+#endif
 #else
     UNREFERENCED_PARAMETER(c);
 #endif

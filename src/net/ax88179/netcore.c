@@ -448,6 +448,29 @@ static VOID Halt(NDIS_HANDLE context)
     FreeAdapter(a);
 }
 
+#if defined(NDIS51_MINIPORT)
+/* NDIS 5.1 (the x64 build, ethernet.md section 4.2), as cdcnet's: a
+ * surprise removal fails what is queued and lets nothing new in. The lower
+ * edge sees the device gone through its own transfers. */
+static VOID PnPEvent(NDIS_HANDLE context, NDIS_DEVICE_PNP_EVENT event, PVOID buffer, ULONG length)
+{
+    ADAPTER *a = context;
+    UNREFERENCED_PARAMETER(buffer);
+    UNREFERENCED_PARAMETER(length);
+    if (event == NdisDevicePnPEventSurpriseRemoved) {
+        NdisAcquireSpinLock(&a->Lock);
+        a->Gone = TRUE;
+        NdisReleaseSpinLock(&a->Lock);
+        Flush(a);
+    }
+}
+
+static VOID Shutdown(NDIS_HANDLE context)
+{
+    UNREFERENCED_PARAMETER(context);  /* may run at high IRQL: touch nothing */
+}
+#endif
+
 /* ---------------- the address (section 4.8) ---------------- */
 
 static BOOLEAN ValidMac(const UCHAR *m)
@@ -581,7 +604,12 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     }
     if (status != NDIS_STATUS_SUCCESS) { FreeAdapter(a); return NDIS_STATUS_RESOURCES; }
 
-    NdisMSetAttributesEx(handle, a, 0, NDIS_ATTRIBUTE_DESERIALIZE, NdisInterfaceInternal);
+    NdisMSetAttributesEx(handle, a, 0,
+                         NDIS_ATTRIBUTE_DESERIALIZE
+#if defined(NDIS51_MINIPORT)
+                         | NDIS_ATTRIBUTE_SURPRISE_REMOVE_OK
+#endif
+                         , NdisInterfaceInternal);
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 
@@ -623,7 +651,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING path)
     NdisMInitializeWrapper(&wrapper, driver, path, NULL);
     if (!wrapper) return STATUS_INSUFFICIENT_RESOURCES;
     NdisZeroMemory(&chars, sizeof(chars));
+#if defined(NDIS51_MINIPORT)
+    chars.MajorNdisVersion = 5; chars.MinorNdisVersion = 1;
+    chars.PnPEventNotifyHandler = PnPEvent;
+    chars.AdapterShutdownHandler = Shutdown;
+#else
     chars.MajorNdisVersion = 5; chars.MinorNdisVersion = 0;
+#endif
     chars.InitializeHandler = Initialize;
     chars.HaltHandler = Halt;
     chars.QueryInformationHandler = Query;

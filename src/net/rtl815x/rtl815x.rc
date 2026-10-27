@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 Yeo Kheng Meng
 1 VERSIONINFO
-FILEVERSION 0,1,2,0
-PRODUCTVERSION 0,1,2,0
+FILEVERSION 0,2,0,0
+PRODUCTVERSION 0,2,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0
 FILEOS 0x00040004L
@@ -15,10 +15,10 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "usb-wdm-free\0"
             VALUE "FileDescription", "usb-wdm-free RTL815X USB Ethernet (Realtek RTL8152, RTL8153)\0"
-            VALUE "FileVersion", "0.1.2.0\0"
+            VALUE "FileVersion", "0.2.0.0\0"
             VALUE "OriginalFilename", "rtl815x.sys\0"
             VALUE "ProductName", "usb-wdm-free\0"
-            VALUE "ProductVersion", "0.1.2.0\0"
+            VALUE "ProductVersion", "0.2.0.0\0"
         END
     END
     BLOCK "VarFileInfo"

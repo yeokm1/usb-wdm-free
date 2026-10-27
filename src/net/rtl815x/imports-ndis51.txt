@@ -1,0 +1,55 @@
+# The declared x64 NDIS 5.1 import set (build.md section 5). WDK 7.1 WNET
+# amd64 import libraries; XP x64 to 7 x64 load tests are the evidence.
+# cdcnet's x64 list (src/net/cdcnet/imports-ndis51.txt), plus the two
+# names this package adds for the address policy (ethernet.md 4.8):
+# NdisReadNetworkAddress and NdisWriteConfiguration. On amd64 the WDK's
+# ndis.h makes NdisGetCurrentSystemTime and the NDIS spin lock calls
+# inline, so they import nothing.
+NDIS.SYS!NdisAllocateBuffer
+NDIS.SYS!NdisAllocateBufferPool
+NDIS.SYS!NdisAllocateMemory
+NDIS.SYS!NdisAllocatePacket
+NDIS.SYS!NdisAllocatePacketPool
+NDIS.SYS!NdisCloseConfiguration
+NDIS.SYS!NdisFreeBufferPool
+NDIS.SYS!NdisFreeMemory
+NDIS.SYS!NdisFreePacket
+NDIS.SYS!NdisFreePacketPool
+NDIS.SYS!NdisInitializeWrapper
+NDIS.SYS!NdisMGetDeviceProperty
+NDIS.SYS!NdisMIndicateStatus
+NDIS.SYS!NdisMIndicateStatusComplete
+NDIS.SYS!NdisMRegisterMiniport
+NDIS.SYS!NdisMSetAttributesEx
+NDIS.SYS!NdisMSleep
+NDIS.SYS!NdisOpenConfiguration
+NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReadNetworkAddress
+NDIS.SYS!NdisTerminateWrapper
+NDIS.SYS!NdisUnchainBufferAtFront
+NDIS.SYS!NdisWriteConfiguration
+NDIS.SYS!NdisWriteErrorLogEntry
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoFreeMdl
+NTOSKRNL.EXE!IoIsWdmVersionAvailable
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!KeAcquireSpinLockRaiseToDpc
+NTOSKRNL.EXE!KeClearEvent
+NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeReleaseSpinLock
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!MmMapLockedPages
+NTOSKRNL.EXE!ObReferenceObjectByHandle
+NTOSKRNL.EXE!ObfDereferenceObject
+NTOSKRNL.EXE!PsCreateSystemThread
+NTOSKRNL.EXE!PsTerminateSystemThread
+NTOSKRNL.EXE!ZwClose
+# Checked flavour only.
+NTOSKRNL.EXE!DbgPrint
+NTOSKRNL.EXE!RtlAssert

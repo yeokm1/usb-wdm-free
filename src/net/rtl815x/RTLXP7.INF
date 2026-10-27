@@ -1,0 +1,147 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; RTLXP7.INF - usb-wdm-free RTL815X: Realtek USB Ethernet in vendor mode,
+; Windows XP, XP x64, Vista and 7, x86 and x64, for the chips Realtek's own
+; XP to 7 drivers do not serve (owner, 2026-10-27; ethernet.md sections 1
+; item 8 and 7.6). RTL815X.INF is the Windows 2000 INF and RTL81598.INF
+; the Windows 98 SE and ME INF. Written from the Windows 2000 DDK network
+; guide's INF pages; no DDK sample INF was read.
+;
+; Models, one section per system (owner, 2026-10-27):
+;   [Models]                  none: 2000, which ignores decorations, has
+;                             RTL815X.INF.
+;   NTx86.5.1, NTamd64.5.2    XP and XP x64: the RTL8156 and 8156B
+;                             (0BDA:8156), the RTL8157 (0BDA:8157) and
+;                             the RTL8159 (0BDA:815A).
+;   NTx86.6.0, NTamd64.6.0    Vista: as XP.
+;   NTx86.6.1, NTamd64.6.1    7: the RTL8157 and RTL8159 only. Realtek's 7
+;                             driver in usb-wdm-nonfree lists 0BDA:8156.
+;   NTx86.6.2, NTamd64.6.2    none: Windows 8 and later have no NDIS 5
+;                             (ethernet.md section 4.1).
+; The RTL8152 and RTL8153 ids (0BDA:8050, 8053, 8152, 8153, 8155 and every
+; rebrand) are never listed here: usb-wdm-nonfree's Realtek INFs list them
+; on XP to 7, and STAGE.TXT allows one INF per id per system. The ids are
+; those of Linux r8152.c at f47d2236 for these chips. Linux names no
+; rebrand's chip, so no rebrand is listed.
+
+[Version]
+Signature="$Windows NT$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/27/2026,0.2.0.0
+
+[Manufacturer]
+%Provider%=Models,NTx86.5.1,NTamd64.5.2,NTx86.6.0,NTamd64.6.0,NTx86.6.1,NTamd64.6.1,NTx86.6.2,NTamd64.6.2
+
+[Models]
+
+[Models.NTx86.5.1]
+%D8156%=RTL,USB\VID_0BDA&PID_8156
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTamd64.5.2]
+%D8156%=RTL,USB\VID_0BDA&PID_8156
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTx86.6.0]
+%D8156%=RTL,USB\VID_0BDA&PID_8156
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTamd64.6.0]
+%D8156%=RTL,USB\VID_0BDA&PID_8156
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTx86.6.1]
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTamd64.6.1]
+%D8157%=RTL,USB\VID_0BDA&PID_8157
+%D8159%=RTL,USB\VID_0BDA&PID_815A
+
+[Models.NTx86.6.2]
+
+[Models.NTamd64.6.2]
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+rtl815x.sys=1
+
+[DestinationDirs]
+CopyNT=12
+
+[RTL.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
+
+[RTL.NTamd64]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
+
+[CopyNT]
+rtl815x.sys
+
+[RegNT]
+HKR,Ndi,Service,,rtl815x
+HKR,Ndi\Interfaces,UpperRange,,ndis5
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+
+[RTL.NT.Services]
+AddService=rtl815x,2,Service,EventLog
+
+[RTL.NTamd64.Services]
+AddService=rtl815x,2,Service,EventLog
+
+[Service]
+DisplayName=%Service%
+ServiceType=1
+StartType=3
+ErrorControl=1
+LoadOrderGroup=NDIS
+ServiceBinary=%12%\rtl815x.sys
+
+[EventLog]
+AddReg=EventLogReg
+
+[EventLogReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
+HKR,,TypesSupported,0x00010001,7
+
+; The Advanced tab: a locally administered address (ethernet.md 4.8).
+[Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="RTL815X installation disk"
+Service="usb-wdm-free RTL815X USB Ethernet"
+AddressDesc="Network Address"
+D8156="Realtek RTL8156 USB 2.5G Ethernet (RTL815X)"
+D8157="Realtek RTL8157 USB 5G Ethernet (RTL815X)"
+D8159="Realtek RTL8159 USB 10G Ethernet (RTL815X)"

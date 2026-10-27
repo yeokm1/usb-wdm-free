@@ -794,6 +794,93 @@ request count, status and register state match; the diagnostic
   (line 10453); whether xHCI98 enables U1/U2 for such a device, and what the
   driver must do about it, is a question for xHCI98's maintainer (owner).
 
+#### 6.4.1 RTL8157 (5G) and RTL8159 (10G)
+
+Owner, 2026-10-27 (xHCI98 3.3.0.0, task 44.70): the core serves the
+RTL8157 (chip id `1030`, Linux's `RTL_VER_16`) and RTL8159 (`2020`,
+`RTL_VER_17`) [linux] lines 10077-10080. No such adapter is on the bench;
+every run is against `rtltest.c`'s model or the simulator. The facts were
+read from `r8152.c` at `f47d2236` (the v7.3 file, the same lines) and
+restated as this core's own step tables: the 8156 core's shared tables
+(`SqSetupMG`, `SqWakeMG`, `SqRxOnMG`, `SqRxOffMG`, `SqSleepMG`,
+`SqDetachMG`, with `K_57` lines), and the two chips' own PHY setup
+(`SqPhy57`, `SqPhy1030`, `SqPhy2020`) and descriptor format (`DESC_V2`).
+A first, separate set of tables for the two chips, read from Linux
+independently, gave the same requests as the shared tables
+(`docs/testing/2026-10-27-rtl8157-8159.md`).
+
+- **Firmware**: Linux names `rtl_nic/rtl8157-1.fw` and `rtl8159-1.fw`
+  [linux] lines 9983-9986, but applying a patch returns at once when none
+  was loaded [linux] line 5579, and the PHY setup goes on [linux] lines
+  7069-7080, 7975-8352. Both chips are brought up without a patch, as the
+  older chips are. One tuning comment ("with uc2 patch", [linux] line
+  8226) suggests that some RTL8159 values assume the patch: a real-chip
+  check item.
+- **Bring-up** ([linux] lines 8366-8512): bits in USB `0xcffe`, `0xd3ca`,
+  `0xd26b` and `0xcfee`; U1/U2 off; the wait for the PHY parameters
+  loading from flash (`0xd3ae` bit 1, `0xd284` bits 2 and 5, [linux] lines
+  5884-5898); autoload; on the RTL8159 after a power cut a 20 ms wait for
+  `0xd284` bit 6, else the chip is not used [linux] lines 8354-8364,
+  8413-8417; a PHY in external init let go of; U2P3 off through the
+  indirect window; timers; power cut and UPS off (the PHY set up again if
+  the cut flag stays set, [linux] lines 4276-4321); no wake source; U1/U2
+  on at SuperSpeed; MAC clock slowdown; link flags; receive aggregation
+  on, with `0xd406` bit 10 (and bit 11 on the RTL8159) cleared;
+  zero-length receive off in the buffer unit; the transmit signature
+  checked (`0xd4ae` bit 1 cleared); clause 22 forced mode; tally reset.
+- **Indirect window** (new on these chips): address `0xd5d6`, data
+  `0xd5d8` (dword), command `0xd5dc` (bit 0 busy, bit 1 write, bit 2 the
+  USB IP target, else the buffer unit). An access waits for idle (2 ms
+  polls, 20 ms) and is given up if the window stays busy [linux] lines
+  1688-1735.
+- **PHY setup** ([linux] lines 7975-8352): ALDPS and EEE off, the PHY's
+  power-saving bits, each chip's PHY tuning values (99 steps on the
+  RTL8157, 126 on the RTL8159, many through the PHY SRAM windows at
+  `0xa436` and `0xb87c`), then, while the PHY grants a patch request, EEE
+  clock division; green Ethernet, EEE (advertising 100 and 1000, 2.5G and
+  5G, and 10G on the RTL8159, [linux] lines 9872-9874, 9894-9896,
+  5773-5843), ALDPS and pause. A request not granted ends the PHY setup
+  there (Linux also leaves out the PHY reset of the autonegotiation after
+  it, [linux] lines 8323-8324, 8351, 6610-6611; this core resets the PHY
+  anyway, as for the RTL8156B).
+- **Autonegotiation**: 10/100/1000 as before, and 2.5G and 5G (and 10G on
+  the RTL8159) in MMD 7 register 32 (`0xa5d4`), at USB SuperSpeed only;
+  below SuperSpeed those bits are cleared [linux] lines 6580-6603,
+  10262-10280. The simulator's author reports that an RTL8159 without its
+  PHY patch links at 5 Gb/s at most (Linux commit `a51e171e`, not read
+  here); v7.3 still advertises 10G, and so does this core. The link speed
+  NDIS gets is the one the chip reports.
+- **Up and down** ([linux] lines 6824-6935): the MAC is not reset; its
+  receiver and transmitter are turned off instead [linux] lines 3435-3438.
+  VLAN removal (`0xc012` bits 6-7) off while up and on in OOB; jumbo
+  transmit size, flow-control thresholds at 8 and 16 KiB, transmit FIFO
+  thresholds.
+- **Link up** ([linux] lines 6408-6430, 3597-3618, 3633-3714): no limit on
+  frames per transfer (`0xd4ee` bits 0-8 cleared); early receive timeout
+  640 ns and the extra aggregation timer 15 us; early receive size in
+  16-byte units, (buffer - 1522 - 16 - 16) / 16; EEE+ never on the RTL8159
+  [linux] line 3476.
+- **Records** ([linux] lines 864-896, 9718-9732, 3037-3131, 2630-2770):
+  receive headers of 16 bytes, the length with its FCS in bits 17-31 of
+  the first dword, records 16-byte aligned; transmit headers of 16 bytes,
+  16-byte aligned: the first and last bits with the length, zero, the
+  length shifted left 4, and the signature `0xa8000000`.
+- **Buffers**: Linux uses bulk IN 32 KiB on the RTL8157 and 48 KiB on the
+  RTL8159 [linux] lines 9887, 9909; this core uses 32 KiB for both, the
+  lower edge's largest (`RX_BUFFER_MAX`), with the early receive size set
+  from it, so no transfer is longer than the buffer. Transmit 16 KiB as for
+  the others [linux] line 1275.
+- **Link speed**: `0xe908` bits 10, 12 and 14 give 2500, 5000 and 10000
+  Mb/s [linux] lines 746-748; NDIS gets them in 100 b/s units
+  (`OID_GEN_LINK_SPEED`: 100,000,000 at 10 Gb/s, which fits a `ULONG`).
+- **Stop** adds `0xcf04` bits 0-2 and 7 cleared to the power-cut-off
+  steps [linux] lines 9681-9691.
+- **USB ids**: Realtek's `0BDA:8157` and `0BDA:815A` [linux] lines
+  10404-10405. Linux's id table lists rebranded ids by vendor, not by
+  chip, so none of them is known to be an RTL8157 or RTL8159; the core
+  takes the chip from its id register behind whatever USB id the INF
+  lists.
+
 ### 6.5 Interaction with the RTL8153's ECM mode
 
 Both `cdcnet` (ECM configuration) and `rtl815x` (vendor configuration) can

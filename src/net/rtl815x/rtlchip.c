@@ -1577,6 +1577,12 @@ static void Negotiate(RTL_STATE *s, NET_IO *io)
         now = (nc_u16)((was & ~(MGIG_2G5 | MGIG_5G | MGIG_10G)) | MultiGig(s));
         if (now != was) PhyPut(s, io, PR_MGIG_CTRL, now);
     }
+    if (s->NoReset) {
+        /* An 8156-core PHY setup that gave up asks for no PHY reset. */
+        PhyPut(s, io, MII(MII_CONTROL), MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
+        s->NoReset = 0;
+        return;
+    }
     PhyPut(s, io, MII(MII_CONTROL), MIICTL_RESET | MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
     WaitFor(s, io, &reset, 0);
 }
@@ -1620,6 +1626,7 @@ static int PhySequence(const RTL_STATE *s)
 static void PhySetup(RTL_STATE *s, NET_IO *io)
 {
     Run(s, io, PhySequence(s));
+    s->NoReset = (nc_u8)((s->Kind & K_MG) && s->Abort);
     s->Abort = 0;
 }
 
@@ -1750,7 +1757,7 @@ static void Hook(RTL_STATE *s, NET_IO *io, int h)
 
     /* ---- the 8156 core ---- */
     case H_FLASH_WAIT: { /* a PHY that loads its code from flash: up to 100 ms for it */
-        static const STEP loaded = WAIT(USB, 2, UR_GPHY, GPHY_PATCH_DONE, GPHY_PATCH_DONE, 100, 1);
+        static const STEP loaded = WAIT(USB, 2, UR_GPHY, GPHY_CODE_LOADED, GPHY_CODE_LOADED, 100, 1);
         if ((Get(io, RTL_SPACE_MAC, MR_GPHY_FLASH, 2) & 0x0002) &&
             !(Get(io, RTL_SPACE_USB, UR_GPHY, 2) & GPHY_NO_FLASH))
             WaitFor(s, io, &loaded, 0);

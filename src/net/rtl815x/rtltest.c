@@ -46,6 +46,7 @@ typedef struct MODEL {
     nc_u32 Ind[2][16384];       /* behind the indirect window: BMU, IP (addr / 4) */
     int IndStuck;               /* the indirect window stays busy */
     nc_u16 Sram[2][65536];      /* the PHY SRAM windows */
+    nc_u16 Lane[4];             /* 0xd06a per pair, selected by 0xd068 bits 3-4 */
     nc_u16 SramAt[2];
     nc_u32 BmcrResets, BmcrWrites, CmdResets;
 } MODEL;
@@ -70,6 +71,7 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
         !((addr == 0xa466 ? v : m->Phy[0xa466 / 2]) & 0x0001) &&
         !((addr == 0xa468 ? v : m->Phy[0xa468 / 2]) & 0x000a))
         m->Phy[PR_STATE / 2] = PHYST_LAN_ON;
+    if (addr == 0xd06a) { m->Lane[(m->Phy[0xd068 / 2] >> 3) & 3] = v; return; }
     if (addr == PR_SRAM_ADDR) m->SramAt[0] = v;
     if (addr == PR_SRAM2_ADDR) m->SramAt[1] = v;
     if (addr == PR_SRAM_DATA) m->Sram[0][m->SramAt[0]++] = v;
@@ -85,6 +87,7 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
 
 static nc_u16 PhyRead(MODEL *m, nc_u16 addr)
 {
+    if (addr == 0xd06a) return m->Lane[(m->Phy[0xd068 / 2] >> 3) & 3];
     if (addr == PR_SRAM_DATA) return m->Sram[0][m->SramAt[0]];
     if (addr == PR_SRAM2_DATA) return m->Sram[1][m->SramAt[1]];
     return m->Phy[addr / 2];
@@ -442,7 +445,7 @@ static void Multigig(void)
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 2);
     Reset(0x7420UL << 16);
     m->Pla[MR_GPHY_FLASH] = 0x02;
-    m->Usb[UR_GPHY] = GPHY_PATCH_DONE;
+    m->Usb[UR_GPHY] = GPHY_CODE_LOADED;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 0);
 
     /* A patch window refused: the rest of the PHY setup is skipped (no
@@ -453,6 +456,7 @@ static void Multigig(void)
     CHECK((m->Phy[PR_PATCH_CMD / 2] & PATCH_ASK) == 0);
     CHECK(m->Phy[PR_EEE_ADV / 2] == 0 && (m->Phy[0xa86a / 2] & 1) == 0);
     CHECK((m->Phy[(MII(MII_CONTROL)) / 2] & MIICTL_AN_RESTART) && m->Phy[PR_MGIG_CTRL / 2] == MGIG_2G5);
+    CHECK(m->BmcrResets == 0);                      /* no PHY reset after a PHY setup that gave up */
     CHECK((m->Pla[MR_OOB] & OOB_ACTIVE) == 0 && Dword(m->Usb, UR_RX_BUF_TH) == 0x00600400UL);
 
     /* An RTL8156 with its pairs reversed: the PHY's pair tables swapped. */
@@ -461,8 +465,10 @@ static void Multigig(void)
     m->Phy[0xd068 / 2] = 0x0002;
     m->Phy[0xbd5a / 2] = 0x0102; m->Phy[0xbd5c / 2] = 0x0304;
     m->Phy[0xbc18 / 2] = 0x1f00; m->Phy[0xbc1a / 2] = 0x0011;
+    m->Lane[0] = 0xa111; m->Lane[1] = 0xb222; m->Lane[2] = 0xc333; m->Lane[3] = 0xd444;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     CHECK(m->Phy[0xd068 / 2] == 0x2011);
+    CHECK(m->Lane[0] == 0xa444 && m->Lane[3] == 0xd111 && m->Lane[1] == 0xb333 && m->Lane[2] == 0xc222);
     CHECK(m->Phy[0xbd5a / 2] == 0x0403 && m->Phy[0xbd5c / 2] == 0x0201);
     CHECK(m->Phy[0xbc18 / 2] == 0x1100 && m->Phy[0xbc1a / 2] == 0x001f);
     /* and without the reversal, untouched */
@@ -470,6 +476,21 @@ static void Multigig(void)
     m->Phy[0xbd5a / 2] = 0x0102; m->Phy[0xbd5c / 2] = 0x0304;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     CHECK(m->Phy[0xbd5a / 2] == 0x0102 && m->Phy[0xbd5c / 2] == 0x0304);
+    CHECK(m->Lane[0] == 0 && m->Lane[3] == 0);
+    /* PHY values that land in the SRAM windows, one per table */
+    CHECK(m->Sram[0][0x8257] == 0x020f && m->Sram[0][0x80ea] == 0x7843 && m->Sram[1][0x80a2] == 0x0153);
+    CHECK(m->Sram[1][0x8159] == 0x0700 && (m->Sram[0][SR_GREEN] & 0x8000));
+    Reset(0x7020UL << 16);
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK(m->Sram[0][0x819f] == 0xddb6 && m->Sram[0][0x80ea] == 0xc400 && m->Sram[0][0x80df] == 0x0100);
+    Reset(0x7400UL << 16);
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && m->BmcrResets == 1);
+    CHECK(m->Sram[1][0x8fd8] == 0xf600 && m->Sram[0][0x80a9] == 0xc000 && (m->Sram[0][0x817d] & 0x1000));
+    CHECK(m->Phy[0xb890 / 2] == 0x1416 && (m->Phy[0xb896 / 2] & 1));
+    Reset(0x7420UL << 16);
+    CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+    CHECK(m->Sram[0][0x807a] == 0x2417 && m->Sram[1][0x8551] == 0x0800 && m->Sram[1][0x80f5] == 0x760e);
+    CHECK(m->Sram[0][0x8257] == 0 && m->Sram[1][0x8fd8] == 0);
 }
 
 static void Failures(void)
@@ -721,7 +742,7 @@ static void PathsV2(nc_u16 id)
     CHECK(m->Count == plain + 2 * 101 && m->Slept == plainSlept + 2 * 100);
     ResetV2(id);
     m->Pla[MR_GPHY_FLASH] = 0x02;
-    m->Usb[UR_GPHY] = GPHY_PATCH_DONE;
+    m->Usb[UR_GPHY] = GPHY_CODE_LOADED;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 0);
     CHECK(m->Count == plain + 4);                   /* two more reads at each of the two checks */
     ResetV2(id);
@@ -744,14 +765,14 @@ static void PathsV2(nc_u16 id)
         CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && (m->Usb[UR_MISC0] & 1) == 0);
     }
     /* a patch window refused: withdrawn; the PHY setup ends (no clocks,
-     * no green, no EEE); autonegotiation goes on */
+     * no green, no EEE); autonegotiation goes on, with no PHY reset */
     ResetV2(id);
     m->NoGrant = 1;
     CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
     CHECK((m->Phy[PR_PATCH_CMD / 2] & PATCH_ASK) == 0);
     CHECK((Word(m->Pla, MR_POWER4) & 1) == 0 && m->Sram[0][0x8011] == 0x0011);
     CHECK(m->Phy[PR_EEE_ADV / 2] == 0 && (m->Phy[PR_POWER / 2] & 0x8000) == 0);
-    CHECK(m->BmcrResets == 1 && m->BmcrWrites == 1);
+    CHECK(m->BmcrResets == 0 && m->BmcrWrites == 1);
     CHECK((m->Phy[(MII(MII_CONTROL)) / 2] & (MIICTL_AN_ENABLE | MIICTL_AN_RESTART)) ==
           (MIICTL_AN_ENABLE | MIICTL_AN_RESTART));
     m->NoGrant = 0;

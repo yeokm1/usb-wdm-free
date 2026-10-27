@@ -197,7 +197,7 @@
 #define ADV_BMU          0x0000
 #define ADV_IP           0x0004
 /* UR_GPHY */
-#define GPHY_PATCH_DONE  0x0004
+#define GPHY_CODE_LOADED 0x0004
 #define GPHY_NO_FLASH    0x0020
 #define GPHY_RESTORED    0x0040
 
@@ -339,7 +339,8 @@ typedef struct RTL_STATE {
     nc_u8 Desc;               /* DESC_*: the chip's descriptor format */
     nc_u8 Abort;              /* a step gave up: the sequences running end */
     nc_u8 Failed;             /* the chip did not come out of its setup */
-    nc_u16 Spare;
+    nc_u8 NoReset;            /* the PHY setup gave up: autonegotiation without a PHY reset */
+    nc_u8 Spare;
     nc_u32 Accept;            /* ACC_* bits beyond ACC_BCAST | ACC_MY_PHYS */
     nc_u8 Hash[8];            /* MR_HASH bytes as written */
     nc_u8 Mac[6];

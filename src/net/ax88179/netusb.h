@@ -75,6 +75,8 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
 long NetUsbOpen(void *device, const nc_u8 mac[6], NET_START *start, int *connected, nc_u32 *speed100bps);
 void NetUsbStop(void *device);
 void NetUsbKick(void *device);
+/* The device was surprise-removed (NDIS 5.1): no further submissions. */
+void NetUsbSurpriseRemoved(void *device);
 /* Returns nonzero when queued; TaskDone then follows exactly once. */
 int NetUsbRequest(void *device, int request, nc_u32 value, const nc_u8 *data, nc_u32 length);
 

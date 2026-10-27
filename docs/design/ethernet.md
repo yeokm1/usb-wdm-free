@@ -84,6 +84,11 @@ never build inputs (AGENTS.md, "Standalone").
 
    XP to 7 are therefore not targets of `rtl815x` and `ax88179`.
 
+   Owner, 2026-10-27: `rtl815x` also serves XP to 7, for the chips
+   Realtek's XP to 7 drivers do not list: the RTL8153D, 8156 and 8156B on
+   XP and Vista, the RTL8157 and 8159 on XP, Vista and 7, x86 and x64. Its
+   RTL8152 and RTL8153 ids stay off XP to 7 (section 7.6).
+
 ## 2. Purpose and devices served: the survey
 
 What decides each candidate: can it be bought today, is there a free and
@@ -271,14 +276,14 @@ Owner, 2026-10-20: NDIS 5 only, two builds.
 
 | Build | NDIS | Toolchain | Systems | Why |
 |---|---|---|---|---|
-| x86 NDIS 5 | 5.0, `NDIS50_MINIPORT`, `NDIS_WDM=1`, `USE_KLOCKS=1` | Windows 2000 DDK with MSVC 6.0 | `cdcnet`: 98 SE, ME, 2000, XP, Vista and 7 x86. `rtl815x`, `ax88179`: 98 SE, ME and 2000 | The only NDIS version 98 SE has; Vista and 7 load it through the translation layer. The 2000 DDK network guide section 12.6 names the two compile flags |
-| x64 NDIS 5.1 | 5.1 | WDK 7.1, `x64 WNET` environment | `cdcnet` only: XP x64, Vista x64, 7 x64 | XP x64 is NDIS 5.1; Vista and 7 x64 load it through the translation layer |
+| x86 NDIS 5 | 5.0, `NDIS50_MINIPORT`, `NDIS_WDM=1`, `USE_KLOCKS=1` | Windows 2000 DDK with MSVC 6.0 | `cdcnet`: 98 SE, ME, 2000, XP, Vista and 7 x86. `rtl815x`: the same, XP to 7 for its newer chips only (section 7.6). `ax88179`: 98 SE, ME and 2000 | The only NDIS version 98 SE has; Vista and 7 load it through the translation layer. The 2000 DDK network guide section 12.6 names the two compile flags |
+| x64 NDIS 5.1 | 5.1 | WDK 7.1, `x64 WNET` environment | `cdcnet` and `rtl815x` (from 2026-10-27): XP x64, Vista x64, 7 x64 | XP x64 is NDIS 5.1; Vista and 7 x64 load it through the translation layer |
 
 The translation layer's cost on Vista and 7 is accepted; throughput there is
 measured on 7 x64 (section 6.7), not assumed.
 
-Kernel-mode code signing is required on Vista and 7 x64, which only
-`cdcnet` targets. Owner, 2026-10-20:
+Kernel-mode code signing is required on Vista and 7 x64, which `cdcnet`
+and (from 2026-10-27) `rtl815x` target. Owner, 2026-10-20:
 signing follows the same approach as xHCI98 and Stor98, with the tooling
 copied into this repository, not referenced.
 
@@ -1069,13 +1074,16 @@ Folder names follow the one scheme of `README.md`, "Layout" (Owner,
 | `free/net/cdcnet/wxp-x64/` | x64 NDIS 5.1 binary with its embedded test signature, the NT INF; `CDCRNDIS.INF` |
 | `free/net/cdcnet/wv-7-x64/` | the same signed x64 NDIS 5.1 binary; the NT INF with the Vista/7 values; `CDCRNDIS.INF` |
 
-`rtl815x` and `ax88179` target 98 SE, ME and 2000 only (section 1 item
-8), so each has two folders, with no `CDCRNDIS.INF`:
+`ax88179` targets 98 SE, ME and 2000 only (section 1 item 8), so it has
+two folders, with no `CDCRNDIS.INF`. `rtl815x` has those two and, from
+2026-10-27, four for XP to 7 (section 7.6):
 
 | Folder | Contents |
 |---|---|
 | `free/net/rtl815x/w98se-me/`, `free/net/ax88179/w98se-me/` | x86 NDIS 5 `RTL815X.SYS` or `AX179F.SYS`, its INF |
 | `free/net/rtl815x/w2k/`, `free/net/ax88179/w2k/` | the same x86 NDIS 5 binary, the NT INF |
+| `free/net/rtl815x/wxp/`, `free/net/rtl815x/wv-7-x86/` | the same x86 NDIS 5 `RTL815X.SYS`, `RTLXP7.INF` |
+| `free/net/rtl815x/wxp-x64/`, `free/net/rtl815x/wv-7-x64/` | x64 NDIS 5.1 `RTL815X.SYS` with its embedded test signature, `RTLXP7.INF` |
 
 All names 8.3. `cdcnet`'s x64 build is one binary from XP x64 to 7 x64; it
 sits in two folders because 8.3 has no room for one name covering XP x64
@@ -1112,6 +1120,41 @@ there, and the x64 build leaves it out.
 - An INF-only binding owns no binary; how 7 x64 treats an uncatalogued
   INF over signed in-box files is read in M5, as for `usbcom`'s INF
   (`serial.md`). Vista x64 stays unverified.
+
+### 7.6 `rtl815x` on XP to 7: `RTLXP7.INF`
+
+Owner, 2026-10-27 (xHCI98 roadmap 44.70): `rtl815x` serves XP to 7 for
+the chips Realtek's own XP to 7 drivers in `usb-wdm-nonfree` do not list,
+and never for those they do. One INF, `RTLXP7.INF`, has one models
+section per system, so each Windows sees exactly its set. The ids are
+Linux `r8152.c`'s for these chips. Linux names no rebrand's chip, so no
+rebrand is listed.
+
+| Models section | Systems | Ids |
+|---|---|---|
+| `[Models]` | 2000, which ignores decorations (`RTL815X.INF` serves it) | none |
+| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
+| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same four |
+| `NTx86.6.1`, `NTamd64.6.1` | 7 x86 and x64 | `0BDA:8157`, `0BDA:815A` |
+| `NTx86.6.2`, `NTamd64.6.2` | 8 and later | none: no NDIS 5 there (section 4.1) |
+
+Read against `usb-wdm-nonfree`'s Realtek INFs (2026-10-27): its XP 5.23
+and Vista 6.27 INFs list `0BDA:8050`, `8152` and `8153` (bare and by
+revision) and rebrands, and no `8053`, `8156`, `8157` or `815A`. Its 7
+7.61.20 INFs add `8053`, `8155`, `8156` and `8056`, and no `8157` or
+`815A`. So no id here is matched by both packs on one system. The
+RTL8152 and RTL8153 ids stay off XP to 7.
+
+`0BDA:8053` is the RTL8153D's id here. Linux added it to its table in the
+commit that added the RTL8153C and RTL8153D, and the simulator models the
+RTL8153D on it. Linux does not say which of the two chips uses it. An
+RTL8153C on `0BDA:8053` would also bind on XP and Vista. The chip core
+serves it, and Realtek's XP and Vista INFs do not list that id.
+
+The x86 folders take the NDIS 5.0 binary, the x64 folders the NDIS 5.1
+build of section 4.2 (`build.cmd ndis51`, as `cdcnet`'s), with the
+release's embedded test signature (section 7.3). Every line is copy-only
+in `STAGE.TXT` while the legs are simulator legs.
 
 ## 8. Build toolchain
 
@@ -1340,6 +1383,12 @@ After that reading:
   1.14.11.0) cover the AX88179 and AX88178A but not the AX88179A/B, which
   `cdcnet`'s NCM serves on every target (section 1 item 8).
 
+Owner, 2026-10-27 (xHCI98 roadmap 44.70): `rtl815x` adds the RTL8153D,
+8156, 8156B, 8157 and 8159. On XP to 7 it serves only the chips
+`usb-wdm-nonfree`'s Realtek drivers leave out: the RTL8153D, 8156 and
+8156B on XP and Vista, the RTL8157 and 8159 on XP, Vista and 7, through
+`RTLXP7.INF` (section 7.6), with an x64 NDIS 5.1 build.
+
 Also: NUSB's EHCI stack on 98 SE is fully supported; signing follows
 xHCI98's and Stor98's approach.
 
@@ -1382,6 +1431,9 @@ After the first `ax88179` and `rtl815x` builds
 - Realtek bring-up without firmware patches: possible link quirks on some
   revisions.
 - 98 SE TCP/IP throughput ceiling, unknown until measured.
+- `0BDA:8053` on XP and Vista (section 7.6): which chips use it, the
+  RTL8153D only or the RTL8153C too, is not stated by Linux. A real
+  adapter settles it.
 - ME's NDIS version, and Android's current tethering protocols, unverified
   (sections 4.1, 2.4). ME is not tested, so the first stays unverified
   unless the ME DDK is read (section 11.1).

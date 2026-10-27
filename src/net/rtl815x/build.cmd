@@ -1,20 +1,24 @@
 @echo off
 rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
-rem build.cmd ndis5 <free|checked|trace>
+rem build.cmd <ndis5|ndis51> <free|checked|trace>
 rem
-rem Builds the package's NDIS 5 miniport for the ndis5 profile (build.md
-rem sections 3 and 4; ethernet.md section 4.2: x86 NDIS 5.0 with a WDM
-rem lower edge, MSVC 6.0 + Windows 2000 DDK, for 98 SE, ME and 2000) into
-rem out\net\<package directory>\ndis5\<flavour>\. Every path is rooted in
-rem this repository; a missing kit is reported, never searched for.
+rem Builds the package's NDIS 5 miniport for one profile (build.md
+rem sections 3 and 4; ethernet.md section 4.2) into
+rem out\net\<package directory>\<profile>\<flavour>\. Every path is rooted
+rem in this repository; a missing kit is reported, never searched for.
 rem PASS.TXT is written last, only when every gate has passed.
 rem
+rem   ndis5   x86 NDIS 5.0 with a WDM lower edge, MSVC 6.0 + Windows 2000
+rem           DDK: 98 SE, ME and 2000, and XP to 7 x86 (RTLXP7.INF).
+rem   ndis51  x64 NDIS 5.1, WDK 7.1 WNET amd64, as cdcnet's ndis51:
+rem           XP x64, Vista x64 and 7 x64 (RTLXP7.INF).
 rem   trace   a free build that also writes a trace to QEMU's debug
 rem           console port 0xE9: test-only, never released.
 rem
 rem The package-specific lines are the four "set" lines after setlocal;
-rem the rest is the same in src\net\ax88179 and src\net\rtl815x.
+rem the rest is the same in src\net\ax88179 and src\net\rtl815x, except
+rem the ndis51 profile (its check and :env_ndis51), which only rtl815x has.
 rem
 rem Copyright (C) 2026 Yeo Kheng Meng
 
@@ -22,7 +26,7 @@ setlocal EnableExtensions
 set PKG=rtl815x
 set DIR=rtl815x
 set MODULES=netcore netusb netchip rtlchip
-set INFS=RTL815X.INF RTL81598.INF
+set INFS=RTL815X.INF RTL81598.INF RTLXP7.INF
 set CLASS=net
 set SRC=%~dp0
 for %%I in ("%~dp0..\..\..") do set ROOT=%%~fI
@@ -38,8 +42,12 @@ set FLAVOUR=%~2
 if "%PROFILE%"=="" goto usage
 if "%FLAVOUR%"=="" goto usage
 if not "%~3"=="" goto usage
-if /I not "%PROFILE%"=="ndis5" goto usage
 if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" if /I not "%FLAVOUR%"=="trace" goto usage
+if /I "%PROFILE%"=="ndis5" goto profile_ok
+if /I "%PROFILE%"=="ndis51" goto profile_ok
+goto usage
+
+:profile_ok
 
 set OUT=%ROOT%\out\%CLASS%\%DIR%\%PROFILE%\%FLAVOUR%
 if exist "%OUT%\PASS.TXT" del "%OUT%\PASS.TXT"
@@ -58,7 +66,8 @@ set _CL_=
 set LINK=
 set _LINK_=
 
-call :env_ndis5 || goto fail
+if /I "%PROFILE%"=="ndis5" call :env_ndis5 || goto fail
+if /I "%PROFILE%"=="ndis51" call :env_ndis51 || goto fail
 
 if /I "%FLAVOUR%"=="checked" (
     set CFLAV=%CCHK%
@@ -143,6 +152,30 @@ set SUBSYS=4.00
 set KITVER=MSVC 6.0 (cl 12.00.8804, link 6.00.8447) + Windows 2000 DDK
 exit /b 0
 
+:env_ndis51
+rem WDK 7.1, WNET amd64, NDIS 5.1 (build.md section 3, ndis51), with the
+rem flags src\net\cdcnet\build.cmd uses for cdcnet's x64 binary.
+set WDK=%TOOLS%\WinDDK71
+call :need "%WDK%\bin\x86\amd64\cl.exe" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\inc\ddk\ndis.h" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\inc\ddk\wdm.h" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\lib\wnet\amd64\ndis.lib" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\lib\wnet\amd64\ntoskrnl.lib" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\bin\x86\rc.exe" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+set PATH=%WDK%\bin\x86\amd64;%WDK%\bin\x86;%SystemRoot%\system32;%SystemRoot%\System32\WindowsPowerShell\v1.0
+set DUMPBIN=link /dump
+set RC=%WDK%\bin\x86\rc.exe
+set CINC=/I"%WDK%\inc\ddk" /I"%WDK%\inc\api" /I"%WDK%\inc\crt"
+set CBASE=/DNDIS_MINIPORT_DRIVER=1 /DNDIS51_MINIPORT=1 /DNDIS_WDM=1 /W3 /WX /GS- /Gy /GF /Zl /D_AMD64_=1 /DAMD64=1 /D_WIN64=1 /DNTDDI_VERSION=0x05020000 /D_WIN32_WINNT=0x0502 /DWINVER=0x0502 /DWIN32_LEAN_AND_MEAN=1
+set CFREE=/Oxs /DDBG=0
+set CCHK=/Od /Oi /Zi /Fd"%OUT%\%PKG%.cpdb" /DDBG=1
+set LBASE=/DRIVER /SUBSYSTEM:NATIVE,5.02 /ENTRY:DriverEntry /BASE:0x10000 /NODEFAULTLIB /INCREMENTAL:NO /OPT:REF /OPT:ICF /MERGE:_PAGE=PAGE /MERGE:_TEXT=.text /MACHINE:AMD64
+set LLIBS="%WDK%\lib\wnet\amd64\ntoskrnl.lib" "%WDK%\lib\wnet\amd64\ndis.lib" "%WDK%\lib\wnet\amd64\hal.lib"
+set MACHINE=8664
+set SUBSYS=5.02
+set KITVER=WDK 7.1 7600.16385.1 (cl 15.00.30729.207, link 9.00.30729.207), WNET amd64
+exit /b 0
+
 :need
 if exist "%~1" exit /b 0
 echo MISSING: %~1 - install %~2 as docs\toolchain.md describes
@@ -162,7 +195,7 @@ exit /b 1
 exit /b 0
 
 :usage
-echo usage: build.cmd ndis5 ^<free^|checked^|trace^>
+echo usage: build.cmd ^<ndis5^|ndis51^> ^<free^|checked^|trace^>
 endlocal
 exit /b 2
 

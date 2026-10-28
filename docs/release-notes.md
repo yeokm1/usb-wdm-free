@@ -21,14 +21,17 @@ MIDI synth play through the device. Every other file is 0.1.3's.
   play through Windows' software synth. Before it a `.mid` file would not
   play when a `uac2` device was the only sound device.
 - **uac2 legs**: simulator only. Volume and mute on 98 SE under xHCI98,
-  XP x86 and XP x64, with and without a volume control on the device. One
-  simulated device has a CX31993 DAC's layout.
+  XP x86, XP x64, Vista x86 and 7 x86, with and without a volume control
+  on the device. On Vista and 7 the Sounds panel's Levels slider and mute
+  and the tray volume set the device's own controls. One simulated device
+  has a CX31993 DAC's layout.
   [Volume record](testing/2026-10-28-uac2-volume.md),
   [MIDI record](testing/2026-10-28-uac2-swmidi.md).
 - **uac2 on XP x64**: Windows installs its own USB audio driver first.
   Changing the driver to `uac2` hung here every time, and only a restart
   helped. The legs moved Windows' `wdma_usb.inf` aside before plugging
-  the device in.
+  the device in. On Vista and 7 Windows' driver takes the device first
+  too (and fails to start); changing it to `uac2` worked at once there.
 
 - **98 SE, ME and 2000**: `RTL81598.INF` and `RTL815X.INF` add
   `0BDA:8155`, `8156`, `8157` and `815A`. The driver serves the chip

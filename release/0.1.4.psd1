@@ -41,7 +41,7 @@
                    Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', 'playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg; 0.1.4.0 volume and mute passed on XP (simulator)') } }
                 @{ Name = 'wv-8-x86'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); Vista and 8 have no leg; 0.1.4.0 volume and mute: no Vista to 8 leg') } }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); 8 has no leg; 0.1.4.0 playback with volume and mute passed on Vista and 7 x86 (simulator; endpoint volume and mute reach the device)') } }
                 # The x64 folders keep 0.1.2's files until the owner test-signs the 0.1.4.0
                 # x64 image (SIGN-0.1.4.txt). Then, in both folders, and run again with -X64Dir:
                 #   Files = @{ 'uac2wdm.sys' = 'x64:uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf' }

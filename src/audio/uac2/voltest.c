@@ -358,10 +358,17 @@ static void Plans(void)
     actual[2] = UAC_VOL_SILENCE;                       /* a silent channel: unity */
     UacVolGains(levels, 2, 1, &m, actual, muted, g);
     CHECK(g[1] == UAC_VOL_UNITY && g[0] == 0);
-    /* Channel mutes of the master's unit (MuteExtra). */
-    m.MuteExtra = 2; muted[2] = 1;
+    /* Channel mutes of the master's unit (MuteExtra), with channel 2 audible. */
+    actual[2] = 0;
+    m.MuteExtra = 2; muted[2] = 0;
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[0] == 0 && g[1] == 0);
+    muted[2] = 1;
     UacVolGains(levels, 2, 1, &m, actual, muted, g);
     CHECK(g[0] == 0 && g[1] == UAC_VOL_UNITY);
+    m.MuteExtra = 0;                                   /* not the unit's: muted[2] means nothing */
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[1] == 0);
     m.VolumeExtra = m.MuteExtra = 0; muted[2] = 0;
     actual[1] = actual[2] = 0;
     /* Below the device's minimum: the rest in software. */

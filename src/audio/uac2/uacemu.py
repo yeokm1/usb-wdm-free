@@ -944,13 +944,13 @@ def main():
                     help='seconds into a stream after which every feedback packet is zero-length')
     ap.add_argument('--pcm', type=Path, help='optional bounded SIMULATED received PCM capture')
     ap.add_argument('--fu', choices=FU_MODES, default='full',
-                    help='playback feature units of a built profile (not x4/x4full)')
+                    help='playback feature units of a built profile (not x4, x4full or cx31993)')
     ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
                     help='volume RANGE MIN:MAX:RES in 1/256 dB')
     ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
     args = ap.parse_args()
-    if args.fu != 'full' and args.profile in ('x4', 'x4full'):
-        ap.error('--fu applies to the built profiles')
+    if args.fu != 'full' and args.profile in ('x4', 'x4full', 'cx31993'):
+        ap.error('--fu applies to the built profiles other than cx31993')
     vol_range = tuple(int(v) for v in args.vol_range.split(':'))
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')

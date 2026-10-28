@@ -310,8 +310,15 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             }
         }
     }
-    /* The gains for the device's state: an unknown volume taken as the top
-     * of its range, an unknown mute as off. With next (the values about to
+    /* What an unknown volume is taken as: the top of its range; an extra
+     * channel volume without a RANGE, the most a CUR can say (+128 dB),
+     * so its channel stays silent in software until its CUR is read. */
+    int Assumed(ULONG n) const {
+        if (n && (level.NoRange & (1u << (n - 1)))) return 0x7FFF;
+        return (int)(level.Range[n].KsMax / 256);
+    }
+    /* The gains for the device's state: an unknown volume as Assumed, an
+     * unknown mute as off. With next (the values about to
      * be written, mute included), the lower of the two for each channel. */
     void Gains(const LONG *levels, LONG mute, const int *next, unsigned long *gain) {
         int actual[UAC_VOL_SLOTS], muted[UAC_VOL_SLOTS];
@@ -321,7 +328,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         UAC_VOL_MAP map = level.Map;
         LONG flat[UAC_VOL_CHANNELS];
         for (n = 0; n < UAC_VOL_SLOTS; n++) {
-            actual[n] = level.Known[n] ? level.Actual[n] : (int)(level.Range[n].KsMax / 256);
+            actual[n] = level.Known[n] ? level.Actual[n] : Assumed(n);
             muted[n] = level.MuteKnown[n] && level.ActualMute[n];
         }
         if (!level.VolumeOwned) {
@@ -452,7 +459,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         /* What each written slot will hold: main controls their targets,
          * extras their value nearest 0 dB (unmuted). */
         for (n = 0; n < UAC_VOL_SLOTS; n++) {
-            next[n] = v->Actual[n];
+            next[n] = v->Known[n] ? v->Actual[n] : Assumed(n);
             if (VolumeSlot(n, &extra) && !(extra && (v->NoRange & (1u << (n - 1)))))
                 next[n] = extra ? UacVolFromKs(0, &v->Range[n]) : target[n];
         }
@@ -479,31 +486,38 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             t.QuadPart = -400000;   /* 40 ms: the queued USB audio plays out */
             KeDelayExecutionThread(KernelMode, FALSE, &t);
         }
-        if (writeVolume) {
-            /* Every lowering first, then every raising (and the unknown):
-             * no state on the way is louder than both ends. */
-            BOOLEAN normal = TRUE;
-            for (ULONG pass = 0; pass < 2; pass++)
-                for (n = 0; n < UAC_VOL_SLOTS; n++) {
-                    if (!VolumeSlot(n, &extra) || (extra && (v->NoRange & (1u << (n - 1)))) ||
-                        (v->Known[n] && next[n] == v->Actual[n])) continue;
-                    if ((pass == 0) != (v->Known[n] && next[n] < v->Actual[n])) continue;
-                    if (WriteCur(m->VolumeUnit, 2, n, next[n])) { v->Actual[n] = next[n]; v->Known[n] = TRUE; }
-                    else { v->Known[n] = FALSE; volumeFailed = TRUE; if (extra) normal = FALSE; }
+        if (writeVolume || writeMute) {
+            /* The volume lowerings, then the mutes turned on; then the
+             * volume raisings (and the unknown), then the mutes turned off:
+             * no state on the way is louder than both ends. A failed write
+             * in the first two holds the last two (both left dirty), as the
+             * device may not have taken it. */
+            BOOLEAN volumeNormal = TRUE, muteNormal = TRUE;
+            for (ULONG pass = 0; pass < 4; pass++) {
+                if (pass == 2 && (volumeFailed || muteFailed)) {
+                    if (writeVolume) { volumeFailed = TRUE; volumeNormal = FALSE; }
+                    if (writeMute) { muteFailed = TRUE; muteNormal = FALSE; }
+                    break;
                 }
-            v->VolumeNormal = normal;
-        }
-        if (writeMute) {
-            BOOLEAN normal = TRUE;
-            for (n = 0; n < UAC_VOL_SLOTS; n++) {
-                int want;
-                if (!MuteSlot(n, &extra)) continue;
-                want = extra ? 0 : mute;
-                if (v->MuteKnown[n] && v->ActualMute[n] == want) continue;
-                if (WriteCur(m->MuteUnit, 1, n, want)) { v->ActualMute[n] = want; v->MuteKnown[n] = TRUE; }
-                else { v->MuteKnown[n] = FALSE; muteFailed = TRUE; if (extra) normal = FALSE; }
+                for (n = 0; n < UAC_VOL_SLOTS; n++) {
+                    if (pass == 0 || pass == 2) {
+                        if (!writeVolume || !VolumeSlot(n, &extra) || (extra && (v->NoRange & (1u << (n - 1)))) ||
+                            (v->Known[n] && next[n] == v->Actual[n])) continue;
+                        if ((pass == 0) != (v->Known[n] && next[n] < v->Actual[n])) continue;
+                        if (WriteCur(m->VolumeUnit, 2, n, next[n])) { v->Actual[n] = next[n]; v->Known[n] = TRUE; }
+                        else { v->Known[n] = FALSE; volumeFailed = TRUE; if (extra) volumeNormal = FALSE; }
+                    } else {
+                        int want;
+                        if (!writeMute || !MuteSlot(n, &extra)) continue;
+                        want = extra ? 0 : mute;
+                        if ((v->MuteKnown[n] && v->ActualMute[n] == want) || (pass == 1) != (want != 0)) continue;
+                        if (WriteCur(m->MuteUnit, 1, n, want)) { v->ActualMute[n] = want; v->MuteKnown[n] = TRUE; }
+                        else { v->MuteKnown[n] = FALSE; muteFailed = TRUE; if (extra) muteNormal = FALSE; }
+                    }
+                }
             }
-            v->MuteNormal = normal;
+            if (writeVolume) v->VolumeNormal = volumeNormal;
+            if (writeMute) v->MuteNormal = muteNormal;
         }
         if (volumeFailed || muteFailed) {
             KeAcquireSpinLock(&v->Lock, &irql);
@@ -915,8 +929,10 @@ public:
     void Shutdown(BOOLEAN permanent) {
         PAGED_CODE();
         /* A level work item still to run takes the operation mutex: wait
-         * for it outside the mutex (Changed queues no more once Closed). */
-        if (permanent) InterlockedExchange(&level.Closed, 1);
+         * for it outside the mutex (Changed queues no more once Closed).
+         * A stopped Wave is not started again (Start makes a new one), so
+         * a stop closes it too. */
+        InterlockedExchange(&level.Closed, 1);
         while (level.Work) {
             LARGE_INTEGER t;
             t.QuadPart = -100000;   /* 10 ms */

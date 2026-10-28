@@ -649,7 +649,10 @@ class Model:
             if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
                 value = payload[0] if selector == 1 else struct.unpack('<h', payload)[0]
                 silence = selector == 2 and value == -32768
-                off_step = selector == 2 and (res > 0 and (value - lo) % res or res == 0 and value != lo)
+                # RES 0 on a range wider than one value: steps of 1, as the
+                # driver reads it (Linux does the same).
+                step = res if res > 0 else (1 if hi > lo else 0)
+                off_step = selector == 2 and (step > 0 and (value - lo) % step or step == 0 and value != lo)
                 if access != 3 or (selector == 1 and value > 1) or \
                         (selector == 2 and not silence and (not lo <= value <= hi or off_step)):
                     self.log('feature_refused', entity=entity, selector=selector, channel=channel, value=value)

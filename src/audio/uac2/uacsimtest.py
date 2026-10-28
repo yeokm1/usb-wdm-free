@@ -465,7 +465,7 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -0x1000)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x700))[0], 4)
         # Steps of the range only (0.5 dB here), and the silence value.
-        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3c40))[0], 4)
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3bc0))[0], 4)
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3b80))[0], 0)
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -32768))[0], 0)
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -32768)))
@@ -507,7 +507,14 @@ class ProfileTest(unittest.TestCase):
         answer = self.control(m, 2, 0xa1, 0x200, 0x0200, 50)[1]
         out = (c.c_int * 32)()
         self.assertEqual(self.dll.UacVolRange(answer, len(answer), out), 1)
-        self.assertEqual(out[1], -32767)                   # silence is not the range's MIN
+        self.assertEqual(out[1], -32768 + 0x100)           # silence is not a level: the next step
+        # RES 0 on a wider range: the driver reads RES 1, and so does the simulator.
+        m, _, _ = self.model('hs24', vol_range=(-0x100, 0, 0))
+        self.configure(m)
+        answer = self.control(m, 2, 0xa1, 0x200, 0x0200, 50)[1]
+        self.assertEqual(self.dll.UacVolRange(answer, len(answer), out), 1)
+        self.assertEqual((out[1], out[9], out[17]), (-0x100, 0, 1))
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x81))[0], 0)
 
     def test_rendered_level(self):
         # 16-bit stereo at half scale: received -6.02 dBFS; the unit's -10 dB

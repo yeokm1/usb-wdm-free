@@ -215,8 +215,17 @@ static void Ranges(void)
     CHECK(UacVolFromKs(-10L * 65536L - 32769L, &r) == -0x0b00);
     CHECK(UacVolFromKs(100L * 65536L, &r) == 0 && UacVolFromKs(-200L * 65536L, &r) == -0x6000);
     n = Answer(b, 1, silence);
-    CHECK(UacVolRange(b, n, &r) && r.Min[0] == -32767 && r.KsMin == -32767L * 256L &&
-          r.KsStep == 0x80L * 256L);
+    /* MIN at the silence value: the first level is one step up, the grid kept. */
+    CHECK(UacVolRange(b, n, &r) && r.Min[0] == -32768 + 0x80 && r.KsMin == (-32768L + 0x80) * 256L &&
+          r.KsStep == 0x80L * 256L && r.KsMax == 0);
+    {
+        static const int silent[3] = { -32768, -32768, 0 };
+        static const int over[3] = { -32768, -32700, 0x100 };
+        n = Answer(b, 1, silent);
+        CHECK(!UacVolRange(b, n, &r));                     /* only silence: no range */
+        n = Answer(b, 1, over);
+        CHECK(!UacVolRange(b, n, &r));                     /* the next step is past MAX */
+    }
     n = Answer(b, 2, two);
     CHECK(UacVolRange(b, n, &r) && r.Count == 2 && r.KsMin == -0x4000L * 256L &&
           r.KsMax == 0x600L * 256L && r.KsStep == 0x80L * 256L);
@@ -299,82 +308,119 @@ static void Plans(void)
     unsigned char b[8];
     static const int x[3] = { -0x6000, 0, 0x100 };
     static const int y[3] = { -0x3000, 0x600, 0x80 };
+    static const int z[3] = { -0x0300, 0, 0x100 };
     long levels[UAC_VOL_CHANNELS];
-    int hw[UAC_VOL_SLOTS], actual[UAC_VOL_SLOTS];
+    int hw[UAC_VOL_SLOTS], actual[UAC_VOL_SLOTS], muted[UAC_VOL_SLOTS];
     unsigned long g[UAC_VOL_CHANNELS];
     unsigned int i;
     for (i = 0; i < UAC_VOL_SLOTS; i++) CHECK(UacVolRange(b, Answer(b, 1, x), &r[i]));
     CHECK(UacVolRange(b, Answer(b, 1, y), &r[2]));     /* channel 2 has its own range */
+    CHECK(UacVolRange(b, Answer(b, 1, z), &r[4]));     /* channel 4: -3..0 dB only */
     memset(&m, 0, sizeof(m));
     m.Channels = 2;
-    for (i = 0; i < UAC_VOL_SLOTS; i++) actual[i] = 0;
+    for (i = 0; i < UAC_VOL_SLOTS; i++) actual[i] = muted[i] = 0;
     levels[0] = -10L * 65536L; levels[1] = -20L * 65536L;
     /* Master: the loudest channel in hardware. */
     m.VolumeMode = UAC_VOL_MASTER; m.MuteMode = UAC_VOL_MASTER;
     UacVolTargets(levels, 2, &m, r, hw);
     CHECK(hw[0] == -0x0a00 && !hw[1] && !hw[2]);
-    /* Gains against what the device does now. Still at 0 dB (before the
-     * write): both channels at their full levels in software, never
-     * louder than asked. Once written: the other channel's difference. */
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
-    CHECK(g[0] == UacVolGain(-10L * 65536L) && g[1] == UacVolGain(-20L * 65536L));
+    /* Gains against what the device does now; each stream channel k takes
+     * node channel k % 2. At 0 dB (before the write): full levels in
+     * software. Once written: the other channel's difference. */
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
+    for (i = 0; i < UAC_VOL_CHANNELS; i++) CHECK(g[i] == UacVolGain(levels[i % 2]));
     actual[0] = hw[0];
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
-    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UacVolGain(-10L * 65536L));
-    /* The device quieter than asked (a write still to come, or one that
-     * failed): software does not raise it. */
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
+    for (i = 0; i < UAC_VOL_CHANNELS; i++) CHECK(g[i] == (i % 2 ? UacVolGain(-10L * 65536L) : UAC_VOL_UNITY));
+    /* The device quieter than asked: software does not raise it. */
     actual[0] = -0x1400;
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
     CHECK(g[0] == UAC_VOL_UNITY && g[1] == UAC_VOL_UNITY);
-    actual[0] = UAC_VOL_SILENCE;                       /* silent: nothing to add */
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
+    /* Silent (CUR 0x8000): unity, and no mute needed in software. */
+    actual[0] = UAC_VOL_SILENCE;
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
     CHECK(g[0] == UAC_VOL_UNITY && g[1] == UAC_VOL_UNITY);
     /* Mute: zero until the device's mute is confirmed on. */
     actual[0] = -0x0a00;
-    UacVolGains(levels, 2, 1, &m, actual, 0, g);
-    CHECK(g[0] == 0 && g[1] == 0);
-    UacVolGains(levels, 2, 1, &m, actual, 1, g);
-    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UacVolGain(-10L * 65536L));
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    for (i = 0; i < UAC_VOL_CHANNELS; i++) CHECK(g[i] == 0);
+    muted[0] = 1;
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UAC_VOL_UNITY);
+    muted[0] = 0;
+    /* Master with the unit's channel volumes (VolumeExtra): their settings
+     * count. Channel 1 at +0 (normalized), channel 2 still at -6 dB: the
+     * right channel (node -20 dB) needs only -4 dB more in software. */
+    m.VolumeExtra = 3;
+    actual[1] = 0; actual[2] = -0x600;
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
+    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UacVolGain(-4L * 65536L) && g[3] == UacVolGain(-10L * 65536L));
+    actual[2] = UAC_VOL_SILENCE;                       /* a silent channel: unity */
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[1] == UAC_VOL_UNITY && g[0] == 0);
+    /* Channel mutes of the master's unit (MuteExtra). */
+    m.MuteExtra = 2; muted[2] = 1;
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[0] == 0 && g[1] == UAC_VOL_UNITY);
+    m.VolumeExtra = m.MuteExtra = 0; muted[2] = 0;
+    actual[1] = actual[2] = 0;
     /* Below the device's minimum: the rest in software. */
     levels[0] = levels[1] = -100L * 65536L;
     UacVolTargets(levels, 2, &m, r, hw);
     CHECK(hw[0] == -0x6000);
     actual[0] = hw[0];
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
     CHECK(g[0] == UacVolGain(-4L * 65536L) && g[1] == g[0]);
-    /* Between steps: the device rounds to 1 dB; above the level, software
-     * takes the rest; below it, nothing is added. */
+    /* Between steps: above the level, software takes the rest; below it,
+     * nothing is added. */
     levels[0] = -10L * 65536L - 40000L; levels[1] = -10L * 65536L - 20000L;
     UacVolTargets(levels, 2, &m, r, hw);
     actual[0] = hw[0];
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
     CHECK(hw[0] == -0x0a00 && g[1] == UacVolGain(-20000L) && g[0] == UacVolGain(-40000L));
     levels[0] = levels[1] = -10L * 65536L - 50000L;
     UacVolTargets(levels, 2, &m, r, hw);
     actual[0] = hw[0];
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
     CHECK(hw[0] == -0x0b00 && g[0] == UAC_VOL_UNITY && g[1] == UAC_VOL_UNITY);
     /* Channel mode over four logical channels: node channel (n-1)%2, each
-     * from its own range (channel 2: 0.5 dB steps from -48 dB). */
-    m.VolumeMode = UAC_VOL_CHANNEL; m.VolumeChannels = 4; m.MuteMode = UAC_VOL_CHANNEL;
-    levels[0] = -3L * 65536L; levels[1] = -60L * 65536L - 20000L;
+     * from its own range; each stream channel against its own channel
+     * (channel 4 stops at -3 dB, so its -20 dB needs -17 dB in software);
+     * stream channels past the unit's four are all software. */
+    m.VolumeMode = UAC_VOL_CHANNEL; m.VolumeChannels = 4; m.MuteMode = UAC_VOL_CHANNEL; m.MuteChannels = 4;
+    levels[0] = -3L * 65536L; levels[1] = -20L * 65536L;
     UacVolTargets(levels, 2, &m, r, hw);
-    CHECK(!hw[0] && hw[1] == -0x300 && hw[2] == -0x3000 && hw[3] == -0x300 && hw[4] == -0x3c00 && !hw[5]);
+    CHECK(!hw[0] && hw[1] == -0x300 && hw[2] == -0x1400 && hw[3] == -0x300 && hw[4] == -0x300 && !hw[5]);
     for (i = 0; i < UAC_VOL_SLOTS; i++) actual[i] = hw[i];
-    UacVolGains(levels, 2, 0, &m, actual, 0, g);
-    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UacVolGain(-12L * 65536L - 20000L));
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
+    CHECK(g[0] == UAC_VOL_UNITY && g[1] == UAC_VOL_UNITY && g[2] == UAC_VOL_UNITY);
+    CHECK(g[3] == UacVolGain(-17L * 65536L));
+    CHECK(g[4] == UacVolGain(-3L * 65536L) && g[5] == UacVolGain(-20L * 65536L));
+    levels[1] = -60L * 65536L - 20000L;                /* channel 2 stops at -48 dB */
+    UacVolTargets(levels, 2, &m, r, hw);
+    CHECK(hw[2] == -0x3000 && hw[4] == -0x300);
+    for (i = 0; i < UAC_VOL_SLOTS; i++) actual[i] = hw[i];
+    UacVolGains(levels, 2, 0, &m, actual, muted, g);
+    CHECK(g[1] == UacVolGain(-12L * 65536L - 20000L) && g[3] == UacVolGain(-57L * 65536L - 20000L));
+    /* Per-channel mutes: only the channels confirmed muted are spared. */
+    muted[1] = 1; muted[2] = 0;
+    UacVolGains(levels, 2, 1, &m, actual, muted, g);
+    CHECK(g[0] == UAC_VOL_UNITY && g[1] == 0 && g[2] == 0 && g[4] == 0);
+    muted[1] = 0;
     /* Software only. */
-    m.VolumeMode = UAC_VOL_NONE; m.MuteMode = UAC_VOL_NONE;
+    m.VolumeMode = UAC_VOL_NONE; m.MuteMode = UAC_VOL_NONE; m.VolumeChannels = m.MuteChannels = 0;
     UacVolSoftRange(&r[0]);
     levels[1] = -7L * 65536L;
     UacVolTargets(levels, 2, &m, r, hw);
     for (i = 0; i < UAC_VOL_SLOTS; i++) CHECK(!hw[i]);
-    UacVolGains(levels, 2, 0, &m, hw, 0, g);
-    CHECK(g[0] == UacVolGain(-3L * 65536L) && g[1] == UacVolGain(-7L * 65536L));
-    UacVolGains(levels, 2, 1, &m, hw, 0, g);
-    CHECK(!g[0] && !g[1]);
-    UacVolGains(levels, 2, 1, &m, hw, 1, g);            /* no device mute: hwMuted means nothing */
-    CHECK(!g[0] && !g[1]);
+    UacVolGains(levels, 2, 0, &m, hw, muted, g);
+    CHECK(g[0] == UacVolGain(-3L * 65536L) && g[1] == UacVolGain(-7L * 65536L) && g[7] == g[1]);
+    muted[0] = 1;                                      /* no device mute: muted[] means nothing */
+    UacVolGains(levels, 2, 1, &m, hw, muted, g);
+    for (i = 0; i < UAC_VOL_CHANNELS; i++) CHECK(!g[i]);
+    /* Mono node: every stream channel takes node channel 0. */
+    UacVolGains(levels, 1, 0, &m, hw, muted, g);
+    for (i = 0; i < UAC_VOL_CHANNELS; i++) CHECK(g[i] == UacVolGain(-3L * 65536L));
 }
 
 static unsigned long seed = 12345;

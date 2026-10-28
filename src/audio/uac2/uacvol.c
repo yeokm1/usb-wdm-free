@@ -185,8 +185,10 @@ int UacVolRange(const unsigned char *answer, unsigned int length, UAC_VOL_RANGE 
         const unsigned char *t = bytes + 2 + 6 * i;
         v.Min[i] = Word(t); v.Max[i] = Word(t + 2); v.Res[i] = Word(t + 4);
         if (v.Min[i] == UAC_VOL_SILENCE) {
-            /* Silence is CUR's value, not a level of the range. */
-            v.Min[i] = -32767;
+            /* Silence is CUR's value, not a level of the range: the first
+             * level is one step up, on the same grid. */
+            if (v.Res[i] <= 0) return 0;
+            v.Min[i] += v.Res[i];
             if (v.Max[i] < v.Min[i]) return 0;
             if (v.Max[i] == v.Min[i]) v.Res[i] = 0;
         }
@@ -269,17 +271,30 @@ void UacVolTargets(const long *levels, unsigned int channels, const UAC_VOL_MAP 
 }
 
 void UacVolGains(const long *levels, unsigned int channels, int mute, const UAC_VOL_MAP *map,
-                 const int *actual, int hwMuted, unsigned long *gain)
+                 const int *actual, const int *muted, unsigned long *gain)
 {
-    unsigned int c;
-    if (!levels || !map || !actual || !gain || !channels) return;
+    unsigned int k;
+    if (!levels || !map || !actual || !muted || !gain || !channels) return;
     if (channels > UAC_VOL_CHANNELS) channels = UAC_VOL_CHANNELS;
-    for (c = 0; c < channels; c++) {
-        long done = 0;  /* what the device does to this channel, KS */
-        if (map->VolumeMode == UAC_VOL_MASTER) done = UacVolToKs(actual[0]);
-        else if (map->VolumeMode == UAC_VOL_CHANNEL) done = UacVolToKs(actual[c + 1]);
-        gain[c] = UacVolGain(levels[c] - done);
-        if (mute && !(hwMuted && map->MuteMode != UAC_VOL_NONE)) gain[c] = 0;
+    for (k = 0; k < UAC_VOL_CHANNELS; k++) {
+        unsigned int n = k + 1;     /* the device's logical channel */
+        long done = 0;              /* what the device does to it, KS */
+        int off = 0;                /* the device's mute is confirmed on for it */
+        if (map->VolumeMode == UAC_VOL_MASTER) {
+            if (actual[0] == UAC_VOL_SILENCE) off = 1;
+            done = UacVolToKs(actual[0]);
+            if (map->VolumeExtra & (1u << k)) {
+                if (actual[n] == UAC_VOL_SILENCE) off = 1;
+                done += UacVolToKs(actual[n]);
+            }
+        } else if (map->VolumeMode == UAC_VOL_CHANNEL && n <= map->VolumeChannels) {
+            if (actual[n] == UAC_VOL_SILENCE) off = 1;
+            done = UacVolToKs(actual[n]);
+        }
+        if (map->MuteMode == UAC_VOL_MASTER) off = off || muted[0] || ((map->MuteExtra & (1u << k)) && muted[n]);
+        else if (map->MuteMode == UAC_VOL_CHANNEL) off = off || (n <= map->MuteChannels && muted[n]);
+        gain[k] = off ? UAC_VOL_UNITY : UacVolGain(levels[k % channels] - done);
+        if (mute && !off) gain[k] = 0;
     }
 }
 

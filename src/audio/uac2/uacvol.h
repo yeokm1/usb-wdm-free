@@ -63,7 +63,8 @@ int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channel
 
 /* A volume RANGE answer (2-byte signed MIN/MAX/RES triples, section
  * 5.2.5.7.2) in KS units. The silence value -32768 is not a level: a MIN
- * of -32768 reads as -32767. KsMax is the highest value the steps reach. */
+ * of -32768 reads as its next step (MIN + RES; none without a RES). KsMax
+ * is the highest value the steps reach. */
 typedef struct UAC_VOL_RANGE {
     unsigned int Count;
     int Min[UAC_VOL_RANGES], Max[UAC_VOL_RANGES], Res[UAC_VOL_RANGES]; /* 1/256 dB */
@@ -95,14 +96,19 @@ unsigned long UacVolGain(long level);
 void UacVolTargets(const long *levels, unsigned int channels, const UAC_VOL_MAP *map,
                    const UAC_VOL_RANGE *ranges, int *hardware);
 
-/* The software gain of each node channel, given what the device does now:
- * actual[] in the slots of UacVolTargets (UAC_VOL_SILENCE: silent), the
- * difference between a channel's level and the device's never above
- * unity; 0 for every channel when mute is asked and the device's mute is
- * not confirmed on (hwMuted, read only where the map has a device mute). A device that already plays quieter than
- * asked is left alone: software never raises a level. */
+/* The software gain of each stream channel k = 0..UAC_VOL_CHANNELS-1 (the
+ * device's logical channel k + 1, node channel k % channels), given what
+ * the device does now: actual[] in the slots of UacVolTargets (master
+ * mode: actual[0], plus actual[k + 1] where VolumeExtra has channel
+ * k + 1; channel mode: actual[k + 1] up to VolumeChannels), and muted[]
+ * the mutes confirmed on (master: muted[0], plus muted[k + 1] where
+ * MuteExtra has it; channel mode: muted[k + 1] up to MuteChannels). The
+ * gain is the level less what the device does, never above unity (software
+ * never raises a level); unity where the device is silent; 0 when mute
+ * is asked and the device is not silent. A caller that does not know a
+ * control's state passes the top of its range: never louder than asked. */
 void UacVolGains(const long *levels, unsigned int channels, int mute, const UAC_VOL_MAP *map,
-                 const int *actual, int hwMuted, unsigned long *gain);
+                 const int *actual, const int *muted, unsigned long *gain);
 
 /* Scales whole frames of little-endian signed PCM in place: subslot 2, 3
  * or 4 bytes, channel c of each frame by gain[c % gains] (Q16). A trailing

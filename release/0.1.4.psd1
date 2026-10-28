@@ -5,6 +5,9 @@
 # section 7.6). Every rtl815x image and INF is 0.2.0 from out\ (the chip core's
 # new chips on 98 SE, ME and 2000 too); its x64 image is
 # the owner's signed copy of out\net\rtl815x\ndis51\free\rtl815x.sys.
+# Plus uac2 0.1.4.0 (owner, 2026-10-28): playback volume and mute, and the
+# INF's midi subclass (the SW synth). Its x86 image and INF are from out\; its
+# x64 image is the owner's signed copy of out\audio\uac2\wdm64\free\uac2wdm.sys.
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
 # VID/PID), Desc (the STAGE.TXT PACKAGE words), DeviceIds (whole-device
@@ -20,7 +23,8 @@
     Agree = @{ 'src\audio\uac2\x64\uac2wdm.inf' = 'src\audio\uac2\uac2wdm.inf' }
     # The unsigned build of each x64 image the owner signs ('x64:<name>' in Files).
     # Every other signed x64 image is 0.1.0's, from the tree.
-    X64Builds = @{ 'rtl815x.sys' = 'out\net\rtl815x\ndis51\free\rtl815x.sys' }
+    X64Builds = @{ 'rtl815x.sys' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
+                   'uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys' }
     Packages = @(
         @{
             Id = 'audio/uac2'; Kind = 'CLASS'
@@ -30,14 +34,19 @@
             Services = @('uac2wdm')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\w98se-me\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\w98se-me\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', 'every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1)') } }
+                   Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', 'every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1); 0.1.4.0 volume and mute passed on 98 SE (simulator)') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
-                   Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\w2k-xp\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\w2k-xp\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', 'playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg') } }
+                   Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', 'playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg; 0.1.4.0 volume and mute passed on XP (simulator)') } }
                 @{ Name = 'wv-8-x86'; Arch = 'x86'
-                   Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\wv-8-x86\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\wv-8-x86\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); Vista and 8 have no leg') } }
+                   Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); Vista and 8 have no leg; 0.1.4.0 volume and mute: no Vista to 8 leg') } }
+                # The x64 folders keep 0.1.2's files until the owner test-signs the 0.1.4.0
+                # x64 image (SIGN-0.1.4.txt). Then, in both folders, and run again with -X64Dir:
+                #   Files = @{ 'uac2wdm.sys' = 'x64:uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf' }
+                # and add to the Stage note '; 0.1.4.0 volume and mute passed on XP x64 (simulator,
+                # unsigned build)' (wxp-x64) or '; 0.1.4.0 volume and mute: no Vista to 8 x64 leg' (wv-8-x64).
                 @{ Name = 'wxp-x64'; Arch = 'x64'
                    Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\wxp-x64\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\wxp-x64\uac2wdm.inf' }
                    Stage = @{ 'uac2wdm.inf' = @('COPY', 'WXP64', 'copy only (owner, 2026-10-24): no XP x64 leg') } }

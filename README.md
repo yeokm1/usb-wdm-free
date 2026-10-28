@@ -12,7 +12,7 @@ These drivers are experimental. They may not work with every device and can make
 
 | Driver | Device class | Windows |
 |---|---|---|
-| `uac2` | USB Audio Class 2.0, playback and recording | 98 SE to 8; x64 from XP |
+| `uac2` | USB Audio Class 2.0, playback and recording, with volume and mute | 98 SE to 8; x64 from XP |
 | `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
 | `usbcom` | USB CDC-ACM serial, as COM ports | 98 SE, ME; 2000 to 8 and x64 as an INF for Windows' `usbser.sys` |
@@ -87,6 +87,8 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   `NOAUD98.INF`.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
+- **XP x64 installs its own USB audio driver for a `uac2` device first.**
+  Changing it to `uac2` can hang. If it does, restart Windows.
 
 ## Installing
 

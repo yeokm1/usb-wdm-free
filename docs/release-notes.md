@@ -4,11 +4,31 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
-## Release 0.1.4 (2026-10-28): newer Realtek chips in rtl815x
+## Release 0.1.4 (2026-10-28): newer Realtek chips, uac2 volume
 
 `rtl815x` 0.2.0.0 adds the Realtek RTL8153D (1 Gb/s), RTL8156 and
-RTL8156B (2.5 Gb/s), RTL8157 (5 Gb/s) and RTL8159 (10 Gb/s). Every other
-file is 0.1.3's.
+RTL8156B (2.5 Gb/s), RTL8157 (5 Gb/s) and RTL8159 (10 Gb/s). `uac2`
+0.1.4.0 adds playback volume and mute. Its INF lets Windows' software
+MIDI synth play through the device. Every other file is 0.1.3's.
+
+- **uac2 volume and mute**: the Volume Control, the tray volume and
+  Sounds and Audio Devices now set the device's level. The driver uses
+  the volume and mute controls the device offers. A device without them
+  gets the same controls in software: the driver scales the sound itself.
+  Until you change it the device keeps its own level. After that the
+  driver remembers the level and sets it again at the next start.
+- **uac2 MIDI**: the INF registers WinMM's MIDI output, so `.mid` files
+  play through Windows' software synth. Before it a `.mid` file would not
+  play when a `uac2` device was the only sound device.
+- **uac2 legs**: simulator only. Volume and mute on 98 SE under xHCI98,
+  XP x86 and XP x64, with and without a volume control on the device. One
+  simulated device has a CX31993 DAC's layout.
+  [Volume record](testing/2026-10-28-uac2-volume.md),
+  [MIDI record](testing/2026-10-28-uac2-swmidi.md).
+- **uac2 on XP x64**: Windows installs its own USB audio driver first.
+  Changing the driver to `uac2` hung here every time, and only a restart
+  helped. The legs moved Windows' `wdma_usb.inf` aside before plugging
+  the device in.
 
 - **98 SE, ME and 2000**: `RTL81598.INF` and `RTL815X.INF` add
   `0BDA:8155`, `8156`, `8157` and `815A`. The driver serves the chip
@@ -25,8 +45,9 @@ file is 0.1.3's.
   98 SE, ME and 2000 under xHCI98, with each chip at its top speed and a
   lower one: DHCP, pings, a cable pull and unplug. The XP to 7 legs ran
   at High Speed. [Release record](testing/2026-10-28-release-0.1.4.md).
-- **Signing**: the x86 images are unsigned, as always. No x64 image
-  changed in this commit.
+- **Signing**: the x86 images are unsigned, as always. The new x64
+  images of `rtl815x` and `uac2` wait for the owner's test signature. Until
+  then `uac2`'s x64 folders hold 0.1.2's files.
 
 ## Release 0.1.3 (2026-10-26): class matches
 

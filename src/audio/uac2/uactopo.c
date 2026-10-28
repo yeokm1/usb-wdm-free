@@ -13,7 +13,9 @@ const UAC_LINK UacWaveLinks[UAC_WAVE_LINKS] = {
 
 const UAC_LINK UacTopoLinks[UAC_TOPO_LINKS] = {
     { UAC_FILTER_NODE, 0, 0, UAC_NODE_IN },  /* bridge in -> SUM */
-    { 0, UAC_NODE_OUT, UAC_FILTER_NODE, 1 }  /* SUM -> speaker line */
+    { 0, UAC_NODE_OUT, 1, UAC_NODE_IN },     /* SUM -> VOLUME */
+    { 1, UAC_NODE_OUT, 2, UAC_NODE_IN },     /* VOLUME -> MUTE */
+    { 2, UAC_NODE_OUT, UAC_FILTER_NODE, 1 }  /* MUTE -> speaker line */
 };
 
 /* Capture only: wave pin 0 capture (out), pin 1 bridge in; node 0 ADC. */
@@ -23,24 +25,31 @@ static const UAC_LINK CaptureWave[2] = {
 };
 /* Both: wave pins 0 render, 1 render bridge, 2 capture, 3 capture bridge;
  * nodes 0 DAC, 1 ADC. Topology pins 0 render in, 1 speaker, 2 microphone
- * line in, 3 capture line out; nodes 0 and 1 SUM. */
+ * line in, 3 capture line out; nodes 0 and 1 SUM, 2 VOLUME, 3 MUTE (the
+ * render line). A capture-only device keeps the render line without the
+ * two controls (StubTopo). */
 static const UAC_LINK BothWave[4] = {
     { UAC_FILTER_NODE, 0, 0, UAC_NODE_IN }, { 0, UAC_NODE_OUT, UAC_FILTER_NODE, 1 },
     { UAC_FILTER_NODE, 3, 1, UAC_NODE_IN }, { 1, UAC_NODE_OUT, UAC_FILTER_NODE, 2 }
 };
-static const UAC_LINK BothTopo[4] = {
+static const UAC_LINK StubTopo[4] = {
     { UAC_FILTER_NODE, 0, 0, UAC_NODE_IN }, { 0, UAC_NODE_OUT, UAC_FILTER_NODE, 1 },
+    { UAC_FILTER_NODE, 2, 1, UAC_NODE_IN }, { 1, UAC_NODE_OUT, UAC_FILTER_NODE, 3 }
+};
+static const UAC_LINK BothTopo[6] = {
+    { UAC_FILTER_NODE, 0, 0, UAC_NODE_IN }, { 0, UAC_NODE_OUT, 2, UAC_NODE_IN },
+    { 2, UAC_NODE_OUT, 3, UAC_NODE_IN }, { 3, UAC_NODE_OUT, UAC_FILTER_NODE, 1 },
     { UAC_FILTER_NODE, 2, 1, UAC_NODE_IN }, { 1, UAC_NODE_OUT, UAC_FILTER_NODE, 3 }
 };
 
 static const UAC_GRAPH Graphs[3] = {
-    { 2, 1, 2, UacWaveLinks, 2, 1, 2, UacTopoLinks,  0, 1, -1, -1,  0, 1, -1, -1,  0, -1 },
+    { 2, 1, 2, UacWaveLinks, 2, 3, 4, UacTopoLinks,  0, 1, -1, -1,  0, 1, -1, -1,  0, -1,  1, 2 },
     /* Capture only: the full layout, its render pin a stub with no
      * instances (uac2wdm.cpp): 98 SE's WDMAud took a page fault
      * (wdmaud(07)+2F3C, 2026-10-23) on a wave filter with a capture pair
      * alone, with either topology. */
-    { 4, 2, 4, BothWave,     4, 2, 4, BothTopo,      0, 1, 2, 3,   0, 1, 2, 3,    0, 1 },
-    { 4, 2, 4, BothWave,     4, 2, 4, BothTopo,      0, 1, 2, 3,   0, 1, 2, 3,    0, 1 }
+    { 4, 2, 4, BothWave,     4, 2, 4, StubTopo,      0, 1, 2, 3,   0, 1, 2, 3,    0, 1, -1, -1 },
+    { 4, 2, 4, BothWave,     4, 4, 6, BothTopo,      0, 1, 2, 3,   0, 1, 2, 3,    0, 1,  2, 3 }
 };
 
 const UAC_GRAPH *UacGraphFor(int render, int capture)

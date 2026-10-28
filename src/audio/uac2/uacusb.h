@@ -53,6 +53,11 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out);
 NTSTATUS UacUsbRates(UAC_DEV *dev, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count);
 int UacUsbHighSpeed(UAC_DEV *dev);
 void UacUsbClose(UAC_DEV *dev);
+/* PASSIVE. One class request to the function, under the device lock that
+ * also orders the clock requests: setup is the 8 bytes uacctl.c's
+ * UacCtlSetup made (interface recipient only; wLength is the buffer).
+ * *length in: wLength; out: the bytes moved. */
+NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG *length);
 
 /* Stream: one direction, one format, one rate. Create plans the alternate
  * (UacPlanPick) and changes nothing on the device. Start sets the clock

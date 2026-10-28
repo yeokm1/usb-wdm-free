@@ -36,6 +36,11 @@ if errorlevel 1 goto fail
 topotest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
+cl /nologo /W4 /WX /MD /O2 /Fe"%OUT%\voltest.exe" "%SRC%uacvol.c" "%SRC%uacctl.c" "%SRC%uacdesc.c" "%SRC%voltest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+voltest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
 echo PASS uac2 host > PASS.TXT
 popd
 exit /b 0

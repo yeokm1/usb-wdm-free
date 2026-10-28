@@ -94,7 +94,9 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(self.control(1, 0x21, 0x100, 0x2103, 4, struct.pack('<I', 48000))[0], 0)
         self.assertEqual(self.control(1, 0x21, 0x100, 0x2103, 4, struct.pack('<I', 44100))[0], 4)
         self.assertEqual(self.control(1, 0xa1, 0x100, 0x2104, 4)[0], 4)
-        self.assertEqual(self.control(1, 0xa1, 0x108, 0x0103, 1)[2], b'\0')
+        # FU 1: master mute and volume, each channel volume only (bmaControls).
+        self.assertEqual(self.control(1, 0xa1, 0x100, 0x0103, 1)[2], b'\0')
+        self.assertEqual(self.control(1, 0xa1, 0x108, 0x0103, 1)[0], 4)
         self.assertEqual(self.control(1, 0xa1, 0x208, 0x0103, 2)[2], b'\0\0')
         self.assertEqual(self.control(1, 0x21, 0x100, 0x0103, 1, b'\1')[0], 4)
 
@@ -257,6 +259,8 @@ class ProfileTest(unittest.TestCase):
                                         c.c_uint, c.c_uint, c.c_int, c.POINTER(c.c_uint)]
         cls.dll.UacPlanPacketBytes.argtypes = [c.c_uint, c.c_int, c.c_uint, c.c_uint, c.c_int]
         cls.dll.UacPlanPacketBytes.restype = c.c_uint
+        cls.dll.UacVolFind.argtypes = [c.c_void_p, c.c_uint, c.c_uint, c.c_void_p]
+        cls.dll.UacVolRange.argtypes = [c.c_void_p, c.c_uint, c.c_void_p]
 
     def setUp(self):
         self.time = 100.0
@@ -281,7 +285,8 @@ class ProfileTest(unittest.TestCase):
 
     def model(self, name, **kw):
         wire, trace = Wire(), io.StringIO()
-        m = uacemu.Model(wire, trace, lambda: self.time, profile=uacemu.Profile(name), **kw)
+        shape = {k: kw.pop(k) for k in ('fu', 'vol_range', 'vol_cur') if k in kw}
+        m = uacemu.Model(wire, trace, lambda: self.time, profile=uacemu.Profile(name, **shape), **kw)
         m.peer_caps = uacemu.CAPS
         return m, wire, trace
 
@@ -434,6 +439,111 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8),
                          (0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x100)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x100))[0], 4)
+
+    def test_feature_unit_modes_and_access(self):
+        # The descriptor's bmaControls decide what answers: SET only where
+        # read/write, GET where readable, a stall elsewhere.
+        expect = {'full': (0, 0, 0, 0), 'master': (0, 0, 4, 4), 'channels': (4, 4, 0, 0),
+                  'readonly': (0, 4, 0, 4)}
+        for fu, (get0, set0, get1, set1) in expect.items():
+            m, _, _ = self.model('hs24', fu=fu)
+            self.configure(m)
+            self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2)[0], get0, fu)
+            self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x100))[0], set0, fu)
+            self.assertEqual(self.control(m, 1, 0xa1, 0x201, 0x0200, 2)[0], get1, fu)
+            self.assertEqual(self.control(m, 1, 0x21, 0x101, 0x0200, 1, b'\1')[0], set1, fu)
+        m, _, _ = self.model('hs24', fu='none')
+        self.configure(m)
+        self.assertNotIn(2, m.p.entities)
+        self.assertEqual(m.p.entities[3]['source'], 1)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2)[0], 4)
+        # A range of the caller's choosing, and a CUR at plug-in.
+        m, _, _ = self.model('hs24', vol_range=(-0x3c00, 0x600, 0x80), vol_cur=-0x1000)
+        self.configure(m)
+        self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 50),
+                         (0, struct.pack('<Hhhh', 1, -0x3c00, 0x600, 0x80)))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -0x1000)))
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x700))[0], 4)
+        with self.assertRaises(ValueError):
+            uacemu.Profile('hs24', fu='loud')
+        with self.assertRaises(ValueError):
+            uacemu.Profile('hs24', vol_range=(0, -1, 1))
+
+    def test_driver_finds_the_simulated_units(self):
+        # The driver's walk (uacvol.c) on each built profile and FU mode.
+        modes = {'full': (1, 1), 'master': (1, 1), 'channels': (2, 2), 'readonly': (0, 0), 'none': (0, 0)}
+        for name in ('hs24', 'multi', 'fs', 'clocks', 'adaptive'):
+            for fu, (vmode, mmode) in modes.items():
+                p = uacemu.Profile(name, fu=fu)
+                rc, d = self.parse(p.config)
+                self.assertEqual(rc, 0)
+                terminal = self.dll.UacPlanTerminal(c.byref(d), 0, int(p.speed == 'high'))
+                vm = (c.c_uint * 8)()
+                self.assertEqual(self.dll.UacVolFind(c.byref(d), terminal, 2, vm), 1, (name, fu))
+                # Channels, Output, VolumeUnit|MuteUnit (bytes), VolumeMode, MuteMode, ...
+                raw = bytes(vm)
+                channels, output = struct.unpack_from('<IB', raw, 0)
+                vunit, munit = raw[5], raw[6]
+                vmode_got, mmode_got = struct.unpack_from('<II', raw, 8)
+                self.assertEqual((vmode_got, mmode_got), (vmode, mmode), (name, fu))
+                unit = 0 if fu in ('readonly', 'none') else 2
+                self.assertEqual((vunit, munit), (unit, unit), (name, fu))
+                self.assertEqual(p.entities[output]['kind'], 'ot')
+        x4 = uacemu.Profile('x4full')
+        rc, d = self.parse(x4.config)
+        vm = (c.c_uint * 8)()
+        self.assertEqual(self.dll.UacVolFind(c.byref(d), 3, 2, vm), 1)
+        raw = bytes(vm)
+        self.assertEqual((raw[4], raw[5], raw[6]), (5, 1, 1))
+        self.assertEqual(struct.unpack_from('<II', raw, 8), (1, 1))
+        # The simulator's RANGE answer through the driver's parser.
+        m, _, _ = self.model('hs24', vol_range=(-32768, 0, 0x100))
+        self.configure(m)
+        answer = self.control(m, 2, 0xa1, 0x200, 0x0200, 50)[1]
+        out = (c.c_int * 32)()
+        self.assertEqual(self.dll.UacVolRange(answer, len(answer), out), 1)
+        self.assertEqual(out[1], -32767)                   # silence is not the range's MIN
+
+    def test_rendered_level(self):
+        # 16-bit stereo at half scale: received -6.02 dBFS; the unit's -10 dB
+        # master and -3 dB on the right channel render below it; mute renders
+        # nothing.
+        m, _, trace = self.model('hs24')
+        self.configure(m, (1, 1))
+        m.handle(12, 1, bytes((1, 8, 4)))
+        frame = struct.pack('<hh', 16384, -16384)
+        self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x0a00))
+        self.control(m, 1, 0x21, 0x202, 0x0200, 2, struct.pack('<h', -0x0300))
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 24) + frame * 6)
+        levels = m.levels()
+        self.assertEqual(levels['units'], [2])
+        self.assertEqual(levels['received_peak_dbfs'], [-6.02, -6.02])
+        self.assertEqual(levels['rendered_peak_dbfs'], [-16.02, -19.02])
+        self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'\1')
+        self.assertEqual(m.levels()['rendered_peak_dbfs'], [None, None])
+        m.report('iso_out_totals')
+        record = json.loads(trace.getvalue().splitlines()[-1])
+        self.assertEqual(record['received_peak_dbfs'], [-6.02, -6.02])
+        self.assertEqual(m.peak, {})                        # a new window
+        # Scaled in the driver instead: received moves, no unit on the path.
+        m, _, _ = self.model('hs24', fu='none')
+        self.configure(m, (1, 1))
+        m.handle(12, 1, bytes((1, 8, 4)))
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 24) + struct.pack('<hh', 1638, 0) * 6)
+        levels = m.levels()
+        self.assertEqual(levels['units'], [])
+        self.assertEqual(levels['received_peak_dbfs'][0], levels['rendered_peak_dbfs'][0])
+        self.assertAlmostEqual(levels['received_peak_dbfs'][0], -26.02, places=1)
+        self.assertEqual(levels['rendered_peak_dbfs'][1], None)   # silence: no level
+        # 24-bit (subslot 3) and the X4's path through its mixer.
+        m, _, _ = self.model('hs24')
+        self.configure(m, (1, 2))
+        m.handle(12, 1, bytes((1, 8, 4)))
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 6) + (0x400000).to_bytes(3, 'little') * 2)
+        self.assertEqual(m.levels()['received_peak_dbfs'], [-6.02, -6.02])
+        m, _, _ = self.model('x4full')
+        self.assertEqual(m.path_units(3), [1])
+        self.assertEqual(m.path_units(17), [14])
 
     def test_playback_formats_and_feedback(self):
         for name, alt, frame, value in (('hs24', 2, 6, struct.pack('<I', 6 << 16)),

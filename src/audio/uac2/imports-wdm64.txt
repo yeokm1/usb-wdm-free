@@ -41,3 +41,5 @@ PORTCLS.SYS!PcNewServiceGroup
 # 98 SE thread join (uacusb.c): Exited event; the thread object only on WDM 1.10+
 NTOSKRNL.EXE!IoIsWdmVersionAvailable
 NTOSKRNL.EXE!KeDelayExecutionThread
+# Volume and mute: the saved levels (uac2wdm.cpp, GetValue)
+NTOSKRNL.EXE!ZwQueryValueKey

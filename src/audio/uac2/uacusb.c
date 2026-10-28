@@ -431,6 +431,29 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
 
 int UacUsbHighSpeed(UAC_DEV *d) { return d && d->HighSpeed; }
 
+NTSTATUS UacUsbClassRequest(UAC_DEV *d, const UCHAR *setup, PVOID bytes, ULONG *length)
+{
+    struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST urb;
+    NTSTATUS status;
+    if (!d || !setup || !length || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        (setup[0] & 0x7f) != 0x21 || *length != ((ULONG)setup[6] | ((ULONG)setup[7] << 8)) ||
+        (*length && !bytes))
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    urb.TransferFlags = setup[0] & 0x80 ? USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK : 0;
+    urb.TransferBuffer = bytes; urb.TransferBufferLength = *length;
+    urb.Request = setup[1];
+    urb.Value = (USHORT)(setup[2] | (setup[3] << 8));
+    urb.Index = (USHORT)(setup[4] | (setup[5] << 8));
+    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+    status = UsbRequest(d->Lower, (PURB)&urb);
+    KeReleaseMutex(&d->Lock, FALSE);
+    *length = urb.TransferBufferLength;
+    return status;
+}
+
 /* Optional read-only audibility diagnostics: the first feature unit's
  * master mute/volume. No mute or volume write. */
 static VOID ReadFeature(UAC_USB *s)

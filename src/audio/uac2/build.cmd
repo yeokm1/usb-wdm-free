@@ -73,11 +73,13 @@ cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacrate.obj" "%SRC%uacrate.c" >> 
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacusb.obj" "%SRC%uacusb.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uactopo.obj" "%SRC%uactopo.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacplan.obj" "%SRC%uacplan.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacvol.obj" "%SRC%uacvol.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacctl.obj" "%SRC%uacctl.c" >> "%LOG%" 2>&1 || goto fail
 
 "%RC%" /fo"%OUT%\uac2wdm.res" "%SRC%uac2wdm.rc" >> "%LOG%" 2>&1 || goto fail
 
 echo === link >> "%LOG%"
-set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uac2wdm.res" %LLIBS%
+set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uacvol.obj" "%OUT%\uacctl.obj" "%OUT%\uac2wdm.res" %LLIBS%
 echo %CMDL% >> "%LOG%"
 %CMDL% >> "%LOG%" 2>&1 || goto fail
 

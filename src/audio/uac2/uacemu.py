@@ -33,7 +33,21 @@ Every profile answers the standard requests and the clock source
 (SAM_FREQ CUR/RANGE, CLOCK_VALID), clock selector (CUR), clock multiplier
 (NUMERATOR/DENOMINATOR) and feature unit (MUTE, VOLUME CUR/RANGE)
 requests of the entities its descriptors declare, read from the
-descriptors themselves. Playback OUT packets are checked against the
+descriptors themselves. A SET_CUR is refused where the descriptor's
+bmaControls do not make the control read/write.
+
+Feature units of the built profiles (--fu): 'full' (master and every
+channel: mute and volume read/write, the default), 'master' (master
+only), 'channels' (each channel only), 'readonly' (master and channels
+readable, not writable) or 'none' (no feature unit: each output terminal
+takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
+signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
+(1/256 dB, default 0) shape the volume control. Playback is "rendered"
+through the feature units on its path: every 0.25 s the log carries the
+received peak per channel (dBFS) and the rendered peak (received plus
+the units' volume, or silence when muted), so a leg reads a level change
+made in hardware (rendered moves, received stays) or in the driver
+(received moves). Playback OUT packets are checked against the
 active alternate (frame size, maximum packet) and counted; feedback runs
 at the feedback endpoint's interval, 16.16 at High Speed and 10.14 at
 Full Speed, with --fb-ppm, --fb-zero-every and --fb-stop-after to model
@@ -42,6 +56,7 @@ rate and depth. Built profiles carry IDs FFFF:02xx, which no INF lists
 (--vid/--pid change them, for the X4 profiles too).
 """
 import argparse
+import array
 import collections
 import hashlib
 import json
@@ -49,6 +64,7 @@ import math
 import select
 import socket
 import struct
+import sys
 import time
 from pathlib import Path
 
@@ -136,7 +152,12 @@ def audio_function(config):
                 entities[d[3]] = dict(kind='ot', type=int.from_bytes(d[4:6], 'little'),
                                       source=d[7], clock=d[8])
             elif sub == 0x06 and size >= 10 and (size - 6) % 4 == 0:
-                entities[d[3]] = dict(kind='fu', source=d[4], channels=(size - 6) // 4 - 1)
+                n = (size - 6) // 4
+                entities[d[3]] = dict(kind='fu', source=d[4], channels=n - 1,
+                                      controls=[int.from_bytes(d[5 + 4 * i:9 + 4 * i], 'little')
+                                                for i in range(n)])
+            elif sub in (0x04, 0x05) and size >= 5 and size >= 5 + d[4]:
+                entities[d[3]] = dict(kind='mx', inputs=list(d[5:5 + d[4]]))
         elif kind == 0x24 and current and current[2:] == (1, 2) and current[1] and size >= 4:
             a = alts[(current[0], current[1])]
             if d[2] == 1 and size >= 16:
@@ -189,10 +210,18 @@ class Builder:
     def output_terminal(self, tid, ttype, source, clock):
         self.ac += bytes((12, 0x24, 0x03, tid)) + struct.pack('<HBBBHB', ttype, 0, source, clock, 0, 0)
 
-    def feature_unit(self, uid, source, channels):
-        # Master and every channel: mute (D1..0) and volume (D3..2) read/write.
+    def feature_unit(self, uid, source, channels, fu='full'):
+        """Mute (D1..0) and volume (D3..2): read/write (11b) on the master
+        and every channel ('full'), the master only, the channels only, or
+        readable only (01b). 'none' adds no unit: returns the source, the
+        id the output terminal then takes."""
+        if fu == 'none':
+            return source
+        master, each = {'full': (0x0f, 0x0f), 'master': (0x0f, 0), 'channels': (0, 0x0f),
+                        'readonly': (0x05, 0x05)}[fu]
         self.ac += bytes((6 + 4 * (channels + 1), 0x24, 0x06, uid, source)) + \
-            struct.pack('<%dI' % (channels + 1), *([0x0f] * (channels + 1))) + b'\0'
+            struct.pack('<%dI' % (channels + 1), master, *([each] * channels)) + b'\0'
+        return uid
 
     def packet(self, rate, channels, subslot):
         if self.speed == 'high':
@@ -234,13 +263,14 @@ FAMILY_44 = [44100, 88200, 176400]
 FAMILY_48 = [48000, 96000, 192000]
 
 
-def build(name):
-    """(speed, configuration, {clock source id: rates}, product id)."""
+def build(name, fu='full'):
+    """(speed, configuration, {clock source id: rates}, product id). fu: the
+    playback feature units' controls (Builder.feature_unit)."""
     if name == 'hs24':
         b = Builder('high')
         b.clock_source(0x10)
         rates = {0x10: sorted(FAMILY_44 + FAMILY_48)}
-        b.input_terminal(1, 0x0101, 0x10, 2); b.feature_unit(2, 1, 2); b.output_terminal(3, 0x0301, 2, 0x10)
+        b.input_terminal(1, 0x0101, 0x10, 2); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 2, fu), 0x10)
         b.input_terminal(4, 0x0201, 0x10, 2); b.feature_unit(5, 4, 2); b.output_terminal(6, 0x0101, 5, 0x10)
         b.stream(1, 'out', 2, [(2, 16), (3, 24), (4, 32)], 192000)
         b.stream(6, 'in', 2, [(2, 16), (3, 24)], 192000)
@@ -249,8 +279,8 @@ def build(name):
         b = Builder('high')
         b.clock_source(0x10)
         rates = {0x10: [48000, 96000]}
-        b.input_terminal(1, 0x0101, 0x10, 8); b.feature_unit(2, 1, 8); b.output_terminal(3, 0x0301, 2, 0x10)
-        b.input_terminal(4, 0x0101, 0x10, 6); b.feature_unit(5, 4, 6); b.output_terminal(6, 0x0301, 5, 0x10)
+        b.input_terminal(1, 0x0101, 0x10, 8); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 8, fu), 0x10)
+        b.input_terminal(4, 0x0101, 0x10, 6); b.output_terminal(6, 0x0301, b.feature_unit(5, 4, 6, fu), 0x10)
         b.stream(1, 'out', 8, [(2, 16)], 96000)
         b.stream(4, 'out', 6, [(3, 24)], 96000)
         pid = 0x0202
@@ -265,7 +295,7 @@ def build(name):
         b = Builder('full')
         b.clock_source(0x10)
         rates = {0x10: [44100, 48000]}
-        b.input_terminal(1, 0x0101, 0x10, 2); b.feature_unit(2, 1, 2); b.output_terminal(3, 0x0301, 2, 0x10)
+        b.input_terminal(1, 0x0101, 0x10, 2); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 2, fu), 0x10)
         b.input_terminal(4, 0x0201, 0x10, 1); b.output_terminal(5, 0x0101, 4, 0x10)
         b.stream(1, 'out', 2, [(2, 16)], 48000)
         b.stream(5, 'in', 1, [(2, 16)], 48000)
@@ -277,7 +307,7 @@ def build(name):
         b.clock_selector(0x12, [0x10, 0x11])
         b.clock_multiplier(0x13, 0x11)
         rates = {0x10: FAMILY_44, 0x11: FAMILY_48}
-        b.input_terminal(1, 0x0101, 0x12, 2); b.feature_unit(2, 1, 2); b.output_terminal(3, 0x0301, 2, 0x12)
+        b.input_terminal(1, 0x0101, 0x12, 2); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 2, fu), 0x12)
         b.input_terminal(4, 0x0201, 0x13, 2); b.output_terminal(5, 0x0101, 4, 0x13)
         b.stream(1, 'out', 2, [(2, 16), (3, 24)], 192000)
         b.stream(5, 'in', 2, [(2, 16)], 192000)
@@ -286,7 +316,7 @@ def build(name):
         b = Builder('high')
         b.clock_source(0x10, attributes=1, controls=0x05)   # internal fixed, frequency read only
         rates = {0x10: [48000]}
-        b.input_terminal(1, 0x0101, 0x10, 2); b.feature_unit(2, 1, 2); b.output_terminal(3, 0x0301, 2, 0x10)
+        b.input_terminal(1, 0x0101, 0x10, 2); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 2, fu), 0x10)
         b.input_terminal(4, 0x0201, 0x10, 2); b.output_terminal(5, 0x0101, 4, 0x10)
         b.stream(1, 'out', 2, [(2, 16)], 48000, sync='adaptive')
         b.stream(5, 'in', 2, [(2, 16)], 48000, sync='sync')
@@ -297,13 +327,18 @@ def build(name):
 
 
 PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive')
+FU_MODES = ('full', 'master', 'channels', 'readonly', 'none')
+VOLUME_RANGE = (-0x6000, 0, 0x100)
 
 
 class Profile:
-    def __init__(self, name='x4', vid=None, pid=None):
-        if name not in PROFILE_NAMES:
+    def __init__(self, name='x4', vid=None, pid=None, fu='full', vol_range=VOLUME_RANGE, vol_cur=0):
+        if name not in PROFILE_NAMES or fu not in FU_MODES:
             raise ValueError('profile')
-        self.name = name
+        lo, hi, res = vol_range
+        if not -32768 <= lo <= hi <= 32767 or res < 0 or not -32768 <= vol_cur <= 32767:
+            raise ValueError('volume range')
+        self.name, self.fu, self.vol_range, self.vol_cur = name, fu, (lo, hi, res), vol_cur
         if name in ('x4', 'x4full'):
             self.speed, self.config, self.rates = 'high', CONFIG, {}
             self.vid, self.pid = vid or 0x041e, pid or 0x3278
@@ -312,7 +347,7 @@ class Profile:
             self.allowed = {(4, 1)} if name == 'x4' else None
             self.fu_settable = name == 'x4full'
         else:
-            self.speed, self.config, self.rates, default_pid = build(name)
+            self.speed, self.config, self.rates, default_pid = build(name, fu)
             self.vid, self.pid = vid or 0xffff, pid or default_pid
             self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x200, 0xef, 2, 1, 64,
                                       self.vid, self.pid, 0x0001, 1, 2, 0, 1)
@@ -367,6 +402,7 @@ class Model:
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
         self.mute, self.volume = {}, {}
+        self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
 
     @property
     def clock(self):
@@ -416,7 +452,84 @@ class Model:
                  nonzero_bytes=self.nonzero, lengths=dict(self.lengths),
                  first_out=self.first_out, last_out=self.last_out, span_seconds=elapsed,
                  feedback_packets=self.feedback_packets, zero_feedback=self.zero_feedback,
-                 in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest())
+                 in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest(),
+                 **self.levels())
+        self.peak = {}
+
+    # -- the rendered signal -------------------------------------------------
+    def path_units(self, terminal):
+        """The feature units from a playback input terminal to an output
+        terminal, walking forward through units (the first path found)."""
+        entities = self.p.entities
+
+        def walk(eid, seen):
+            if eid in seen or len(seen) > 32:
+                return None
+            for oid, e in sorted(entities.items()):
+                if e['kind'] == 'ot' and e['source'] == eid:
+                    return []
+            for uid, e in sorted(entities.items()):
+                feeds = (e['kind'] == 'fu' and e['source'] == eid) or \
+                    (e['kind'] == 'mx' and eid in e['inputs'])
+                if feeds:
+                    rest = walk(uid, seen | {eid})
+                    if rest is not None:
+                        return ([uid] if e['kind'] == 'fu' else []) + rest
+            return None
+        return walk(terminal, frozenset()) or []
+
+    def channel_gain(self, units, channel):
+        """(dB, muted) the units apply to logical channel `channel` (1-based)."""
+        db, muted = 0.0, False
+        for uid in units:
+            for ch in (0, channel):
+                muted = muted or bool(self.mute.get((uid, ch), 0))
+                db += self.volume.get((uid, ch), self.p.vol_cur) / 256 if ch <= self.p.entities[uid]['channels'] and \
+                    self.p.entities[uid]['controls'][ch] >> 2 & 1 else 0
+        return db, muted
+
+    def levels(self):
+        """Received and rendered peaks of this window, per channel, dBFS."""
+        if not self.peak:
+            return {}
+        terminal = None
+        for (interface, alternate) in sorted(self.p.alts):
+            info = self.p.stream_alt(interface, alternate)
+            if info and info['data'] and not info['data']['address'] & 0x80 and \
+                    self.alts.get(interface) == alternate:
+                terminal = self.p.alts[(interface, alternate)].get('terminal')
+                break
+        units = self.path_units(terminal) if terminal else []
+        received, rendered, gains = [], [], []
+        for ch in sorted(self.peak):
+            peak = self.peak[ch]
+            rx = round(20 * math.log10(peak), 2) if peak > 0 else None
+            db, muted = self.channel_gain(units, ch + 1)
+            received.append(rx)
+            rendered.append(None if muted or rx is None else round(rx + db, 2))
+            gains.append(None if muted else round(db, 2))
+        return dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
+                    unit_gain_db=gains, units=units)
+
+    def measure(self, payload, info):
+        """Track each channel's largest sample of one OUT packet."""
+        subslot, channels = info['subslot'], info['channels']
+        full = float(1 << (8 * subslot - 1))
+        if subslot in (2, 4):
+            samples = array.array('h' if subslot == 2 else 'i', payload)
+            if sys.byteorder != 'little':
+                samples.byteswap()
+        else:
+            samples = [int.from_bytes(payload[i:i + 3], 'little', signed=True)
+                       for i in range(0, len(payload) - 2, 3)]
+        for ch in range(channels):
+            column = samples[ch::channels]
+            if column:
+                top = max(max(column), -min(column)) / full
+                if top > self.peak.get(ch, 0.0):
+                    self.peak[ch] = top
+                else:
+                    self.peak.setdefault(ch, 0.0)
 
     def reset_streams(self):
         self.streams.clear()
@@ -511,16 +624,23 @@ class Model:
             return 0, struct.pack('<H', 1)
         elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2):
             store, key = (self.mute if selector == 1 else self.volume), (entity, channel)
+            access = e['controls'][channel] >> (2 * (selector - 1)) & 3
+            lo, hi, res = self.p.vol_range
+            if not access & 1:
+                return 4, b''
             if get and request == 1:
-                return 0, struct.pack('<B' if selector == 1 else '<h', store.get(key, 0))
+                return 0, struct.pack('<B' if selector == 1 else '<h',
+                                      store.get(key, 0 if selector == 1 else self.p.vol_cur))
             if get and request == 2 and selector == 2:
-                return 0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x0100)   # -96..0 dB, 1 dB steps
+                return 0, struct.pack('<Hhhh', 1, lo, hi, res)
             if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
                 value = payload[0] if selector == 1 else struct.unpack('<h', payload)[0]
-                if (selector == 1 and value > 1) or (selector == 2 and not -0x6000 <= value <= 0):
+                if access != 3 or (selector == 1 and value > 1) or (selector == 2 and not lo <= value <= hi):
+                    self.log('feature_refused', entity=entity, selector=selector, channel=channel, value=value)
                     return 4, b''
                 store[key] = value
-                self.log('feature', entity=entity, selector=selector, channel=channel, value=value)
+                self.log('feature', entity=entity, selector=selector, channel=channel, value=value,
+                         db=value / 256 if selector == 2 else None)
                 return 0, b''
         return 4, b''
 
@@ -644,6 +764,7 @@ class Model:
         self.nonzero += sum(byte != 0 for byte in payload)
         self.lengths[length] += 1
         self.digest.update(payload)
+        self.measure(payload, own[2])
         if self.pcm is not None:
             if self.pcm_bytes + length > 4 * 1024 * 1024:
                 raise ValueError('simulated PCM capture exceeds four MiB')
@@ -746,6 +867,7 @@ class Model:
                         device += d[12:14]
                     self.send(1, data=device)
                     self.log('connected', model='SIMULATED UAC2 %s' % self.p.name, speed=self.p.speed,
+                             fu=self.p.fu, vol_range=self.p.vol_range, vol_cur=self.p.vol_cur,
                              vid='%04x' % self.p.vid, pid='%04x' % self.p.pid,
                              config_sha256=hashlib.sha256(self.p.config).hexdigest())
                     connected = True
@@ -778,8 +900,18 @@ def main():
     ap.add_argument('--fb-stop-after', type=float,
                     help='seconds into a stream after which every feedback packet is zero-length')
     ap.add_argument('--pcm', type=Path, help='optional bounded SIMULATED received PCM capture')
+    ap.add_argument('--fu', choices=FU_MODES, default='full',
+                    help='playback feature units of a built profile (not x4/x4full)')
+    ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
+                    help='volume RANGE MIN:MAX:RES in 1/256 dB')
+    ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
     args = ap.parse_args()
-    profile = Profile(args.profile, args.vid, args.pid)
+    if args.fu != 'full' and args.profile in ('x4', 'x4full'):
+        ap.error('--fu applies to the built profiles')
+    vol_range = tuple(int(v) for v in args.vol_range.split(':'))
+    if len(vol_range) != 3:
+        ap.error('--vol-range MIN:MAX:RES')
+    profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
         server.bind(('127.0.0.1', args.port))

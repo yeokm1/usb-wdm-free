@@ -8,7 +8,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=10/28/2026,0.1.4.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86

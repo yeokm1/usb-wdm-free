@@ -21,7 +21,17 @@ extern "C" {
 #include "uacusb.h"
 #include "uacplan.h"
 #include "uactopo.h"
+#include "uacvol.h"
 }
+#ifndef KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL
+#define KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL 0x00000002 /* XP ks.h */
+#endif
+#ifndef VT_I4
+#define VT_I4 3
+#endif
+#ifndef VT_BOOL
+#define VT_BOOL 11
+#endif
 
 static KSDATARANGE analog = {
     sizeof(KSDATARANGE), 0, 0, 0, STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
@@ -59,6 +69,8 @@ inline void *operator new(size_t, void *memory) { return memory; }
 static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status);
 static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN capture);
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
+static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
+static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
 #ifndef _WIN64
 /* Windows 98 SE's NTKERN exports no IoAllocateWorkItem/IoQueueWorkItem/
  * IoFreeWorkItem (link probe against the 98 DDK wdm.lib, 2026-10-22). The
@@ -106,7 +118,48 @@ struct UAC_DIR {
     LONG Active;
     ULONG Attempts, Created, Closed;
     UAC_USB *Usb;
+    UacStream *Stream;          /* the stream Usb serves */
+    ULONG Channels, Subslot;    /* its device format */
     UAC_DIR_FORMATS Formats;
+};
+
+/* Playback volume and mute: the topology filter's VOLUME and MUTE nodes
+ * (uacvol.h). Each node channel has a level in KS units (1/65536 dB);
+ * the device's Feature Unit does what it can and the rest is a software
+ * gain on the samples on their way to USB (Wave::Fill). Until a level is
+ * set or restored from the registry the device keeps its own settings. */
+struct UAC_LEVEL {
+    BOOLEAN Present;            /* a render line */
+    BOOLEAN Owned;              /* set or restored: the driver writes the device */
+    BOOLEAN Written;            /* Volume[] and Mute below are on the device */
+    ULONG Channels;
+    UAC_VOL_MAP Map;
+    UAC_VOL_RANGE Range;        /* the device's volume range, or the software one */
+    KSPIN_LOCK Lock;            /* Level[], Mute, Change */
+    LONG Level[UAC_VOL_CHANNELS];
+    LONG Mute;
+    ULONG Change, Saved;        /* SETs that changed something; the last one saved */
+    int Volume[UAC_VOL_CHANNELS];
+    LONG WrittenMute;
+    LONG Gain[UAC_VOL_CHANNELS];  /* Q16, read by the USB worker */
+    LONG Queued;                /* a work item will apply the levels */
+    ULONG Writes, Failures;
+    NTSTATUS LastStatus;
+};
+/* The registry copy of the levels (the device's driver key, Uac2Level). */
+struct UAC_LEVEL_SAVE {
+    ULONG Version, Channels;
+    LONG Mute;
+    LONG Level[UAC_VOL_CHANNELS];
+};
+/* Diagnostics (Uac2VolMap): what the driver found and does. */
+struct UAC_LEVEL_DIAG {
+    ULONG Channels, Output, VolumeUnit, VolumeMode, VolumeChannels;
+    ULONG MuteUnit, MuteMode, MuteChannels, Restored;
+    LONG KsMin, KsMax, KsStep;
+    ULONG Change, Writes, Failures;
+    NTSTATUS LastStatus;
+    LONG Mute, Level[UAC_VOL_CHANNELS], Gain[UAC_VOL_CHANNELS];
 };
 
 class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
@@ -121,20 +174,305 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     KMUTEX operation;
     BOOLEAN removed, pnpBlocked, powerBlocked;
     UAC_DIR dir[2];             /* 0 render, 1 capture */
+    UAC_LEVEL level;
     PCPIN_DESCRIPTOR pins[4];
     PCNODE_DESCRIPTOR nodes[2];
     GUID categories[3];
     PCFILTER_DESCRIPTOR filter;
 
+    /* The USB callbacks' context is the direction (Run). */
     static void Fill(PVOID context, PUCHAR bytes, ULONG count) {
-        ((UacStream *)context)->FillBytes(bytes, count);
+        UAC_DIR *d = (UAC_DIR *)context;
+        d->Stream->FillBytes(bytes, count);
+        if (!d->Capture) d->Owner->Soften(d, bytes, count);
     }
     static void Captured(PVOID context, const UCHAR *bytes, ULONG count) {
-        ((UacStream *)context)->WriteBytes(bytes, count);
+        ((UAC_DIR *)context)->Stream->WriteBytes(bytes, count);
     }
     static void Progress(PVOID context, ULONG bytes, ULONG errors) {
-        ((UacStream *)context)->CompleteBytes(bytes, errors);
+        ((UAC_DIR *)context)->Stream->CompleteBytes(bytes, errors);
     }
+    /* The software part of the levels, on the USB worker. */
+    void Soften(UAC_DIR *d, PUCHAR bytes, ULONG count) {
+        unsigned long gain[UAC_VOL_CHANNELS];
+        BOOLEAN unity = TRUE;
+        if (!level.Present) return;
+        for (ULONG c = 0; c < level.Channels; c++) {
+            gain[c] = (unsigned long)level.Gain[c];
+            if (gain[c] < UAC_VOL_UNITY) unity = FALSE;
+        }
+        if (!unity) UacVolScale(bytes, count, d->Subslot, d->Channels, gain, level.Channels);
+    }
+    /* One Feature Unit request (uacctl.c builds and checks the setup). */
+    /* got: the bytes a GET returned (may be short); NULL: exactly size. */
+    NTSTATUS Feature(UAC_BYTE unit, ULONG selector, ULONG channel, BOOLEAN read,
+                     ULONG attribute, PVOID bytes, ULONG size, ULONG *got = NULL) {
+        UAC_CTL_TARGET t;
+        UCHAR setup[8];
+        t.Interface = descriptor->Control; t.Entity = unit; t.Endpoint = 0;
+        t.Channel = channel; t.MaxChannel = 255;
+        if (!UacCtlSetup(UAC_CTL_FEATURE, selector, &t, read ? 1 : 3, attribute, read ? 1 : 0,
+                         size, 0, setup)) return STATUS_INVALID_PARAMETER;
+        ULONG length = size;
+        NTSTATUS s = UacUsbClassRequest(dev, setup, bytes, &length);
+        if (got) *got = length;
+        else if (NT_SUCCESS(s) && length != size) s = STATUS_DEVICE_DATA_ERROR;
+        return s;
+    }
+    /* Room for UAC_VOL_RANGES subranges in one request; a device that
+     * refuses it is asked for one subrange, the wLength Linux uses
+     * ([linux] sound/usb/mixer.c), and its first subrange is the range. */
+    BOOLEAN ReadRange(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
+        UCHAR b[2 + 6 * UAC_VOL_RANGES];
+        ULONG got = 0, n;
+        RtlZeroMemory(b, sizeof(b));
+        if (!NT_SUCCESS(Feature(unit, 2, channel, TRUE, UAC_CTL_RANGE_ATTRIBUTE, b, sizeof(b), &got)) &&
+            !NT_SUCCESS(Feature(unit, 2, channel, TRUE, UAC_CTL_RANGE_ATTRIBUTE, b, 8, &got)))
+            return FALSE;
+        if (got < 8) return FALSE;
+        n = (ULONG)b[0] | ((ULONG)b[1] << 8);
+        if (n > 1 && got < 2 + 6 * n) { n = 1; b[0] = 1; b[1] = 0; }
+        if (!n || n > UAC_VOL_RANGES) return FALSE;
+        return UacVolRange(b, 2 + 6 * n, range) ? TRUE : FALSE;
+    }
+    /* CUR as KS units (volume) or 0/1 (mute); FALSE when unreadable. */
+    BOOLEAN ReadCur(UAC_BYTE unit, ULONG selector, ULONG channel, LONG *value) {
+        UCHAR b[2];
+        ULONG size = selector == 2 ? 2 : 1;
+        if (!NT_SUCCESS(Feature(unit, selector, channel, TRUE, UAC_CTL_CUR, b, size)) ||
+            !UacCtlValue(UAC_CTL_FEATURE, selector, b, size, 0)) return FALSE;
+        if (selector == 2) {
+            int v = (int)((unsigned int)b[0] | ((unsigned int)b[1] << 8));
+            if (v >= 32768) v -= 65536;
+            *value = v == -32768 ? level.Range.KsMin : UacVolToKs(v);
+        } else *value = b[0];
+        return TRUE;
+    }
+    BOOLEAN WriteCur(UAC_BYTE unit, ULONG selector, ULONG channel, int value) {
+        UCHAR b[2];
+        b[0] = (UCHAR)value; b[1] = (UCHAR)((unsigned int)value >> 8);
+        NTSTATUS s = Feature(unit, selector, channel, FALSE, UAC_CTL_CUR, b, selector == 2 ? 2 : 1);
+        level.Writes++;
+        if (!NT_SUCCESS(s)) { level.Failures++; level.LastStatus = s; }
+        return NT_SUCCESS(s) ? TRUE : FALSE;
+    }
+    /* PnP start, after Learn: the render line's controls and levels. */
+    void LevelSetup() {
+        UAC_LEVEL *v = &level;
+        UAC_LEVEL_SAVE saved;
+        ULONG c, most = 1;
+        RtlZeroMemory(v, sizeof(*v));
+        KeInitializeSpinLock(&v->Lock);
+        for (c = 0; c < UAC_VOL_CHANNELS; c++) v->Gain[c] = (LONG)UAC_VOL_UNITY;
+        if (!dir[0].Formats.Count) return;
+        for (c = 0; c < dir[0].Formats.Count; c++)
+            if (dir[0].Formats.Format[c].Channels > most) most = dir[0].Formats.Format[c].Channels;
+        /* Mono or a stereo pair: a stream with more channels takes channel
+         * c % 2 (uacvol.h), as the system's mixer shows a pair. */
+        v->Channels = most >= 2 ? 2 : 1;
+        v->Present = TRUE;
+        UacVolFind(descriptor, dir[0].Formats.Format[0].Terminal, v->Channels, &v->Map);
+        if (v->Map.VolumeMode != UAC_VOL_NONE &&
+            !ReadRange(v->Map.VolumeUnit, v->Map.VolumeMode == UAC_VOL_MASTER ? 0 : 1, &v->Range))
+            v->Map.VolumeMode = UAC_VOL_NONE;   /* no usable RANGE: software */
+        if (v->Map.VolumeMode == UAC_VOL_NONE) UacVolSoftRange(&v->Range);
+        if (GetValue(device, L"Uac2Level", &saved, sizeof(saved)) && saved.Version == 1 &&
+            saved.Channels == v->Channels) {
+            for (c = 0; c < v->Channels; c++) v->Level[c] = saved.Level[c];
+            v->Mute = saved.Mute ? 1 : 0;
+            v->Owned = TRUE;
+        } else {
+            /* The device's own settings, or 0 dB in software. */
+            for (c = 0; c < v->Channels; c++) {
+                LONG cur = 0;
+                if (v->Map.VolumeMode == UAC_VOL_MASTER) ReadCur(v->Map.VolumeUnit, 2, 0, &cur);
+                else if (v->Map.VolumeMode == UAC_VOL_CHANNEL) ReadCur(v->Map.VolumeUnit, 2, c + 1, &cur);
+                v->Level[c] = cur;
+            }
+            LONG mute = 0;
+            if (v->Map.MuteMode == UAC_VOL_MASTER) ReadCur(v->Map.MuteUnit, 1, 0, &mute);
+            else if (v->Map.MuteMode == UAC_VOL_CHANNEL) ReadCur(v->Map.MuteUnit, 1, 1, &mute);
+            v->Mute = mute;
+        }
+        for (c = 0; c < v->Channels; c++)
+            v->Level[c] = UacVolToKs(UacVolFromKs(v->Level[c], &v->Range));
+        v->Saved = v->Change;
+    }
+    /* PASSIVE, operation held: the gains for the levels, then what the
+     * device must change, then the registry copy. */
+    void ApplyLocked() {
+        UAC_LEVEL *v = &level;
+        LONG levels[UAC_VOL_CHANNELS], mute;
+        int hw[UAC_VOL_CHANNELS];
+        unsigned long gain[UAC_VOL_CHANNELS];
+        ULONG c, change;
+        KIRQL irql;
+        if (!v->Present) return;
+        KeAcquireSpinLock(&v->Lock, &irql);
+        for (c = 0; c < v->Channels; c++) levels[c] = v->Level[c];
+        mute = v->Mute; change = v->Change;
+        KeReleaseSpinLock(&v->Lock, irql);
+        UacVolPlan(levels, v->Channels, mute, &v->Map, &v->Range, hw, gain);
+        for (c = 0; c < v->Channels; c++) InterlockedExchange(&v->Gain[c], (LONG)gain[c]);
+        if (v->Owned && dev && !removed && !pnpBlocked && !powerBlocked) {
+            BOOLEAN ok = TRUE;
+            if (v->Map.VolumeMode == UAC_VOL_MASTER) {
+                if (!v->Written || hw[0] != v->Volume[0]) ok = WriteCur(v->Map.VolumeUnit, 2, 0, hw[0]) && ok;
+            } else if (v->Map.VolumeMode == UAC_VOL_CHANNEL) {
+                for (c = 0; c < v->Map.VolumeChannels; c++)
+                    if (!v->Written || hw[c] != v->Volume[c]) ok = WriteCur(v->Map.VolumeUnit, 2, c + 1, hw[c]) && ok;
+            }
+            if (v->Map.MuteMode == UAC_VOL_MASTER) {
+                if (!v->Written || mute != v->WrittenMute) ok = WriteCur(v->Map.MuteUnit, 1, 0, mute) && ok;
+            } else if (v->Map.MuteMode == UAC_VOL_CHANNEL) {
+                for (c = 0; c < v->Map.MuteChannels; c++)
+                    if (!v->Written || mute != v->WrittenMute) ok = WriteCur(v->Map.MuteUnit, 1, c + 1, mute) && ok;
+            }
+            /* After a failure every control is written again next time. */
+            v->Written = ok;
+            for (c = 0; c < UAC_VOL_CHANNELS; c++) v->Volume[c] = hw[c];
+            v->WrittenMute = mute;
+        }
+        if (!removed) {
+            if (change != v->Saved) {
+                UAC_LEVEL_SAVE save;
+                RtlZeroMemory(&save, sizeof(save));
+                save.Version = 1; save.Channels = v->Channels; save.Mute = mute;
+                for (c = 0; c < v->Channels; c++) save.Level[c] = levels[c];
+                PutValue(device, L"Uac2Level", &save, sizeof(save));
+                v->Saved = change;
+            }
+            RecordLevel(levels, mute, gain);
+        }
+    }
+    void RecordLevel(const LONG *levels, LONG mute, const unsigned long *gain) {
+        UAC_LEVEL *v = &level;
+        UAC_LEVEL_DIAG g;
+        RtlZeroMemory(&g, sizeof(g));
+        g.Channels = v->Channels; g.Output = v->Map.Output;
+        g.VolumeUnit = v->Map.VolumeUnit; g.VolumeMode = v->Map.VolumeMode; g.VolumeChannels = v->Map.VolumeChannels;
+        g.MuteUnit = v->Map.MuteUnit; g.MuteMode = v->Map.MuteMode; g.MuteChannels = v->Map.MuteChannels;
+        g.Restored = v->Owned; g.KsMin = v->Range.KsMin; g.KsMax = v->Range.KsMax; g.KsStep = v->Range.KsStep;
+        g.Change = v->Change; g.Writes = v->Writes; g.Failures = v->Failures; g.LastStatus = v->LastStatus;
+        g.Mute = mute;
+        for (ULONG c = 0; c < v->Channels; c++) { g.Level[c] = levels[c]; g.Gain[c] = (LONG)gain[c]; }
+        PutValue(device, L"Uac2VolMap", &g, sizeof(g));
+    }
+    void Apply() {
+        KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+        ApplyLocked();
+        KeReleaseMutex(&operation, FALSE);
+    }
+    struct LEVEL_WORK { PIO_WORKITEM Item; Wave *Owner; };
+    static VOID LevelWork(PDEVICE_OBJECT, PVOID context) {
+        LEVEL_WORK *j = (LEVEL_WORK *)context;
+        Wave *w = j->Owner;
+        PIO_WORKITEM item = j->Item;
+        ExFreePool(j);
+        InterlockedExchange(&w->level.Queued, 0);
+        w->Apply();
+        IoFreeWorkItem(item);
+        w->Release();
+    }
+    /* A property set at raised IRQL: apply on a work item, at PASSIVE.
+     * One at a time; it reads the levels when it runs. */
+    void Changed() {
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL) { Apply(); return; }
+        if (InterlockedExchange(&level.Queued, 1)) return;
+        LEVEL_WORK *j = (LEVEL_WORK *)ExAllocatePoolWithTag(NonPagedPool, sizeof(LEVEL_WORK), 'v2aU');
+        PIO_WORKITEM item = j ? IoAllocateWorkItem(device) : NULL;
+        if (!item) {
+            if (j) ExFreePool(j);
+            InterlockedExchange(&level.Queued, 0);  /* the next PASSIVE set applies it */
+            return;
+        }
+        j->Item = item; j->Owner = this;
+        AddRef();
+        IoQueueWorkItem(item, LevelWork, DelayedWorkQueue, j);
+    }
+    NTSTATUS LevelBasic(PPCPROPERTY_REQUEST r, BOOLEAN volume) {
+        ULONG full = sizeof(KSPROPERTY_DESCRIPTION) + sizeof(KSPROPERTY_MEMBERSHEADER) +
+                     level.Channels * sizeof(KSPROPERTY_STEPPING_LONG);
+        ULONG access = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET;
+        if (!r->ValueSize) { r->ValueSize = full; return STATUS_BUFFER_OVERFLOW; }
+        if (!r->Value) return STATUS_INVALID_PARAMETER;
+        if (r->ValueSize >= sizeof(KSPROPERTY_DESCRIPTION)) {
+            PKSPROPERTY_DESCRIPTION d = (PKSPROPERTY_DESCRIPTION)r->Value;
+            d->AccessFlags = access;
+            d->DescriptionSize = full;
+            d->PropTypeSet.Set = KSPROPTYPESETID_General;
+            d->PropTypeSet.Id = volume ? VT_I4 : VT_BOOL;
+            d->PropTypeSet.Flags = 0;
+            d->MembersListCount = 1;
+            d->Reserved = 0;
+            if (r->ValueSize >= full) {
+                PKSPROPERTY_MEMBERSHEADER m = (PKSPROPERTY_MEMBERSHEADER)(d + 1);
+                PKSPROPERTY_STEPPING_LONG step = (PKSPROPERTY_STEPPING_LONG)(m + 1);
+                m->MembersFlags = KSPROPERTY_MEMBER_STEPPEDRANGES;
+                m->MembersSize = sizeof(KSPROPERTY_STEPPING_LONG);
+                m->MembersCount = level.Channels;
+                m->Flags = KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL;
+                for (ULONG c = 0; c < level.Channels; c++) {
+                    step[c].SteppingDelta = volume ? (ULONG)level.Range.KsStep : 1;
+                    step[c].Reserved = 0;
+                    step[c].Bounds.SignedMinimum = volume ? level.Range.KsMin : 0;
+                    step[c].Bounds.SignedMaximum = volume ? level.Range.KsMax : 1;
+                }
+                r->ValueSize = full;
+            } else r->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
+            return STATUS_SUCCESS;
+        }
+        if (r->ValueSize >= sizeof(ULONG)) {
+            *(PULONG)r->Value = access; r->ValueSize = sizeof(ULONG); return STATUS_SUCCESS;
+        }
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+public:
+    /* KSPROPERTY_AUDIO_VOLUMELEVEL (volume) or KSPROPERTY_AUDIO_MUTE on
+     * the topology filter's node; the channel is the KSNODEPROPERTY_AUDIO_
+     * CHANNEL's (0..Channels-1, or -1 for all). */
+    NTSTATUS LevelProperty(PPCPROPERTY_REQUEST r, BOOLEAN volume) {
+        UAC_LEVEL *v = &level;
+        KIRQL irql;
+        ULONG c;
+        if (!v->Present) return STATUS_INVALID_DEVICE_REQUEST;
+        if (r->Verb & KSPROPERTY_TYPE_BASICSUPPORT) return LevelBasic(r, volume);
+        if (r->InstanceSize < sizeof(LONG) || !r->Instance) return STATUS_INVALID_PARAMETER;
+        LONG channel = *(PLONG)r->Instance;
+        if (channel != -1 && (channel < 0 || (ULONG)channel >= v->Channels)) return STATUS_INVALID_PARAMETER;
+        if (r->ValueSize < sizeof(LONG) || !r->Value) return STATUS_BUFFER_TOO_SMALL;
+        if (r->Verb & KSPROPERTY_TYPE_GET) {
+            LONG value;
+            KeAcquireSpinLock(&v->Lock, &irql);
+            if (!volume) value = v->Mute;
+            else if (channel >= 0) value = v->Level[channel];
+            else for (value = v->Level[0], c = 1; c < v->Channels; c++)
+                if (v->Level[c] > value) value = v->Level[c];
+            KeReleaseSpinLock(&v->Lock, irql);
+            *(PLONG)r->Value = value;
+            r->ValueSize = sizeof(LONG);
+            return STATUS_SUCCESS;
+        }
+        if (r->Verb & KSPROPERTY_TYPE_SET) {
+            LONG value = *(PLONG)r->Value;
+            BOOLEAN changed = FALSE;
+            if (volume) value = UacVolToKs(UacVolFromKs(value, &v->Range));
+            else value = value ? 1 : 0;
+            KeAcquireSpinLock(&v->Lock, &irql);
+            if (!volume) {
+                if (v->Mute != value) { v->Mute = value; changed = TRUE; }
+            } else for (c = 0; c < v->Channels; c++)
+                if ((channel < 0 || (ULONG)channel == c) && v->Level[c] != value) {
+                    v->Level[c] = value; changed = TRUE;
+                }
+            if (changed) { v->Change++; v->Owned = TRUE; }
+            KeReleaseSpinLock(&v->Lock, irql);
+            if (changed) Changed();
+            return STATUS_SUCCESS;
+        }
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+private:
     /* The device format (index) a stream format maps to, or -1. The
      * container must be the subslot; valid bits may differ (a 24-bit
      * device takes 32-bit samples in a 32-bit slot and ignores the low
@@ -178,10 +516,16 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
                             pcm->Rate, pcm->Mask);
             status = STATUS_NOT_SUPPORTED;
             if (d->Usb) status = STATUS_SUCCESS;
-            else if (i >= 0)
+            else if (i >= 0) {
+                d->Stream = stream;
+                d->Channels = pcm->Channels;
+                d->Subslot = d->Formats.Format[i].Subslot;
                 status = UacUsbCreate(w->dev, d->Capture, d->Formats.Format[i].Terminal,
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
-                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, stream, &d->Usb);
+                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d, &d->Usb);
+            }
+            /* The device may have lost its levels in D3 or a stop. */
+            if (NT_SUCCESS(status) && !d->Capture && !w->level.Written) w->ApplyLocked();
             if (NT_SUCCESS(status)) status = UacUsbStart(d->Usb);
             Record(w->device, 31, status);
         }
@@ -194,7 +538,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             UAC_USB_STATS stats;
             UacUsbGetStats(d->Usb, &stats);
             if (!removed) RecordStats(device, &stats, d->Capture);
-            if (destroy) { UacUsbDestroy(d->Usb); d->Usb = NULL; }
+            if (destroy) { UacUsbDestroy(d->Usb); d->Usb = NULL; d->Stream = NULL; }
         }
     }
     static void Halt(PVOID context, UacStream *) {
@@ -298,6 +642,7 @@ public:
           port(NULL), removed(FALSE), pnpBlocked(FALSE), powerBlocked(FALSE) {
         KeInitializeMutex(&operation, 0);
         RtlZeroMemory(dir, sizeof(dir));
+        RtlZeroMemory(&level, sizeof(level));
         dir[0].Owner = dir[1].Owner = this; dir[1].Capture = TRUE;
     }
     ~Wave() {
@@ -317,6 +662,8 @@ public:
         Learn(&dir[0]); Learn(&dir[1]);
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
         if (!graph) return STATUS_NOT_SUPPORTED;
+        LevelSetup();
+        ApplyLocked();
         ULONG c = 0;
         categories[c++] = KSCATEGORY_AUDIO;
         BOOLEAN render = dir[0].Formats.Count != 0;
@@ -489,7 +836,7 @@ STDMETHODIMP_(void) Wave::PowerChangeState(POWER_STATE state) {
     PAGED_CODE();
     KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
     powerBlocked = state.DeviceState != PowerDeviceD0;
-    if (powerBlocked) { Drain(&dir[0], FALSE); Drain(&dir[1], FALSE); }
+    if (powerBlocked) { Drain(&dir[0], FALSE); Drain(&dir[1], FALSE); level.Written = FALSE; }
     KeReleaseMutex(&operation, FALSE);
 }
 STDMETHODIMP Wave::QueryPowerChangeState(POWER_STATE state) {
@@ -500,11 +847,27 @@ STDMETHODIMP Wave::QueryDeviceCapabilities(PDEVICE_CAPABILITIES caps) {
 }
 #pragma code_seg()
 
+static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r);
+static const PCPROPERTY_ITEM volumeItems[] = {
+    { &KSPROPSETID_Audio, KSPROPERTY_AUDIO_VOLUMELEVEL,
+      PCPROPERTY_ITEM_FLAG_GET | PCPROPERTY_ITEM_FLAG_SET | PCPROPERTY_ITEM_FLAG_BASICSUPPORT, LevelHandler },
+    { &KSPROPSETID_Audio, KSPROPERTY_AUDIO_CPU_RESOURCES, PCPROPERTY_ITEM_FLAG_GET, LevelHandler }
+};
+static const PCPROPERTY_ITEM muteItems[] = {
+    { &KSPROPSETID_Audio, KSPROPERTY_AUDIO_MUTE,
+      PCPROPERTY_ITEM_FLAG_GET | PCPROPERTY_ITEM_FLAG_SET | PCPROPERTY_ITEM_FLAG_BASICSUPPORT, LevelHandler },
+    { &KSPROPSETID_Audio, KSPROPERTY_AUDIO_CPU_RESOURCES, PCPROPERTY_ITEM_FLAG_GET, LevelHandler }
+};
+DEFINE_PCAUTOMATION_TABLE_PROP(volumeTable, volumeItems);
+DEFINE_PCAUTOMATION_TABLE_PROP(muteTable, muteItems);
+
 class Topology : public IMiniportTopology {
     static void operator delete(PVOID memory) { ExFreePool(memory); }
     LONG refs;
+    Wave *wave;                 /* referenced: the levels live there */
+    const UAC_GRAPH *graph;
     PCPIN_DESCRIPTOR pins[4];
-    PCNODE_DESCRIPTOR nodes[2];
+    PCNODE_DESCRIPTOR nodes[4];
     GUID categories[2];
     PCFILTER_DESCRIPTOR filter;
     static void Bridge(PCPIN_DESCRIPTOR *p, KSPIN_DATAFLOW flow, const GUID *category) {
@@ -516,7 +879,8 @@ class Topology : public IMiniportTopology {
         p->KsPinDescriptor.Category = category;
     }
 public:
-    Topology(const UAC_GRAPH *g) : refs(1) {
+    Topology(const UAC_GRAPH *g, Wave *w) : refs(1), wave(w), graph(g) {
+        wave->AddRef();
         RtlZeroMemory(pins, sizeof(pins)); RtlZeroMemory(nodes, sizeof(nodes));
         if (g->TopoRenderIn >= 0) {
             Bridge(&pins[g->TopoRenderIn], KSPIN_DATAFLOW_IN, &KSCATEGORY_AUDIO);
@@ -527,6 +891,16 @@ public:
             Bridge(&pins[g->TopoCaptureOut], KSPIN_DATAFLOW_OUT, &KSCATEGORY_AUDIO);
         }
         for (ULONG i = 0; i < g->TopoNodes; i++) nodes[i].Type = &KSNODETYPE_SUM;
+        if (g->Volume >= 0) {
+            nodes[g->Volume].Type = &KSNODETYPE_VOLUME;
+            nodes[g->Volume].Name = &KSAUDFNAME_MASTER_VOLUME;
+            nodes[g->Volume].AutomationTable = &volumeTable;
+        }
+        if (g->Mute >= 0) {
+            nodes[g->Mute].Type = &KSNODETYPE_MUTE;
+            nodes[g->Mute].Name = &KSAUDFNAME_MASTER_MUTE;
+            nodes[g->Mute].AutomationTable = &muteTable;
+        }
         categories[0] = KSCATEGORY_AUDIO; categories[1] = KSCATEGORY_TOPOLOGY;
         RtlZeroMemory(&filter, sizeof(filter));
         filter.PinSize = sizeof(PCPIN_DESCRIPTOR);
@@ -549,6 +923,24 @@ public:
         if (!n) { this->~Topology(); ExFreePool(this); }
         return n;
     }
+    ~Topology() { wave->Release(); }
+    /* The node's property, for LevelHandler. */
+    NTSTATUS Level(PPCPROPERTY_REQUEST r) {
+        BOOLEAN volume = r->PropertyItem->Id == KSPROPERTY_AUDIO_VOLUMELEVEL;
+        LONG node = r->PropertyItem->Id == KSPROPERTY_AUDIO_CPU_RESOURCES ? -2 :
+                    volume ? graph->Volume : graph->Mute;
+        if (node == -2) {
+            if ((LONG)r->Node != graph->Volume && (LONG)r->Node != graph->Mute)
+                return STATUS_INVALID_DEVICE_REQUEST;
+            if (!(r->Verb & KSPROPERTY_TYPE_GET)) return STATUS_INVALID_DEVICE_REQUEST;
+            if (r->ValueSize < sizeof(ULONG) || !r->Value) return STATUS_BUFFER_TOO_SMALL;
+            *(PULONG)r->Value = KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU;
+            r->ValueSize = sizeof(ULONG);
+            return STATUS_SUCCESS;
+        }
+        if (node < 0 || (LONG)r->Node != node) return STATUS_INVALID_DEVICE_REQUEST;
+        return wave->LevelProperty(r, volume);
+    }
     STDMETHODIMP GetDescription(PPCFILTER_DESCRIPTOR *out) {
         *out = &filter; return STATUS_SUCCESS;
     }
@@ -563,6 +955,13 @@ public:
         UNREFERENCED_PARAMETER(port); return STATUS_SUCCESS;
     }
 };
+
+/* PortCls passes the miniport it was given as MajorTarget. */
+static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
+{
+    if (!r || !r->MajorTarget || !r->PropertyItem) return STATUS_INVALID_PARAMETER;
+    return ((Topology *)(PMINIPORTTOPOLOGY)r->MajorTarget)->Level(r);
+}
 
 struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; };
 static PDRIVER_DISPATCH PortClsPnp;
@@ -580,7 +979,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 16;
+    ULONG build = 17;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -628,6 +1027,48 @@ static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULO
         ZwSetValueKey(key, &name, 0, REG_BINARY, counts, sizeof(counts));
         ZwClose(key);
     }
+}
+
+static void Name(UNICODE_STRING *u, PWSTR name)
+{
+    USHORT n = 0;
+    while (name[n]) n++;
+    u->Buffer = name; u->Length = (USHORT)(n * sizeof(WCHAR)); u->MaximumLength = u->Length + sizeof(WCHAR);
+}
+
+static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size)
+{
+    HANDLE key;
+    UNICODE_STRING u;
+    Name(&u, name);
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
+            PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
+        ZwSetValueKey(key, &u, 0, REG_BINARY, (PVOID)data, size);
+        ZwClose(key);
+    }
+}
+
+/* A REG_BINARY value of exactly size bytes. */
+static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size)
+{
+    HANDLE key;
+    UNICODE_STRING u;
+    UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 128];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+    ULONG got = 0;
+    BOOLEAN ok = FALSE;
+    if (size > 128) return FALSE;
+    Name(&u, name);
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
+            PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &key))) {
+        if (NT_SUCCESS(ZwQueryValueKey(key, &u, KeyValuePartialInformation, info, sizeof(buffer), &got)) &&
+            info->Type == REG_BINARY && info->DataLength == size) {
+            RtlCopyMemory(data, info->Data, size);
+            ok = TRUE;
+        }
+        ZwClose(key);
+    }
+    return ok;
 }
 
 static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
@@ -739,7 +1180,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     Topology *t = NULL;
     s = w->Prepare();
     Record(fdo, 13, s);
-    if (NT_SUCCESS(s)) t = new(tm) Topology(w->Graph());
+    if (NT_SUCCESS(s)) t = new(tm) Topology(w->Graph(), w);
     else ExFreePool(tm);
     const UAC_GRAPH *g = w->Graph();
     if (NT_SUCCESS(s)) { s = PcNewPort(&wave, CLSID_PortWaveCyclic); Record(fdo, 5, s); }

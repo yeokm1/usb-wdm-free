@@ -14,8 +14,12 @@ try {
     if ($LASTEXITCODE) { throw 'uacdesc compile failed' }
     & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacplan.obj "$PSScriptRoot/uacplan.c"
     if ($LASTEXITCODE) { throw 'uacplan compile failed' }
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacvol.obj "$PSScriptRoot/uacvol.c"
+    if ($LASTEXITCODE) { throw 'uacvol compile failed' }
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacctl.obj "$PSScriptRoot/uacctl.c"
+    if ($LASTEXITCODE) { throw 'uacctl compile failed' }
     & "$bin/link.exe" /nologo /DLL /NOENTRY /NODEFAULTLIB /MACHINE:X64 /OUT:uaccore.dll `
         /EXPORT:UacParse /EXPORT:UacFunction /EXPORT:UacWholeFirst /EXPORT:UacClock /EXPORT:UacClockPath `
-        /EXPORT:UacPlanFormats /EXPORT:UacPlanPick /EXPORT:UacPlanTerminal /EXPORT:UacPlanPacketBytes /EXPORT:UacPlanChannelMask uacdesc.obj uacplan.obj "$repo/tools/WinDDK71/lib/Crt/amd64/msvcrt.lib"
+        /EXPORT:UacPlanFormats /EXPORT:UacPlanPick /EXPORT:UacPlanTerminal /EXPORT:UacPlanPacketBytes /EXPORT:UacPlanChannelMask /EXPORT:UacVolFind /EXPORT:UacVolRange uacdesc.obj uacplan.obj uacvol.obj uacctl.obj "$repo/tools/WinDDK71/lib/Crt/amd64/msvcrt.lib"
     if ($LASTEXITCODE) { throw 'host DLL link failed' }
 } finally { Pop-Location }

@@ -28,18 +28,23 @@ typedef struct UAC_LINK {
 extern const UAC_LINK UacWaveLinks[UAC_WAVE_LINKS];
 
 /* Topology filter: pin 0 bridge in (from the wave filter), pin 1 the
- * speaker line out; node 0 a SUM node between them. */
+ * speaker line out; node 0 a SUM node, then node 1 VOLUME and node 2
+ * MUTE, the master controls of the speaker line (uacvol.h). */
 #define UAC_TOPO_PINS 2
-#define UAC_TOPO_NODES 1
-#define UAC_TOPO_LINKS 2
+#define UAC_TOPO_NODES 3
+#define UAC_TOPO_LINKS 4
 extern const UAC_LINK UacTopoLinks[UAC_TOPO_LINKS];
 
 /* The graph for a device's directions (render, capture or both). Pin
- * numbers are -1 where the direction is absent. Render only is the two
- * tables above. Capture runs the other way: wave filter capture bridge in
- * -> ADC -> capture pin out; topology filter microphone line in -> SUM ->
- * line out to the wave filter. Each filter keeps a node between any two
- * of its pins (the 98 SE rule below). */
+ * and node numbers are -1 where the direction is absent. Render only is
+ * the two tables above. Capture runs the other way: wave filter capture
+ * bridge in -> ADC -> capture pin out; topology filter microphone line in
+ * -> SUM -> line out to the wave filter. Each filter keeps a node between
+ * any two of its pins (the 98 SE rule below). The render line carries
+ * VOLUME and MUTE after its SUM node, where WDMAud reads a destination
+ * line's controls (2000 DDK, "WDMAud Topology Parsing") and the Vista
+ * endpoint finds them on the path from the wave filter to the speaker
+ * pin; a capture-only device's stub render line has none. */
 typedef struct UAC_GRAPH {
     unsigned int WavePins, WaveNodes, WaveLinkCount;
     const UAC_LINK *WaveLinks;
@@ -48,6 +53,7 @@ typedef struct UAC_GRAPH {
     int RenderPin, RenderBridge, CapturePin, CaptureBridge;  /* wave filter */
     int TopoRenderIn, TopoSpeaker, TopoMic, TopoCaptureOut;  /* topology filter */
     int Dac, Adc;                                            /* wave nodes */
+    int Volume, Mute;                                        /* topology nodes */
 } UAC_GRAPH;
 
 /* NULL when neither direction is present. */

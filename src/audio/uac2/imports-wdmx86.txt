@@ -44,3 +44,5 @@ PORTCLS.SYS!PcNewServiceGroup
 NTOSKRNL.EXE!IoIsWdmVersionAvailable
 NTOSKRNL.EXE!KeDelayExecutionThread
 NTOSKRNL.EXE!ExQueueWorkItem
+# Volume and mute: the saved levels (uac2wdm.cpp, GetValue)
+NTOSKRNL.EXE!ZwQueryValueKey

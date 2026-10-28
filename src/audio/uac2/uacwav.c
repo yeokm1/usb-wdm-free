@@ -244,12 +244,13 @@ static int Ramp(unsigned secs)
     UINT dev = List(0, 0), i, done = 0, frames, f, step = 0;
     unsigned char *buf[BLOCKS];
     double phase = 0, rad = 2 * 3.14159265358979 * 440.0 / 48000;
-    int haveVol, haveMute;
+    int haveVol, haveMute, gotVol = 0, gotMute = 0;
+    unsigned failed = 0;
     if (dev == (UINT)-1 || !Mixer(&mx, &line)) { printf("FAIL: no UAC2 output or mixer\n"); return 1; }
     haveVol = Control(mx, &line, MIXERCONTROL_CONTROLTYPE_VOLUME, &vol);
     haveMute = Control(mx, &line, MIXERCONTROL_CONTROLTYPE_MUTE, &mute);
-    if (haveVol) Values(mx, &line, &vol, oldVol, 0);
-    if (haveMute) Values(mx, &line, &mute, oldMute, 0);
+    if (haveVol) gotVol = !Values(mx, &line, &vol, oldVol, 0);
+    if (haveMute) gotMute = !Values(mx, &line, &mute, oldMute, 0);
     printf("volume control=%d (was %lu,%lu) mute control=%d (was %lu)\n", haveVol, oldVol[0], oldVol[1],
            haveMute, oldMute[0]);
     Format(&w, 2, 16, 48000);
@@ -271,7 +272,8 @@ static int Ramp(unsigned secs)
     }
     start = GetTickCount();
     for (i = 0; i < BLOCKS; i++) waveOutWrite(h, &hdr[i], sizeof(hdr[i]));
-    while (done < BLOCKS && GetTickCount() - start < total * 1000 + 10000) {
+    /* A slow guest clock (98 SE under TCG) runs a second of audio in a few. */
+    while (done < BLOCKS && GetTickCount() - start < total * 5000 + 10000) {
         DWORD now = GetTickCount() - start;
         while (step < 6 && now >= step * secs * 1000) {
             MMRESULT a = 0, b = 0;
@@ -281,6 +283,7 @@ static int Ramp(unsigned secs)
             if (haveMute) b = Values(mx, &line, &mute, v, 1);
             printf("step %u at %lu ms: volume %lu (%u) mute %lu (%u)\n", step, now, level[step], a,
                    muted[step], b);
+            if (a || b) failed++;
             step++;
         }
         WaitForSingleObject(ev, 50);
@@ -290,12 +293,17 @@ static int Ramp(unsigned secs)
     waveOutReset(h);
     for (i = 0; i < BLOCKS; i++) { waveOutUnprepareHeader(h, &hdr[i], sizeof(hdr[i])); free(buf[i]); }
     waveOutClose(h);
-    if (haveVol) Values(mx, &line, &vol, oldVol, 1);
-    if (haveMute) Values(mx, &line, &mute, oldMute, 1);
+    /* Back to what was found, where it was read. */
+    if (gotVol && Values(mx, &line, &vol, oldVol, 1)) failed++;
+    if (gotMute && Values(mx, &line, &mute, oldMute, 1)) failed++;
     mixerClose(mx);
-    printf(done == BLOCKS && haveVol && haveMute ? "PASS: ramp played with volume and mute\n"
-                                                 : "FAIL: buffers or controls missing\n");
-    return done == BLOCKS && haveVol && haveMute ? 0 : 1;
+    printf("restored volume=%d mute=%d, failed operations=%u\n", gotVol, gotMute, failed);
+    if (done == BLOCKS && gotVol && gotMute && !failed) {
+        printf("PASS: ramp played with volume and mute\n");
+        return 0;
+    }
+    printf("FAIL: buffers, controls or mixer operations\n");
+    return 1;
 }
 
 static int Rec(unsigned ch, unsigned bits, unsigned rate, unsigned secs)

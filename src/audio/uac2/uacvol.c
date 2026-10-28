@@ -85,6 +85,13 @@ static int Walk(const UAC_DESC *d, unsigned int id, unsigned int terminal,
     return 0;
 }
 
+/* A Feature Unit's logical channels (not counting the master), or -1. */
+static int UnitChannels(const UAC_BYTE *p)
+{
+    if (!p || p[2] != 0x06 || p[0] < 10 || (p[0] - 6) % 4) return -1;
+    return (p[0] - 6) / 4 - 1;
+}
+
 /* The control's access on logical channel `channel` of a Feature Unit. */
 static int Access(const UAC_BYTE *fu, unsigned int channel, unsigned int selector)
 {
@@ -92,26 +99,27 @@ static int Access(const UAC_BYTE *fu, unsigned int channel, unsigned int selecto
 }
 
 static void Pick(const UAC_DESC *d, const UAC_BYTE *path, unsigned int length,
-                 unsigned int channels, unsigned int selector,
-                 UAC_BYTE *unit, unsigned int *mode, unsigned int *unitChannels)
+                 unsigned int channels, unsigned int selector, UAC_BYTE *unit,
+                 unsigned int *mode, unsigned int *unitChannels, unsigned int *extra)
 {
-    unsigned int i, c, n;
-    *unit = 0; *mode = UAC_VOL_NONE; *unitChannels = 0;
+    unsigned int i, c;
+    int n;
+    *unit = 0; *mode = UAC_VOL_NONE; *unitChannels = 0; *extra = 0;
     for (i = 1; i + 1 < length; i++) {
         const UAC_BYTE *p = Entity(d, path[i]);
-        if (!p || p[2] != 0x06 || p[0] < 10 || (p[0] - 6) % 4) continue;
-        if (Access(p, 0, selector) == 3) {
-            *unit = path[i]; *mode = UAC_VOL_MASTER; return;
-        }
+        if ((n = UnitChannels(p)) < 0 || Access(p, 0, selector) != 3) continue;
+        *unit = path[i]; *mode = UAC_VOL_MASTER;
+        for (c = 1; c <= (unsigned int)n && c <= UAC_VOL_CHANNELS; c++)
+            if (Access(p, c, selector) == 3) *extra |= 1u << (c - 1);
+        return;
     }
     for (i = 1; i + 1 < length; i++) {
         const UAC_BYTE *p = Entity(d, path[i]);
         int all = 1;
-        if (!p || p[2] != 0x06 || p[0] < 10 || (p[0] - 6) % 4) continue;
-        n = (p[0] - 6) / 4 - 1;
-        if (n < channels || n > UAC_VOL_CHANNELS) continue;
-        for (c = 1; c <= n; c++) if (Access(p, c, selector) != 3) all = 0;
-        if (all) { *unit = path[i]; *mode = UAC_VOL_CHANNEL; *unitChannels = n; return; }
+        if ((n = UnitChannels(p)) < 0) continue;
+        if ((unsigned int)n < channels || n > UAC_VOL_CHANNELS) continue;
+        for (c = 1; c <= (unsigned int)n; c++) if (Access(p, c, selector) != 3) all = 0;
+        if (all) { *unit = path[i]; *mode = UAC_VOL_CHANNEL; *unitChannels = (unsigned int)n; return; }
     }
 }
 
@@ -128,6 +136,7 @@ int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channel
     m.VolumeUnit = m.MuteUnit = 0;
     m.VolumeMode = m.MuteMode = UAC_VOL_NONE;
     m.VolumeChannels = m.MuteChannels = 0;
+    m.VolumeExtra = m.MuteExtra = 0;
     *map = m;
     if (!desc || !desc->Bytes || !terminal || terminal > 255) return 0;
     for (id = 1; id < 256; id++) {
@@ -137,12 +146,20 @@ int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channel
         for (i = 0; i < 256; i++) visited[i] = 0;
         if (!Walk(desc, id, terminal, visited, path, 0, &length)) continue;
         m.Output = (UAC_BYTE)id;
-        Pick(desc, path, length, channels, 2, &m.VolumeUnit, &m.VolumeMode, &m.VolumeChannels);
-        Pick(desc, path, length, channels, 1, &m.MuteUnit, &m.MuteMode, &m.MuteChannels);
+        Pick(desc, path, length, channels, 2, &m.VolumeUnit, &m.VolumeMode, &m.VolumeChannels,
+             &m.VolumeExtra);
+        Pick(desc, path, length, channels, 1, &m.MuteUnit, &m.MuteMode, &m.MuteChannels,
+             &m.MuteExtra);
         *map = m;
         return 1;
     }
     return 0;
+}
+
+/* The highest value a subrange's steps reach. */
+static long Top(long lo, long hi, long res)
+{
+    return res > 0 ? lo + ((hi - lo) / res) * res : lo;
 }
 
 int UacVolRange(const unsigned char *answer, unsigned int length, UAC_VOL_RANGE *out)
@@ -167,7 +184,7 @@ int UacVolRange(const unsigned char *answer, unsigned int length, UAC_VOL_RANGE 
     for (i = 0; i < r.Count; i++) {
         const unsigned char *t = bytes + 2 + 6 * i;
         v.Min[i] = Word(t); v.Max[i] = Word(t + 2); v.Res[i] = Word(t + 4);
-        if (v.Min[i] == -32768) {
+        if (v.Min[i] == UAC_VOL_SILENCE) {
             /* Silence is CUR's value, not a level of the range. */
             v.Min[i] = -32767;
             if (v.Max[i] < v.Min[i]) return 0;
@@ -176,7 +193,7 @@ int UacVolRange(const unsigned char *answer, unsigned int length, UAC_VOL_RANGE 
         if (v.Res[i] > 0 && (!step || v.Res[i] < step)) step = v.Res[i];
     }
     v.KsMin = UacVolToKs(v.Min[0]);
-    v.KsMax = UacVolToKs(v.Max[v.Count - 1]);
+    v.KsMax = UacVolToKs((int)Top(v.Min[v.Count - 1], v.Max[v.Count - 1], v.Res[v.Count - 1]));
     v.KsStep = (step ? step : 1) * 256L;
     *out = v;
     return 1;
@@ -208,14 +225,14 @@ int UacVolFromKs(long level, const UAC_VOL_RANGE *r)
     if (level > r->KsMax) level = r->KsMax;
     /* In KS units throughout: |level| < 2^23, no overflow. */
     for (i = 0; i < r->Count; i++) {
-        long lo = r->Min[i], hi = r->Max[i], res = r->Res[i], c, d;
+        long lo = r->Min[i], res = r->Res[i], top = Top(lo, r->Max[i], res), c, d;
         if (level <= lo * 256L) c = lo;
-        else if (level >= hi * 256L) c = hi;
-        else if (res <= 0) c = lo;
+        else if (level >= top * 256L) c = top;
         else {
-            /* The step at or below the level, then the one above if nearer. */
+            /* res > 0 here (top > lo). The step at or below the level,
+             * then the one above if nearer. */
             c = lo + ((level - lo * 256L) / (res * 256L)) * res;
-            if (c + res <= hi && (c + res) * 256L - level < level - c * 256L) c += res;
+            if (c + res <= top && (c + res) * 256L - level < level - c * 256L) c += res;
         }
         d = c * 256L > level ? c * 256L - level : level - c * 256L;
         if (bestDistance < 0 || d < bestDistance) { best = c; bestDistance = d; }
@@ -234,31 +251,36 @@ unsigned long UacVolGain(long level)
     return a - (((a - b) * frac + 32768UL) >> 16);
 }
 
-void UacVolPlan(const long *levels, unsigned int channels, int mute,
-                const UAC_VOL_MAP *map, const UAC_VOL_RANGE *range,
-                int *hardware, unsigned long *gain)
+void UacVolTargets(const long *levels, unsigned int channels, const UAC_VOL_MAP *map,
+                   const UAC_VOL_RANGE *ranges, int *hardware)
 {
     unsigned int c, n;
     long loudest;
-    if (!levels || !map || !range || !hardware || !gain || !channels) return;
+    if (!levels || !map || !ranges || !hardware || !channels) return;
     if (channels > UAC_VOL_CHANNELS) channels = UAC_VOL_CHANNELS;
-    for (n = 0; n < UAC_VOL_CHANNELS; n++) hardware[n] = 0;
+    for (n = 0; n < UAC_VOL_SLOTS; n++) hardware[n] = 0;
     loudest = levels[0];
     for (c = 1; c < channels; c++) if (levels[c] > loudest) loudest = levels[c];
+    if (map->VolumeMode == UAC_VOL_MASTER)
+        hardware[0] = UacVolFromKs(loudest, &ranges[0]);
+    else if (map->VolumeMode == UAC_VOL_CHANNEL)
+        for (n = 1; n <= map->VolumeChannels && n <= UAC_VOL_CHANNELS; n++)
+            hardware[n] = UacVolFromKs(levels[(n - 1) % channels], &ranges[n]);
+}
+
+void UacVolGains(const long *levels, unsigned int channels, int mute, const UAC_VOL_MAP *map,
+                 const int *actual, int hwMuted, unsigned long *gain)
+{
+    unsigned int c;
+    if (!levels || !map || !actual || !gain || !channels) return;
+    if (channels > UAC_VOL_CHANNELS) channels = UAC_VOL_CHANNELS;
     for (c = 0; c < channels; c++) {
-        long done = 0;  /* what the hardware does to this channel, KS */
-        if (map->VolumeMode == UAC_VOL_MASTER) {
-            hardware[0] = UacVolFromKs(loudest, range);
-            done = UacVolToKs(hardware[0]);
-        } else if (map->VolumeMode == UAC_VOL_CHANNEL) {
-            done = UacVolToKs(UacVolFromKs(levels[c], range));
-        }
+        long done = 0;  /* what the device does to this channel, KS */
+        if (map->VolumeMode == UAC_VOL_MASTER) done = UacVolToKs(actual[0]);
+        else if (map->VolumeMode == UAC_VOL_CHANNEL) done = UacVolToKs(actual[c + 1]);
         gain[c] = UacVolGain(levels[c] - done);
-        if (mute && map->MuteMode == UAC_VOL_NONE) gain[c] = 0;
+        if (mute && !(hwMuted && map->MuteMode != UAC_VOL_NONE)) gain[c] = 0;
     }
-    if (map->VolumeMode == UAC_VOL_CHANNEL)
-        for (n = 0; n < map->VolumeChannels && n < UAC_VOL_CHANNELS; n++)
-            hardware[n] = UacVolFromKs(levels[n % channels], range);
 }
 
 void UacVolScale(unsigned char *bytes, unsigned long count, unsigned int subslot,

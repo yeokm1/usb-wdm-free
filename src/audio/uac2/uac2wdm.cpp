@@ -126,40 +126,50 @@ struct UAC_DIR {
 /* Playback volume and mute: the topology filter's VOLUME and MUTE nodes
  * (uacvol.h). Each node channel has a level in KS units (1/65536 dB);
  * the device's Feature Unit does what it can and the rest is a software
- * gain on the samples on their way to USB (Wave::Fill). Until a level is
- * set or restored from the registry the device keeps its own settings. */
+ * gain on the samples on their way to USB (Wave::Fill), computed from
+ * what the device is known to do, so a pending or failed write never
+ * makes a channel louder than asked. Until a control is set, or restored
+ * from the registry, the device keeps its own setting of it. */
 struct UAC_LEVEL {
     BOOLEAN Present;            /* a render line */
-    BOOLEAN Owned;              /* set or restored: the driver writes the device */
-    BOOLEAN Written;            /* Volume[] and Mute below are on the device */
     ULONG Channels;
     UAC_VOL_MAP Map;
-    UAC_VOL_RANGE Range;        /* the device's volume range, or the software one */
-    KSPIN_LOCK Lock;            /* Level[], Mute, Change */
+    UAC_VOL_RANGE Range[UAC_VOL_SLOTS]; /* [0] master or software, [n] logical channel n */
+    KSPIN_LOCK Lock;            /* Level[], Mute, the Owned and Dirty flags, Change */
     LONG Level[UAC_VOL_CHANNELS];
     LONG Mute;
-    ULONG Change, Saved;        /* SETs that changed something; the last one saved */
-    int Volume[UAC_VOL_CHANNELS];
-    LONG WrittenMute;
+    BOOLEAN VolumeOwned, MuteOwned;   /* set or restored: the driver writes it */
+    BOOLEAN VolumeDirty, MuteDirty;   /* to write */
+    ULONG Change, Saved;        /* SETs taken; the last one saved */
+    /* The device, under the operation mutex: */
+    BOOLEAN VolumeKnown, MuteKnown;   /* Actual[] / ActualMute are what it has */
+    BOOLEAN VolumeNormal, MuteNormal; /* the extra channel controls set (VolumeExtra) */
+    int Actual[UAC_VOL_SLOTS];
+    LONG ActualMute;
     LONG Gain[UAC_VOL_CHANNELS];  /* Q16, read by the USB worker */
-    LONG Queued;                /* a work item will apply the levels */
+    PIO_WORKITEM Item;          /* preallocated: applies a SET made at raised IRQL */
+    LONG Queued, Work;          /* Item queued; work items not yet finished */
+    LONG Closed;                /* removal: no more work items */
     ULONG Writes, Failures;
     NTSTATUS LastStatus;
 };
 /* The registry copy of the levels (the device's driver key, Uac2Level). */
+#define UAC_LEVEL_VOLUME 1
+#define UAC_LEVEL_MUTE 2
 struct UAC_LEVEL_SAVE {
-    ULONG Version, Channels;
+    ULONG Version, Channels, Owned;  /* Version 2; Owned: UAC_LEVEL_VOLUME | UAC_LEVEL_MUTE */
     LONG Mute;
     LONG Level[UAC_VOL_CHANNELS];
 };
 /* Diagnostics (Uac2VolMap): what the driver found and does. */
 struct UAC_LEVEL_DIAG {
-    ULONG Channels, Output, VolumeUnit, VolumeMode, VolumeChannels;
-    ULONG MuteUnit, MuteMode, MuteChannels, Restored;
+    ULONG Channels, Output, VolumeUnit, VolumeMode, VolumeChannels, VolumeExtra;
+    ULONG MuteUnit, MuteMode, MuteChannels, MuteExtra, Owned, Known;
     LONG KsMin, KsMax, KsStep;
     ULONG Change, Writes, Failures;
     NTSTATUS LastStatus;
-    LONG Mute, Level[UAC_VOL_CHANNELS], Gain[UAC_VOL_CHANNELS];
+    LONG Mute, ActualMute, Level[UAC_VOL_CHANNELS], Gain[UAC_VOL_CHANNELS];
+    LONG Actual[UAC_VOL_SLOTS];
 };
 
 class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
@@ -235,16 +245,15 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         if (!n || n > UAC_VOL_RANGES) return FALSE;
         return UacVolRange(b, 2 + 6 * n, range) ? TRUE : FALSE;
     }
-    /* CUR as KS units (volume) or 0/1 (mute); FALSE when unreadable. */
-    BOOLEAN ReadCur(UAC_BYTE unit, ULONG selector, ULONG channel, LONG *value) {
+    /* CUR, raw: volume in 1/256 dB (UAC_VOL_SILENCE included), mute 0/1. */
+    BOOLEAN ReadCur(UAC_BYTE unit, ULONG selector, ULONG channel, int *value) {
         UCHAR b[2];
         ULONG size = selector == 2 ? 2 : 1;
         if (!NT_SUCCESS(Feature(unit, selector, channel, TRUE, UAC_CTL_CUR, b, size)) ||
             !UacCtlValue(UAC_CTL_FEATURE, selector, b, size, 0)) return FALSE;
         if (selector == 2) {
             int v = (int)((unsigned int)b[0] | ((unsigned int)b[1] << 8));
-            if (v >= 32768) v -= 65536;
-            *value = v == -32768 ? level.Range.KsMin : UacVolToKs(v);
+            *value = v >= 32768 ? v - 65536 : v;
         } else *value = b[0];
         return TRUE;
     }
@@ -256,11 +265,20 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         if (!NT_SUCCESS(s)) { level.Failures++; level.LastStatus = s; }
         return NT_SUCCESS(s) ? TRUE : FALSE;
     }
+    /* The KS range of node channel c. */
+    const UAC_VOL_RANGE *KsRange(ULONG c) const {
+        return level.Map.VolumeMode == UAC_VOL_CHANNEL ? &level.Range[c + 1] : &level.Range[0];
+    }
+    /* A device value as a node level: silence is the bottom of the range. */
+    LONG Level(int value, ULONG c) const {
+        return value == UAC_VOL_SILENCE ? KsRange(c)->KsMin : UacVolToKs(value);
+    }
     /* PnP start, after Learn: the render line's controls and levels. */
     void LevelSetup() {
         UAC_LEVEL *v = &level;
+        UAC_VOL_MAP *m = &v->Map;
         UAC_LEVEL_SAVE saved;
-        ULONG c, most = 1;
+        ULONG c, n, most = 1;
         RtlZeroMemory(v, sizeof(*v));
         KeInitializeSpinLock(&v->Lock);
         for (c = 0; c < UAC_VOL_CHANNELS; c++) v->Gain[c] = (LONG)UAC_VOL_UNITY;
@@ -270,92 +288,168 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         /* Mono or a stereo pair: a stream with more channels takes channel
          * c % 2 (uacvol.h), as the system's mixer shows a pair. */
         v->Channels = most >= 2 ? 2 : 1;
-        v->Present = TRUE;
-        UacVolFind(descriptor, dir[0].Formats.Format[0].Terminal, v->Channels, &v->Map);
-        if (v->Map.VolumeMode != UAC_VOL_NONE &&
-            !ReadRange(v->Map.VolumeUnit, v->Map.VolumeMode == UAC_VOL_MASTER ? 0 : 1, &v->Range))
-            v->Map.VolumeMode = UAC_VOL_NONE;   /* no usable RANGE: software */
-        if (v->Map.VolumeMode == UAC_VOL_NONE) UacVolSoftRange(&v->Range);
-        if (GetValue(device, L"Uac2Level", &saved, sizeof(saved)) && saved.Version == 1 &&
+        UacVolFind(descriptor, dir[0].Formats.Format[0].Terminal, v->Channels, m);
+        /* Every controlled channel's own RANGE; a control without a usable
+         * one is left to software. */
+        if (m->VolumeMode == UAC_VOL_MASTER) {
+            if (!ReadRange(m->VolumeUnit, 0, &v->Range[0])) m->VolumeMode = UAC_VOL_NONE;
+            for (n = 1; n <= UAC_VOL_CHANNELS; n++)
+                if ((m->VolumeExtra & (1u << (n - 1))) && !ReadRange(m->VolumeUnit, n, &v->Range[n]))
+                    m->VolumeExtra &= ~(1u << (n - 1));
+        } else if (m->VolumeMode == UAC_VOL_CHANNEL) {
+            for (n = 1; n <= m->VolumeChannels; n++)
+                if (!ReadRange(m->VolumeUnit, n, &v->Range[n])) m->VolumeMode = UAC_VOL_NONE;
+        }
+        if (m->VolumeMode == UAC_VOL_NONE) {
+            m->VolumeUnit = 0; m->VolumeChannels = 0; m->VolumeExtra = 0;
+            UacVolSoftRange(&v->Range[0]);
+        }
+        /* What the device has now. */
+        v->VolumeKnown = TRUE;
+        if (m->VolumeMode == UAC_VOL_MASTER)
+            v->VolumeKnown = ReadCur(m->VolumeUnit, 2, 0, &v->Actual[0]);
+        else if (m->VolumeMode == UAC_VOL_CHANNEL)
+            for (n = 1; n <= m->VolumeChannels; n++)
+                if (!ReadCur(m->VolumeUnit, 2, n, &v->Actual[n])) v->VolumeKnown = FALSE;
+        int mute = 0;
+        v->MuteKnown = m->MuteMode == UAC_VOL_NONE ||
+                       ReadCur(m->MuteUnit, 1, m->MuteMode == UAC_VOL_MASTER ? 0 : 1, &mute);
+        v->ActualMute = m->MuteMode == UAC_VOL_NONE ? 0 : mute;
+        /* The levels: restored, else the device's own (0 dB in software). */
+        for (c = 0; c < v->Channels; c++)
+            v->Level[c] = !v->VolumeKnown ? 0 :
+                m->VolumeMode == UAC_VOL_MASTER ? Level(v->Actual[0], c) :
+                m->VolumeMode == UAC_VOL_CHANNEL ? Level(v->Actual[c + 1], c) : 0;
+        v->Mute = v->ActualMute;
+        if (GetValue(device, L"Uac2Level", &saved, sizeof(saved)) && saved.Version == 2 &&
             saved.Channels == v->Channels) {
-            for (c = 0; c < v->Channels; c++) v->Level[c] = saved.Level[c];
-            v->Mute = saved.Mute ? 1 : 0;
-            v->Owned = TRUE;
-        } else {
-            /* The device's own settings, or 0 dB in software. */
-            for (c = 0; c < v->Channels; c++) {
-                LONG cur = 0;
-                if (v->Map.VolumeMode == UAC_VOL_MASTER) ReadCur(v->Map.VolumeUnit, 2, 0, &cur);
-                else if (v->Map.VolumeMode == UAC_VOL_CHANNEL) ReadCur(v->Map.VolumeUnit, 2, c + 1, &cur);
-                v->Level[c] = cur;
+            if (saved.Owned & UAC_LEVEL_VOLUME) {
+                for (c = 0; c < v->Channels; c++) v->Level[c] = saved.Level[c];
+                v->VolumeOwned = v->VolumeDirty = TRUE;
             }
-            LONG mute = 0;
-            if (v->Map.MuteMode == UAC_VOL_MASTER) ReadCur(v->Map.MuteUnit, 1, 0, &mute);
-            else if (v->Map.MuteMode == UAC_VOL_CHANNEL) ReadCur(v->Map.MuteUnit, 1, 1, &mute);
-            v->Mute = mute;
+            if (saved.Owned & UAC_LEVEL_MUTE) {
+                v->Mute = saved.Mute ? 1 : 0;
+                v->MuteOwned = v->MuteDirty = TRUE;
+            }
         }
         for (c = 0; c < v->Channels; c++)
-            v->Level[c] = UacVolToKs(UacVolFromKs(v->Level[c], &v->Range));
-        v->Saved = v->Change;
+            v->Level[c] = UacVolToKs(UacVolFromKs(v->Level[c], KsRange(c)));
+        v->Present = TRUE;
     }
-    /* PASSIVE, operation held: the gains for the levels, then what the
-     * device must change, then the registry copy. */
+    BOOLEAN DeviceReady() const { return dev && !removed && !pnpBlocked && !powerBlocked; }
+    /* A control the driver owns that the device may not have (after D3). */
+    BOOLEAN LevelStale() const {
+        return level.Present && ((level.VolumeOwned && !level.VolumeKnown) ||
+                                 (level.MuteOwned && !level.MuteKnown));
+    }
+    /* target: what the device would have once written; taken for the
+     * device's state while that is not known. */
+    void PublishGains(const LONG *levels, LONG mute, const int *target) {
+        unsigned long gain[UAC_VOL_CHANNELS];
+        UacVolGains(levels, level.Channels, mute, &level.Map, level.VolumeKnown ? level.Actual : target,
+                    level.MuteKnown && level.ActualMute, gain);
+        for (ULONG c = 0; c < level.Channels; c++) InterlockedExchange(&level.Gain[c], (LONG)gain[c]);
+    }
+    /* PASSIVE, operation held. Gains for what the device has; the writes
+     * the owned controls need; gains again for what the device then has;
+     * the registry copy. Software never plays a channel louder than asked
+     * while a write is pending or after one failed (a failed control is
+     * written again at the next apply). */
     void ApplyLocked() {
         UAC_LEVEL *v = &level;
+        UAC_VOL_MAP *m = &v->Map;
         LONG levels[UAC_VOL_CHANNELS], mute;
-        int hw[UAC_VOL_CHANNELS];
-        unsigned long gain[UAC_VOL_CHANNELS];
-        ULONG c, change;
+        int target[UAC_VOL_SLOTS];
+        BOOLEAN volumeOwned, muteOwned, volumeDirty, muteDirty;
+        ULONG c, n, change;
         KIRQL irql;
         if (!v->Present) return;
         KeAcquireSpinLock(&v->Lock, &irql);
         for (c = 0; c < v->Channels; c++) levels[c] = v->Level[c];
         mute = v->Mute; change = v->Change;
+        volumeOwned = v->VolumeOwned; muteOwned = v->MuteOwned;
+        volumeDirty = v->VolumeDirty; muteDirty = v->MuteDirty;
+        v->VolumeDirty = v->MuteDirty = FALSE;
         KeReleaseSpinLock(&v->Lock, irql);
-        UacVolPlan(levels, v->Channels, mute, &v->Map, &v->Range, hw, gain);
-        for (c = 0; c < v->Channels; c++) InterlockedExchange(&v->Gain[c], (LONG)gain[c]);
-        if (v->Owned && dev && !removed && !pnpBlocked && !powerBlocked) {
-            BOOLEAN ok = TRUE;
-            if (v->Map.VolumeMode == UAC_VOL_MASTER) {
-                if (!v->Written || hw[0] != v->Volume[0]) ok = WriteCur(v->Map.VolumeUnit, 2, 0, hw[0]) && ok;
-            } else if (v->Map.VolumeMode == UAC_VOL_CHANNEL) {
-                for (c = 0; c < v->Map.VolumeChannels; c++)
-                    if (!v->Written || hw[c] != v->Volume[c]) ok = WriteCur(v->Map.VolumeUnit, 2, c + 1, hw[c]) && ok;
+        UacVolTargets(levels, v->Channels, m, v->Range, target);
+        PublishGains(levels, mute, target);
+        BOOLEAN volumeFailed = FALSE, muteFailed = FALSE;
+        if (DeviceReady() && volumeOwned && m->VolumeMode != UAC_VOL_NONE &&
+            (volumeDirty || !v->VolumeKnown)) {
+            if (!v->VolumeNormal) {
+                /* The same unit's channel volumes to 0 dB: the master alone sets the level. */
+                BOOLEAN ok = TRUE;
+                for (n = 1; n <= UAC_VOL_CHANNELS; n++)
+                    if (m->VolumeExtra & (1u << (n - 1)))
+                        ok = WriteCur(m->VolumeUnit, 2, n, UacVolFromKs(0, &v->Range[n])) && ok;
+                v->VolumeNormal = ok;
             }
-            if (v->Map.MuteMode == UAC_VOL_MASTER) {
-                if (!v->Written || mute != v->WrittenMute) ok = WriteCur(v->Map.MuteUnit, 1, 0, mute) && ok;
-            } else if (v->Map.MuteMode == UAC_VOL_CHANNEL) {
-                for (c = 0; c < v->Map.MuteChannels; c++)
-                    if (!v->Written || mute != v->WrittenMute) ok = WriteCur(v->Map.MuteUnit, 1, c + 1, mute) && ok;
+            BOOLEAN known = TRUE;
+            for (n = m->VolumeMode == UAC_VOL_MASTER ? 0 : 1;
+                 n <= (m->VolumeMode == UAC_VOL_MASTER ? 0 : m->VolumeChannels); n++) {
+                if (v->VolumeKnown && target[n] == v->Actual[n]) continue;
+                if (WriteCur(m->VolumeUnit, 2, n, target[n])) v->Actual[n] = target[n];
+                else { volumeFailed = TRUE; known = FALSE; }
             }
-            /* After a failure every control is written again next time. */
-            v->Written = ok;
-            for (c = 0; c < UAC_VOL_CHANNELS; c++) v->Volume[c] = hw[c];
-            v->WrittenMute = mute;
+            /* A refused write leaves the device as it was, if that was known. */
+            v->VolumeKnown = known || v->VolumeKnown;
+            if (!known && !v->VolumeKnown) v->VolumeNormal = FALSE;
         }
+        if (DeviceReady() && muteOwned && m->MuteMode != UAC_VOL_NONE &&
+            (muteDirty || !v->MuteKnown)) {
+            if (!v->MuteNormal) {
+                BOOLEAN ok = TRUE;
+                for (n = 1; n <= UAC_VOL_CHANNELS; n++)
+                    if (m->MuteExtra & (1u << (n - 1))) ok = WriteCur(m->MuteUnit, 1, n, 0) && ok;
+                v->MuteNormal = ok;
+            }
+            BOOLEAN ok = TRUE;
+            if (!v->MuteKnown || mute != v->ActualMute) {
+                if (m->MuteMode == UAC_VOL_MASTER) ok = WriteCur(m->MuteUnit, 1, 0, mute);
+                else for (n = 1; n <= m->MuteChannels; n++) ok = WriteCur(m->MuteUnit, 1, n, mute) && ok;
+            }
+            if (ok) { v->ActualMute = mute; v->MuteKnown = TRUE; }
+            else muteFailed = TRUE;
+            /* Per channel, some may have taken it: unknown until written again. */
+            if (!ok && m->MuteMode == UAC_VOL_CHANNEL) v->MuteKnown = FALSE;
+        }
+        if (volumeFailed || muteFailed) {
+            KeAcquireSpinLock(&v->Lock, &irql);
+            if (volumeFailed) v->VolumeDirty = TRUE;
+            if (muteFailed) v->MuteDirty = TRUE;
+            KeReleaseSpinLock(&v->Lock, irql);
+        }
+        PublishGains(levels, mute, target);
         if (!removed) {
             if (change != v->Saved) {
                 UAC_LEVEL_SAVE save;
                 RtlZeroMemory(&save, sizeof(save));
-                save.Version = 1; save.Channels = v->Channels; save.Mute = mute;
+                save.Version = 2; save.Channels = v->Channels; save.Mute = mute;
+                save.Owned = (volumeOwned ? UAC_LEVEL_VOLUME : 0) | (muteOwned ? UAC_LEVEL_MUTE : 0);
                 for (c = 0; c < v->Channels; c++) save.Level[c] = levels[c];
                 PutValue(device, L"Uac2Level", &save, sizeof(save));
                 v->Saved = change;
             }
-            RecordLevel(levels, mute, gain);
+            RecordLevel(levels, mute);
         }
     }
-    void RecordLevel(const LONG *levels, LONG mute, const unsigned long *gain) {
+    void RecordLevel(const LONG *levels, LONG mute) {
         UAC_LEVEL *v = &level;
         UAC_LEVEL_DIAG g;
+        ULONG c;
         RtlZeroMemory(&g, sizeof(g));
         g.Channels = v->Channels; g.Output = v->Map.Output;
-        g.VolumeUnit = v->Map.VolumeUnit; g.VolumeMode = v->Map.VolumeMode; g.VolumeChannels = v->Map.VolumeChannels;
-        g.MuteUnit = v->Map.MuteUnit; g.MuteMode = v->Map.MuteMode; g.MuteChannels = v->Map.MuteChannels;
-        g.Restored = v->Owned; g.KsMin = v->Range.KsMin; g.KsMax = v->Range.KsMax; g.KsStep = v->Range.KsStep;
+        g.VolumeUnit = v->Map.VolumeUnit; g.VolumeMode = v->Map.VolumeMode;
+        g.VolumeChannels = v->Map.VolumeChannels; g.VolumeExtra = v->Map.VolumeExtra;
+        g.MuteUnit = v->Map.MuteUnit; g.MuteMode = v->Map.MuteMode;
+        g.MuteChannels = v->Map.MuteChannels; g.MuteExtra = v->Map.MuteExtra;
+        g.Owned = (v->VolumeOwned ? UAC_LEVEL_VOLUME : 0) | (v->MuteOwned ? UAC_LEVEL_MUTE : 0);
+        g.Known = (v->VolumeKnown ? UAC_LEVEL_VOLUME : 0) | (v->MuteKnown ? UAC_LEVEL_MUTE : 0);
+        g.KsMin = KsRange(0)->KsMin; g.KsMax = KsRange(0)->KsMax; g.KsStep = KsRange(0)->KsStep;
         g.Change = v->Change; g.Writes = v->Writes; g.Failures = v->Failures; g.LastStatus = v->LastStatus;
-        g.Mute = mute;
-        for (ULONG c = 0; c < v->Channels; c++) { g.Level[c] = levels[c]; g.Gain[c] = (LONG)gain[c]; }
+        g.Mute = mute; g.ActualMute = v->ActualMute;
+        for (c = 0; c < v->Channels; c++) { g.Level[c] = levels[c]; g.Gain[c] = v->Gain[c]; }
+        for (c = 0; c < UAC_VOL_SLOTS; c++) g.Actual[c] = v->Actual[c];
         PutValue(device, L"Uac2VolMap", &g, sizeof(g));
     }
     void Apply() {
@@ -363,32 +457,32 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         ApplyLocked();
         KeReleaseMutex(&operation, FALSE);
     }
-    struct LEVEL_WORK { PIO_WORKITEM Item; Wave *Owner; };
+    /* The work item: the Wave and the device object stay referenced until
+     * it ends (the x86 executive work item holds neither), and Shutdown
+     * waits for it (Work). */
     static VOID LevelWork(PDEVICE_OBJECT, PVOID context) {
-        LEVEL_WORK *j = (LEVEL_WORK *)context;
-        Wave *w = j->Owner;
-        PIO_WORKITEM item = j->Item;
-        ExFreePool(j);
+        Wave *w = (Wave *)context;
+        PDEVICE_OBJECT fdo = w->device;
         InterlockedExchange(&w->level.Queued, 0);
         w->Apply();
-        IoFreeWorkItem(item);
+        InterlockedDecrement(&w->level.Work);
         w->Release();
+        ObDereferenceObject(fdo);
     }
-    /* A property set at raised IRQL: apply on a work item, at PASSIVE.
+    /* A property set at raised IRQL: apply on the work item, at PASSIVE.
      * One at a time; it reads the levels when it runs. */
     void Changed() {
         if (KeGetCurrentIrql() == PASSIVE_LEVEL) { Apply(); return; }
-        if (InterlockedExchange(&level.Queued, 1)) return;
-        LEVEL_WORK *j = (LEVEL_WORK *)ExAllocatePoolWithTag(NonPagedPool, sizeof(LEVEL_WORK), 'v2aU');
-        PIO_WORKITEM item = j ? IoAllocateWorkItem(device) : NULL;
-        if (!item) {
-            if (j) ExFreePool(j);
-            InterlockedExchange(&level.Queued, 0);  /* the next PASSIVE set applies it */
+        if (!level.Item) return;
+        /* Work first, then Closed: Shutdown sets Closed, then waits for Work. */
+        InterlockedIncrement(&level.Work);
+        if (level.Closed || InterlockedExchange(&level.Queued, 1)) {
+            InterlockedDecrement(&level.Work);
             return;
         }
-        j->Item = item; j->Owner = this;
         AddRef();
-        IoQueueWorkItem(item, LevelWork, DelayedWorkQueue, j);
+        ObReferenceObject(device);
+        IoQueueWorkItem(level.Item, LevelWork, DelayedWorkQueue, this);
     }
     NTSTATUS LevelBasic(PPCPROPERTY_REQUEST r, BOOLEAN volume) {
         ULONG full = sizeof(KSPROPERTY_DESCRIPTION) + sizeof(KSPROPERTY_MEMBERSHEADER) +
@@ -413,10 +507,10 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
                 m->MembersCount = level.Channels;
                 m->Flags = KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL;
                 for (ULONG c = 0; c < level.Channels; c++) {
-                    step[c].SteppingDelta = volume ? (ULONG)level.Range.KsStep : 1;
+                    step[c].SteppingDelta = volume ? (ULONG)KsRange(c)->KsStep : 1;
                     step[c].Reserved = 0;
-                    step[c].Bounds.SignedMinimum = volume ? level.Range.KsMin : 0;
-                    step[c].Bounds.SignedMaximum = volume ? level.Range.KsMax : 1;
+                    step[c].Bounds.SignedMinimum = volume ? KsRange(c)->KsMin : 0;
+                    step[c].Bounds.SignedMaximum = volume ? KsRange(c)->KsMax : 1;
                 }
                 r->ValueSize = full;
             } else r->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
@@ -430,7 +524,9 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
 public:
     /* KSPROPERTY_AUDIO_VOLUMELEVEL (volume) or KSPROPERTY_AUDIO_MUTE on
      * the topology filter's node; the channel is the KSNODEPROPERTY_AUDIO_
-     * CHANNEL's (0..Channels-1, or -1 for all). */
+     * CHANNEL's (0..Channels-1, or -1 for all). A SET takes the control
+     * over (the driver writes it from then on and restores it), even at
+     * the value it already has. */
     NTSTATUS LevelProperty(PPCPROPERTY_REQUEST r, BOOLEAN volume) {
         UAC_LEVEL *v = &level;
         KIRQL irql;
@@ -440,6 +536,7 @@ public:
         if (r->InstanceSize < sizeof(LONG) || !r->Instance) return STATUS_INVALID_PARAMETER;
         LONG channel = *(PLONG)r->Instance;
         if (channel != -1 && (channel < 0 || (ULONG)channel >= v->Channels)) return STATUS_INVALID_PARAMETER;
+        if (!r->ValueSize) { r->ValueSize = sizeof(LONG); return STATUS_BUFFER_OVERFLOW; }
         if (r->ValueSize < sizeof(LONG) || !r->Value) return STATUS_BUFFER_TOO_SMALL;
         if (r->Verb & KSPROPERTY_TYPE_GET) {
             LONG value;
@@ -454,23 +551,29 @@ public:
             return STATUS_SUCCESS;
         }
         if (r->Verb & KSPROPERTY_TYPE_SET) {
-            LONG value = *(PLONG)r->Value;
-            BOOLEAN changed = FALSE;
-            if (volume) value = UacVolToKs(UacVolFromKs(value, &v->Range));
-            else value = value ? 1 : 0;
+            LONG value = *(PLONG)r->Value, snapped[UAC_VOL_CHANNELS];
+            for (c = 0; c < v->Channels; c++)
+                snapped[c] = UacVolToKs(UacVolFromKs(value, KsRange(c)));
             KeAcquireSpinLock(&v->Lock, &irql);
             if (!volume) {
-                if (v->Mute != value) { v->Mute = value; changed = TRUE; }
-            } else for (c = 0; c < v->Channels; c++)
-                if ((channel < 0 || (ULONG)channel == c) && v->Level[c] != value) {
-                    v->Level[c] = value; changed = TRUE;
-                }
-            if (changed) { v->Change++; v->Owned = TRUE; }
+                v->Mute = value ? 1 : 0;
+                v->MuteOwned = v->MuteDirty = TRUE;
+            } else {
+                for (c = 0; c < v->Channels; c++)
+                    if (channel < 0 || (ULONG)channel == c) v->Level[c] = snapped[c];
+                v->VolumeOwned = v->VolumeDirty = TRUE;
+            }
+            v->Change++;
             KeReleaseSpinLock(&v->Lock, irql);
-            if (changed) Changed();
+            Changed();
             return STATUS_SUCCESS;
         }
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+    /* KSPROPERTY_AUDIO_CPU_RESOURCES: the host when software does it. */
+    ULONG LevelCpu(BOOLEAN volume) const {
+        return (volume ? level.Map.VolumeMode : level.Map.MuteMode) == UAC_VOL_NONE ?
+               KSAUDIO_CPU_RESOURCES_HOST_CPU : KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU;
     }
 private:
     /* The device format (index) a stream format maps to, or -1. The
@@ -525,7 +628,7 @@ private:
                     d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d, &d->Usb);
             }
             /* The device may have lost its levels in D3 or a stop. */
-            if (NT_SUCCESS(status) && !d->Capture && !w->level.Written) w->ApplyLocked();
+            if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
             if (NT_SUCCESS(status)) status = UacUsbStart(d->Usb);
             Record(w->device, 31, status);
         }
@@ -648,6 +751,7 @@ public:
     ~Wave() {
         /* Close and PnP Shutdown own all USB destruction at PASSIVE. */
         ASSERT(dir[0].Usb == NULL && dir[1].Usb == NULL);
+        if (level.Item) IoFreeWorkItem(level.Item);
         if (dev) UacUsbClose(dev);
         if (descriptor) {
             ExFreePool((PVOID)descriptor->Bytes);
@@ -663,6 +767,7 @@ public:
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
         if (!graph) return STATUS_NOT_SUPPORTED;
         LevelSetup();
+        if (level.Present) level.Item = IoAllocateWorkItem(device);
         ApplyLocked();
         ULONG c = 0;
         categories[c++] = KSCATEGORY_AUDIO;
@@ -704,6 +809,14 @@ public:
     const UAC_GRAPH *Graph() const { return graph; }
     void Shutdown(BOOLEAN permanent) {
         PAGED_CODE();
+        /* A level work item still to run takes the operation mutex: wait
+         * for it outside the mutex (Changed queues no more once Closed). */
+        if (permanent) InterlockedExchange(&level.Closed, 1);
+        while (level.Work) {
+            LARGE_INTEGER t;
+            t.QuadPart = -100000;   /* 10 ms */
+            KeDelayExecutionThread(KernelMode, FALSE, &t);
+        }
         KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
         pnpBlocked = TRUE;
         Drain(&dir[0], TRUE); Drain(&dir[1], TRUE);
@@ -836,7 +949,12 @@ STDMETHODIMP_(void) Wave::PowerChangeState(POWER_STATE state) {
     PAGED_CODE();
     KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
     powerBlocked = state.DeviceState != PowerDeviceD0;
-    if (powerBlocked) { Drain(&dir[0], FALSE); Drain(&dir[1], FALSE); level.Written = FALSE; }
+    if (powerBlocked) {
+        Drain(&dir[0], FALSE); Drain(&dir[1], FALSE);
+        /* The device may come back with its own levels. */
+        if (level.Map.VolumeMode != UAC_VOL_NONE) level.VolumeKnown = level.VolumeNormal = FALSE;
+        if (level.Map.MuteMode != UAC_VOL_NONE) level.MuteKnown = level.MuteNormal = FALSE;
+    }
     KeReleaseMutex(&operation, FALSE);
 }
 STDMETHODIMP Wave::QueryPowerChangeState(POWER_STATE state) {
@@ -933,8 +1051,9 @@ public:
             if ((LONG)r->Node != graph->Volume && (LONG)r->Node != graph->Mute)
                 return STATUS_INVALID_DEVICE_REQUEST;
             if (!(r->Verb & KSPROPERTY_TYPE_GET)) return STATUS_INVALID_DEVICE_REQUEST;
+            if (!r->ValueSize) { r->ValueSize = sizeof(ULONG); return STATUS_BUFFER_OVERFLOW; }
             if (r->ValueSize < sizeof(ULONG) || !r->Value) return STATUS_BUFFER_TOO_SMALL;
-            *(PULONG)r->Value = KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU;
+            *(PULONG)r->Value = wave->LevelCpu((LONG)r->Node == graph->Volume);
             r->ValueSize = sizeof(ULONG);
             return STATUS_SUCCESS;
         }

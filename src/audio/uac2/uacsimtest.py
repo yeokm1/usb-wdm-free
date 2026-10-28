@@ -464,6 +464,11 @@ class ProfileTest(unittest.TestCase):
                          (0, struct.pack('<Hhhh', 1, -0x3c00, 0x600, 0x80)))
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -0x1000)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x700))[0], 4)
+        # Steps of the range only (0.5 dB here), and the silence value.
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3c40))[0], 4)
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3b80))[0], 0)
+        self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -32768))[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -32768)))
         with self.assertRaises(ValueError):
             uacemu.Profile('hs24', fu='loud')
         with self.assertRaises(ValueError):
@@ -519,12 +524,21 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(levels['units'], [2])
         self.assertEqual(levels['received_peak_dbfs'], [-6.02, -6.02])
         self.assertEqual(levels['rendered_peak_dbfs'], [-16.02, -19.02])
+        # Muting later does not rewrite what this window already rendered.
         self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'\1')
-        self.assertEqual(m.levels()['rendered_peak_dbfs'], [None, None])
+        self.assertEqual(m.levels()['rendered_peak_dbfs'], [-16.02, -19.02])
+        self.assertEqual(m.levels()['unit_gain_db'], [None, None])
         m.report('iso_out_totals')
         record = json.loads(trace.getvalue().splitlines()[-1])
         self.assertEqual(record['received_peak_dbfs'], [-6.02, -6.02])
-        self.assertEqual(m.peak, {})                        # a new window
+        self.assertEqual((m.peak, m.rpeak), ({}, {}))       # a new window
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 24) + frame * 6)
+        self.assertEqual(m.levels()['rendered_peak_dbfs'], [None, None])
+        self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'\0')
+        self.control(m, 1, 0x21, 0x201, 0x0200, 2, struct.pack('<h', -32768))  # left: silence
+        m.report('iso_out_totals')
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 24) + frame * 6)
+        self.assertEqual(m.levels()['rendered_peak_dbfs'], [None, -19.02])
         # Scaled in the driver instead: received moves, no unit on the path.
         m, _, _ = self.model('hs24', fu='none')
         self.configure(m, (1, 1))

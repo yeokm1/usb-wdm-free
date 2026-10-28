@@ -44,10 +44,11 @@ takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
 signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
 (1/256 dB, default 0) shape the volume control. Playback is "rendered"
 through the feature units on its path: every 0.25 s the log carries the
-received peak per channel (dBFS) and the rendered peak (received plus
-the units' volume, or silence when muted), so a leg reads a level change
-made in hardware (rendered moves, received stays) or in the driver
-(received moves). Playback OUT packets are checked against the
+received peak per channel (dBFS) and the rendered peak (each packet with
+the units' volume in force when it arrived; none while muted or at the
+silence value 0x8000), so a leg reads a level change made in hardware
+(rendered moves, received stays) or in the driver (received moves). A
+volume SET_CUR must be a step of the range, or the silence value. Playback OUT packets are checked against the
 active alternate (frame size, maximum packet) and counted; feedback runs
 at the feedback endpoint's interval, 16.16 at High Speed and 10.14 at
 Full Speed, with --fb-ppm, --fb-zero-every and --fb-stop-after to model
@@ -403,6 +404,7 @@ class Model:
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
         self.mute, self.volume = {}, {}
         self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
+        self.rpeak = {}         # the same after the units in force at each packet
 
     @property
     def clock(self):
@@ -454,7 +456,7 @@ class Model:
                  feedback_packets=self.feedback_packets, zero_feedback=self.zero_feedback,
                  in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest(),
                  **self.levels())
-        self.peak = {}
+        self.peak, self.rpeak = {}, {}
 
     # -- the rendered signal -------------------------------------------------
     def path_units(self, terminal):
@@ -479,40 +481,51 @@ class Model:
         return walk(terminal, frozenset()) or []
 
     def channel_gain(self, units, channel):
-        """(dB, muted) the units apply to logical channel `channel` (1-based)."""
+        """(dB, muted) the units apply to logical channel `channel` (1-based);
+        the volume silence value mutes."""
         db, muted = 0.0, False
         for uid in units:
             for ch in (0, channel):
+                if ch > self.p.entities[uid]['channels']:
+                    continue
                 muted = muted or bool(self.mute.get((uid, ch), 0))
-                db += self.volume.get((uid, ch), self.p.vol_cur) / 256 if ch <= self.p.entities[uid]['channels'] and \
-                    self.p.entities[uid]['controls'][ch] >> 2 & 1 else 0
+                if self.p.entities[uid]['controls'][ch] >> 2 & 1:
+                    value = self.volume.get((uid, ch), self.p.vol_cur)
+                    if value == -32768:
+                        muted = True
+                    else:
+                        db += value / 256
         return db, muted
 
-    def levels(self):
-        """Received and rendered peaks of this window, per channel, dBFS."""
-        if not self.peak:
-            return {}
-        terminal = None
+    def playback_units(self):
+        """The feature units on the active playback alternate's path."""
         for (interface, alternate) in sorted(self.p.alts):
             info = self.p.stream_alt(interface, alternate)
             if info and info['data'] and not info['data']['address'] & 0x80 and \
                     self.alts.get(interface) == alternate:
                 terminal = self.p.alts[(interface, alternate)].get('terminal')
-                break
-        units = self.path_units(terminal) if terminal else []
+                return self.path_units(terminal) if terminal else []
+        return []
+
+    def levels(self):
+        """Received and rendered peaks of this window, per channel, dBFS,
+        with the units' gain in force now."""
+        if not self.peak:
+            return {}
+        units = self.playback_units()
         received, rendered, gains = [], [], []
+        dbfs = lambda peak: round(20 * math.log10(peak), 2) if peak > 0 else None
         for ch in sorted(self.peak):
-            peak = self.peak[ch]
-            rx = round(20 * math.log10(peak), 2) if peak > 0 else None
             db, muted = self.channel_gain(units, ch + 1)
-            received.append(rx)
-            rendered.append(None if muted or rx is None else round(rx + db, 2))
+            received.append(dbfs(self.peak[ch]))
+            rendered.append(dbfs(self.rpeak.get(ch, 0.0)))
             gains.append(None if muted else round(db, 2))
         return dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
                     unit_gain_db=gains, units=units)
 
-    def measure(self, payload, info):
-        """Track each channel's largest sample of one OUT packet."""
+    def measure(self, payload, info, units):
+        """Track each channel's largest sample of one OUT packet, as
+        received and as rendered by the units in force now."""
         subslot, channels = info['subslot'], info['channels']
         full = float(1 << (8 * subslot - 1))
         if subslot in (2, 4):
@@ -526,10 +539,10 @@ class Model:
             column = samples[ch::channels]
             if column:
                 top = max(max(column), -min(column)) / full
-                if top > self.peak.get(ch, 0.0):
-                    self.peak[ch] = top
-                else:
-                    self.peak.setdefault(ch, 0.0)
+                db, muted = self.channel_gain(units, ch + 1)
+                out = 0.0 if muted else top * 10 ** (db / 20)
+                self.peak[ch] = max(self.peak.get(ch, 0.0), top)
+                self.rpeak[ch] = max(self.rpeak.get(ch, 0.0), out)
 
     def reset_streams(self):
         self.streams.clear()
@@ -635,12 +648,15 @@ class Model:
                 return 0, struct.pack('<Hhhh', 1, lo, hi, res)
             if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
                 value = payload[0] if selector == 1 else struct.unpack('<h', payload)[0]
-                if access != 3 or (selector == 1 and value > 1) or (selector == 2 and not lo <= value <= hi):
+                silence = selector == 2 and value == -32768
+                off_step = selector == 2 and (res > 0 and (value - lo) % res or res == 0 and value != lo)
+                if access != 3 or (selector == 1 and value > 1) or \
+                        (selector == 2 and not silence and (not lo <= value <= hi or off_step)):
                     self.log('feature_refused', entity=entity, selector=selector, channel=channel, value=value)
                     return 4, b''
                 store[key] = value
                 self.log('feature', entity=entity, selector=selector, channel=channel, value=value,
-                         db=value / 256 if selector == 2 else None)
+                         db=value / 256 if selector == 2 and not silence else None)
                 return 0, b''
         return 4, b''
 
@@ -764,7 +780,7 @@ class Model:
         self.nonzero += sum(byte != 0 for byte in payload)
         self.lengths[length] += 1
         self.digest.update(payload)
-        self.measure(payload, own[2])
+        self.measure(payload, own[2], self.playback_units())
         if self.pcm is not None:
             if self.pcm_bytes + length > 4 * 1024 * 1024:
                 raise ValueError('simulated PCM capture exceeds four MiB')

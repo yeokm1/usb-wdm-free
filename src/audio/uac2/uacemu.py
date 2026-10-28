@@ -145,7 +145,9 @@ def audio_function(config):
                 entities[d[3]] = dict(kind='ot', type=int.from_bytes(d[4:6], 'little'),
                                       source=d[7], clock=d[8])
             elif sub == 0x06 and size >= 10 and (size - 6) % 4 == 0:
-                entities[d[3]] = dict(kind='fu', source=d[4], channels=(size - 6) // 4 - 1)
+                channels = (size - 6) // 4 - 1
+                entities[d[3]] = dict(kind='fu', source=d[4], channels=channels, controls=[
+                    int.from_bytes(d[5 + 4 * i:9 + 4 * i], 'little') for i in range(channels + 1)])
         elif kind == 0x24 and current and current[2:] == (1, 2) and current[1] and size >= 4:
             a = alts[(current[0], current[1])]
             if d[2] == 1 and size >= 16:
@@ -530,13 +532,15 @@ class Model:
                 return 0, b''
         elif e['kind'] == 'cm' and selector in (1, 2) and not channel and get and request == 1:
             return 0, struct.pack('<H', 1)
-        elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2):
+        elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2) and                 e['controls'][channel] >> (2 * selector - 2) & 3:
+            # bmaControls: mute D1..0, volume D3..2; 1 read only, 3 read/write.
+            writable = e['controls'][channel] >> (2 * selector - 2) & 3 == 3
             store, key = (self.mute if selector == 1 else self.volume), (entity, channel)
             if get and request == 1:
                 return 0, struct.pack('<B' if selector == 1 else '<h', store.get(key, 0))
             if get and request == 2 and selector == 2:
                 return 0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x0100)   # -96..0 dB, 1 dB steps
-            if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
+            if not get and request == 1 and len(payload) == selector and self.p.fu_settable and writable:
                 value = payload[0] if selector == 1 else struct.unpack('<h', payload)[0]
                 if (selector == 1 and value > 1) or (selector == 2 and not -0x6000 <= value <= 0):
                     return 4, b''

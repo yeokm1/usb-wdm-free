@@ -94,7 +94,9 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(self.control(1, 0x21, 0x100, 0x2103, 4, struct.pack('<I', 48000))[0], 0)
         self.assertEqual(self.control(1, 0x21, 0x100, 0x2103, 4, struct.pack('<I', 44100))[0], 4)
         self.assertEqual(self.control(1, 0xa1, 0x100, 0x2104, 4)[0], 4)
-        self.assertEqual(self.control(1, 0xa1, 0x108, 0x0103, 1)[2], b'\0')
+        # FU 1 channel 8 declares volume only (bmaControls 0x0c): mute stalls.
+        self.assertEqual(self.control(1, 0xa1, 0x108, 0x0103, 1)[0], 4)
+        self.assertEqual(self.control(1, 0xa1, 0x100, 0x0103, 1)[2], b'\0')
         self.assertEqual(self.control(1, 0xa1, 0x208, 0x0103, 2)[2], b'\0\0')
         self.assertEqual(self.control(1, 0x21, 0x100, 0x0103, 1, b'\1')[0], 4)
 
@@ -439,6 +441,21 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8),
                          (0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x100)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x100))[0], 4)
+
+    def test_feature_unit_masks(self):
+        # cx31993: master mute only (0x03), channel volume only (0x0c);
+        # absent controls stall, present ones answer.
+        m, _, _ = self.model('cx31993')
+        self.configure(m)
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'')[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0200, 1), (0, b''))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2)[0], 4)        # no master volume
+        self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8)[0], 4)
+        for ch in (1, 2):
+            self.assertEqual(self.control(m, 1, 0xa1, 0x100 | ch, 0x0200, 1)[0], 4)   # no channel mute
+            self.assertEqual(self.control(m, 1, 0x21, 0x100 | ch, 0x0200, 1, b'')[0], 4)
+            self.assertEqual(self.control(m, 1, 0x21, 0x200 | ch, 0x0200, 2, struct.pack('<h', -0x0a00))[0], 0)
+            self.assertEqual(self.control(m, 1, 0xa1, 0x200 | ch, 0x0200, 2), (0, struct.pack('<h', -0x0a00)))
 
     def test_playback_formats_and_feedback(self):
         for name, alt, frame, value in (('hs24', 2, 6, struct.pack('<I', 6 << 16)),

@@ -101,6 +101,9 @@ every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
+0.1.4 is signed with a new test certificate. Trust the
+`usb-wdm-free-test.cer` of this release, not an earlier one. Its
+thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
 
 `free/tools/camcheck/` holds CamCheck (`CAMCHECK.EXE`), a webcam preview
 for 98 SE, ME and 2000 that works with `uvc98` and any other Video for

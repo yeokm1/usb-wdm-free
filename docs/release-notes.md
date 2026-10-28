@@ -40,17 +40,21 @@ MIDI synth play through the device. Every other file is 0.1.3's.
   chips that Realtek's driver in the non-free set does not serve on that
   system. XP and Vista get the RTL8153D, 8156 and 8156B. XP, Vista and 7
   get the RTL8157 and 8159. Windows 8 and later are not targets.
-- **x64 (XP x64, Vista x64, 7 x64)**: built (NDIS 5.1). Its folders are
-  added when the owner has test-signed the image.
+- **x64 (XP x64, Vista x64, 7 x64)**: built (NDIS 5.1), in `wxp-x64`
+  and `wv-7-x64`. The XP x64, Vista x64 and 7 x64 legs ran a trace
+  build of `088aabd`, signed in the guest with a throwaway certificate,
+  not this image.
 - **Firmware**: none is loaded. Linux runs these chips without their
   patches too. Without its patch an RTL8159 links at 5 Gb/s at most.
 - **Legs**: simulator only. No adapter with any of these chips has run.
   98 SE, ME and 2000 under xHCI98, with each chip at its top speed and a
   lower one: DHCP, pings, a cable pull and unplug. The XP to 7 legs ran
   at High Speed. [Release record](testing/2026-10-28-release-0.1.4.md).
-- **Signing**: the x86 images are unsigned, as always. The new x64
-  images of `rtl815x` and `uac2` wait for the owner's test signature. Until
-  then `uac2`'s x64 folders hold 0.1.2's files.
+- **Signing**: 0.1.4 is signed with a new test certificate. Trust the
+  `usb-wdm-free-test.cer` of this release, not an earlier one. Its
+  thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`. Every x64 image is signed
+  again with it, the unchanged ones too. Their image digests are 0.1.3's.
+  The x86 images are unsigned, as always.
 
 ## Release 0.1.3 (2026-10-26): class matches
 

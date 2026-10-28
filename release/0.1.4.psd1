@@ -8,6 +8,8 @@
 # Plus uac2 0.1.4.0 (owner, 2026-10-28): playback volume and mute, and the
 # INF's midi subclass (the SW synth). Its x86 image and INF are from out\; its
 # x64 image is the owner's signed copy of out\audio\uac2\wdm64\free\uac2wdm.sys.
+# The test-signing key changed for 0.1.4 (owner, 2026-10-28): every x64 image
+# is signed again with the new key, so the release has one certificate.
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
 # VID/PID), Desc (the STAGE.TXT PACKAGE words), DeviceIds (whole-device
@@ -21,10 +23,19 @@
     # INF copies kept in the tree that must equal their original but for the
     # Signature line and comments (uac2's x64 INF: 64-bit Windows refuses $CHICAGO$).
     Agree = @{ 'src\audio\uac2\x64\uac2wdm.inf' = 'src\audio\uac2\uac2wdm.inf' }
-    # The unsigned build of each x64 image the owner signs ('x64:<name>' in Files).
-    # Every other signed x64 image is 0.1.0's, from the tree.
-    X64Builds = @{ 'rtl815x.sys' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
-                   'uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys' }
+    # The unsigned form of each x64 image the owner signs ('x64:<name>' in Files,
+    # one per folder): a build under out\, or 'strip:<path>', an earlier release's
+    # image in the tree with its signature removed (its image digest unchanged).
+    X64Builds = @{ 'uac2.wxp-x64.uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys'
+                   'uac2.wv-8-x64.uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys'
+                   'rtl815x.wxp-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
+                   'rtl815x.wv-7-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
+                   'usbmidi.wxp-x64.usbmidi.sys' = 'strip:free\audio\usbmidi\wxp-x64\usbmidi.sys'
+                   'usbmidi.wv-8-x64.usbmidi.sys' = 'strip:free\audio\usbmidi\wv-8-x64\usbmidi.sys'
+                   'xpad98.wxp-x64.xpad98.sys' = 'strip:free\hid\xpad98\wxp-x64\xpad98.sys'
+                   'xpad98.wv-x64.xpad98.sys' = 'strip:free\hid\xpad98\wv-x64\xpad98.sys'
+                   'cdcnet.wxp-x64.CDCNET.SYS' = 'strip:free\net\cdcnet\wxp-x64\CDCNET.SYS'
+                   'cdcnet.wv-7-x64.CDCNET.SYS' = 'strip:free\net\cdcnet\wv-7-x64\CDCNET.SYS' }
     Packages = @(
         @{
             Id = 'audio/uac2'; Kind = 'CLASS'
@@ -42,17 +53,12 @@
                 @{ Name = 'wv-8-x86'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
                    Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); 8 has no leg; 0.1.4.0 playback with volume and mute passed on Vista and 7 x86 (simulator; endpoint volume and mute reach the device)') } }
-                # The x64 folders keep 0.1.2's files until the owner test-signs the 0.1.4.0
-                # x64 image (SIGN-0.1.4.txt). Then, in both folders, and run again with -X64Dir:
-                #   Files = @{ 'uac2wdm.sys' = 'x64:uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf' }
-                # and add to the Stage note '; 0.1.4.0 volume and mute passed on XP x64 (simulator,
-                # unsigned build)' (wxp-x64) or '; 0.1.4.0 volume and mute: no Vista to 8 x64 leg' (wv-8-x64).
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\wxp-x64\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\wxp-x64\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WXP64', 'copy only (owner, 2026-10-24): no XP x64 leg') } }
+                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wxp-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WXP64', 'copy only (owner, 2026-10-24): no XP x64 leg; 0.1.4.0 volume and mute passed on XP x64 (simulator, unsigned build)') } }
                 @{ Name = 'wv-8-x64'; Arch = 'x64'
-                   Files = @{ 'uac2wdm.sys' = 'tree:free\audio\uac2\wv-8-x64\uac2wdm.sys'; 'uac2wdm.inf' = 'tree:free\audio\uac2\wv-8-x64\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted') } }
+                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wv-8-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted; 0.1.4.0 volume and mute: no Vista to 8 x64 leg') } }
             )
         }
         @{
@@ -77,10 +83,10 @@
                    Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wv-8-x86\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wv-8-x86\usbmidi.inf' }
                    Stage = @{ 'usbmidi.inf' = @('COPY', 'WVISTA W7 W8', 'by-hand INF (USBMIDI_BY_HAND only)') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wxp-x64\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wxp-x64\usbmidi.inf' }
+                   Files = @{ 'usbmidi.sys' = 'x64:usbmidi.wxp-x64.usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wxp-x64\usbmidi.inf' }
                    Stage = @{ 'usbmidi.inf' = @('COPY', 'WXP64', 'by-hand INF (USBMIDI_BY_HAND only); no x64 leg') } }
                 @{ Name = 'wv-8-x64'; Arch = 'x64'
-                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wv-8-x64\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wv-8-x64\usbmidi.inf' }
+                   Files = @{ 'usbmidi.sys' = 'x64:usbmidi.wv-8-x64.usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wv-8-x64\usbmidi.inf' }
                    Stage = @{ 'usbmidi.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'by-hand INF (USBMIDI_BY_HAND only); no x64 leg; test-signed') } }
             )
         }
@@ -140,11 +146,11 @@
                    Stage = @{ 'CDCNET.INF' = @('COPY', 'WVISTA W7', 'no leg on Vista or 7 x86')
                               'CDCRNDIS.INF' = @('COPY', 'WVISTA W7', 'binds Windows RNDIS driver; no passing data leg') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'CDCNET.SYS' = 'tree:free\net\cdcnet\wxp-x64\CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wxp-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wxp-x64.CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wxp-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
                    Stage = @{ 'CDCNET.INF' = @('COPY', 'WXP64', 'no XP x64 leg')
                               'CDCRNDIS.INF' = @('COPY', 'WXP64', 'binds Windows RNDIS driver; no passing data leg') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
-                   Files = @{ 'CDCNET.SYS' = 'tree:free\net\cdcnet\wv-7-x64\CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wv-7-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wv-7-x64.CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wv-7-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
                    Stage = @{ 'CDCNET.INF' = @('STAGE', 'W7X64', 'UHCI ECM leg on 7 x64 ran its test copy CDCTEST.INF (same install sections); test-signed')
                               'CDCRNDIS.INF' = @('COPY', 'WVISTA64 W7X64', 'binds Windows RNDIS driver; no passing data leg') } }
             )
@@ -169,14 +175,12 @@
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA W7', 'copy only: simulator legs only, no device') } }
-                # The x64 folders wait for the owner's test signature on the new x64 image
-                # (SIGN-0.1.4.txt): uncomment and run again with -X64Dir, before the tag.
-                # @{ Name = 'wxp-x64'; Arch = 'x64'
-                # Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                # Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP64', 'copy only: simulator legs only, no device') } }
-                # @{ Name = 'wv-7-x64'; Arch = 'x64'
-                # Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                # Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only: simulator legs only, no device; test-signed') } }
+                @{ Name = 'wxp-x64'; Arch = 'x64'
+                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wxp-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP64', 'copy only: simulator legs only, no device') } }
+                @{ Name = 'wv-7-x64'; Arch = 'x64'
+                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wv-7-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only: simulator legs only, no device; test-signed') } }
             )
         }
         @{
@@ -215,10 +219,10 @@
                    Files = @{ 'xpad98.sys' = 'tree:free\hid\xpad98\wv-x86\xpad98.sys'; 'xpxpv.inf' = 'tree:free\hid\xpad98\wv-x86\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WVISTA', 'EHCI Xbox One leg passed') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'xpad98.sys' = 'tree:free\hid\xpad98\wxp-x64\xpad98.sys'; 'xpxpv.inf' = 'tree:free\hid\xpad98\wxp-x64\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wxp-x64.xpad98.sys'; 'xpxpv.inf' = 'tree:free\hid\xpad98\wxp-x64\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WXP64', 'EHCI Xbox One leg passed') } }
                 @{ Name = 'wv-x64'; Arch = 'x64'
-                   Files = @{ 'xpad98.sys' = 'tree:free\hid\xpad98\wv-x64\xpad98.sys'; 'xpxpv.inf' = 'tree:free\hid\xpad98\wv-x64\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wv-x64.xpad98.sys'; 'xpxpv.inf' = 'tree:free\hid\xpad98\wv-x64\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WVISTA64', 'EHCI Xbox One leg passed with test signing (owner, 2026-10-24); test-signed') } }
             )
         }

@@ -49,8 +49,8 @@ PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound card
 STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1); 0.1.4.0 volume and mute passed on 98 SE (simulator)
 STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg; 0.1.4.0 volume and mute passed on XP (simulator)
 STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | playback and capture passed on 7 x86 (simulator, real X4 via VM); 8 has no leg; 0.1.4.0 playback with volume and mute passed on Vista and 7 x86 (simulator; endpoint volume and mute reach the device)
-COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24): no XP x64 leg
-COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted
+COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24): no XP x64 leg; 0.1.4.0 volume and mute passed on XP x64 (simulator, unsigned build)
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted; 0.1.4.0 volume and mute: no Vista to 8 x64 leg
 
 # ---- audio/usbmidi
 PACKAGE  | audio/usbmidi | CLASS | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces
@@ -91,6 +91,8 @@ COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2
 COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
 COPY  | WXP | free/net/rtl815x/wxp/RTLXP7.INF | copy only: simulator legs only, no device
 COPY  | WVISTA W7 | free/net/rtl815x/wv-7-x86/RTLXP7.INF | copy only: simulator legs only, no device
+COPY  | WXP64 | free/net/rtl815x/wxp-x64/RTLXP7.INF | copy only: simulator legs only, no device
+COPY  | WVISTA64 W7X64 | free/net/rtl815x/wv-7-x64/RTLXP7.INF | copy only: simulator legs only, no device; test-signed
 
 # ---- net/ax88179
 PACKAGE  | net/ax88179 | DEVICE | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip

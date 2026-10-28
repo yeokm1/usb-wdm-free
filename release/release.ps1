@@ -387,6 +387,20 @@ function Test-SignedAgainst([string]$Signed, [string]$Unsigned, [string]$Label) 
     Note "$Label`: matches the build $(Split-Path $Unsigned -Leaf) outside checksum and certificate table"
 }
 
+function Get-Unsigned([string]$Signed, [string]$Out) {
+    # Writes $Signed without its signature to $Out and returns $Out ($null when
+    # $Signed carries no certificate table at its end): the file cut at the table,
+    # the security directory entry and the checksum zeroed. The Authenticode image
+    # digest skips exactly these bytes, so it is unchanged. Not signing.
+    $b = [IO.File]::ReadAllBytes($Signed); $pe = Get-Pe $b
+    if ($null -eq $pe -or $pe.CertLen -eq 0 -or $pe.CertOff + $pe.CertLen -ne $b.Length -or $pe.CertOff % 8 -ne 0) { return $null }
+    $u = New-Object byte[] $pe.CertOff; [Array]::Copy($b, $u, $pe.CertOff)
+    for ($i = 0; $i -lt 8; $i++) { $u[$pe.SecDir + $i] = 0 }
+    for ($i = 0; $i -lt 4; $i++) { $u[$pe.CheckSum + $i] = 0 }
+    [IO.File]::WriteAllBytes($Out, $u)
+    return $Out
+}
+
 function Test-Fresh([string]$Commit, [string]$PkgId, [string]$Src) {
     # A result built at an earlier commit still stands for HEAD when nothing
     # it is made from changed since: for an image, no source of the package
@@ -480,6 +494,16 @@ foreach ($p in $def.Packages) {
             if ($src.StartsWith('x64:')) {
                 $build = $def.X64Builds[$src.Substring(4)]
                 if ($null -eq $build) { Fail "$src`: no X64Builds entry naming its unsigned build"; continue }
+                if ($build.StartsWith('strip:')) {
+                    # An image kept from an earlier release, signed again: its unsigned
+                    # form is the released image in the tree with its certificate table
+                    # removed (Get-Unsigned), so only the signature may differ.
+                    $unsigned = Get-Unsigned (Join-Path $Root $build.Substring(6)) (Join-Path $stage ('strip-' + (Split-Path $src.Substring(4) -Leaf)))
+                    if ($null -eq $unsigned) { Fail "$build`: not a signed image in the tree"; continue }
+                    Note "$build`: an earlier release's image, its signature removed for the comparison"
+                    Test-SignedAgainst (Join-Path $dest $n) $unsigned "$($p.Id)/$($f.Name)/$n"
+                    continue
+                }
                 $unsigned = Join-Path $BuildRoot $build
                 $rec = Join-Path (Split-Path $unsigned -Parent) 'record.txt'
                 if (-not (Test-Path (Join-Path (Split-Path $unsigned -Parent) 'PASS.TXT')) -or -not (Test-Path $rec) -or ([IO.File]::ReadAllText($rec) -notmatch 'commit\s+([0-9a-f]{40})')) { Fail "$build`: no passing build record" }

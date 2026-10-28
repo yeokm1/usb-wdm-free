@@ -311,8 +311,8 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         }
     }
     /* What an unknown volume is taken as: the top of its range; an extra
-     * channel volume without a RANGE, the most a CUR can say (+128 dB),
-     * so its channel stays silent in software until its CUR is read. */
+     * channel volume without a RANGE, the most a CUR can say (+128 dB).
+     * Gains also silences that channel while the volume is owned. */
     int Assumed(ULONG n) const {
         if (n && (level.NoRange & (1u << (n - 1)))) return 0x7FFF;
         return (int)(level.Range[n].KsMax / 256);
@@ -339,6 +339,11 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             levels = flat;
         }
         UacVolGains(levels, level.Channels, mute, &map, actual, muted, gain);
+        /* An owned master whose extra channel volume has no RANGE and an
+         * unknown CUR: that channel is silent until the CUR is read. */
+        if (map.VolumeMode == UAC_VOL_MASTER)
+            for (k = 0; k < UAC_VOL_CHANNELS; k++)
+                if ((level.NoRange & (1u << k)) && !level.Known[k + 1]) gain[k] = 0;
         if (!next) return;
         for (n = 0; n < UAC_VOL_SLOTS; n++) {
             if (VolumeSlot(n, &extra)) actual[n] = next[n];
@@ -487,14 +492,14 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             KeDelayExecutionThread(KernelMode, FALSE, &t);
         }
         if (writeVolume || writeMute) {
-            /* The volume lowerings, then the mutes turned on; then the
-             * volume raisings (and the unknown), then the mutes turned off:
-             * no state on the way is louder than both ends. A failed write
-             * in the first two holds the last two (both left dirty), as the
-             * device may not have taken it. */
+            /* The volume lowerings (an unknown volume counts as Assumed),
+             * then the mutes turned on; then the volume raisings, then the
+             * mutes turned off: no state on the way is louder than both
+             * ends. A failed write holds every later pass (left dirty), as
+             * the device may not have taken it. */
             BOOLEAN volumeNormal = TRUE, muteNormal = TRUE;
             for (ULONG pass = 0; pass < 4; pass++) {
-                if (pass == 2 && (volumeFailed || muteFailed)) {
+                if (pass >= 2 && (volumeFailed || muteFailed)) {
                     if (writeVolume) { volumeFailed = TRUE; volumeNormal = FALSE; }
                     if (writeMute) { muteFailed = TRUE; muteNormal = FALSE; }
                     break;
@@ -503,7 +508,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
                     if (pass == 0 || pass == 2) {
                         if (!writeVolume || !VolumeSlot(n, &extra) || (extra && (v->NoRange & (1u << (n - 1)))) ||
                             (v->Known[n] && next[n] == v->Actual[n])) continue;
-                        if ((pass == 0) != (v->Known[n] && next[n] < v->Actual[n])) continue;
+                        if ((pass == 0) != (next[n] < (v->Known[n] ? v->Actual[n] : Assumed(n)))) continue;
                         if (WriteCur(m->VolumeUnit, 2, n, next[n])) { v->Actual[n] = next[n]; v->Known[n] = TRUE; }
                         else { v->Known[n] = FALSE; volumeFailed = TRUE; if (extra) volumeNormal = FALSE; }
                     } else {

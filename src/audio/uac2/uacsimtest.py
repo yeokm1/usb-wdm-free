@@ -336,6 +336,11 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(shape['mic'], ([], [(1, 2, 16), (1, 3, 24)]))
         self.assertEqual(shape['fs'], ([(2, 2, 16)], [(1, 2, 16)]))
         self.assertEqual(shape['adaptive'], ([(2, 2, 16)], [(2, 2, 16)]))
+        # The CX31993 model: synchronous playback only, the listed packet sizes.
+        self.assertEqual(shape['cx31993'], ([(2, 2, 16), (2, 3, 24), (2, 4, 32)], []))
+        self.assertEqual([uacemu.Profile('cx31993').stream_alt(1, a)['data']['max'] for a in (1, 2, 3)],
+                         [192, 288, 384])
+        self.assertIsNone(uacemu.Profile('cx31993').stream_alt(1, 1)['feedback'])
         # Adaptive playback has no feedback endpoint; async playback has one.
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)

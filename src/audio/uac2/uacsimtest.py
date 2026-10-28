@@ -447,13 +447,13 @@ class ProfileTest(unittest.TestCase):
         # absent controls stall, present ones answer.
         m, _, _ = self.model('cx31993')
         self.configure(m)
-        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'')[0], 0)
-        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0200, 1), (0, b''))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'\1')[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0200, 1), (0, b'\1'))
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2)[0], 4)        # no master volume
         self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8)[0], 4)
         for ch in (1, 2):
             self.assertEqual(self.control(m, 1, 0xa1, 0x100 | ch, 0x0200, 1)[0], 4)   # no channel mute
-            self.assertEqual(self.control(m, 1, 0x21, 0x100 | ch, 0x0200, 1, b'')[0], 4)
+            self.assertEqual(self.control(m, 1, 0x21, 0x100 | ch, 0x0200, 1, b'\1')[0], 4)
             self.assertEqual(self.control(m, 1, 0x21, 0x200 | ch, 0x0200, 2, struct.pack('<h', -0x0a00))[0], 0)
             self.assertEqual(self.control(m, 1, 0xa1, 0x200 | ch, 0x0200, 2), (0, struct.pack('<h', -0x0a00)))
 

@@ -532,8 +532,10 @@ class Model:
                 return 0, b''
         elif e['kind'] == 'cm' and selector in (1, 2) and not channel and get and request == 1:
             return 0, struct.pack('<H', 1)
-        elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2) and                 e['controls'][channel] >> (2 * selector - 2) & 3:
-            # bmaControls: mute D1..0, volume D3..2; 1 read only, 3 read/write.
+        elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2) and \
+                e['controls'][channel] >> (2 * selector - 2) & 3 in (1, 3):
+            # bmaControls: mute D1..0, volume D3..2; 1 read only, 3 read/write
+            # (0 absent and 2 reserved stall).
             writable = e['controls'][channel] >> (2 * selector - 2) & 3 == 3
             store, key = (self.mute if selector == 1 else self.volume), (entity, channel)
             if get and request == 1:

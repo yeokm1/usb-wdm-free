@@ -341,6 +341,11 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(shape['mic'], ([], [(1, 2, 16), (1, 3, 24)]))
         self.assertEqual(shape['fs'], ([(2, 2, 16)], [(1, 2, 16)]))
         self.assertEqual(shape['adaptive'], ([(2, 2, 16)], [(2, 2, 16)]))
+        # The CX31993 model: synchronous playback only, the listed packet sizes.
+        self.assertEqual(shape['cx31993'], ([(2, 2, 16), (2, 3, 24), (2, 4, 32)], []))
+        self.assertEqual([uacemu.Profile('cx31993').stream_alt(1, a)['data']['max'] for a in (1, 2, 3)],
+                         [192, 288, 384])
+        self.assertIsNone(uacemu.Profile('cx31993').stream_alt(1, 1)['feedback'])
         # Adaptive playback has no feedback endpoint; async playback has one.
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)
@@ -565,6 +570,29 @@ class ProfileTest(unittest.TestCase):
         m, _, _ = self.model('x4full')
         self.assertEqual(m.path_units(3), [1])
         self.assertEqual(m.path_units(17), [14])
+
+    def test_feature_unit_masks(self):
+        # cx31993: master mute only (0x03), channel volume only (0x0c);
+        # absent controls stall, present ones answer.
+        m, _, _ = self.model('cx31993')
+        self.configure(m)
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0200, 1, b'\1')[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0200, 1), (0, b'\1'))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2)[0], 4)        # no master volume
+        self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8)[0], 4)
+        for ch in (1, 2):
+            self.assertEqual(self.control(m, 1, 0xa1, 0x100 | ch, 0x0200, 1)[0], 4)   # no channel mute
+            self.assertEqual(self.control(m, 1, 0x21, 0x100 | ch, 0x0200, 1, b'\1')[0], 4)
+            self.assertEqual(self.control(m, 1, 0x21, 0x200 | ch, 0x0200, 2, struct.pack('<h', -0x0a00))[0], 0)
+            self.assertEqual(self.control(m, 1, 0xa1, 0x200 | ch, 0x0200, 2), (0, struct.pack('<h', -0x0a00)))
+        # The driver's walk: channel volume on both channels, master mute.
+        rc, d = self.parse(m.p.config)
+        self.assertEqual(rc, 0)
+        vm = (c.c_uint * 8)()
+        self.assertEqual(self.dll.UacVolFind(c.byref(d), 1, 2, vm), 1)
+        raw = bytes(vm)
+        self.assertEqual((raw[5], raw[6]), (2, 2))
+        self.assertEqual(struct.unpack_from('<IIII', raw, 8), (2, 1, 2, 0))
 
     def test_playback_formats_and_feedback(self):
         for name, alt, frame, value in (('hs24', 2, 6, struct.pack('<I', 6 << 16)),

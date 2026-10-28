@@ -68,12 +68,19 @@ HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,uac2wdm.sys
 [AudioSupport]
 ; Published PortCls multimedia registration contract. WDMAud supplies
-; wave/mixer API translation; this experiment has no MIDI or CD path.
+; wave/mixer API translation. The midi subclass is not the device's
+; MIDI: it gives WinMM WDMAud's MIDI output, the Microsoft GS Wavetable
+; SW Synth that WDMAUDIO.Registration installs and SysAudio renders
+; through KMixer to this device, as the in-box wdma_usb.inf's playback
+; sections list it. Without it neither 98 SE nor XP lists a MIDI output
+; (2026-10-28).
 HKR,,AssociatedFilters,,wdmaud
 HKR,,Driver,,uac2wdm.sys
-HKR,Drivers,SubClasses,,"wave,mixer"
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
 HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\wave\wdmaud.drv,Description,,%Device%
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
 HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 

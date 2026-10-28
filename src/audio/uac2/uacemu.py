@@ -28,6 +28,15 @@ Profiles (--profile):
             clock multiplier (1/1) of the 48 kHz source.
   adaptive  High Speed adaptive playback (no feedback endpoint, fixed 48
             kHz clock), and synchronous capture, 2 channels 16-bit.
+  cx31993   the playback function of a Conexant/Synaptics CX31993 USB
+            headphone DAC as a published lsusb -v listing describes it
+            (06cb:1595, docs/testing/2026-10-28-uac2-swmidi.md): clock
+            source 9, headphone output terminal, a feature unit with master
+            mute and per-channel volume, one SYNCHRONOUS playback interface
+            with 16/24/32-bit stereo alternates at the listed packet sizes
+            (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
+            not in that listing: 44.1 to 384 kHz, both families, assumed.
+            Its HID interface is not modelled.
 
 Every profile answers the standard requests and the clock source
 (SAM_FREQ CUR/RANGE, CLOCK_VALID), clock selector (CUR), clock multiplier
@@ -214,14 +223,17 @@ class Builder:
     def feature_unit(self, uid, source, channels, fu='full'):
         """Mute (D1..0) and volume (D3..2): read/write (11b) on the master
         and every channel ('full'), the master only, the channels only, or
-        readable only (01b). 'none' adds no unit: returns the source, the
-        id the output terminal then takes."""
+        readable only (01b); or fu is the bmaControls list, master first.
+        'none' adds no unit: returns the source, the id the output terminal
+        then takes."""
         if fu == 'none':
             return source
-        master, each = {'full': (0x0f, 0x0f), 'master': (0x0f, 0), 'channels': (0, 0x0f),
-                        'readonly': (0x05, 0x05)}[fu]
+        if isinstance(fu, str):
+            master, each = {'full': (0x0f, 0x0f), 'master': (0x0f, 0), 'channels': (0, 0x0f),
+                            'readonly': (0x05, 0x05)}[fu]
+            fu = [master] + [each] * channels
         self.ac += bytes((6 + 4 * (channels + 1), 0x24, 0x06, uid, source)) + \
-            struct.pack('<%dI' % (channels + 1), master, *([each] * channels)) + b'\0'
+            struct.pack('<%dI' % (channels + 1), *fu) + b'\0'
         return uid
 
     def packet(self, rate, channels, subslot):
@@ -229,9 +241,10 @@ class Builder:
             return (-(-rate // 8000) + 1) * channels * subslot
         return (rate // 1000 + 1) * channels * subslot
 
-    def stream(self, terminal, direction, channels, formats, rate, sync='async'):
+    def stream(self, terminal, direction, channels, formats, rate, sync='async', sizes=None):
         """formats: [(subslot, bits)], one alternate each; rate: the highest
-        rate every alternate must carry."""
+        rate every alternate must carry; sizes: wMaxPacketSize per alternate
+        instead of the computed one."""
         number = self.interfaces
         self.interfaces += 1
         body = bytes((9, 4, number, 0, 0, 1, 2, 0x20, 0))
@@ -243,7 +256,7 @@ class Builder:
                 struct.pack('<IBIB', 1, channels, CHANNEL_CONFIG.get(channels, 0), 0)
             body += bytes((6, 0x24, 0x02, 1, subslot, bits))
             attributes = 1 | {'async': 0x04, 'adaptive': 0x08, 'sync': 0x0c}[sync]
-            size = self.packet(rate, channels, subslot)
+            size = sizes[alt - 1] if sizes else self.packet(rate, channels, subslot)
             if size > (1024 if self.speed == 'high' else 1023):
                 raise ValueError('alternate exceeds one transaction')
             body += bytes((7, 5, ep, attributes)) + struct.pack('<HB', size, 1)
@@ -322,12 +335,21 @@ def build(name, fu='full'):
         b.stream(1, 'out', 2, [(2, 16)], 48000, sync='adaptive')
         b.stream(5, 'in', 2, [(2, 16)], 48000, sync='sync')
         pid = 0x0206
+    elif name == 'cx31993':
+        b = Builder('high')
+        b.clock_source(9)
+        rates = {9: sorted(FAMILY_44 + FAMILY_48 + [352800, 384000])}
+        b.input_terminal(1, 0x0101, 9, 2)
+        b.feature_unit(2, 1, 2, [0x03, 0x0c, 0x0c])
+        b.output_terminal(3, 0x0302, 2, 9)
+        b.stream(1, 'out', 2, [(2, 16), (3, 24), (4, 32)], 384000, sync='sync', sizes=[192, 288, 384])
+        pid = 0x0207
     else:
         raise ValueError('profile')
     return b.speed, b.configuration(), rates, pid
 
 
-PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive')
+PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993')
 FU_MODES = ('full', 'master', 'channels', 'readonly', 'none')
 VOLUME_RANGE = (-0x6000, 0, 0x100)
 
@@ -636,6 +658,8 @@ class Model:
         elif e['kind'] == 'cm' and selector in (1, 2) and not channel and get and request == 1:
             return 0, struct.pack('<H', 1)
         elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2):
+            # bmaControls: mute D1..0, volume D3..2; 1 read only, 3 read/write
+            # (0 absent and 2 reserved stall).
             store, key = (self.mute if selector == 1 else self.volume), (entity, channel)
             access = e['controls'][channel] >> (2 * (selector - 1)) & 3
             lo, hi, res = self.p.vol_range

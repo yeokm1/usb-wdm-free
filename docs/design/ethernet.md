@@ -22,6 +22,9 @@ section number and file name inside the CHM. "The 98 DDK guide" is
 installation follows [build.md](build.md); paths in another checkout are
 never build inputs (AGENTS.md, "Standalone").
 
+Which Windows versions each USB Ethernet chip already has a driver for (in
+the box, from its maker, or here), and the gaps: [ethernet-coverage.md](ethernet-coverage.md) (2026-10-27).
+
 ## 1. Summary of the decisions
 
 1. **Three packages, sharing one NDIS core compiled into each.**

@@ -234,10 +234,11 @@ class UacClockPath(c.Structure):
 class UacDesc(c.Structure):
     _fields_ = [('Bytes', c.c_void_p), ('Length', c.c_uint), ('Control', c.c_ubyte),
                 ('First', c.c_ubyte), ('Count', c.c_ubyte), ('Entity', c.c_ushort * 256),
-                ('AltCount', c.c_uint), ('Skipped', c.c_uint), ('Alt', UacAlt * 64)]
+                ('AltCount', c.c_uint), ('Skipped', c.c_uint), ('Alt', UacAlt * 128)]
 
 
-BUILT = [n for n in uacemu.PROFILE_NAMES if not n.startswith('x4')]
+CAPTURED = ('x4', 'x4full', 'alc4080cap')
+BUILT = [n for n in uacemu.PROFILE_NAMES if n not in CAPTURED]
 
 
 @unittest.skipUnless(DLL_PATH.exists(), 'run host.ps1 first')
@@ -259,6 +260,8 @@ class ProfileTest(unittest.TestCase):
         cls.dll.UacPlanTerminals.restype = c.c_uint
         cls.dll.UacPlanQuirks.argtypes = [c.c_uint, c.c_uint]
         cls.dll.UacPlanQuirks.restype = c.c_uint
+        cls.dll.UacPlanFormatsFor.argtypes = [c.c_void_p, c.c_int, c.c_int, c.c_uint, c.c_void_p, c.c_uint]
+        cls.dll.UacPlanFormatsFor.restype = c.c_uint
         cls.dll.UacPlanPick.argtypes = [c.c_void_p, c.c_int, c.c_uint, c.c_uint, c.c_uint, c.c_uint,
                                         c.c_uint, c.c_uint, c.c_int, c.POINTER(c.c_uint)]
         cls.dll.UacPlanPacketBytes.argtypes = [c.c_uint, c.c_int, c.c_uint, c.c_uint, c.c_int]
@@ -323,9 +326,9 @@ class ProfileTest(unittest.TestCase):
                                       info['feedback']['address'] if info['feedback'] else 0,
                                       info['data']['max'])
                 self.assertEqual(driver, model)
-                # The X4 has one Type III (non-PCM) alternate; both skip it.
+                # The X4 and the ALC4080 capture each have one alternate both skip.
                 self.assertEqual(d.Skipped, len(p.alts) - len(model))
-                self.assertEqual(d.Skipped, 1 if name.startswith('x4') else 0)
+                self.assertEqual(d.Skipped, 1 if name in CAPTURED else 0)
 
     def test_built_shapes(self):
         shape = {}
@@ -389,6 +392,41 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.dll.UacPlanQuirks(p.vid, p.pid), 0)
         self.assertEqual(uacemu.Profile('alc4080', vid=0x0db0, pid=0x419c).device[8:12],
                          struct.pack('<HH', 0x0db0, 0x419c))
+
+    def test_alc4080_capture(self):
+        # The owner's capture of a board's Realtek ALC4080 (0B05:1B9B,
+        # testdata/alc4080, docs/design/uac2.md section 15.1a): 68 streaming
+        # alternates, more than the 64 the parser held before; three playback
+        # terminals (speaker, headphones, S/PDIF) and three capture ones, each
+        # on a clock source of its own; adaptive playback, async capture; the
+        # first terminal of each direction offers every format of its own.
+        cfg = (Path(__file__).resolve().parent / 'testdata/alc4080/config0.bin').read_bytes()
+        dev = (Path(__file__).resolve().parent / 'testdata/alc4080/device.bin').read_bytes()
+        self.assertEqual((dev[8:12], len(cfg)), (bytes.fromhex('050b9b1b'), 3619))
+        rc, d = self.parse(cfg)
+        self.assertEqual((rc, d.AltCount, d.Skipped), (0, 67, 1))
+        t = (c.c_uint * 8)()
+        self.assertEqual(self.dll.UacPlanTerminals(c.byref(d), 0, 1, t, 8), 3)
+        self.assertEqual(list(t)[:3], [13, 14, 16])
+        self.assertEqual(self.dll.UacPlanTerminals(c.byref(d), 1, 1, t, 8), 3)
+        self.assertEqual(list(t)[:3], [17, 19, 20])
+        for terminal, source in ((13, 5), (14, 6), (16, 8), (17, 1), (19, 3), (20, 4)):
+            self.assertEqual(self.driver_clock(d, terminal), (0, source))
+        syncs = {(d.Alt[i].Interface, d.Alt[i].Attributes >> 2 & 3) for i in range(d.AltCount)}
+        self.assertEqual(syncs, {(1, 1), (2, 1), (3, 1), (4, 2), (5, 2), (6, 2)})
+        fmts = (UacFormat * 16)()
+        n = self.dll.UacPlanFormatsFor(c.byref(d), 0, 1, 13, fmts, 16)
+        self.assertEqual(sorted((fmts[k].Channels, fmts[k].Bits) for k in range(n)),
+                         sorted((ch, b) for ch in (2, 4, 6, 8) for b in (16, 24, 32)))
+        self.assertTrue(all(fmts[k].Terminal == 13 for k in range(n)))
+        n = self.dll.UacPlanFormatsFor(c.byref(d), 1, 1, 17, fmts, 16)
+        self.assertGreater(n, 0)
+        for terminal, ch in ((13, 2), (17, 2)):
+            index = c.c_uint()
+            capture = terminal == 17
+            self.assertEqual(self.dll.UacPlanPick(c.byref(d), capture, terminal, ch, 2, 16,
+                                                  0xffffffff, 48000, 1, c.byref(index)), 0)
+            self.assertEqual(d.Alt[index.value].Terminal, terminal)
 
     def test_clock_paths_through_driver(self):
         p = uacemu.Profile('clocks')

@@ -6,7 +6,7 @@
 #ifndef UACDESC_H
 #define UACDESC_H
 
-#define UAC_MAX_ALTS 64
+#define UAC_MAX_ALTS 128
 #define UAC_OK 0
 #define UAC_BAD_DESCRIPTOR 1
 #define UAC_TOO_MANY_ALTS 2

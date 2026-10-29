@@ -829,10 +829,12 @@ private:
     void Learn(UAC_DIR *d) {
         UAC_DIR_FORMATS *f = &d->Formats;
         UAC_FORMAT all[UAC_FORMATS];
-        ULONG n = UacPlanFormats(descriptor, d->Capture, UacUsbHighSpeed(dev), all, UAC_FORMATS);
         /* One wave pin per direction: the direction's first terminal (an
-         * X4's analog output, not its S/PDIF one). */
+         * X4's analog output, not its S/PDIF one), and only its formats, so
+         * an on-board codec's other outputs do not crowd them out. */
         UAC_BYTE terminal = (UAC_BYTE)UacPlanTerminal(descriptor, d->Capture, UacUsbHighSpeed(dev));
+        ULONG n = UacPlanFormatsFor(descriptor, d->Capture, UacUsbHighSpeed(dev), terminal, all,
+                                    UAC_FORMATS);
         f->Count = 0;
         for (ULONG i = 0; i < n; i++) {
             ULONG rates[UAC_USB_RATES], count = 0, kept = 0;

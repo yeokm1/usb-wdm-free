@@ -45,6 +45,13 @@ Profiles (--profile):
             board's, and two capture endpoints, line in and microphone;
             async playback with explicit feedback, 16/24-bit alternates.
             Pass --vid 0db0 --pid 419c for a board id uac2's table lists.
+  alc4080cap the owner's capture of a board's Realtek ALC4080 (testdata/
+            alc4080, docs/design/uac2.md section 15.1a) replayed: its
+            device and configuration descriptors as captured, strings
+            replaced by SIMULATED labels; adaptive playback on IF4 to IF6,
+            async capture on IF1 to IF3, each terminal on its own clock
+            (44.1 to 192 kHz; the headphones' to 384 kHz, as Linux listed).
+            The HID interface answers nothing.
   uac3dual  two configurations, as USB Audio 3.0 section 3.3 requires of a
             3.0 device: configuration 1 (index 0) is hs24's UAC 2.0
             function, configuration 2 a USB Audio 3.0 function (IAD
@@ -380,7 +387,8 @@ def build(name, fu='full'):
 
 
 PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080',
-                 'uac3dual')
+                 'uac3dual', 'alc4080cap')
+ALC_FIXTURE = Path(__file__).resolve().parent / 'testdata/alc4080'
 
 # Configuration 2 of uac3dual: a USB Audio 3.0 function by its standard
 # descriptors (ADC 3.0 4.1: IAD, the AudioControl interface first, then the
@@ -401,7 +409,19 @@ class Profile:
         if not -32768 <= lo <= hi <= 32767 or res < 0 or not -32768 <= vol_cur <= 32767:
             raise ValueError('volume range')
         self.name, self.fu, self.vol_range, self.vol_cur = name, fu, (lo, hi, res), vol_cur
-        if name in ('x4', 'x4full'):
+        if name == 'alc4080cap':
+            self.speed, self.config = 'high', (ALC_FIXTURE / 'config0.bin').read_bytes()
+            base = (ALC_FIXTURE / 'device.bin').read_bytes()
+            self.vid, self.pid = vid or 0x0b05, pid or 0x1b9b
+            # Strings: index 1 product, 3 manufacturer in the capture; serial none.
+            self.device = base[:8] + struct.pack('<HH', self.vid, self.pid) + base[12:]
+            self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0xef, 2, 1, 64, 1, 0)
+            self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('ALC4080 capture - SIMULATED'),
+                            3: usb_string('usb-wdm-free SIMULATED')}
+            all44 = sorted(FAMILY_44 + FAMILY_48)
+            self.rates = {1: all44, 3: all44, 4: all44, 5: all44, 6: all44 + [352800, 384000], 8: all44}
+            self.allowed, self.fu_settable = None, True
+        elif name in ('x4', 'x4full'):
             self.speed, self.config, self.rates = 'high', CONFIG, {}
             self.vid, self.pid = vid or 0x041e, pid or 0x3278
             self.device = DEVICE[:8] + struct.pack('<HH', self.vid, self.pid) + DEVICE[12:]

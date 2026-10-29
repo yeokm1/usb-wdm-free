@@ -875,6 +875,28 @@ facts; nothing adapted):
   clock entities and rates, the capture paths, which terminal is which
   jack, and the ids of other makers' boards.
 
+### 15.1a The capture, and other boards (2026-10-29)
+
+The owner's Linux capture of one board's ALC4080 arrived (`0B05:1B9B`,
+`bcdDevice` 0013, High Speed, one configuration): interface 0
+AudioControl (`01/01/20`), interfaces 1 to 6 AudioStreaming (`01/02/20`),
+interface 7 HID. By `bTerminalLink` and the terminal types: playback IF4
+to Output Terminal 21, speaker (0x0301); IF5 to OT 22, headphones
+(0x0302, to 384 kHz); IF6 to OT 24, S/PDIF (0x0605); capture IF1 from
+Input Terminal 9, analog connector (0x0601), IF2 from IT 11, line
+connector (0x0603), IF3 from IT 12, microphone (0x0201). Linux lists
+every playback stream ADAPTIVE. Its Feature Units 29, 30 and 32 feed
+OT 21, 22 and 24 - the unit ids Linux's `sound/usb/mixer_maps.c` (facts
+only) names for three other boards' ALC4080 (`0DB0:419C`, `A073`,
+`CC78`), so the layout looks like one firmware template; but each board
+maker gives its own ids, and its jacks, inputs, rates and HID interface
+may differ. So `uac2` serves the codec from its descriptors - several
+AudioStreaming interfaces, named by terminal type - and a board with two
+outputs or no S/PDIF works the same way; a vid:pid table is only for a
+quirk, never the reason the codec works (15.3 item 7 is revised by
+this). The jack names come from the terminal types; no listening check
+is owed before the real-board reading (xHCI98 45-E.13).
+
 ### 15.2 What `uac2` does with it today
 
 - Binding: if the function is USB Audio 2.0 and its PDO offers
@@ -1066,7 +1088,7 @@ does neither, and logs a driver node's detail error.)
 
 **XP SP3 x86, 2026-10-29** (q35 guest, Windows' own `usbehci.sys`, no
 xHCI98; `uac2` 0.1.4.0's `w2k-xp` files in `C:\UAC2`, added to
-`DevicePath`; `UACCI.DLL` registered as the only MEDIA class co-installer,
+`DevicePath`; `UACCI1.DLL` registered as the only MEDIA class co-installer,
 none being there before; a never-seen simulated UAC 2.0 device,
 `uacemu.py` `hs24`, `FFFF:0201`, on the EHCI port):
 
@@ -1098,3 +1120,146 @@ none being there before; a never-seen simulated UAC 2.0 device,
 design's `DNF_BAD_DRIVER` acts; `DIF_ALLOW_INSTALL` also comes before any
 `usbaudio` code runs. The real co-installer is designed next, and the same
 reading is owed on 98 SE, ME, 2000, Vista, 7, 8 and 8.1.
+
+### 16.4 The co-installer (design)
+
+One source, `uacci.c`, builds two DLLs: `UACCI1.DLL` (the co-installer,
+shipped with `uac2` in its `w2k-xp`, `wxp-x64`, `wv-8-x86` and `wv-8-x64`
+folders) and, with `UACCI_PROBE` defined, the probe of 16.3 (test-only).
+98 SE and ME have no co-installers; 16.5 records what they do instead.
+
+**The rule.** A device is `uac2`'s case when its compatible ids
+(`SPDRP_COMPATIBLEIDS`) hold, case-insensitively, a string of exactly the
+form `USB\Class_01&SubClass_0h&Prot_20` (`h` one hex digit). Nothing
+else is read from the device. USB Audio 1.0 functions (`Prot_00`), MIDI
+(subclass 03, protocol 00), composite parents (no class 01 id) and every
+other MEDIA device fail the rule and are left alone. `Prot_30` is not in
+the rule (an owner question).
+
+**Windows' node.** A compatible driver node is `usbaudio`'s when the base
+name of its INF (`SP_DRVINFO_DETAIL_DATA.InfFileName`, any directory, the
+driver store's included) is `wdma_usb.inf` and the install section it
+would run (`SetupDiGetActualSectionToInstall` on that INF and the node's
+`SectionName`) has a `.Services` section whose `AddService` names the
+service `usbaudio`. Never by description or provider.
+
+**What it does.**
+
+1. `DIF_SELECTBESTCOMPATDRV`, before the default handler: for a device
+   under the rule, every compatible node that is `usbaudio`'s gets
+   `DNF_BAD_DRIVER` (`SetupDiSetDriverInstallParams`); the default handler
+   then picks the best remaining node, `uac2` where its INF is on the
+   machine. If none remains, the default handler fails with
+   `ERROR_NO_COMPAT_DRIVERS` and the device is left without a driver
+   (code 28), which is better than the wait.
+2. `DIF_ALLOW_INSTALL`: for a device under the rule whose selected node is
+   `usbaudio`'s (a path that skipped step 1, or a user's own pick in the
+   Update Driver list), it returns `ERROR_DI_DONT_INSTALL`, so nothing of
+   `usbaudio` is installed on it.
+3. Every other request, and every device outside the rule: `NO_ERROR`,
+   nothing touched, no post-processing.
+4. Each decision (rule met, node marked, install refused) is one line in
+   `%windir%\UACCI.LOG`, bounded and serialised as the probe's; the file
+   grows only on audio installs. An error before the rule is decided (the
+   ids cannot be read) leaves the device as Windows would have it. Once
+   the rule is met, an error (a node whose INF or section cannot be read,
+   a mark that fails) fails the request: step 1 returns the error, so the
+   selection fails and the device stays without a driver until the next
+   plug or Update Driver retries; step 2 refuses the install when the
+   selected node, its INF name or (for a `wdma_usb.inf` node) its
+   services cannot be read. A node from another INF whose details read
+   is never refused. Both are logged. A test build injects each failure
+   (the details of the selected node, the section of a `wdma_usb.inf`
+   node) and the legs check that `usbaudio` is not installed.
+
+**Registration.** `UACCI.INF`, a non-device INF beside `uac2wdm.inf`, run
+by `uac2`'s setup step (right-click Install, or `rundll32
+setupapi,InstallHinfSection DefaultInstall 132 <path>\UACCI.INF`; xHCI98's
+installer when it stages `uac2`), never by `uac2` winning a device
+install:
+
+- `[DefaultInstall]` (and `.NTamd64`): `UACCI1.DLL` to `%11%`; `AddReg`
+  `HKLM,SYSTEM\CurrentControlSet\Control\CoDeviceInstallers,`
+  `{4D36E96C-E325-11CE-BFC1-08002BE10318},0x00010008,"UACCI1.DLL,UacCoInstaller"`
+  (`FLG_ADDREG_TYPE_MULTI_SZ | FLG_ADDREG_APPEND`: appended once,
+  other entries kept);
+- The file name carries the co-installer's version (`UACCI1.DLL` now;
+  the next is `UACCI2.DLL`, 8.3): a loaded DLL is never replaced in
+  place. An upgrade runs the new DLL's `rundll32 %11%\UACCI2.DLL,UacInstall`
+  after its `UACCI.INF` copied the file: it removes every `UACCIn.DLL`
+  string other than its own, appends its own once, and reads the value
+  back; the old file stays in the system folder. (The first version's INF
+  appends by `AddReg`; `UacInstall` exists from it on, so later versions
+  need no `AddReg`.)
+- The uninstall is the DLL's own helper, `rundll32 %11%\UACCI1.DLL,UacUninstall`,
+  on every system: it reads the value, removes every string naming a
+  `UACCIn.DLL` and nothing else, and writes the rest back (removing the
+  value only when nothing else was in it). `DelReg`'s
+  `FLG_DELREG_MULTI_SZ_DELSTRING` is not used: before XP it is not
+  documented, and on 2000 a plain `DelReg` of the value would drop the
+  other installers' entries too. xHCI98's uninstall and the README call
+  the helper; its file stays (a reinstall before a restart reuses it).
+- The co-installer only steers a device to `uac2` when `uac2wdm.inf` is
+  where Windows looks (the driver store, or `DevicePath`): the setup step
+  stages it too (xHCI98's installer already does, `SetupCopyOEMInf`;
+  standalone, the user's Have Disk once, or the README's step).
+
+**What the legs read, per system** (2000, XP, XP x64, Vista, 7, 8, 8.1,
+x86 and x64 where the system has it): a never-seen simulated UAC 2.0
+device on Windows' own USB 2.0 stack, `uac2` staged, `UACCI.INF`
+installed: the log's decisions, `uac2wdm` running, playback; the same
+device plugged into a second port and a second device; a USB Audio 1.0
+device still on `usbaudio`; the uninstall leaving the other class
+co-installer entries. Vista to 8.1: whether an unsigned class
+co-installer DLL loads at all, and the prompts.
+
+### 16.5 The legs of the co-installer (2026-10-29)
+
+q35 guests, stock QEMU 11.1.0, Windows' own USB 2.0 stack (`ich9-usb-ehci1`
+with a UHCI companion; no xHCI98), `uac2` 0.1.4.0 put where Windows looks
+(`DevicePath` on 2000 and XP, `pnputil -a` on 7), `UACCI.INF` installed by
+`InstallHinfSection DefaultInstall` (the co-installer's test build of
+`42ff9d2`, `UACCI1.DLL` x86), a never-seen simulated UAC 2.0 device
+(`uacemu.py` `hs24`, `FFFF:0201`). Evidence:
+`E:\xhci98-vm\p45\w45-uac2\` (`shots\r1-*`, `gw2k-*`, `gw7-*`; `ev\`).
+
+| System | Result |
+|---|---|
+| XP SP3 x86 | `UACCI.INF` asked once ("has not passed Windows Logo testing"), then registered as the only MEDIA class entry. First plug: the log reads `select ... usbaudio nodes marked=1`; the wizard offered "UAC2 USB audio (experiment)" by itself, `uac2wdm` RUNNING, `usbaudio` never installed (`sc query`: 1060). A second device (`FFFF:0299`, another port): the same. `UacUninstall` and `UacInstall` with a foreign entry (`Other.dll,X`) in the value: install appends once, uninstall leaves `Other.dll,X` alone; with only ours, uninstall removes the value. Playback through `uac2` was read on the earlier XP legs, not again here |
+| 2000 SP4 | `UACCI.INF` asked once (Digital Signature Not Found, Yes). First plug: `usbaudio nodes marked=1`, the wizard named the device "UAC2 USB audio (experiment)" and installed `uac2` (2000's own hub does not split the IAD device: `uac2` takes the whole device, as section 3 says). Control, the co-installer removed by `UacUninstall`, a second never-seen device: the wizard chose `uac2` all the same and the log has no call: **2000 already ranks `uac2` above `usbaudio`** (no signature penalty there). Playback on 2000 not read (`uac2` has no 2000 leg yet) |
+| 7 SP1 x86 | `pnputil -a` and `UACCI.INF` each asked "Windows can't verify the publisher" (Install anyway). The unsigned class co-installer DLL loads: first plug, `usbaudio nodes marked=1`, "Your device is ready to use", `uac2wdm` RUNNING, `usbaudio` not installed, playback through `Media.SoundPlayer` reached the device |
+| 98 SE, ME | not read yet (no co-installers there; the first-plug ranking is owed) |
+| Vista x86, 8, 8.1, x64 | not read yet; owed |
+
+### 16.6 USB Audio 3.0 devices (owner, 2026-10-29: a reading only)
+
+**The specification.** USB Audio Device Class 3.0 (with errata to
+2019-04-05, usb.org, `Audio30-Errata.pdf`), section 3.3 "Backwards
+Compatibility": "The first USB Configuration descriptor (index 0) exposed
+by the Device shall contain an Audio Interface Association (AIA), which is
+compliant with ADC 1.0 or ADC 2.0", and a further configuration shall
+expose a BADD 3.0 AIA; section 4.1: such a device "is required to contain
+multiple Configuration descriptors" and a BOS Configuration Summary. So a
+3.0 device has a 1.0 or 2.0 function, and that configuration comes first.
+Linux (`drivers/usb/core/generic.c`, `usb_choose_configuration`, v6.12;
+facts only) picks the first UAC3 configuration when there is one, else
+the first configuration.
+
+**The reading** (XP SP3 x86, the 45.24 fix-leg overlay with this release's
+xHCI98 and `uac2` installed, plus Windows' own EHCI; `uacemu.py`
+`uac3dual`: configuration 1 = `hs24`'s UAC 2.0 function, configuration 2 =
+a 3.0 function by its standard descriptors, no BOS; `FFFF:0230`):
+
+- Under xHCI98: only configuration index 0 is read; no configuration is
+  selected; the device is one PDO (the bus splits a device only when it
+  has one configuration, design record 13 section 10.8), Found New
+  Hardware finds no driver for it.
+- Under Windows' own EHCI: only index 0 is read, the device is
+  deconfigured (`SET_CONFIGURATION 0`), and the whole device becomes
+  "USB Audio Device" on `usbaudio`, code 10.
+- Neither selects configuration 2, and neither shows protocol 30h to a
+  driver; but neither gives the 2.0 function to `uac2` either, because
+  neither splits a device with two configurations. Serving the 2.0
+  function of a 3.0 device would need the parent to select configuration
+  1 and split it (xHCI98's design record 13 section 10.8; on Windows'
+  stack, not this repository's to change). No 3.0 driver work (owner).

@@ -133,7 +133,10 @@ Order, after the survey of existing drivers
 - **Wave 2**: `uvc98` (Brio 100 held for testing), `usbcom`'s 98
   SE/ME driver, `usbmidi`, `cdcnet` and `xpad98`.
 - **Later**: the installer and its helper (deferred); `libusb0`; `rtl815x` and `ax88179`, after `cdcnet`; `usbprn`,
-  at low priority.
+  at low priority; `usbcom`'s chip modules for the USB serial bridges
+  no vendor driver covers on 98 SE and ME (FTDI FT-X, FT232H, FT4232H,
+  PL2303 old and G series, CP2105, CP2108; `docs/design/serial.md`
+  milestone M5), in the next release (owner, 2026-10-29).
 
 Other classes considered, and which come next, are surveyed in
 [docs/design/candidates.md](design/candidates.md).

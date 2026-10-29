@@ -40,7 +40,8 @@ What this design covers is the real gap:
 3. **Vendor-chip silicon that no vendor 98 driver accepts.** This covers
    FTDI FT-X/FT232H/FT4232H, PL2303G-series, CP2105/CP2108, and whatever the
    section 2 checks add. These are later, optional modules on the same core.
-   Owner, 2026-10-20: later, and on demand only.
+   Owner, 2026-10-20: later, and on demand only. Owner, 2026-10-29:
+   in the next release, no longer on demand only (milestone M5, section 12).
 
 The gap is not negligible. Arduino-class and RP2040/ESP32 boards are the
 USB serial devices people actually plug in today, and on 98 SE/ME none of
@@ -747,7 +748,7 @@ The descriptor rules come from CDC 1.2 and its PSTN subclass, and from Linux
 - **No isochronous transfers.** Full Speed is enough. High-Speed CDC
   devices simply get larger bulk packets.
 
-### 6.3 Chip modules (later, on demand only)
+### 6.3 Chip modules (next release; owner, 2026-10-29)
 
 Each is a table entry plus about 300 lines on the core. The Linux sources,
 with their licences; a GPL-2.0 (only) source gives facts only (section
@@ -1100,7 +1101,7 @@ are `usb-serial` (an FTDI FT232BM, `hw/usb/dev-serial.c`), `usb-braille`
   2026-10-20):** the NT front end
   of `USBCOM.SYS` for 2000, with full `ntddser.h` IOCTLs and `serial.sys`
   timeout semantics, installed with `msports.dll`.
-- **M5 (later, on demand only; Owner, 2026-10-20):** chip modules for the
+- **M5 (next release; Owner, 2026-10-20 on demand only, 2026-10-29 the next release):** chip modules for the
   gaps in section 2.6, ordered by what users ask for. FT-X and PL2303G are
   the likely first.
 

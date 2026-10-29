@@ -161,6 +161,21 @@ Physical: none recorded (Uno, Pico owed). Simulator: `acmemu.py` profiles
 under xHCI98, NUSB EHCI, UHCI; ME xHCI98.
 Gap: **more than one ACM function** (two COM ports from one device), rank 5.
 
+Chip modules (M5, 2026-10-29): `chipemu.py` (a subclass of `acmemu.py`'s
+model) is a SIMULATED FT-X, FT232H, FT4232H, PL2303 H/HX/HXD/TA/TB/G,
+CP2105 or CP2108 (`--part`, `--speed high` for EHCI). It decodes each
+part's rate and framing requests back to numbers, frames received data as
+the part does, loops the control lines and break back, and enforces the
+part's rules: the PL2303 start sequence, the CP210x `IFC_ENABLE` and
+request directions. Host tests: `chiptest.py` (7) and `acmhost.c`'s chip
+checks. Guest legs: every part PASS on 98 SE and ME under xHCI98 3.2.0.0;
+under NUSB's EHCI every check PASS but the 64 KiB echo on FT-X, FT232H,
+FT4232H and CP2105 (a loss suspected below the driver, not proven)
+([chip legs](2026-10-29-usbcom-chips.md)). QEMU's `usb-serial` (FT232BM)
+is a second, independent FTDI model. Physical: none (xHCI98's bench task
+45-E.14). Gaps: standby and resume with a bridge port open; two bridges at
+once.
+
 ### `xpad98` (Xbox pads)
 
 Claimed: Xbox 360 wired protocol (start, LED, rumble, XUSB input), Xbox

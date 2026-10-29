@@ -73,6 +73,8 @@ void UcTraceV(const char *fmt, const AC_U32 *v, int n);
 #define UC_RS_CONTROL   0x08
 #define UC_RESET_TRIES  3        /* pipe resets before a pipe is left halted */
 #define UC_POLL_MS      100      /* CP210x modem status poll while open (design 6.3) */
+#define UC_STATUS_TICKS 2        /* FTDI: whole poll periods after the opens with no status report
+                                    before bulk OUT goes anyway (design 6.3) */
 
 typedef enum UC_KIND { UcKindFdo = 1, UcKindPdo = 2 } UC_KIND;
 
@@ -154,6 +156,7 @@ struct UC_PORT {
     BOOLEAN         CtlOk;          /* the last step succeeded */
     BOOLEAN         PollArmed;      /* PollTimer set, its count taken */
     BOOLEAN         PollDue;        /* a status poll is owed */
+    ULONG           StatusTicks;    /* FTDI: timer periods waited for a status report */
     BOOLEAN         OpenPending;    /* chip: no bulk transfer until its opens have run (6.3) */
     BOOLEAN         RestoreOpenOwed; /* a resume's open is owed (counted in OpensLeft) */
     ULONG           OpensLeft;      /* this attachment's opens still to run (FIFO, restore) */

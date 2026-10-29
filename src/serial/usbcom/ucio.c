@@ -73,14 +73,16 @@ static void UcAddOp(UC_PORT *p, ULONG op)
     p->OpCount++;
 }
 
-/* ---- the CP210x status poll (design 6.3) ----------------------------------- */
+/* ---- the CP210x status poll and the FTDI status wait (design 6.3) ---------- */
 
 /* Sets the poll timer; its Outstanding count is released when it fires
-   (UcPollDpc) or is cancelled (UcCancelPoll). Lock held. */
+   (UcPollDpc) or is cancelled (UcCancelPoll). The CP210x polls with it;
+   the FTDI uses it only while it waits for a status report. Lock held. */
 static void UcArmPoll(UC_PORT *p)
 {
     LARGE_INTEGER t;
-    if (p->PollArmed || !AcChipPolls(&p->Chip) || p->Stopping || p->Suspended || p->Gone)
+    if (p->PollArmed || !(AcChipPolls(&p->Chip) || p->AwaitStatus) || p->Stopping ||
+        p->Suspended || p->Gone)
         return;
     t.QuadPart = -10 * 1000 * (LONGLONG)UC_POLL_MS;
     p->PollArmed = TRUE;
@@ -183,7 +185,17 @@ static VOID UcPollDpc(PKDPC dpc, PVOID ctx, PVOID a1, PVOID a2)
     KeAcquireSpinLock(&p->Lock, &irql);
     p->PollArmed = FALSE;
     if (p->Attached && !p->Stopping && !p->Gone && !p->Suspended) {
-        p->PollDue = TRUE;
+        if (AcChipPolls(&p->Chip)) {
+            p->PollDue = TRUE;
+        } else if (p->AwaitStatus && !p->OpenPending &&
+                   p->StatusTicks++ >= UC_STATUS_TICKS) {
+            /* No status report since the opens ran (a chip sends one
+               within its latency timer): bulk OUT goes on the CTS last
+               known rather than never (design 6.3). */
+            p->AwaitStatus = FALSE;
+            UCT1("COM%lu FTDI: no status report after the open, transmitting",
+                 p->PortNumber);
+        }
         UcArmPoll(p);
     }
     KeReleaseSpinLock(&p->Lock, irql);
@@ -697,6 +709,7 @@ static long __stdcall UcAttach(void *port, const UCIF_CALLBACKS *cb)
         p->RxGen++;
         p->OpenPending = (BOOLEAN)(p->Chip.Family != AC_FAM_CDC);
         p->AwaitStatus = (BOOLEAN)(p->Chip.Family == AC_FAM_FTDI);
+        p->StatusTicks = 0;
         p->RestoreMask = 0;                /* the previous open's: superseded */
         if (AcChipResetsPipes(&p->Chip)) {
             /* The PL2303 H: both bulk pipes reset first (design 6.3). */
@@ -1063,8 +1076,10 @@ void UcPortResume(UC_PORT *p)
         }
         if (p->Chip.Family != AC_FAM_CDC)
             p->OpenPending = TRUE;           /* no bulk transfer before the opens again */
-        if (p->Chip.Family == AC_FAM_FTDI)
+        if (p->Chip.Family == AC_FAM_FTDI) {
             p->AwaitStatus = TRUE;           /* nor bulk OUT before a fresh CTS */
+            p->StatusTicks = 0;
+        }
         UcArmPoll(p);
     }
     /* Queued under the lock so a concurrent stop sees it counted. */

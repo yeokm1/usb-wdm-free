@@ -112,6 +112,36 @@ unsigned int UacPlanTerminals(const UAC_DESC *desc, int capture, int highSpeed,
     return n;
 }
 
+unsigned int UacPlanEndpoints(const UAC_DESC *desc, int capture, int highSpeed,
+                              unsigned int *out, unsigned int max)
+{
+    unsigned int t[8], n, i, j;
+    if (!out || !max) return 0;
+    n = UacPlanTerminals(desc, capture, highSpeed, t, 8);
+    if (n < 2) {
+        if (n) out[0] = t[0];
+        return n;
+    }
+    /* Over both directions: an interface whose alternates link two
+     * terminals, a playback and a capture one included, would be switched
+     * under one pair by another. */
+    for (i = 0; i < desc->AltCount; i++) {
+        const UAC_ALT *a = &desc->Alt[i];
+        if (!Runnable(a, highSpeed)) continue;
+        for (j = 0; j < desc->AltCount; j++) {
+            const UAC_ALT *b = &desc->Alt[j];
+            if (!Runnable(b, highSpeed)) continue;
+            /* One interface, two terminals; or one terminal, two interfaces. */
+            if ((a->Interface == b->Interface) != (a->Terminal == b->Terminal)) {
+                out[0] = t[0];
+                return 1;
+            }
+        }
+    }
+    for (i = 0; i < n && i < max; i++) out[i] = t[i];
+    return i;
+}
+
 static const struct {
     unsigned short Vid, Pid;
     unsigned int Quirks;

@@ -73,6 +73,15 @@ unsigned int UacPlanTerminal(const UAC_DESC *desc, int capture, int highSpeed);
 unsigned int UacPlanTerminals(const UAC_DESC *desc, int capture, int highSpeed,
                               unsigned int *out, unsigned int max);
 
+/* The endpoints of a direction (section 15.3 items 2 and 3): the
+ * terminals of UacPlanTerminals, in that order, when every streaming
+ * interface's runnable alternates, of either direction, link one terminal
+ * and no terminal is linked from two interfaces; else only the first
+ * terminal, as before.
+ * Returns the count. */
+unsigned int UacPlanEndpoints(const UAC_DESC *desc, int capture, int highSpeed,
+                              unsigned int *out, unsigned int max);
+
 /* Every endpoint of a direction, not the first only (section 15.3 item 5). */
 #define UAC_QUIRK_ENDPOINTS 0x1U
 

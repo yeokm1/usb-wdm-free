@@ -109,6 +109,8 @@ static VOID UacQueueItem(PIO_WORKITEM i, PIO_WORKITEM_ROUTINE r, WORK_QUEUE_TYPE
 #endif
 #include "uacstream.h"
 
+#define UAC_PAIRS 4
+
 class Wave;
 /* One direction of the wave filter: its formats, its one-stream gate and
  * the transport stream of the open pin instance. */
@@ -186,6 +188,16 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     BOOLEAN removed, pnpBlocked, powerBlocked;
     UAC_DIR dir[2];             /* 0 render, 1 capture */
     UAC_LEVEL level;
+    /* Endpoint pair `index` (docs/design/uac2.md section 15.3): pair 0
+     * owns the function (descriptor model, transport); a later pair holds
+     * a reference to pair 0 and borrows them. Pair 0 names the others
+     * (not referenced) for its power changes, under its operation mutex. */
+    ULONG index;
+    Wave *primary;
+    Wave *peers[UAC_PAIRS - 1];
+    ULONG peerCount;
+    WCHAR levelName[16];        /* Uac2Level (pair 0), Uac2LevelPxx */
+    const GUID *jack[2];        /* the bridge category of each direction */
     PCPIN_DESCRIPTOR pins[4];
     PCNODE_DESCRIPTOR nodes[2];
     GUID categories[3];
@@ -372,6 +384,17 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
          * c % 2 (uacvol.h), as the system's mixer shows a pair. */
         v->Channels = most >= 2 ? 2 : 1;
         UacVolFind(descriptor, dir[0].Formats.Format[0].Terminal, v->Channels, m);
+        /* A Feature Unit an earlier pair drives stays that pair's: here the
+         * level is software only, so no pair changes another's loudness
+         * behind its back (section 15.3 item 6). */
+        if (primary && m->VolumeUnit && primary->UnitTaken(m->VolumeUnit)) {
+            m->VolumeMode = UAC_VOL_NONE; m->VolumeUnit = 0;
+            m->VolumeChannels = 0; m->VolumeExtra = 0;
+        }
+        if (primary && m->MuteUnit && primary->UnitTaken(m->MuteUnit)) {
+            m->MuteMode = UAC_VOL_NONE; m->MuteUnit = 0;
+            m->MuteChannels = 0; m->MuteExtra = 0;
+        }
         /* Every controlled channel's own RANGE; a control without a usable
          * one is left to software (an extra one is then not written). */
         if (m->VolumeMode == UAC_VOL_MASTER) {
@@ -397,7 +420,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         v->Mute = m->MuteMode != UAC_VOL_NONE;
         for (n = m->MuteMode == UAC_VOL_MASTER ? 0 : 1; n < UAC_VOL_SLOTS && v->Mute; n++)
             if (MuteSlot(n, &extra) && !extra && !(v->MuteKnown[n] && v->ActualMute[n])) v->Mute = 0;
-        if (GetValue(device, L"Uac2Level", &saved, sizeof(saved)) && saved.Version == 2 &&
+        if (GetValue(device, levelName, &saved, sizeof(saved)) && saved.Version == 2 &&
             saved.Channels == v->Channels) {
             if (saved.Owned & UAC_LEVEL_VOLUME) {
                 for (c = 0; c < v->Channels; c++) v->Level[c] = saved.Level[c];
@@ -539,7 +562,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
                 save.Version = 2; save.Channels = v->Channels; save.Mute = mute;
                 save.Owned = (volumeOwned ? UAC_LEVEL_VOLUME : 0) | (muteOwned ? UAC_LEVEL_MUTE : 0);
                 for (c = 0; c < v->Channels; c++) save.Level[c] = levels[c];
-                PutValue(device, L"Uac2Level", &save, sizeof(save));
+                PutValue(device, levelName, &save, sizeof(save));
                 v->Saved = change;
             }
             RecordLevel(levels, mute);
@@ -832,7 +855,12 @@ private:
         /* One wave pin per direction: the direction's first terminal (an
          * X4's analog output, not its S/PDIF one), and only its formats, so
          * an on-board codec's other outputs do not crowd them out. */
-        UAC_BYTE terminal = (UAC_BYTE)UacPlanTerminal(descriptor, d->Capture, UacUsbHighSpeed(dev));
+        unsigned int ends[UAC_PAIRS];
+        ULONG count = UacPlanEndpoints(descriptor, d->Capture, UacUsbHighSpeed(dev), ends, UAC_PAIRS);
+        f->Count = 0;
+        if (index >= count) { BuildRanges(f, d->Capture); return; }
+        UAC_BYTE terminal = (UAC_BYTE)ends[index];
+        jack[d->Capture ? 1 : 0] = JackGuid(UacVolJack(descriptor, d->Capture, terminal), d->Capture);
         ULONG n = UacPlanFormatsFor(descriptor, d->Capture, UacUsbHighSpeed(dev), terminal, all,
                                     UAC_FORMATS);
         f->Count = 0;
@@ -866,28 +894,119 @@ private:
         p->KsPinDescriptor.Category = category;
     }
 public:
-    Wave(PDEVICE_OBJECT fdo, PDEVICE_OBJECT target, UAC_DESC *model)
+    Wave(PDEVICE_OBJECT fdo, PDEVICE_OBJECT target, UAC_DESC *model, ULONG pair = 0,
+         Wave *owner = NULL)
         : refs(1), device(fdo), lower(target), descriptor(model), dev(NULL), graph(NULL),
-          port(NULL), removed(FALSE), pnpBlocked(FALSE), powerBlocked(FALSE) {
+          port(NULL), removed(FALSE), pnpBlocked(FALSE), powerBlocked(FALSE),
+          index(pair), primary(owner), peerCount(0) {
         KeInitializeMutex(&operation, 0);
         RtlZeroMemory(dir, sizeof(dir));
         RtlZeroMemory(&level, sizeof(level));
+        RtlZeroMemory(peers, sizeof(peers));
         dir[0].Owner = dir[1].Owner = this; dir[1].Capture = TRUE;
+        jack[0] = &KSNODETYPE_SPEAKER; jack[1] = &KSNODETYPE_MICROPHONE;
+        if (primary) { primary->AddRef(); descriptor = primary->descriptor; }
+        LevelName();
     }
     ~Wave() {
         /* Close and PnP Shutdown own all USB destruction at PASSIVE. */
         ASSERT(dir[0].Usb == NULL && dir[1].Usb == NULL);
         if (level.Item) IoFreeWorkItem(level.Item);
+        if (primary) { primary->Release(); return; }
         if (dev) UacUsbClose(dev);
         if (descriptor) {
             ExFreePool((PVOID)descriptor->Bytes);
             ExFreePool(descriptor);
         }
     }
+    /* The endpoints of pair 0 and the pairs after it (Start). */
+    /* Several pairs only when every endpoint has a clock source of its
+     * own, read without a selector choice: until a clock reservation at
+     * stream open exists (section 15.3 item 5), endpoints that share a
+     * clock stay one pair, as before. */
+    ULONG Pairs() const {
+        unsigned int t[2][UAC_PAIRS];
+        UAC_BYTE seen[2 * UAC_PAIRS], source;
+        ULONG n[2], i, j, count = 0;
+        int hs = UacUsbHighSpeed(dev);
+        n[0] = UacPlanEndpoints(descriptor, 0, hs, t[0], UAC_PAIRS);
+        n[1] = UacPlanEndpoints(descriptor, 1, hs, t[1], UAC_PAIRS);
+        if (n[0] < 2 && n[1] < 2) return 1;
+        for (i = 0; i < 2; i++)
+            for (j = 0; j < n[i]; j++) {
+                if (UacClock(descriptor, (UAC_BYTE)t[i][j], NULL, &source) != UAC_OK) return 1;
+                for (ULONG k = 0; k < count; k++) if (seen[k] == source) return 1;
+                seen[count++] = source;
+            }
+        /* Nor when two playback paths meet in the Feature Unit either would
+         * drive for its volume or mute (section 15.3 item 6). */
+        UAC_BYTE units[4 * UAC_PAIRS];
+        ULONG used = 0;
+        for (j = 0; j < n[0]; j++) {
+            /* With each channel count LevelSetup can ask (mono, a pair). */
+            for (ULONG ch = 1; ch <= 2; ch++) {
+                UAC_VOL_MAP m;
+                UacVolFind(descriptor, t[0][j], ch, &m);
+                UAC_BYTE u[2] = { m.VolumeUnit, m.MuteUnit };
+                for (i = 0; i < 2; i++) {
+                    if (!u[i]) continue;
+                    for (ULONG k = 0; k < used; k++) if (units[k] == u[i] && (k / 4) != j) return 1;
+                }
+                units[used++] = u[0]; units[used++] = u[1];
+            }
+        }
+        return n[0] > n[1] ? n[0] : n[1];
+    }
+    /* A Feature Unit pair 0 or an earlier pair drives (pair 0 only). */
+    BOOLEAN UnitTaken(UAC_BYTE unit) {
+        BOOLEAN taken = FALSE;
+        const UAC_VOL_MAP *m = &level.Map;
+        if (m->VolumeUnit == unit || m->MuteUnit == unit) return TRUE;
+        KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+        for (ULONG i = 0; i < peerCount && !taken; i++) {
+            const UAC_VOL_MAP *p = &peers[i]->level.Map;
+            if (p->VolumeUnit == unit || p->MuteUnit == unit) taken = TRUE;
+        }
+        KeReleaseMutex(&operation, FALSE);
+        return taken;
+    }
+    void AddPeer(Wave *w) {
+        KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+        if (peerCount < UAC_PAIRS - 1) peers[peerCount++] = w;
+        KeReleaseMutex(&operation, FALSE);
+    }
+    /* The registry value of this pair's levels: pair 0 keeps Uac2Level,
+     * the name before section 15; a later pair its own. */
+    void LevelName() {
+        static const WCHAR hex[] = L"0123456789ABCDEF";
+        static const WCHAR base[] = L"Uac2Level";
+        ULONG i;
+        for (i = 0; base[i]; i++) levelName[i] = base[i];
+        if (index) {
+            levelName[i++] = L'P';
+            levelName[i++] = hex[(index >> 4) & 15];
+            levelName[i++] = hex[index & 15];
+        }
+        levelName[i] = 0;
+    }
+    static const GUID *JackGuid(unsigned int type, BOOLEAN capture) {
+        switch (type) {
+        case 0x0301: return &KSNODETYPE_SPEAKER;
+        case 0x0302: return &KSNODETYPE_HEADPHONES;
+        case 0x0201: return &KSNODETYPE_MICROPHONE;
+        case 0x0601: return &KSNODETYPE_ANALOG_CONNECTOR;
+        case 0x0603: return &KSNODETYPE_LINE_CONNECTOR;
+        case 0x0605: return &KSNODETYPE_SPDIF_INTERFACE;
+        default: return capture ? &KSNODETYPE_MICROPHONE : &KSNODETYPE_SPEAKER;
+        }
+    }
+    const GUID *Jack(BOOLEAN capture) const { return jack[capture ? 1 : 0]; }
     /* PnP start: open the transport, learn both directions and build the
      * wave filter for what the device has. */
     NTSTATUS Prepare() {
-        NTSTATUS s = UacUsbOpen(lower, descriptor, &dev);
+        NTSTATUS s = STATUS_SUCCESS;
+        if (primary) dev = primary->dev;
+        else s = UacUsbOpen(lower, descriptor, &dev);
         if (!NT_SUCCESS(s)) return s;
         Learn(&dir[0]); Learn(&dir[1]);
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
@@ -949,9 +1068,11 @@ public:
         pnpBlocked = TRUE;
         Drain(&dir[0], TRUE); Drain(&dir[1], TRUE);
         if (permanent) removed = TRUE;
+        peerCount = 0;
         KeReleaseMutex(&operation, FALSE);
     }
     STDMETHODIMP_(void) PowerChangeState(POWER_STATE state);
+    void PowerLocal(POWER_STATE state);
     STDMETHODIMP QueryPowerChangeState(POWER_STATE state);
     STDMETHODIMP QueryDeviceCapabilities(PDEVICE_CAPABILITIES caps);
     STDMETHODIMP QueryInterface(REFIID id, PVOID *out) {
@@ -1073,7 +1194,16 @@ public:
 };
 
 #pragma code_seg("PAGE")
+/* PortCls calls pair 0, the one registered for adapter power: it takes the
+ * later pairs' streams down (and back) too, before its own. */
 STDMETHODIMP_(void) Wave::PowerChangeState(POWER_STATE state) {
+    PAGED_CODE();
+    KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+    for (ULONG i = 0; i < peerCount; i++) peers[i]->PowerLocal(state);
+    KeReleaseMutex(&operation, FALSE);
+    PowerLocal(state);
+}
+void Wave::PowerLocal(POWER_STATE state) {
     PAGED_CODE();
     KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
     powerBlocked = state.DeviceState != PowerDeviceD0;
@@ -1130,10 +1260,10 @@ public:
         RtlZeroMemory(pins, sizeof(pins)); RtlZeroMemory(nodes, sizeof(nodes));
         if (g->TopoRenderIn >= 0) {
             Bridge(&pins[g->TopoRenderIn], KSPIN_DATAFLOW_IN, &KSCATEGORY_AUDIO);
-            Bridge(&pins[g->TopoSpeaker], KSPIN_DATAFLOW_OUT, &KSNODETYPE_SPEAKER);
+            Bridge(&pins[g->TopoSpeaker], KSPIN_DATAFLOW_OUT, w->Jack(FALSE));
         }
         if (g->TopoMic >= 0) {
-            Bridge(&pins[g->TopoMic], KSPIN_DATAFLOW_IN, &KSNODETYPE_MICROPHONE);
+            Bridge(&pins[g->TopoMic], KSPIN_DATAFLOW_IN, w->Jack(TRUE));
             Bridge(&pins[g->TopoCaptureOut], KSPIN_DATAFLOW_OUT, &KSCATEGORY_AUDIO);
         }
         for (ULONG i = 0; i < g->TopoNodes; i++) nodes[i].Type = &KSNODETYPE_SUM;
@@ -1210,7 +1340,7 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
     return ((Topology *)(PMINIPORTTOPOLOGY)r->MajorTarget)->Level(r);
 }
 
-struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; };
+struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1]; };
 static PDRIVER_DISPATCH PortClsPnp;
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
@@ -1226,7 +1356,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 17;
+    ULONG build = 18;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1404,58 +1534,108 @@ done:
     return s;
 }
 
-static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
+/* Every pair's PnP stop: the later pairs first, pair 0 (the transport's
+ * owner) last; permanent also drops the extension's references. */
+static void ShutdownPairs(EXT *ext, BOOLEAN permanent, BOOLEAN release)
 {
-    EXT *ext = Extension(fdo);
+    for (ULONG k = UAC_PAIRS - 1; k-- > 0; ) {
+        Wave *v = ext->Pair[k];
+        if (!v) continue;
+        v->Shutdown(permanent);
+        if (release) { ext->Pair[k] = NULL; v->Release(); }
+    }
     if (ext->Miniport) {
-        ext->Miniport->Shutdown(TRUE);
-        ext->Miniport->Release(); ext->Miniport = NULL;
+        ext->Miniport->Shutdown(permanent);
+        if (release) { ext->Miniport->Release(); ext->Miniport = NULL; }
     }
-    UAC_DESC *model = NULL;
-    NTSTATUS s = ParseDevice(fdo, &model);
-    if (!NT_SUCCESS(s)) return s;
+}
+
+/* One endpoint pair: its wave and topology ports under the reference
+ * strings of section 15.3 item 3, and their physical connections. */
+static NTSTATUS StartPair(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources, Wave *w,
+                          ULONG k)
+{
+    static const PWSTR waveName[UAC_PAIRS] = { L"Wave", L"Wave2", L"Wave3", L"Wave4" };
+    static const PWSTR topoName[UAC_PAIRS] = { L"Topology", L"Topology2", L"Topology3", L"Topology4" };
     PPORT wave = NULL, topo = NULL;
-    void *wm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Wave), 'w2aU');
-    void *tm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Topology), 't2aU');
-    if (!wm || !tm) {
-        if (wm) ExFreePool(wm); if (tm) ExFreePool(tm);
-        ExFreePool((PVOID)model->Bytes); ExFreePool(model);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    Wave *w = new(wm) Wave(fdo, ext->Lower, model);
-    ext->Miniport = w; w->AddRef(); /* explicit adapter/PnP reference */
     Topology *t = NULL;
-    s = w->Prepare();
-    Record(fdo, 13, s);
-    if (NT_SUCCESS(s)) t = new(tm) Topology(w->Graph(), w);
-    else ExFreePool(tm);
     const UAC_GRAPH *g = w->Graph();
-    if (NT_SUCCESS(s)) { s = PcNewPort(&wave, CLSID_PortWaveCyclic); Record(fdo, 5, s); }
+    NTSTATUS s;
+    void *tm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Topology), 't2aU');
+    if (!tm) return STATUS_INSUFFICIENT_RESOURCES;
+    t = new(tm) Topology(g, w);
+    s = PcNewPort(&wave, CLSID_PortWaveCyclic); Record(fdo, 5, s);
     if (NT_SUCCESS(s)) { s = wave->Init(fdo, irp, (PMINIPORTWAVECYCLIC)w, NULL, resources); Record(fdo, 6, s); }
     if (NT_SUCCESS(s)) { s = PcNewPort(&topo, CLSID_PortTopology); Record(fdo, 7, s); }
     if (NT_SUCCESS(s)) { s = topo->Init(fdo, irp, t, NULL, resources); Record(fdo, 8, s); }
-    if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, L"Wave", wave); Record(fdo, 9, s); }
-    if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, L"Topology", topo); Record(fdo, 10, s); }
+    if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, waveName[k], wave); Record(fdo, 9, s); }
+    if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, topoName[k], topo); Record(fdo, 10, s); }
     if (NT_SUCCESS(s) && g->RenderBridge >= 0) {
         s = PcRegisterPhysicalConnection(fdo, wave, g->RenderBridge, topo, g->TopoRenderIn); Record(fdo, 11, s);
     }
     if (NT_SUCCESS(s) && g->CaptureBridge >= 0) {
         s = PcRegisterPhysicalConnection(fdo, topo, g->TopoCaptureOut, wave, g->CaptureBridge); Record(fdo, 14, s);
     }
-    if (NT_SUCCESS(s)) { s = PcRegisterAdapterPowerManagement((PMINIPORTWAVECYCLIC)w, fdo); Record(fdo, 12, s); }
-    if (!NT_SUCCESS(s)) {
-        w->Shutdown(TRUE);
-        ext->Miniport = NULL; w->Release();
-    }
-    w->Release(); if (t) t->Release();
+    t->Release();
     if (wave) wave->Release(); if (topo) topo->Release();
+    return s;
+}
+
+static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
+{
+    EXT *ext = Extension(fdo);
+    ShutdownPairs(ext, TRUE, TRUE);
+    UAC_DESC *model = NULL;
+    NTSTATUS s = ParseDevice(fdo, &model);
+    if (!NT_SUCCESS(s)) return s;
+    void *wm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Wave), 'w2aU');
+    if (!wm) {
+        ExFreePool((PVOID)model->Bytes); ExFreePool(model);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Wave *w = new(wm) Wave(fdo, ext->Lower, model);
+    ext->Miniport = w; /* the adapter/PnP reference: the construction's */
+    s = w->Prepare();
+    Record(fdo, 13, s);
+    if (NT_SUCCESS(s)) s = StartPair(fdo, irp, resources, w, 0);
+    if (NT_SUCCESS(s)) { s = PcRegisterAdapterPowerManagement((PMINIPORTWAVECYCLIC)w, fdo); Record(fdo, 12, s); }
+    /* The later pairs (section 15.3): a pair that cannot be brought up is
+     * left out; pair 0 stands on its own. */
+    ULONG pairs = NT_SUCCESS(s) ? w->Pairs() : 1;
+    for (ULONG k = 1; k < pairs && k < UAC_PAIRS && NT_SUCCESS(s); k++) {
+        void *pm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Wave), 'w2aU');
+        if (!pm) { s = STATUS_INSUFFICIENT_RESOURCES; break; }
+        Wave *v = new(pm) Wave(fdo, ext->Lower, NULL, k, w);
+        NTSTATUS e = v->Prepare();
+        Record(fdo, 0x100 | (k << 4) | 1, e);
+        if (!NT_SUCCESS(e)) {
+            /* Nothing of this pair is registered yet (no usable format,
+             * say): leave it and the pairs after it out. */
+            v->Shutdown(TRUE);
+            v->Release();
+            break;
+        }
+        e = StartPair(fdo, irp, resources, v, k);
+        Record(fdo, 0x100 | (k << 4) | 2, e);
+        if (!NT_SUCCESS(e)) {
+            /* A pair half registered cannot be taken back on every
+             * target: the start fails as a whole. */
+            v->Shutdown(TRUE);
+            v->Release();
+            s = e;
+            break;
+        }
+        ext->Pair[k - 1] = v;
+        w->AddPeer(v);
+    }
+    if (!NT_SUCCESS(s)) ShutdownPairs(ext, TRUE, TRUE);
     DbgPrint("uac2wdm: start %08X\n", s);
     return s;
 }
 
 static NTSTATUS Add(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
-    NTSTATUS s = PcAddAdapterDevice(driver, pdo, Start, 2,
+    NTSTATUS s = PcAddAdapterDevice(driver, pdo, Start, 2 * UAC_PAIRS,
                                     PORT_CLASS_DEVICE_EXTENSION_SIZE + sizeof(EXT));
     if (!NT_SUCCESS(s)) return s;
     /* Old-target path from the design: no XP-only IoGetLowerDeviceObject.
@@ -1466,6 +1646,7 @@ static NTSTATUS Add(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     Extension(fdo)->Pdo = pdo;
     Extension(fdo)->Lower = lower;
     Extension(fdo)->Miniport = NULL;
+    RtlZeroMemory(Extension(fdo)->Pair, sizeof(Extension(fdo)->Pair));
     return STATUS_SUCCESS;
 }
 
@@ -1480,14 +1661,8 @@ static NTSTATUS DispatchPnp(PDEVICE_OBJECT fdo, PIRP irp)
         stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         PAGED_CODE();
         EXT *ext = Extension(fdo);
-        Wave *w = ext->Miniport;
-        if (w) {
-            w->Shutdown(stack->MinorFunction != IRP_MN_STOP_DEVICE);
-            if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
-                ext->Miniport = NULL;
-                w->Release();
-            }
-        }
+        ShutdownPairs(ext, stack->MinorFunction != IRP_MN_STOP_DEVICE,
+                      stack->MinorFunction == IRP_MN_REMOVE_DEVICE);
     }
     return PortClsPnp(fdo, irp);
 }

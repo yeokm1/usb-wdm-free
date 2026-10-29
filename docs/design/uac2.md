@@ -996,6 +996,29 @@ this board. Recording and the other outputs wait for the endpoints of
 8. **No vendor request** at start or at a stream's start, until a capture
    shows one is needed.
 
+### 15.3a As built (step 2b, 2026-10-29)
+
+- Items 1 to 4 as designed: pair 0 owns the function, later pairs borrow
+  it; `UacPlanEndpoints` applies item 2; reference strings `Wave` to
+  `Wave4`; bridge categories from `UacVolJack` (item 4). The interfaces'
+  `FriendlyName` is the INF's (`UAC2 USB audio (experiment) 2` to `4`);
+  a name from the terminal type is still owed.
+- Item 5, narrowed: until a clock reservation at stream open exists,
+  a device gets several pairs only when every endpoint reads a clock
+  source of its own (`UacClock`, no selector choice); otherwise it keeps
+  one pair, as before. The ALC4080 capture qualifies (each terminal its
+  own source); the `multi` profile (two outputs on one clock) does not.
+  Likewise when two playback paths meet in the Feature Unit either would
+  drive for its volume or mute, and (item 2, over both directions) when
+  an interface's alternates link two terminals of either direction.
+- Item 6, narrowed: playback levels per pair (`Uac2Level` for pair 0,
+  `Uac2LevelPnn` after); a Feature Unit an earlier pair drives is left
+  to software in a later one. The capture walk is still owed.
+- Item 7 is gone (15.1a): pairs come from the descriptors; the table
+  stays for quirks only.
+- A later pair that fails to come up fails the start as a whole (a
+  registered subdevice cannot be withdrawn on every target).
+
 ### 15.4 The simulated device
 
 `uacemu.py`'s profile `alc4080` is an assumed layout, not a capture: High

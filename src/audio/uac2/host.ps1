@@ -20,6 +20,6 @@ try {
     if ($LASTEXITCODE) { throw 'uacctl compile failed' }
     & "$bin/link.exe" /nologo /DLL /NOENTRY /NODEFAULTLIB /MACHINE:X64 /OUT:uaccore.dll `
         /EXPORT:UacParse /EXPORT:UacFunction /EXPORT:UacWholeFirst /EXPORT:UacClock /EXPORT:UacClockPath `
-        /EXPORT:UacPlanFormats /EXPORT:UacPlanFormatsFor /EXPORT:UacPlanPick /EXPORT:UacPlanTerminal /EXPORT:UacPlanTerminals /EXPORT:UacPlanQuirks /EXPORT:UacPlanPacketBytes /EXPORT:UacPlanChannelMask /EXPORT:UacVolFind /EXPORT:UacVolRange uacdesc.obj uacplan.obj uacvol.obj uacctl.obj "$repo/tools/WinDDK71/lib/Crt/amd64/msvcrt.lib"
+        /EXPORT:UacPlanFormats /EXPORT:UacPlanFormatsFor /EXPORT:UacPlanPick /EXPORT:UacPlanTerminal /EXPORT:UacPlanTerminals /EXPORT:UacPlanEndpoints /EXPORT:UacVolJack /EXPORT:UacPlanQuirks /EXPORT:UacPlanPacketBytes /EXPORT:UacPlanChannelMask /EXPORT:UacVolFind /EXPORT:UacVolRange uacdesc.obj uacplan.obj uacvol.obj uacctl.obj "$repo/tools/WinDDK71/lib/Crt/amd64/msvcrt.lib"
     if ($LASTEXITCODE) { throw 'host DLL link failed' }
 } finally { Pop-Location }

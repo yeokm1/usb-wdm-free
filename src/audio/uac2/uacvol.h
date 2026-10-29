@@ -75,6 +75,17 @@ typedef struct UAC_VOL_RANGE {
  * subranges; a RES of 0 on a subrange wider than one value reads as 1),
  * else 0 and out unchanged. */
 int UacVolRange(const unsigned char *bytes, unsigned int length, UAC_VOL_RANGE *out);
+
+/* The physical terminal an endpoint reaches (docs/design/uac2.md section
+ * 15.3 item 4): for playback (capture 0) the wTerminalType of the first
+ * Output Terminal, other than a USB streaming one, whose path leads back
+ * to the USB streaming Input Terminal `terminal`; for capture, the
+ * wTerminalType of the first Input Terminal, other than a USB streaming
+ * one, the USB streaming Output Terminal `terminal` leads back to. 0 when
+ * none is found. Terminal Types 2.0: 0x0301 speaker, 0x0302 headphones,
+ * 0x0201 microphone, 0x0601 analog connector, 0x0603 line connector,
+ * 0x0605 S/PDIF interface. */
+unsigned int UacVolJack(const UAC_DESC *desc, int capture, unsigned int terminal);
 /* The software range in the same form. */
 void UacVolSoftRange(UAC_VOL_RANGE *out);
 

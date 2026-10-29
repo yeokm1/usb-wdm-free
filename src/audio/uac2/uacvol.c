@@ -123,6 +123,26 @@ static void Pick(const UAC_DESC *d, const UAC_BYTE *path, unsigned int length,
     }
 }
 
+unsigned int UacVolJack(const UAC_DESC *desc, int capture, unsigned int terminal)
+{
+    UAC_BYTE visited[256], path[WALK_DEPTH];
+    unsigned int id, i, length = 0, type;
+    const UAC_BYTE *p;
+    if (!desc || !desc->Bytes || !terminal || terminal > 255) return 0;
+    for (id = 1; id < 256; id++) {
+        p = Entity(desc, id);
+        if (!p || p[2] != (capture ? 0x02 : 0x03) || p[0] < (capture ? 17 : 12)) continue;
+        type = (unsigned int)p[4] | ((unsigned int)p[5] << 8);
+        if (type == 0x0101) continue;
+        for (i = 0; i < 256; i++) visited[i] = 0;
+        /* Walk runs from an Output Terminal back to an Input Terminal. */
+        if (capture ? Walk(desc, terminal, id, visited, path, 0, &length)
+                    : Walk(desc, id, terminal, visited, path, 0, &length))
+            return type;
+    }
+    return 0;
+}
+
 int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channels,
                UAC_VOL_MAP *map)
 {

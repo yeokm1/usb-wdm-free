@@ -112,14 +112,71 @@ ServiceBinary=%12%\uac2wdm.sys
 AddInterface=%Audio%,Wave,Wave.Interface
 AddInterface=%Audio%,Topology,Topology.Interface
 AddInterface=%Topology%,Topology,Topology.Interface
+AddInterface=%Audio%,Wave2,Wave2.Interface
+AddInterface=%Audio%,Topology2,Topology2.Interface
+AddInterface=%Topology%,Topology2,Topology2.Interface
+AddInterface=%Audio%,Wave3,Wave3.Interface
+AddInterface=%Audio%,Topology3,Topology3.Interface
+AddInterface=%Topology%,Topology3,Topology3.Interface
+AddInterface=%Audio%,Wave4,Wave4.Interface
+AddInterface=%Audio%,Topology4,Topology4.Interface
+AddInterface=%Topology%,Topology4,Topology4.Interface
 [UAC2.NT.Interfaces]
 AddInterface=%Audio%,Wave,Wave.Interface
 AddInterface=%Audio%,Topology,Topology.Interface
 AddInterface=%Topology%,Topology,Topology.Interface
+AddInterface=%Audio%,Wave2,Wave2.Interface
+AddInterface=%Audio%,Topology2,Topology2.Interface
+AddInterface=%Topology%,Topology2,Topology2.Interface
+AddInterface=%Audio%,Wave3,Wave3.Interface
+AddInterface=%Audio%,Topology3,Topology3.Interface
+AddInterface=%Topology%,Topology3,Topology3.Interface
+AddInterface=%Audio%,Wave4,Wave4.Interface
+AddInterface=%Audio%,Topology4,Topology4.Interface
+AddInterface=%Topology%,Topology4,Topology4.Interface
 [UAC2.NTamd64.Interfaces]
 AddInterface=%Audio%,Wave,Wave.Interface
 AddInterface=%Audio%,Topology,Topology.Interface
 AddInterface=%Topology%,Topology,Topology.Interface
+AddInterface=%Audio%,Wave2,Wave2.Interface
+AddInterface=%Audio%,Topology2,Topology2.Interface
+AddInterface=%Topology%,Topology2,Topology2.Interface
+AddInterface=%Audio%,Wave3,Wave3.Interface
+AddInterface=%Audio%,Topology3,Topology3.Interface
+AddInterface=%Topology%,Topology3,Topology3.Interface
+AddInterface=%Audio%,Wave4,Wave4.Interface
+AddInterface=%Audio%,Topology4,Topology4.Interface
+AddInterface=%Topology%,Topology4,Topology4.Interface
+[Wave2.Interface]
+AddReg=Wave2.Interface.Reg
+[Topology2.Interface]
+AddReg=Topology2.Interface.Reg
+[Wave2.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device2%
+[Topology2.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device2%
+[Wave3.Interface]
+AddReg=Wave3.Interface.Reg
+[Topology3.Interface]
+AddReg=Topology3.Interface.Reg
+[Wave3.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device3%
+[Topology3.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device3%
+[Wave4.Interface]
+AddReg=Wave4.Interface.Reg
+[Topology4.Interface]
+AddReg=Topology4.Interface.Reg
+[Wave4.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device4%
+[Topology4.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device4%
 [Wave.Interface]
 AddReg=Wave.Interface.Reg
 [Topology.Interface]
@@ -132,6 +189,9 @@ HKR,,CLSID,,%Proxy%
 HKR,,FriendlyName,,%Device%
 
 [Strings]
+Device2="UAC2 USB audio (experiment) 2"
+Device3="UAC2 USB audio (experiment) 3"
+Device4="UAC2 USB audio (experiment) 4"
 Provider="usb-wdm-free"
 Device="UAC2 USB audio (experiment)"
 Disk="UAC2 experimental build folder"

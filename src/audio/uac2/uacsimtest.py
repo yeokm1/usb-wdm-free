@@ -262,6 +262,10 @@ class ProfileTest(unittest.TestCase):
         cls.dll.UacPlanQuirks.restype = c.c_uint
         cls.dll.UacPlanFormatsFor.argtypes = [c.c_void_p, c.c_int, c.c_int, c.c_uint, c.c_void_p, c.c_uint]
         cls.dll.UacPlanFormatsFor.restype = c.c_uint
+        cls.dll.UacPlanEndpoints.argtypes = [c.c_void_p, c.c_int, c.c_int, c.POINTER(c.c_uint), c.c_uint]
+        cls.dll.UacPlanEndpoints.restype = c.c_uint
+        cls.dll.UacVolJack.argtypes = [c.c_void_p, c.c_int, c.c_uint]
+        cls.dll.UacVolJack.restype = c.c_uint
         cls.dll.UacPlanPick.argtypes = [c.c_void_p, c.c_int, c.c_uint, c.c_uint, c.c_uint, c.c_uint,
                                         c.c_uint, c.c_uint, c.c_int, c.POINTER(c.c_uint)]
         cls.dll.UacPlanPacketBytes.argtypes = [c.c_uint, c.c_int, c.c_uint, c.c_uint, c.c_int]
@@ -421,12 +425,50 @@ class ProfileTest(unittest.TestCase):
         self.assertTrue(all(fmts[k].Terminal == 13 for k in range(n)))
         n = self.dll.UacPlanFormatsFor(c.byref(d), 1, 1, 17, fmts, 16)
         self.assertGreater(n, 0)
+        # The endpoints and their jacks (section 15.1a): speaker,
+        # headphones, S/PDIF; analog connector, line, microphone.
+        t = (c.c_uint * 4)()
+        self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 0, 1, t, 4), 3)
+        self.assertEqual([self.dll.UacVolJack(c.byref(d), 0, t[k]) for k in range(3)],
+                         [0x0301, 0x0302, 0x0605])
+        self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 1, 1, t, 4), 3)
+        self.assertEqual([self.dll.UacVolJack(c.byref(d), 1, t[k]) for k in range(3)],
+                         [0x0601, 0x0603, 0x0201])
+        self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 0, 1, t, 2), 2)
         for terminal, ch in ((13, 2), (17, 2)):
             index = c.c_uint()
             capture = terminal == 17
             self.assertEqual(self.dll.UacPlanPick(c.byref(d), capture, terminal, ch, 2, 16,
                                                   0xffffffff, 48000, 1, c.byref(index)), 0)
             self.assertEqual(d.Alt[index.value].Terminal, terminal)
+
+    def test_endpoints_every_profile(self):
+        # One endpoint per streaming interface where the layout allows it;
+        # the X4 plays to two (analog and S/PDIF), every built profile
+        # but alc4080 to one per direction.
+        t = (c.c_uint * 4)()
+        for name, play, rec in (('x4full', 2, 1), ('hs24', 1, 1), ('multi', 2, 0),
+                                ('alc4080', 3, 2), ('alc4080cap', 3, 3)):
+            p = uacemu.Profile(name)
+            rc, d = self.parse(p.config)
+            self.assertEqual(rc, 0, name)
+            hs = 1 if p.speed == 'high' else 0
+            self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 0, hs, t, 4), play, name)
+            self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 1, hs, t, 4), rec, name)
+        p = uacemu.Profile('alc4080')
+        rc, d = self.parse(p.config)
+        self.assertEqual([self.dll.UacVolJack(c.byref(d), 0, k) for k in (1, 2, 3)], [0x0301, 0x0302, 0x0605])
+        self.assertEqual([self.dll.UacVolJack(c.byref(d), 1, k) for k in (16, 17)], [0x0603, 0x0201])
+        self.assertEqual(self.dll.UacVolJack(c.byref(d), 0, 99), 0)
+        # An interface whose alternates link a playback and a capture
+        # terminal keeps every direction at one endpoint.
+        cfg = bytearray(uacemu.Profile('alc4080').config)
+        rc, d = self.parse(bytes(cfg))
+        for i in range(d.AltCount):
+            if d.Alt[i].Interface == 5 and d.Alt[i].Alternate == 2:
+                d.Alt[i].Interface = 2
+        self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 0, 1, t, 4), 1)
+        self.assertEqual(self.dll.UacPlanEndpoints(c.byref(d), 1, 1, t, 4), 1)
 
     def test_clock_paths_through_driver(self):
         p = uacemu.Profile('clocks')

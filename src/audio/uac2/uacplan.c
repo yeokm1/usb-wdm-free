@@ -44,11 +44,18 @@ static int Runnable(const UAC_ALT *a, int highSpeed)
 unsigned int UacPlanFormats(const UAC_DESC *desc, int capture, int highSpeed,
                             UAC_FORMAT *out, unsigned int max)
 {
+    return UacPlanFormatsFor(desc, capture, highSpeed, 0, out, max);
+}
+
+unsigned int UacPlanFormatsFor(const UAC_DESC *desc, int capture, int highSpeed,
+                               unsigned int terminal, UAC_FORMAT *out, unsigned int max)
+{
     unsigned int i, j, n = 0;
     if (!desc || !out) return 0;
     for (i = 0; i < desc->AltCount && n < max; i++) {
         const UAC_ALT *a = &desc->Alt[i];
         if (((a->DataEndpoint & 0x80) != 0) != (capture != 0)) continue;
+        if (terminal && a->Terminal != terminal) continue;
         if (!Runnable(a, highSpeed)) continue;
         for (j = 0; j < n; j++)
             if (out[j].Channels == a->Channels && out[j].Subslot == a->Subslot &&

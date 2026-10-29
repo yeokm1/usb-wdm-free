@@ -36,6 +36,12 @@ unsigned int UacPlanChannelMask(unsigned int config, unsigned int channels);
 unsigned int UacPlanFormats(const UAC_DESC *desc, int capture, int highSpeed,
                             UAC_FORMAT *out, unsigned int max);
 
+/* UacPlanFormats for the alternates of one USB-streaming terminal only (0:
+ * every terminal), so another terminal's formats never crowd max out (an
+ * on-board codec's several outputs, docs/design/uac2.md section 15). */
+unsigned int UacPlanFormatsFor(const UAC_DESC *desc, int capture, int highSpeed,
+                               unsigned int terminal, UAC_FORMAT *out, unsigned int max);
+
 /* Payload bytes one service interval can need at rate: ceil(rate *
  * period) frames, plus one frame of margin when the device's clock runs
  * free of the host's (headroom: async endpoints, whose feedback or data

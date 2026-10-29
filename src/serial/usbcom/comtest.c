@@ -30,6 +30,15 @@
  * interleaves with the drivers' trace. The last line is
  * "COMTEST RESULT: PASS ..." or "COMTEST RESULT: FAIL ...".
  *
+ * For the USB serial bridges (design 6.3; chipemu.py on the other end):
+ *   -cts         CTS follows RTS (the simulated test plug), not always on;
+ *                adds the fOutxCtsFlow test
+ *   -baud LO HI  rates outside LO..HI must be refused by SetCommState
+ *   -nobreakin   a looped-back break is not expected back (CP210x)
+ *   -ctshw       the chip holds its own transmitter by CTS (CP210x): the
+ *                fOutxCtsFlow test then expects no VxD hold
+ * A framing the port's COMMPROP does not offer must be refused too.
+ *
  * Original code, written from the Win32 communications API documentation.
  * It only ever writes to the port it is told to test, and only a
  * test pattern.
@@ -47,6 +56,8 @@ static char  g_LogPath[MAX_PATH] = "A:\\COMTEST.TXT";
 static int   g_E9 = 1;
 static int   g_Checks, g_Fails;
 static char  g_Port[16];
+static int   g_Cts, g_NoBreakIn, g_CtsHw;
+static DWORD g_BaudLo = 1, g_BaudHi = 0xFFFFFFFF;
 
 /* ---- logging -------------------------------------------------------- */
 
@@ -135,6 +146,37 @@ static BOOL SetLine(HANDLE h, DWORD baud, BYTE bits, BYTE parity, BYTE stop)
     d.DCBlength = sizeof(d);
     return GetCommState(h, &d) && d.BaudRate == baud && d.ByteSize == bits &&
            d.Parity == parity && d.StopBits == stop;
+}
+
+/*
+ * A setting the port must refuse: SetCommState fails, and the state read
+ * back afterwards is the one before (a driver that clamped or ignored it
+ * would leave a changed or accepted state).
+ */
+static BOOL Refused(HANDLE h, DWORD baud, BYTE bits, BYTE parity, BYTE stop)
+{
+    DCB before, d, after;
+    BOOL set;
+    memset(&before, 0, sizeof(before));
+    before.DCBlength = sizeof(before);
+    if (!GetCommState(h, &before))
+        return FALSE;
+    d = before;
+    d.BaudRate = baud;
+    d.ByteSize = bits;
+    d.Parity = parity;
+    d.StopBits = stop;
+    d.fParity = parity != NOPARITY;
+    set = SetCommState(h, &d);
+    memset(&after, 0, sizeof(after));
+    after.DCBlength = sizeof(after);
+    if (!GetCommState(h, &after))
+        return FALSE;
+    return !set && after.BaudRate == before.BaudRate && after.ByteSize == before.ByteSize &&
+           after.Parity == before.Parity && after.StopBits == before.StopBits &&
+           after.fParity == before.fParity && after.fOutxCtsFlow == before.fOutxCtsFlow &&
+           after.fRtsControl == before.fRtsControl && after.fDtrControl == before.fDtrControl &&
+           after.fOutX == before.fOutX && after.fInX == before.fInX;
 }
 
 static void Timeouts(HANDLE h, DWORD interval, DWORD mult, DWORD constant)
@@ -244,12 +286,42 @@ static void TestBauds(HANDLE h)
     char what[96];
     unsigned i;
     for (i = 0; i < sizeof(bauds) / sizeof(bauds[0]); i++) {
-        BOOL set = SetLine(h, bauds[i], 8, NOPARITY, ONESTOPBIT);
-        int echo = set && Echo(h, 200, bauds[i], 0xFF, NULL, 0) && Echo(h, 1537, i, 0xFF, NULL, 0);
+        BOOL set;
+        int echo;
+        if (bauds[i] < g_BaudLo || bauds[i] > g_BaudHi) {
+            SetLine(h, 9600, 8, NOPARITY, ONESTOPBIT);
+            set = Refused(h, bauds[i], 8, NOPARITY, ONESTOPBIT);
+            wsprintf(what, "baud %lu 8N1: outside the port's range, refused and the state kept (%d)",
+                     bauds[i], set);
+            Check(set, what);
+            continue;
+        }
+        set = SetLine(h, bauds[i], 8, NOPARITY, ONESTOPBIT);
+        echo = set && Echo(h, 200, bauds[i], 0xFF, NULL, 0) && Echo(h, 1537, i, 0xFF, NULL, 0);
         wsprintf(what, "baud %lu 8N1: set and read back %d, echo 200 + 1537 bytes %d",
                  bauds[i], set, echo);
         Check(set && echo, what);
     }
+    /* The port's own limits (-baud): both ends taken, one beyond refused. */
+    if (g_BaudLo > 1 || g_BaudHi != 0xFFFFFFFF) {
+        DWORD ends[4];
+        ends[0] = g_BaudLo; ends[1] = g_BaudHi; ends[2] = g_BaudLo - 1; ends[3] = g_BaudHi + 1;
+        for (i = 0; i < 4; i++) {
+            BOOL set;
+            if (i < 2) {
+                set = SetLine(h, ends[i], 8, NOPARITY, ONESTOPBIT) && Echo(h, 64, 40 + i, 0xFF, NULL, 0);
+                wsprintf(what, "baud %lu 8N1 (the port's %s): set, read back, echo 64 bytes (%d)",
+                         ends[i], i ? "highest" : "lowest", set);
+            } else {
+                SetLine(h, 9600, 8, NOPARITY, ONESTOPBIT);
+                set = (ends[i] == 0) ? TRUE : Refused(h, ends[i], 8, NOPARITY, ONESTOPBIT);
+                wsprintf(what, "baud %lu 8N1 (just beyond the port's range): refused, state kept (%d)",
+                         ends[i], set);
+            }
+            Check(set, what);
+        }
+    }
+    SetLine(h, 115200, 8, NOPARITY, ONESTOPBIT);
 }
 
 static void TestFraming(HANDLE h)
@@ -259,12 +331,28 @@ static void TestFraming(HANDLE h)
         { 8, NOPARITY, TWOSTOPBITS, "8N2" }, { 7, MARKPARITY, ONESTOPBIT, "7M1" },
         { 7, SPACEPARITY, ONE5STOPBITS, "7S1.5" }, { 6, NOPARITY, ONESTOPBIT, "6N1" },
         { 5, NOPARITY, ONE5STOPBITS, "5N1.5" }, { 8, NOPARITY, ONESTOPBIT, "8N1" } };
+    static const WORD dbits[9] = { 0, 0, 0, 0, 0, DATABITS_5, DATABITS_6, DATABITS_7, DATABITS_8 };
+    static const WORD par[5] = { PARITY_NONE, PARITY_ODD, PARITY_EVEN, PARITY_MARK, PARITY_SPACE };
+    static const WORD stops[3] = { STOPBITS_10, STOPBITS_15, STOPBITS_20 };
+    COMMPROP cp;
     char what[96];
     unsigned i;
+    memset(&cp, 0, sizeof(cp));
+    GetCommProperties(h, &cp);
     for (i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
-        BOOL set = SetLine(h, 9600, f[i].bits, f[i].parity, f[i].stop);
+        BOOL set;
         BYTE mask = (BYTE)((1u << f[i].bits) - 1);
-        int echo = set && Echo(h, 64, i, mask, NULL, 0);
+        int echo;
+        if (!(cp.wSettableData & dbits[f[i].bits]) || !(cp.wSettableStopParity & par[f[i].parity]) ||
+            !(cp.wSettableStopParity & stops[f[i].stop])) {
+            SetLine(h, 9600, 8, NOPARITY, ONESTOPBIT);
+            set = Refused(h, 9600, f[i].bits, f[i].parity, f[i].stop);
+            wsprintf(what, "9600 %s: not offered by the port, refused and the state kept (%d)", f[i].name, set);
+            Check(set, what);
+            continue;
+        }
+        set = SetLine(h, 9600, f[i].bits, f[i].parity, f[i].stop);
+        echo = set && Echo(h, 64, i, mask, NULL, 0);
         wsprintf(what, "9600 %s: set and read back %d, echo 64 bytes %d", f[i].name, set, echo);
         Check(set && echo, what);
     }
@@ -376,19 +464,25 @@ static void TestLines(HANDLE h)
         { CLRRTS, MS_DSR_ON | MS_RLSD_ON, 0, "CLRRTS with DTR down: both off" },
         { SETRTS, MS_DSR_ON | MS_RLSD_ON, MS_RLSD_ON, "SETRTS with DTR down: DCD only" },
         { SETDTR, MS_DSR_ON | MS_RLSD_ON, MS_DSR_ON | MS_RLSD_ON, "SETDTR: both on" } };
-    DWORD s;
+    DWORD s, mask, want;
     char what[128];
     unsigned i;
+    int rts = 1;
 
     s = WaitModem(h, MS_DSR_ON | MS_RLSD_ON | MS_CTS_ON, MS_DSR_ON | MS_RLSD_ON | MS_CTS_ON, 2000);
     wsprintf(what, "after open (DTR and RTS asserted): modem status %02lx, CTS DSR DCD all on", s);
     Check((s & (MS_DSR_ON | MS_RLSD_ON | MS_CTS_ON)) == (MS_DSR_ON | MS_RLSD_ON | MS_CTS_ON), what);
     for (i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
         BOOL ok = EscapeCommFunction(h, steps[i].fn);
-        s = WaitModem(h, steps[i].mask, steps[i].want, 2000);
+        if (steps[i].fn == SETRTS) rts = 1;
+        if (steps[i].fn == CLRRTS) rts = 0;
+        /* CTS: always on (CDC), or as RTS with -cts (the bridges' plug). */
+        mask = steps[i].mask | MS_CTS_ON;
+        want = steps[i].want | ((!g_Cts || rts) ? MS_CTS_ON : 0);
+        s = WaitModem(h, mask, want, 2000);
         wsprintf(what, "%s (escape %d, modem status %02lx, CTS %s)", steps[i].name, ok, s,
                  (s & MS_CTS_ON) ? "on" : "OFF");
-        Check(ok && (s & steps[i].mask) == steps[i].want && (s & MS_CTS_ON), what);
+        Check(ok && (s & mask) == want, what);
     }
 }
 
@@ -422,7 +516,7 @@ static void TestEvents(void)
         BYTE c = 'E';
         COMSTAT cs;
 
-        SetCommMask(h, EV_DSR | EV_RLSD | EV_BREAK | EV_RXCHAR | EV_TXEMPTY | EV_ERR);
+        SetCommMask(h, EV_CTS | EV_DSR | EV_RLSD | EV_BREAK | EV_RXCHAR | EV_TXEMPTY | EV_ERR);
         ResetEvent(ov.hEvent);
         pend = !WaitCommEvent(h, &mask, &ov) && GetLastError() == ERROR_IO_PENDING;
         switch (steps[i].act) {
@@ -445,7 +539,24 @@ static void TestEvents(void)
         }
         ClearCommError(h, &errs, &cs);
         wsprintf(what, "%s (mask %04lx, comm errors %04lx, waited %d)", steps[i].name, mask, errs, pend);
-        Check(got && (mask & steps[i].want), what);
+        if (steps[i].act == 5 && g_NoBreakIn) {
+            /* The port does not report a received break (design 6.3). */
+            Log("INFO %s: not expected on this port", what);
+            if (pend && !got) {
+                SetCommMask(h, 0);
+                WaitForSingleObject(ov.hEvent, 1000);
+            }
+        } else {
+            Check(got && (mask & steps[i].want), what);
+        }
+        if (g_Cts && (steps[i].act == 3 || steps[i].act == 4)) {
+            wsprintf(what, "EV_CTS with %s (mask %04lx)", steps[i].act == 3 ? "CLRRTS" : "SETRTS", mask);
+            Check(got && (mask & EV_CTS), what);
+        }
+        if (steps[i].act == 5) {
+            Sleep(300);                       /* a bridge's break may bring a NUL */
+            PurgeComm(h, PURGE_RXCLEAR);
+        }
         if (steps[i].act == 5) {
             /* Recorded, not checked: whether VCOMM hands CE_BREAK to the
                caller once EV_BREAK has been raised is VCOMM's business. */
@@ -505,6 +616,8 @@ static void TestMisc(HANDLE h)
     ok = SetCommBreak(h);
     Sleep(200);
     ok = ClearCommBreak(h) && ok;
+    Sleep(300);
+    PurgeComm(h, PURGE_RXCLEAR);              /* a bridge's break may bring a NUL */
     ClearCommError(h, &errs, &cs);
     wsprintf(what, "SetCommBreak / ClearCommBreak (%d), then echo; errors seen %04lx", ok, errs);
     Check(ok && Echo(h, 64, 14, 0xFF, NULL, 0), what);
@@ -558,6 +671,75 @@ static int Quick(void)
     return 1;
 }
 
+/*
+ * fOutxCtsFlow (-cts only), on an overlapped handle: with CTS off (RTS
+ * dropped; the plug loops it to CTS) a write stays queued with fCtsHold and
+ * nothing comes back; with CTS back it completes and comes back whole.
+ */
+static void TestCtsFlow(void)
+{
+    DCB d;
+    BYTE b[16];
+    COMSTAT cs;
+    OVERLAPPED wo, ro;
+    DWORD w = 0, r = 0, errs = 0, wait;
+    char what[160];
+    BOOL ok, pend;
+    int still = 0;
+    HANDLE h = Open(FILE_FLAG_OVERLAPPED);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        Check(0, "overlapped open for the fOutxCtsFlow test");
+        return;
+    }
+    memset(&wo, 0, sizeof(wo));
+    memset(&ro, 0, sizeof(ro));
+    wo.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    ro.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    SetLine(h, 115200, 8, NOPARITY, ONESTOPBIT);
+    memset(&d, 0, sizeof(d));
+    d.DCBlength = sizeof(d);
+    GetCommState(h, &d);
+    d.fOutxCtsFlow = TRUE;
+    d.fRtsControl = RTS_CONTROL_ENABLE;
+    ok = SetCommState(h, &d);
+    EscapeCommFunction(h, CLRRTS);
+    Sleep(500);
+    PurgeComm(h, PURGE_RXCLEAR);
+    Pattern(b, sizeof(b), 21, 0xFF);
+    Timeouts(h, MAXDWORD, 0, 0);
+    pend = !WriteFile(h, b, sizeof(b), &w, &wo) && GetLastError() == ERROR_IO_PENDING;
+    Sleep(1000);
+    if (pend && !GetOverlappedResult(h, &wo, &w, FALSE) && GetLastError() == ERROR_IO_INCOMPLETE)
+        still = 1;
+    ClearCommError(h, &errs, &cs);
+    wsprintf(what, "fOutxCtsFlow, CTS off: write still pending %d, %lu queued, CTS hold %d, %lu bytes came back",
+             still, cs.cbOutQue, cs.fCtsHold, cs.cbInQue);
+    if (g_CtsHw)                /* the chip holds them, not the VxD: drained, none back */
+        Check(ok && !cs.fCtsHold && cs.cbOutQue == 0 && cs.cbInQue == 0, what);
+    else                        /* the VxD holds them, all of them */
+        Check(ok && still && cs.fCtsHold && cs.cbOutQue == sizeof(b) && cs.cbInQue == 0, what);
+    EscapeCommFunction(h, SETRTS);
+    wait = pend ? WaitForSingleObject(wo.hEvent, 5000) : WAIT_OBJECT_0;
+    if (pend) {
+        w = 0;
+        GetOverlappedResult(h, &wo, &w, FALSE);
+    }
+    Sleep(500);
+    Timeouts(h, MAXDWORD, MAXDWORD, 2000);
+    if (!ReadFile(h, g_In, sizeof(b), &r, &ro) && GetLastError() == ERROR_IO_PENDING)
+        GetOverlappedResult(h, &ro, &r, TRUE);
+    wsprintf(what, "fOutxCtsFlow, CTS on: write done %d (%lu bytes), %lu of 16 bytes came back",
+             wait == WAIT_OBJECT_0, w, r);
+    Check(wait == WAIT_OBJECT_0 && w == sizeof(b) && r == sizeof(b) && memcmp(g_In, b, sizeof(b)) == 0, what);
+    d.fOutxCtsFlow = FALSE;
+    SetCommState(h, &d);
+    PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
+    CloseHandle(wo.hEvent);
+    CloseHandle(ro.hEvent);
+    CloseHandle(h);
+}
+
 static void Full(void)
 {
     HANDLE h;
@@ -585,6 +767,8 @@ static void Full(void)
     TestMisc(h);
     Check(CloseHandle(h), "close");
     TestEvents();
+    if (g_Cts)
+        TestCtsFlow();
     TestOpenClose();
 }
 
@@ -683,6 +867,13 @@ int main(int argc, char **argv)
 
     while (a < argc && argv[a][0] == '-') {
         if (!lstrcmpi(argv[a], "-noe9")) g_E9 = 0;
+        else if (!lstrcmpi(argv[a], "-cts")) g_Cts = 1;
+        else if (!lstrcmpi(argv[a], "-nobreakin")) g_NoBreakIn = 1;
+        else if (!lstrcmpi(argv[a], "-ctshw")) g_CtsHw = 1;
+        else if (!lstrcmpi(argv[a], "-baud") && a + 2 < argc) {
+            g_BaudLo = (DWORD)atol(argv[++a]);
+            g_BaudHi = (DWORD)atol(argv[++a]);
+        }
         else if (!lstrcmpi(argv[a], "-log") && a + 1 < argc) lstrcpyn(g_LogPath, argv[++a], MAX_PATH);
         a++;
     }
@@ -736,7 +927,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc - a < 2) {
-        printf("usage: COMTEST [-noe9] [-log file] COMn full|quick|hold secs [wait] | COMTEST list\n");
+        printf("usage: COMTEST [-noe9] [-log file] [-cts] [-ctshw] [-nobreakin] [-baud lo hi] COMn full|quick|hold secs [wait] | COMTEST list\n");
         return 2;
     }
     lstrcpyn(g_Port, argv[a], sizeof(g_Port));
@@ -748,6 +939,8 @@ int main(int argc, char **argv)
         Quick();
     else if (!lstrcmpi(mode, "events"))
         TestEvents();
+    else if (!lstrcmpi(mode, "ctsflow"))
+        TestCtsFlow();
     else if (!lstrcmpi(mode, "opens") && argc - a >= 3) {
         /* opens N: open, echo 64 bytes and close, N times. */
         DWORD n = (DWORD)atol(argv[a + 2]), i, bad = 0;

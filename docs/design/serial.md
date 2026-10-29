@@ -39,9 +39,11 @@ What this design covers is the real gap:
    (section 5.3).
 3. **Vendor-chip silicon that no vendor 98 driver accepts.** This covers
    FTDI FT-X/FT232H/FT4232H, PL2303G-series, CP2105/CP2108, and whatever the
-   section 2 checks add. These are later, optional modules on the same core.
+   section 2 checks add. These are modules on the same core (section 6.3).
    Owner, 2026-10-20: later, and on demand only. Owner, 2026-10-29:
-   in the next release, no longer on demand only (milestone M5, section 12).
+   in the next release, no longer on demand only (milestone M5, section 12):
+   FTDI FT-X, FT232H and FT4232H, Prolific PL2303 (the old parts and the G
+   series) and Silicon Labs CP2105 and CP2108, on 98 SE and ME.
 
 The gap is not negligible. Arduino-class and RP2040/ESP32 boards are the
 USB serial devices people actually plug in today, and on 98 SE/ME none of
@@ -230,12 +232,12 @@ On both, it is bound only as a `LowerFilters` entry under modem INFs
 |---|---|---|---|
 | FTDI FT232BM/AM, FT2232D | Vendor (non-free pack) | Vendor | Vendor (Windows Update) |
 | FTDI FT232R | Vendor, unverified | Vendor | Vendor |
-| FTDI FT-X, FT232H, FT4232H | **Gap** | **Gap** (unverified) | Vendor |
+| FTDI FT-X, FT232H, FT4232H | **Gap: this package (6.3)** | **Gap** (unverified) | Vendor |
 | CH340/CH341 | Vendor (non-free pack) | Vendor | Vendor |
 | CP2101/2 | Vendor if the v4.x package is found, else **gap** | Vendor | Vendor |
-| CP2105/CP2108 | **Gap** | Unverified | Vendor |
-| PL2303 (old) | **Gap**: 2.0.0.19 exists only as unofficial copies, so the non-free pack drops it (section 3) | Vendor | Vendor |
-| PL2303 HXD/TA/G | **Gap** (G certain, HXD/TA unverified) | Unverified | Vendor |
+| CP2105/CP2108 | **Gap: this package (6.3)** | Unverified | Vendor |
+| PL2303 (old) | **Gap: this package (6.3)**; 2.0.0.19 exists only as unofficial copies, so the non-free pack drops it (section 3) | Vendor | Vendor |
+| PL2303 HXD/TA/G | **Gap: this package (6.3)** (G certain, HXD/TA unverified) | Unverified | Vendor |
 | **CDC-ACM** (Arduino, Pico, ESP32-S2/S3, STM32, CH9102/CH343, modems) | **Gap: this package** | INF for `usbser.sys` | INF for `usbser.sys` |
 
 ## 3. Non-free pack entries (owner decision)
@@ -748,27 +750,229 @@ The descriptor rules come from CDC 1.2 and its PSTN subclass, and from Linux
 - **No isochronous transfers.** Full Speed is enough. High-Speed CDC
   devices simply get larger bulk packets.
 
-### 6.3 Chip modules (next release; owner, 2026-10-29)
+### 6.3 Chip modules (M5; owner, 2026-10-29: in the next release)
 
-Each is a table entry plus about 300 lines on the core. The Linux sources,
-with their licences; a GPL-2.0 (only) source gives facts only (section
-10):
+The bridges of section 2.6 that no vendor driver serves on 98 SE and ME get
+a module each on the same core, so a bridge becomes `COMn` exactly as a
+CDC-ACM function does: the same child PDO, `PortName` choice, VCOMM port
+driver, queues, timeouts and removal handling. A module supplies only the
+USB side of section 4's list: its id table entry, how it finds its ports,
+its line coding, control lines, break and flow control as vendor requests,
+and its modem and line status decoding.
 
-- **FTDI:** `ftdi_sio.c` (GPL-2.0+), which may be adapted.
-  - Divisor functions: `ftdi_232am_baud_base_to_divisor` (line 1127),
-    `ftdi_232bm_baud_base_to_divisor` (1152, a 3 MHz base with eighths
-    encoded as sub-divisor codes) and `ftdi_2232h_baud_base_to_divisor`
-    (1173, a 12 MHz base for H parts).
-  - Each 64-byte packet in carries a 2-byte modem and line status prefix.
-- **CP210x:** `cp210x.c` (GPL-2.0; facts only). The rate is set as a 32-bit value, with
-  per-part rounding: `cp210x_get_an205_rate` (line 998) and
-  `cp210x_get_actual_rate` (1010).
-- **CH341:** `ch341.c` (GPL-2.0; facts only). `ch341_get_divisor` (line 175) produces a
-  prescaler and divisor; `ch341_set_baudrate_lcr` (239) writes them.
-- **PL2303:** `pl2303.c` (GPL-2.0; facts only). The rate is encoded either directly or
-  as a divisor: `pl2303_encode_baud_rate_direct` (602) and
-  `pl2303_encode_baud_rate_divisor` (610). The HXN/G series uses different
-  registers (`PL2303_HXN_*`, lines 167-172).
+**Covered, and how a device is recognised.** The SYS takes the family from
+the device descriptor's VID and PID (a function PDO that a splitting bus
+made reports the whole device's descriptor), and the part within the family
+from the descriptor or one vendor read, as Linux does:
+
+| Family | `USBCOM.INF` lists (matched automatically) | Part within the family |
+|---|---|---|
+| FTDI | `0403:6015` FT-X, `0403:6014` FT232H, `0403:6011` FT4232H (whole device and `&MI_00` to `&MI_03`) | `bcdDevice`: 0x1000 FT-X, 0x0900 FT232H, 0x0800 FT4232H; also 0x0400 FT232BM, 0x0500 FT2232C/D, 0x0600 FT232R, 0x0700 FT2232H, and 0x0200 FT232AM, or FT232BM when `iSerialNumber` is 0 and the latency timer reads (Linux `ftdi_determine_type`, `ftdi_sio.c` line 1502) |
+| PL2303 | `067B:2303` (H, HX, HXD, TA), `067B:2304` (TB), and the G series `067B:23A3`, `23B3`, `23C3`, `23D3`, `23E3`, `23F3` | `bDeviceClass`, `bMaxPacketSize0`, `bcdUSB`, `bcdDevice`, and for `bcdDevice` 0x0300 and 0x0500 under USB 2.0 whether vendor register 0x8080 reads (Linux `pl2303_detect_type`, `pl2303.c` line 403) |
+| CP210x | `10C4:EA70` CP2105 (whole device, `&MI_00`, `&MI_01`), `10C4:EA71` CP2108 (whole device, `&MI_00` to `&MI_03`) | the part number from vendor request 0xFF, value 0x370B (Linux `cp210x_determine_type`, `cp210x.c` line 2119) |
+
+The family table also recognises `0403:6001` and `0403:6010` (the FTDI
+parts FTDI's 98 drivers serve, section 2.1) and `10C4:EA60` (CP2101 to
+CP2104, CP2102N), but `USBCOM.INF` does not list them: they are reached only
+by the manual "Have Disk" model, so this package never takes such a device
+from a vendor driver. A user whose FT232R that 1.09.06 does not drive
+(unverified, section 14) can choose it by hand; the QEMU FTDI model
+(`usb-serial`, an FT232BM at `0403:6001`) is reached the same way in the
+legs.
+
+**Ports.** A chip's ports are its vendor-class interfaces: each interface,
+at alternate setting 0, with one bulk IN and one bulk OUT endpoint is one
+port, in interface order (FT4232H and CP2108: four; CP2105: two; the others
+one). The port's interrupt IN endpoint is the first one in its interface, or
+for a PL2303 with none there the first one in interface 0 (Linux's endpoint
+hack, `pl2303.c` line 340). Under xHCI98, which splits composites itself
+and reports no whole-device devnode, each `&MI_nn` function is a device of
+its own to the SYS, with one port. Under NUSB's EHCI and Microsoft's 98 SE
+stack the split is left to Windows' composite parent, which matches only the
+compatible id `USB\COMPOSITE`; the whole-device line is a hardware id and
+wins, so the whole device is one FDO with up to four ports (`AC_MAX_FUNCS`).
+Each port keeps its interface number (CP210x `wIndex`) and, on FTDI, its
+channel: 0 on the FT232AM, BM and R, else 1 + the interface number. A
+PL2303 whose endpoints span two interfaces is served as a whole device only:
+`USBCOM.INF` lists no `&MI_nn` line for the PL2303, so under xHCI98, which
+would split it, it gets no driver. The CDC-ACM walk of 6.1 is not run for a
+chip, and a chip's interfaces are never taken for CDC-ACM.
+
+**Control requests.** Each VxD operation of `ucif.h` (line coding, control
+lines, break, and the new flow control operation below) becomes one to four
+control transfers, run one at a time in call order through the same
+operation FIFO as CDC's (15, "Line coding order"); CDC-ACM's own requests
+(6.2) go through the same path. A step that reads (a read-modify-write of a
+flow register) feeds the next; the operation at the head stays the one the
+transfer in flight belongs to. Internal operations join them:
+
+- *initialise*, at the FDO's start, synchronously before the port runs
+  (part detection, the PL2303's register sequence);
+- *open*, queued at each `Attach` at the tail: after what the previous open
+  left (its DTR drop and close), before this open's line coding;
+- *close*, queued at each `Detach`, after the DTR drop the VxD sends;
+- *status poll*, CP210x only, at most one queued, and only into an empty
+  FIFO.
+
+On a chip, bulk transfers wait after each `Attach` until its *open* has run
+(an FTDI reset discards what the chip holds), and bulk OUT also waits while
+any setting queued before it has not run (line coding, control lines,
+break, flow control, *open*), whether it is still in the VxD's queue or in
+the SYS's: data written after `SetCommState` goes at the new rate. When the
+VxD's queue has emptied into the SYS's, it asks the SYS to pull the
+transmit queue again. On the FTDI, bulk OUT after an open also waits for
+the first status report (the chip sends one within its latency timer, 16 ms
+by default), so the VxD's CTS hold (below) never works from an old CTS.
+Resume (7.10) restores *open*, the line coding, flow control and control
+lines, from the operations last sent, before the FIFO's next operation and
+outside it, once no control transfer is in flight; an operation the device
+slept in the middle of restarts after them, a second resume before they
+have run only marks them again, and bulk transfers wait for them (and on
+the FTDI for a fresh status) as after an open. A setting whose transfer
+fails still lets the data behind it go: the device has answered, and
+holding the data would only hang the port. On the PL2303 H the SYS resets
+both bulk pipes at each `Attach` (Linux clears their halts) before any bulk
+transfer.
+
+The FIFO has 64 places, and the SYS keeps 20 of them: the VxD's `Control`
+is refused at 44 (the VxD keeps the operation and tries again, as before),
+except in `PortClose`'s flush, which marks its operations (`UCOP_F_CLOSING`)
+and may fill all but the last place, so an open's last settings (a
+1200-baud touch, 7.6) always reach the device before its close; the VxD
+holds at most 16. `Attach` is refused, so the open fails, unless 19 places
+are free (this open, its close's flush of up to 16 and the DTR drop, and
+the close), so a quick reopen cannot take the room its own close needs.
+*Close* also drops DTR and RTS itself on every port, CDC-ACM's too. Facts from Linux v6.12 (commit `adc21867`); FTDI's from
+`ftdi_sio.c` and `ftdi_sio.h`, PL2303's from `pl2303.c`, CP210x's from
+`cp210x.c`:
+
+| Operation | FTDI (vendor, to the device, `wIndex` = channel) | PL2303 (class requests `wIndex` 0; vendor writes: `wValue` = register, `wIndex` = value) | CP210x (vendor, to the interface, `wIndex` = interface) |
+|---|---|---|---|
+| initialise | on `bcdDevice` 0x0200 with `iSerialNumber` 0: `GET_LATENCY_TIMER` (0x0A, one byte) | detection read 0x8080 (request 0x01) when needed; then, except on the G series, the eleven-transfer register sequence of `pl2303_startup` (line 470), ending with register 2 = 0x44 (0x24 on the H) | `GET_PARTNUM` (request 0xFF, value 0x370B, one byte, to the device) |
+| open | `RESET` (0, value 0) | register 8 = 0 and 9 = 0; G series: register 7 = 3; H: the pipe resets above | `IFC_ENABLE` (0x00) = 1 |
+| line coding | `SET_DATA` (4: data bits, parity << 8, stop bits << 11, the break bit 1 << 14 kept), then `SET_BAUDRATE` (3: the divisor's low 16 bits; `wIndex` = its high bits, or on a channel part high bits << 8 + channel) | `SET_LINE_REQUEST` (class 0x20) with the CDC 7-byte layout; the rate field encoded as below | `SET_BAUDRATE` (0x1E, 4 bytes), then `SET_LINE_CTL` (0x03: data bits << 8, parity << 4, stop bits) |
+| control lines | `SET_MODEM_CTRL` (1: 0x0300 + DTR + RTS << 1) | `SET_CONTROL_REQUEST` (class 0x22: DTR + RTS << 1) | `SET_MHS` (0x07: 0x0300 + DTR + RTS << 1); with RTS in flow mode, `GET_FLOW` / `SET_FLOW` instead, as Linux (`cp210x_tiocmset_port`, line 1335) |
+| break | `SET_DATA` with bit 14 set or clear | `BREAK_REQUEST` (class 0x23: 0xFFFF / 0) | `SET_BREAK` (0x05: 1 / 0); none on the CP2105's second interface (`cp210x_break_ctl`, line 1441) |
+| flow | `SET_FLOW_CTRL` (2: `wIndex` = 0x0100 or 0, + channel) | read-modify-write: register 0 (read as 0x80, request 0x01), mask 0xF0, value 0x60 (0x40 on the H) or 0; G series: register 0x0A (read request 0x81, write 0x80), mask 0x1C, 0x18 or 0x1C | `GET_FLOW` (0x14, 16 bytes), then `SET_FLOW` (0x13): the CTS handshake bit and the RTS mode separately |
+| close | `SET_FLOW_CTRL` off, then `SET_MODEM_CTRL` with DTR and RTS low (ignored while flow control was on), then `SET_DATA` without break | `BREAK_REQUEST` 0, then `SET_CONTROL_REQUEST` 0 | `GET_FLOW` / `SET_FLOW` with DTR and RTS inactive and no handshake (`SET_MHS` cannot move an RTS in flow mode; on a CP2102N `SET_MHS` 0x0300), `PURGE` (0x12) = 0x000F, `IFC_ENABLE` = 0 |
+| status poll | none (in band) | none (interrupt endpoint) | `GET_MDMSTS` (0x08, one byte) |
+
+**Rates.** The VxD's rate goes to the chip as that chip encodes it:
+
+- FTDI: FT-X, FT232BM, FT232R and FT2232C/D take the 3 MHz divisor with
+  eighths as sub-divisor codes (`ftdi_232bm_baud_base_to_divisor`, line
+  1152); the H parts take the 12 MHz form with bit 17 set for rates from
+  1200 (`ftdi_2232h_baud_base_to_divisor`, line 1173) and the 3 MHz form
+  below 1200; the FT232AM its own form (line 1127). These three functions
+  are adapted from `ftdi_sio.c` (GPL-2.0-or-later) with its notices
+  (section 10). 3,000,000 bit/s at most (12,000,000 on H parts), 184 at
+  least.
+- PL2303: the rate itself for the rates Linux lists as direct (75 to
+  6,000,000, `pl2303_get_supported_baud_rate`, line 573) and always on the G
+  series; otherwise the divisor form `12 MHz * 32 / (mantissa * 4^exponent)`
+  with byte 3 = 0x80, or for the TA and TB the alternative with
+  `2^exponent` (lines 610 and 649). Highest rate per part: H 1,228,800; HX
+  and TA 6,000,000; TB, HXD and G 12,000,000.
+- CP210x: a 32-bit rate, from 300; below 1,000,000 quantised to the AN205
+  table (line 963) except on parts that take the actual rate
+  (`cp210x_get_actual_rate`, line 1010: the CP2105's first interface).
+  Highest rate: CP2105 first interface 2,000,000, second interface 921,600
+  (from 2400); CP2108 2,000,000 (`cp210x_init_max_speed`, line 2026).
+
+**What the VxD may set.** The table of `ucif.h` gains the port's limits:
+lowest and highest rate, the data bits, stop bits and parities it takes,
+the highest rate with 5 or 6 data bits, and whether the port has flow
+control and break. The VxD copies them into its own port at open (the
+table may not be read after `Gone`, `ucif.h`); `PortSetCommState` refuses
+a value outside them as it refuses an invalid one (`IE_BAUDRATE`,
+`IE_BYTESIZE`, `IE_DEFAULT`), and `PortGetProperties` reports them:
+
+| Port | Data bits | Stop bits | Parity | Note |
+|---|---|---|---|---|
+| FTDI | 7, 8 | 1, 2 | all five | Linux sends no 6 data bits and no 1.5 stop bits; its 5-bit setting is a smartcard-reader special case (`ftdi_set_termios`, line 2607), so 5 is refused |
+| PL2303 | 5 to 8 | 1, 1.5, 2 | all five | |
+| CP2105 first interface, CP2108, CP2102 to CP2104 | 5 to 8 | 1, 2 | all five | CP2105: 5 and 6 data bits only up to 921,600 bit/s (CP2105 data sheet, Table 10, unverified: section 14); 1.5 stop bits, which it is said to have with 5 data bits, refused here |
+| CP2105 second interface | 8 | 1 | none, odd, even | the same table (unverified) |
+| CP2101 (manual model only) | 8 | 1 | none, odd, even | Linux `cp210x_set_termios`, line 1269 |
+
+CDC-ACM keeps what section 7.5 says.
+
+**Flow control.** On a chip, CTS is a real line and RTS/CTS handshaking
+exists. The DCB's two directions travel separately in the new operation
+`UCOP_FLOW` (bit 0 `fOutxCtsFlow`, transmit held while CTS is off; bit 1
+`fRtsFlow`, RTS driven by the receive side), sent at open and when either
+changes; CDC ignores it.
+
+- CP210x has the two directions in two fields and takes each as set. The
+  flow operation also clears what the chip would otherwise do on its own:
+  DSR and DCD handshaking and DSR sensitivity in `ulControlHandshake`; its
+  XON/XOFF, error character, null stripping and break character in
+  `ulFlowReplace` (bits 0 to 4); the other fields are written back as read.
+  DTR goes to plain on or off. On a CP2102N the flow operation sends nothing
+  and the control lines always go through `SET_MHS` (Linux turns its flow
+  control off on early firmware, which reads the block wrongly, and the
+  firmware version is not read here).
+- FTDI and PL2303 have one mode for both, switched on only when both are
+  set. `fOutxCtsFlow` alone is done in the VxD instead: it takes nothing
+  from the transmit queue while CTS is off and reports `fCtsHold`, as a
+  UART's port driver does (the bytes already in a USB transfer still go).
+  On the FTDI, whose every packet carries the lines, the hold also lasts
+  from open until the first report; the PL2303 reports its lines only when
+  they change, so there CTS counts as on until its first report. The table
+  tells the VxD which case a port is (`UCIF_CAP_CTSFLOW`: the chip holds by
+  CTS alone; `UCIF_CAP_CTSNOW`: it reports CTS soon after open). `fRtsFlow`
+  alone is accepted and RTS stays as the control lines set it, as on CDC
+  (7.3).
+- DTR/DSR handshaking stays accepted and ignored, as on CDC. XON/XOFF stays
+  in the VxD (7.3).
+
+**Status.** Each module turns its chip's report into the SERIAL_STATE word
+the VxD already decodes (6.2), plus one bit CDC never sets, bit 15, "CTS
+off" (a CDC device's notification is masked to bits 0 to 6); the VxD shows
+CTS on whenever it is clear, so CDC behaves as before (7.2) and a chip's CTS
+reaches the MSR shadow, `EV_CTS` and `MS_CTS_ON`.
+
+- FTDI: every bulk IN packet (per `wMaxPacketSize`) starts with two status
+  bytes, which the SYS strips before the VxD sees the data: byte 0 bits 4
+  to 7 are CTS, DSR, RI and DCD; byte 1 bits 1 to 3 are overrun, parity
+  and framing, taken only from packets that carry data, and bit 4 is a
+  break only in a packet with data whose last byte is NUL (Linux
+  `ftdi_process_packet`, line 2436). A state is passed on when the lines
+  change or an error bit is set.
+- PL2303: the interrupt IN transfer's byte 8 has the SERIAL_STATE layout
+  (DCD, DSR, break, RI, framing, parity, overrun in bits 0 to 6) plus CTS in
+  bit 7 (`pl2303_update_line_status`, line 1096).
+- CP210x: `GET_MDMSTS` gives CTS, DSR, RI and DCD in bits 4 to 7. The SYS
+  reads it every 100 ms while the port is open and the device is in D0 (a
+  one-shot timer, set again from its own DPC; cancelled at `Detach`, stop
+  and suspend, and set again after resume), and passes a change on. Line
+  errors and received breaks are not reported: Linux reads them only in
+  the embedded-events mode, which also changes the data stream; it stays
+  off.
+
+**Not covered.** The FT2232H and the other FTDI parts are not listed
+(section 2.1); FTDI's MPSSE and bit-bang modes, the latency timer (the chip's
+default stays), EEPROM and GPIO are not used; the PL2303 clone question is
+not addressed (a clone that answers as one of the parts above works as
+that part); the CP210x GPIOs and the CP2102N's flow control erratum (Linux
+reads its firmware version) are not handled, the CP2102N being reached only
+by the manual model. The 2000 to 8 INF (`USBCDC.INF`) is unchanged: there
+the vendors' own drivers serve these bridges (section 2.6).
+
+**Testing.** Each part of the table above is a simulated device for the
+legs (`chipemu.py`, on usbredir like `acmemu.py`): it decodes the vendor
+requests back to a rate and framing, records them, echoes the data with the
+chip's framing, refuses a CP210x interface request before `IFC_ENABLE`
+(the part number, a device request, is answered before it), and loops DTR
+back to DSR, RTS to DCD and CTS, and a sent break back as a received one
+where the part has both (not on the CP2105's second interface, which sends
+none, and not on CP210x, whose received breaks this design does not
+report).
+QEMU's `usb-serial`, an FT232BM written independently of this package,
+checks the FTDI divisor and framing against another reading of the
+protocol. Beyond `COMTEST`'s battery, the legs cover a write at once after
+open, quick reopens, pull while open and the CDC-ACM legs again. Real chips
+are owed (xHCI98 bench 45-E.14).
 
 ## 7. Serial behaviour
 
@@ -1000,10 +1204,10 @@ documents where they exist, with no code, names or comments taken.
 | File (planned) | Adapted from | Licence |
 |---|---|---|
 | `src/serial/usbcom/acmdesc.c` (CDC descriptor walk, union fallbacks, quirk table): **not adapted after all**. The walk in `acmcore.c` (2026-10-22) is original, written from CDC 1.2 and the behaviour list in 6.1, so it needs no NOTICE row. Its quirk table carries no entries yet | Linux `drivers/usb/class/cdc-acm.c` and `cdc-acm.h`, v6.12 | GPL-2.0+ |
-| `src/serial/usbcom/m_ftdi.c` (on demand) | Linux `drivers/usb/serial/ftdi_sio.c`, `ftdi_sio.h`, `ftdi_sio_ids.h` | GPL-2.0+ |
-| `src/serial/usbcom/m_cp210x.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/cp210x.c` (GPL-2.0) and Silicon Labs' published interface notes | - |
-| `src/serial/usbcom/m_ch341.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/ch341.c` (GPL-2.0) | - |
-| `src/serial/usbcom/m_pl2303.c` (on demand) | Not adapted: facts only from Linux `drivers/usb/serial/pl2303.c`, `pl2303.h` (GPL-2.0) | - |
+| `src/serial/usbcom/ftdibaud.c` (M5): the three FTDI divisor functions | Linux v6.12 `drivers/usb/serial/ftdi_sio.c` (`ftdi_232am_baud_base_to_divisor`, `ftdi_232bm_baud_base_to_divisor`, `ftdi_2232h_baud_base_to_divisor`), its notices kept. The rest of the FTDI module (`chipcore.c`) is written from facts: request codes and bit values from `ftdi_sio.h` and the ids from `ftdi_sio_ids.h` are GPL-2.0 only | GPL-2.0+ |
+| `src/serial/usbcom/chipcore.c` (M5), CP210x part | Not adapted: facts only from Linux `drivers/usb/serial/cp210x.c` (GPL-2.0) | - |
+| `src/serial/usbcom/m_ch341.c` (not planned: CH340/CH341 have a vendor 98 driver, section 2.2) | Not adapted: facts only from Linux `drivers/usb/serial/ch341.c` (GPL-2.0) | - |
+| `src/serial/usbcom/chipcore.c` (M5), PL2303 part | Not adapted: facts only from Linux `drivers/usb/serial/pl2303.c` (GPL-2.0); `pl2303.h` (GPL-2.0+) gives only the ids | - |
 | `src/serial/usbcom/nt_ser.c` (if M4; timeout case table only) | Not adapted: the timeout cases are written from the driver kit documentation of `SERIAL_TIMEOUTS`; ReactOS `drivers/serial/serial/rw.c` ("See COPYING in the top level directory") is a cross-check only | - |
 
 Everything else is original:
@@ -1037,8 +1241,9 @@ are `usb-serial` (an FTDI FT232BM, `hw/usb/dev-serial.c`), `usb-braille`
   hub's transaction translator: under NUSB's EHCI stack on 98 SE, and
   under Microsoft's EHCI stack on 2000, XP and 7 x64. Each stays pending
   until it is run.
-- QEMU's `usb-serial` (FTDI) concerns the non-free pack's FTDI entry, not
-  this package, and is not part of this plan.
+- QEMU's `usb-serial` (an FTDI FT232BM) reaches this package only through
+  the manual model, and only for the chip modules' legs (M5, section 6.3);
+  the chips themselves are simulated there (`chipemu.py`).
 - **Real hardware** (Owner, 2026-10-20: one or two mainstream devices per
   class):
   - Arduino Uno R3: non-composite, DTR reset.
@@ -1102,8 +1307,20 @@ are `usb-serial` (an FTDI FT232BM, `hw/usb/dev-serial.c`), `usb-braille`
   of `USBCOM.SYS` for 2000, with full `ntddser.h` IOCTLs and `serial.sys`
   timeout semantics, installed with `msports.dll`.
 - **M5 (next release; Owner, 2026-10-20 on demand only, 2026-10-29 the next release):** chip modules for the
-  gaps in section 2.6, ordered by what users ask for. FT-X and PL2303G are
-  the likely first.
+  gaps in section 2.6 (section 6.3): FTDI FT-X, FT232H and FT4232H; PL2303
+  (H, HX, HXD, TA, TB and the G series); CP2105 and CP2108. 98 SE and ME
+  only.
+  - Exit: each part, simulated (a PL2303 with its endpoints on two
+    interfaces aside, 6.3), gives a working `COMn` per port on 98 SE under
+    xHCI98 and under NUSB's EHCI, and on ME under xHCI98: echo,
+    every rate and framing the part takes (and the refusal of the others),
+    the control lines and CTS, break, and pull while open; the simulator's
+    decoded rate and framing match what was set. QEMU's FTDI model passes
+    the same on 98 SE. Real chips are xHCI98's bench task 45-E.14.
+  - ME's EHCI leg stays owed: NUSB is 98 SE only, and the test kit on this
+    host has no USB 2.0 stack for ME. `AGENTS.md` calls a driver ready only
+    once both host controller legs have passed, so the chip modules are not
+    called ready on ME until then.
 
 ## 13. Owner decisions and open questions
 
@@ -1114,7 +1331,8 @@ Owner, 2026-10-20, on the questions this draft raised:
   history, provenance recorded; any with no official source is dropped
   (PL2303 2.0.0.19). This package depends on none of them.
 - **Q2. Chip modules for vendor gaps** (FT-X/FT232H, PL2303G,
-  CP2105/CP2108): later, on demand only.
+  CP2105/CP2108): later, on demand only. Owner, 2026-10-29: in the next
+  release (M5).
 - **Q3. 2000 fallback.** M4 is built only if 2000's `usbser.sys` fails
   testing.
 - **Q4. Interim 98 INF.** If Route A1 works in M0, an INF-only 98 binding
@@ -1177,6 +1395,9 @@ None at present.
 | 2000 DDK `ml.exe` builds VxDs | Not needed: the VxD is C with inline assembly, linked by MSVC 6.0 `LINK /VXD` (section 15) |
 | PSTN 1.2 section numbers cited (6.3.13 `SEND_BREAK`, 6.5.4 `SERIAL_STATE`); the PSTN text was not read on this host, the bit layouts match Linux `cdc-acm.c` | Reading USB-IF `PSTN120.pdf` |
 | esptool DTR/RTS sequence on S2/S3 native USB | M2 |
+| The chip modules (6.3) on real FT-X, FT232H, FT4232H, PL2303 (old and G) and CP2105/CP2108 parts; the facts taken from Linux against the parts themselves | xHCI98 bench task 45-E.14 |
+| FTDI 1.5 stop bits and 5 or 6 data bits (refused here, after Linux) | A real part, or the vendor's documentation |
+| The CP2105 framing limits of 6.3 (its data sheet's Table 10: the second interface 8 data bits, 1 stop bit, no stick parity; the first 5 and 6 data bits only up to 921,600 bit/s, 1.5 stop bits with 5): the sheet returned 403 to this host, so they are taken as cited, the stricter way | Reading `silabs.com/documents/public/data-sheets/CP2105.pdf`, or a real CP2105 |
 
 ## 15. Implementation notes, 2026-10-22
 

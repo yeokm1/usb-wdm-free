@@ -12,6 +12,10 @@
  * The COM number is chosen here, before the child is reported, and written
  * into the child's hardware key as PortName (design 5.1.4).
  *
+ * A USB serial bridge (FTDI, PL2303, CP210x; design 6.3) is recognised by
+ * its ids (chipcore.c); its ports are its vendor interfaces, and everything
+ * after that is as for a CDC-ACM function.
+ *
  * Original code, from the Windows 98 / 2000 DDK documentation and headers.
  *
  * Copyright (C) 2026 Yeo Kheng Meng
@@ -514,14 +518,19 @@ static NTSTATUS UcConfigure(UC_FDO *fdo, AC_FUNC *funcs, int *nfuncs)
         return st;
     fdo->ConfigLength = total;
 
-    nf = AcFindFunctions((const AC_U8 *)fdo->Config, total, fdo->Quirks, funcs, AC_MAX_FUNCS);
-    UCT4("device %04x:%04x, configuration %lu bytes, %ld CDC-ACM functions",
+    fdo->Family = AcChipFamily(fdo->DevDesc.idVendor, fdo->DevDesc.idProduct);
+    if (fdo->Family == AC_FAM_CDC)
+        nf = AcFindFunctions((const AC_U8 *)fdo->Config, total, fdo->Quirks, funcs, AC_MAX_FUNCS);
+    else
+        nf = AcChipFindPorts(fdo->Family, (const AC_U8 *)fdo->Config, total, funcs, AC_MAX_FUNCS);
+    UCT4("device %04x:%04x, configuration %lu bytes, %ld ports",
          fdo->DevDesc.idVendor, fdo->DevDesc.idProduct, total, nf);
+    UCT2("family %lu, bcdDevice %04lx", fdo->Family, fdo->DevDesc.bcdDevice);
     if (nf > 0)
         UCT4("function 0: comm if %lu data if %lu, in max %lu out max %lu",
              funcs[0].CommIf, funcs[0].DataIf, funcs[0].InMax, funcs[0].OutMax);
     if (nf <= 0)
-        return STATUS_DEVICE_CONFIGURATION_ERROR;   /* not CDC-ACM: Code 10 */
+        return STATUS_DEVICE_CONFIGURATION_ERROR;   /* no CDC-ACM function or port: Code 10 */
 
     ifs = (AC_IFACE *)ExAllocatePool(PagedPool, 32 * sizeof(AC_IFACE));
     if (ifs == NULL)
@@ -675,6 +684,49 @@ static NTSTATUS UcCreatePdo(UC_FDO *fdo, UC_PORT *p)
     return STATUS_SUCCESS;
 }
 
+/*
+ * The port's chip state from the device and its function, then the
+ * module's initialisation (design 6.3), synchronously: PASSIVE_LEVEL, before
+ * the port runs. A failed step is the module's to judge (the PL2303's
+ * detection read fails on the G series); none fails the start.
+ */
+static void UcPortSetup(UC_FDO *fdo, UC_PORT *p)
+{
+    struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST urb;
+    UCHAR buf[AC_SETUP_MAX];
+    AC_SETUP s;
+    AC_U16 state;
+    ULONG step = 0, len = 0, n;
+    int ok = 1;
+    NTSTATUS st;
+
+    AcChipSetup(&p->Chip, fdo->Family, (const AC_U8 *)&fdo->DevDesc, p->Func.CommIf, p->Func.InMax);
+    for (n = 0; n < 32; n++) {
+        if (!(AcChipStep(&p->Chip, AC_OP_INIT, 0, NULL, &step, ok, buf, len, &s, &state) & AC_STEP_SEND))
+            break;
+        RtlCopyMemory(buf, s.Data, AC_SETUP_MAX);
+        if (s.Length > AC_SETUP_MAX)
+            s.Length = AC_SETUP_MAX;
+        UcBuildControlUrb((PURB)&urb, &s, buf);
+        st = UcSubmitUrbSync(fdo, (PURB)&urb);
+        ok = NT_SUCCESS(st);
+        len = (ok && (s.Type & 0x80)) ? urb.TransferBufferLength : 0;
+        if (len > AC_SETUP_MAX)
+            len = AC_SETUP_MAX;
+        UCT4("port %lu init step %lu request %08lx: %08lx", p->Index, step,
+             ((ULONG)s.Type << 24) | ((ULONG)s.Request << 16) | s.Value, st);
+        step++;
+    }
+    if (!AcChipBreak(&p->Chip))
+        p->Func.Caps &= (UCHAR)~AC_CAP_BREAK;
+    p->Table.Caps = ((p->Func.Caps & AC_CAP_BREAK) ? UCIF_CAP_BREAK : 0) |
+                    ((p->Func.Caps & AC_CAP_LINE) ? UCIF_CAP_LINE : 0) |
+                    AcChipFlowCaps(&p->Chip);
+    p->Table.Limits = p->Chip.Limits;
+    UCT4("port %lu: part %lu, rates %lu to %lu", p->Index, p->Chip.Part,
+         p->Chip.Limits.MinBaud, p->Chip.Limits.MaxBaud);
+}
+
 static NTSTATUS UcFdoStart(UC_FDO *fdo)
 {
     AC_FUNC funcs[AC_MAX_FUNCS];
@@ -717,6 +769,7 @@ static NTSTATUS UcFdoStart(UC_FDO *fdo)
         p->InPipe = UcFindPipe(fdo, funcs[i].BulkIn);
         p->OutPipe = UcFindPipe(fdo, funcs[i].BulkOut);
         p->NotifyPipe = UcFindPipe(fdo, funcs[i].NotifyEp);
+        UcPortSetup(fdo, p);
     }
     if (!NT_SUCCESS(st) || fdo->NumPorts == 0) {
         if (created)

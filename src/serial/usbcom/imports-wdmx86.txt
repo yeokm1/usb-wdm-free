@@ -22,10 +22,13 @@ NTOSKRNL.EXE!IofCompleteRequest
 NTOSKRNL.EXE!KeClearEvent
 NTOSKRNL.EXE!KeInitializeDpc
 NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeCancelTimer
 NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeInitializeTimer
 NTOSKRNL.EXE!KeInsertQueueDpc
 NTOSKRNL.EXE!KeRemoveQueueDpc
 NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeSetTimer
 NTOSKRNL.EXE!KeWaitForSingleObject
 NTOSKRNL.EXE!ObfReferenceObject
 NTOSKRNL.EXE!PoCallDriver

@@ -7,12 +7,18 @@
  * routine or the pipe-reset work item, never directly from a VxD call:
  * the table entries only record work and queue the DPC.
  *
+ * The control requests of a port, CDC-ACM's or a chip module's (design
+ * 6.3), come from chipcore.c's step generator, one control transfer at a
+ * time, in the order the operations were queued.
+ *
  * Copyright (C) 2026 Yeo Kheng Meng
  */
 #include "usbcom.h"
 
 static NTSTATUS UcComplete(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx);
 static void     UcPump(UC_PORT *p);
+static VOID     UcPollDpc(PKDPC dpc, PVOID ctx, PVOID a1, PVOID a2);
+static void     UcQueueReset(UC_PORT *p);
 
 /* ---- helpers ------------------------------------------------------------- */
 
@@ -36,6 +42,80 @@ static void UcBuildBulk(UC_XFER *x, USBD_PIPE_HANDLE pipe, ULONG len, BOOLEAN in
         sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER), pipe, x->Buffer, NULL,
         len, in ? (USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK)
                 : USBD_TRANSFER_DIRECTION_OUT, NULL);
+}
+
+/* A control request from a step of chipcore.c's generator. */
+void UcBuildControlUrb(PURB urb, const AC_SETUP *s, PUCHAR buf)
+{
+    USHORT fn;
+    ULONG flags = (s->Type & 0x80) ? (USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK)
+                                   : USBD_TRANSFER_DIRECTION_OUT;
+    switch (s->Type & 0x7F) {
+    case 0x20: fn = URB_FUNCTION_CLASS_DEVICE; break;
+    case 0x21: fn = URB_FUNCTION_CLASS_INTERFACE; break;
+    case 0x41: fn = URB_FUNCTION_VENDOR_INTERFACE; break;
+    default:   fn = URB_FUNCTION_VENDOR_DEVICE; break;
+    }
+    RtlZeroMemory(urb, sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST));
+    UsbBuildVendorRequest(urb, fn, sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST), flags, 0,
+        s->Request, s->Value, s->Index, s->Length ? buf : NULL, NULL, s->Length, NULL);
+}
+
+/* Appends an operation of the SYS's own (AC_OP_*). Lock held. */
+static void UcAddOp(UC_PORT *p, ULONG op)
+{
+    UCIF_OP *o;
+    if (p->OpCount >= UC_OPS)
+        return;
+    o = &p->Ops[(p->OpHead + p->OpCount) % UC_OPS];
+    RtlZeroMemory(o, sizeof(*o));
+    o->Op = op;
+    p->OpCount++;
+}
+
+/* ---- the CP210x status poll (design 6.3) ----------------------------------- */
+
+/* Sets the poll timer; its Outstanding count is released when it fires
+   (UcPollDpc) or is cancelled (UcCancelPoll). Lock held. */
+static void UcArmPoll(UC_PORT *p)
+{
+    LARGE_INTEGER t;
+    if (p->PollArmed || !AcChipPolls(&p->Chip) || p->Stopping || p->Suspended || p->Gone)
+        return;
+    t.QuadPart = -10 * 1000 * (LONGLONG)UC_POLL_MS;
+    p->PollArmed = TRUE;
+    InterlockedIncrement(&p->Outstanding);
+    (void)KeSetTimer(&p->PollTimer, t, &p->PollDpc);
+}
+
+/* Lock held. A timer that has already fired releases its count itself. */
+static void UcCancelPoll(UC_PORT *p)
+{
+    p->PollDue = FALSE;
+    if (p->PollArmed && KeCancelTimer(&p->PollTimer)) {
+        p->PollArmed = FALSE;
+        if (InterlockedDecrement(&p->Outstanding) == 0)
+            KeSetEvent(&p->Drained, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+/*
+ * A chip's bulk OUT waits behind the configuration queued before it (design
+ * 6.3): any operation but a status poll or a close. Lock held.
+ */
+static BOOLEAN UcConfigPending(UC_PORT *p)
+{
+    ULONG i;
+    if (p->Chip.Family == AC_FAM_CDC)
+        return FALSE;
+    if (p->RestoreMask || p->CurRestore || p->AwaitStatus)
+        return TRUE;
+    for (i = 0; i < p->OpCount; i++) {
+        ULONG op = p->Ops[(p->OpHead + i) % UC_OPS].Op;
+        if (op != AC_OP_POLL && op != AC_OP_CLOSE)
+            return TRUE;
+    }
+    return FALSE;
 }
 
 static BOOLEAN UcDataBusy(UC_PORT *p)
@@ -89,6 +169,24 @@ static VOID UcDpc(PKDPC dpc, PVOID ctx, PVOID a1, PVOID a2)
     UNREFERENCED_PARAMETER(dpc);
     UNREFERENCED_PARAMETER(a1);
     UNREFERENCED_PARAMETER(a2);
+    UcPump(p);
+    UcDone(p);
+}
+
+static VOID UcPollDpc(PKDPC dpc, PVOID ctx, PVOID a1, PVOID a2)
+{
+    UC_PORT *p = (UC_PORT *)ctx;
+    KIRQL irql;
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(a1);
+    UNREFERENCED_PARAMETER(a2);
+    KeAcquireSpinLock(&p->Lock, &irql);
+    p->PollArmed = FALSE;
+    if (p->Attached && !p->Stopping && !p->Gone && !p->Suspended) {
+        p->PollDue = TRUE;
+        UcArmPoll(p);
+    }
+    KeReleaseSpinLock(&p->Lock, irql);
     UcPump(p);
     UcDone(p);
 }
@@ -163,11 +261,14 @@ static VOID UcResetWorker(PVOID ctx)
     if (rx) rxOk = UcResetPipe(p, p->InPipe, UC_X_IN);
     if (tx) txOk = UcResetPipe(p, p->OutPipe, UC_X_OUT);
 
-    /* A failed reset counts as a try and leaves the pipe halted. */
+    /* A failed reset counts as a try and leaves the pipe halted. A reset
+       asked for while this one ran (an open's, the PL2303 H) goes next. */
     KeAcquireSpinLock(&p->Lock, &irql);
     if (rx) { p->RxResets++; if (rxOk) p->RxHalted = FALSE; }
     if (tx) { p->TxResets++; if (txOk) p->TxHalted = FALSE; }
     p->ResetQueued = FALSE;
+    if ((p->RxHalted && p->RxResets < UC_RESET_TRIES) || (p->TxHalted && p->TxResets < UC_RESET_TRIES))
+        UcQueueReset(p);
     KeReleaseSpinLock(&p->Lock, irql);
     UcQueueDpc(p);
     UcDone(p);
@@ -234,10 +335,112 @@ static void UcPump(UC_PORT *p)
             if (p->Out[i].Busy) cancel[ncancel++] = p->Out[i].Irp;
     }
 
+    /* Control operations also run after Detach (the DTR drop and the
+       close on close), one control transfer at a time (design 6.3). */
+    if (!p->Stopping && !p->Suspended && !p->Gone && !p->Ctl.Busy) {
+        if (p->ResendPending) {
+            /* Resume (7.10): the line state again, before the FIFO, so
+               that operations queued while suspended are newer and win.
+               An operation half done when the device slept restarts. */
+            p->ResendPending = FALSE;
+            if (p->Attached) {
+                p->RestoreGen = p->OpenGen;
+                p->RestoreMask |= UC_RS_OPEN | (p->HaveLine ? UC_RS_LINE : 0) |
+                                  (p->HaveFlow ? UC_RS_FLOW : 0) | (p->HaveControl ? UC_RS_CONTROL : 0);
+                if (p->CurRestore)
+                    p->RestoreMask |= p->CurRestore;
+                p->CurRestore = 0;
+                p->OpStep = 0;
+                p->CtlOk = TRUE;
+                p->CtlLen = 0;
+            }
+        }
+        if (p->PollDue && p->OpCount == 0 && p->Attached) {
+            p->PollDue = FALSE;
+            UcAddOp(p, AC_OP_POLL);
+            p->Ops[(p->OpHead + p->OpCount - 1) % UC_OPS].Value = p->OpenGen;
+        }
+    }
+    while (!p->Stopping && !p->Suspended && !p->Gone && !p->Ctl.Busy &&
+           (p->OpCount || p->RestoreMask || p->CurRestore)) {
+        UCIF_OP *op, ro;
+        UC_XFER *x = &p->Ctl;
+        AC_SETUP s;
+        AC_U16 state = 0;
+        ULONG step = p->OpStep;
+        int r;
+
+        if (p->CurRestore == 0 && p->OpStep == 0 && p->RestoreMask) {
+            p->CurRestore = p->RestoreMask & (~p->RestoreMask + 1);   /* the lowest */
+            p->RestoreMask &= ~p->CurRestore;
+        }
+        if (p->CurRestore) {
+            RtlZeroMemory(&ro, sizeof(ro));
+            if (p->CurRestore == UC_RS_OPEN) { ro.Op = AC_OP_OPEN; ro.Value = p->RestoreGen; }
+            else if (p->CurRestore == UC_RS_LINE) ro = p->SentLine;
+            else if (p->CurRestore == UC_RS_FLOW) ro = p->SentFlow;
+            else ro = p->SentControl;
+            op = &ro;
+        } else if (p->OpCount) {
+            op = &p->Ops[p->OpHead];
+        } else {
+            break;
+        }
+
+        if (op->Op == AC_OP_POLL && (op->Value != p->OpenGen || (p->OpStep == 0 && !p->Attached)))
+            r = AC_STEP_DONE;                /* a previous attachment's poll: no status */
+        else
+            r = AcChipStep(&p->Chip, op->Op, op->Value, op->Data, &step, p->CtlOk,
+                           p->CtlData, p->CtlLen, &s, &state);
+        if ((r & AC_STEP_STATE) && p->Attached && p->Cb.SerialState) {
+            UCT2("COM%lu chip state %04lx", p->PortNumber, state);
+            p->Cb.SerialState(p->Cb.Context, state);
+        }
+        if (r & AC_STEP_SEND) {
+            p->OpStep = step;
+            if (s.Length > AC_SETUP_MAX)
+                s.Length = AC_SETUP_MAX;
+            RtlCopyMemory(p->CtlData, s.Data, AC_SETUP_MAX);
+            p->CtlLen = 0;
+            UcBuildControlUrb((PURB)&x->Urb, &s, p->CtlData);
+            UCT4("COM%lu op %lx step %lu: request %08lx", p->PortNumber, op->Op, step,
+                 ((ULONG)s.Type << 24) | ((ULONG)s.Request << 16) | s.Value);
+            go[ngo++] = x;
+            break;
+        }
+        /* A chip's bulk transfers start once this attachment's opens have
+           all run - its own and a resume's - not an older one's still in
+           the FIFO (6.3). */
+        if (op->Op == AC_OP_OPEN && op->Value == p->OpenGen && p->OpensLeft) {
+            if (p->CurRestore == UC_RS_OPEN)
+                p->RestoreOpenOwed = FALSE;
+            if (--p->OpensLeft == 0 && p->OpenPending) {
+                p->OpenPending = FALSE;
+                UCT1("COM%lu opened: bulk transfers may start", p->PortNumber);
+            }
+        }
+        if (p->CurRestore) {
+            p->CurRestore = 0;
+        } else {
+            /* Finished: remembered for resume if its last transfer worked. */
+            if (p->CtlOk || p->OpStep == 0) {
+                if (op->Op == UCOP_LINE_CODING) { p->SentLine = *op; p->HaveLine = TRUE; }
+                if (op->Op == UCOP_CONTROL) { p->SentControl = *op; p->HaveControl = TRUE; }
+                if (op->Op == UCOP_FLOW) { p->SentFlow = *op; p->HaveFlow = TRUE; }
+            }
+            p->OpHead = (p->OpHead + 1) % UC_OPS;
+            p->OpCount--;
+        }
+        p->OpStep = 0;
+        p->CtlOk = TRUE;
+        p->CtlLen = 0;
+    }
+
+    /* Data after the control operations: a finished one may end a hold. */
     live = p->Attached && !p->Stopping && !p->Suspended && !p->Gone;
     if (live) {
         UcDeliverRx(p);
-        if (!p->RxHalted) {
+        if (!p->RxHalted && !p->OpenPending) {
             ULONG limit = (p->Fdo->Quirks & AC_Q_SINGLE_RX_URB) ? 1 : UC_IN_URBS;
             for (i = 0; i < limit; i++) {
                 UC_XFER *x = &p->In[i];
@@ -246,11 +449,12 @@ static void UcPump(UC_PORT *p)
 #if defined(UC_TEST_SPLIT_CANCEL)
                 x->Seq = ++p->InSeq;
 #endif
+                x->Gen = p->RxGen;
                 UcBuildBulk(x, p->InPipe, UC_IN_SIZE, TRUE);
                 go[ngo++] = x;
             }
         }
-        if (!p->TxHalted && p->Cb.TxPull) {
+        if (!p->TxHalted && !p->OpenPending && !UcConfigPending(p) && p->Cb.TxPull) {
             /* With SEND_ZERO_PACKET only one OUT transfer is in flight, so
                its ZLP cannot fall behind the next transfer. */
             ULONG outLimit = (p->Fdo->Quirks & AC_Q_SEND_ZERO_PACKET) ? 1 : UC_OUT_URBS;
@@ -276,44 +480,19 @@ static void UcPump(UC_PORT *p)
         }
         if (p->NotifyPipe && !p->Notify.Busy && !p->NotifyHalted) {
             UC_XFER *x = &p->Notify;
+            /* A PL2303's status is one packet of wMaxPacketSize (10): a
+               longer request would wait for a short packet that never
+               comes (design 6.3). CDC keeps 64, which a notification
+               split over 8-byte packets still ends short within. */
+            ULONG nlen = (p->Chip.Family == AC_FAM_PL2303 && p->Func.NotifyMax &&
+                          p->Func.NotifyMax <= UC_NOTIFY_SIZE) ? p->Func.NotifyMax : UC_NOTIFY_SIZE;
             RtlZeroMemory(&x->Urb, sizeof(x->Urb));
             UsbBuildInterruptOrBulkTransferRequest((PURB)&x->Urb,
                 sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER), p->NotifyPipe,
-                x->Buffer, NULL, UC_NOTIFY_SIZE,
+                x->Buffer, NULL, nlen,
                 USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK, NULL);
             go[ngo++] = x;
         }
-    }
-
-    /* Control operations also run after Detach (the DTR drop on close). */
-    if (!p->Stopping && !p->Suspended && !p->Gone && !p->Ctl.Busy && p->OpCount) {
-        const UCIF_OP *op = &p->Ops[p->OpHead];
-        UC_XFER *x = &p->Ctl;
-        UCHAR req;
-        USHORT value = 0;
-        ULONG len = 0;
-
-        switch (op->Op) {
-        case UCOP_LINE_CODING:
-            req = 0x20;                      /* SET_LINE_CODING */
-            RtlCopyMemory(p->CtlData, op->Data, 7);
-            len = 7;
-            break;
-        case UCOP_CONTROL:
-            req = 0x22;                      /* SET_CONTROL_LINE_STATE */
-            value = (USHORT)(op->Value & 3);
-            break;
-        default:
-            req = 0x23;                      /* SEND_BREAK */
-            value = (USHORT)op->Value;
-            break;
-        }
-        RtlZeroMemory(&x->Urb, sizeof(x->Urb));
-        UsbBuildVendorRequest((PURB)&x->Urb, URB_FUNCTION_CLASS_INTERFACE,
-            sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST),
-            USBD_TRANSFER_DIRECTION_OUT, 0, req, value, p->Func.CommIf,
-            len ? p->CtlData : NULL, NULL, len, NULL);
-        go[ngo++] = x;
     }
 
     for (i = 0; i < ngo; i++) {
@@ -348,6 +527,26 @@ static NTSTATUS UcComplete(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
             x->Length = x->Urb.Bulk.TransferBufferLength;
             if (x->Length > UC_IN_SIZE)
                 x->Length = UC_IN_SIZE;
+            if (p->Chip.Family == AC_FAM_FTDI) {
+                /* The two status bytes of every packet (design 6.3). */
+                AC_U16 states[UC_IN_SIZE / 64];
+                int ns, k;
+                if (x->Gen != p->RxGen) {
+                    /* From before a suspend or an open: its status is stale
+                       and must not reach the chip's state either. */
+                    x->Length = AcChipStrip(&p->Chip, x->Buffer, x->Length);
+                    ns = 0;
+                } else {
+                    x->Length = AcChipRx(&p->Chip, x->Buffer, x->Length, states, &ns,
+                                         UC_IN_SIZE / 64);
+                }
+                if (ns)
+                    p->AwaitStatus = FALSE;
+                for (k = 0; k < ns && p->Attached && p->Cb.SerialState; k++) {
+                    UCT2("COM%lu FTDI status %04lx", p->PortNumber, states[k]);
+                    p->Cb.SerialState(p->Cb.Context, states[k]);
+                }
+            }
             if (x->Length) {
                 x->Offset = 0;
                 x->Held = TRUE;
@@ -394,7 +593,7 @@ static NTSTATUS UcComplete(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
             USHORT state;
             if (len > UC_NOTIFY_SIZE)
                 len = UC_NOTIFY_SIZE;
-            while (AcNextNotify(x->Buffer, len, &off, p->Func.CommIf, &state)) {
+            while (AcChipNotify(&p->Chip, x->Buffer, len, &off, &state)) {
                 if (state != p->LastState)
                     UCT3("COM%lu SERIAL_STATE %04lx (was %04lx)", p->PortNumber, state, p->LastState);
                 p->LastState = state;
@@ -411,14 +610,16 @@ static NTSTATUS UcComplete(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
         break;
     default:                                    /* control */
         x->Busy = FALSE;
-        if (p->OpCount) {
-            const UCIF_OP *op = &p->Ops[p->OpHead];
-            UCT4("COM%lu control op %lu value %08lx: %08lx", p->PortNumber, op->Op,
-                 op->Op == UCOP_LINE_CODING ? *(const AC_U32 *)op->Data : op->Value, st);
-            if (ok && op->Op == UCOP_LINE_CODING) { p->SentLine = *op; p->HaveLine = TRUE; }
-            if (ok && op->Op == UCOP_CONTROL) { p->SentControl = *op; p->HaveControl = TRUE; }
-            p->OpHead = (p->OpHead + 1) % UC_OPS;
-            p->OpCount--;
+        if (p->OpCount || p->CurRestore) {
+            UCT4("COM%lu control step %lu (restore %lx): %08lx", p->PortNumber, p->OpStep,
+                 p->CurRestore, st);
+            /* The next step of the same operation sees this result. */
+            p->CtlOk = ok;
+            p->CtlLen = (ok && (x->Urb.Class.TransferFlags & USBD_TRANSFER_DIRECTION_IN))
+                        ? x->Urb.Class.TransferBufferLength : 0;
+            if (p->CtlLen > AC_SETUP_MAX)
+                p->CtlLen = AC_SETUP_MAX;
+            p->OpStep++;
         }
         break;
     }
@@ -470,7 +671,10 @@ static long __stdcall UcAttach(void *port, const UCIF_CALLBACKS *cb)
     InterlockedIncrement(&p->Busy);
     UcWaitData(p, 2000);
     KeAcquireSpinLock(&p->Lock, &irql);
-    if (p->Started && !p->Gone && !p->Stopping && !p->Attached && !UcDataBusy(p)) {
+    /* Room for this open and its whole end: the open, then what
+       UC_OPS_RESERVED keeps (a close's flush, the close, a poll). */
+    if (p->Started && !p->Gone && !p->Stopping && !p->Attached && !UcDataBusy(p) &&
+        p->OpCount + 1 + UC_OPS_RESERVED <= UC_OPS) {
         p->Cb = *cb;
         p->Attached = TRUE;
         p->RxHead = p->RxCount = 0;
@@ -479,8 +683,27 @@ static long __stdcall UcAttach(void *port, const UCIF_CALLBACKS *cb)
         p->RxHalted = p->TxHalted = p->NotifyHalted = FALSE;
         p->RxResets = p->TxResets = 0;
         p->LastState = 0;
-        p->HaveLine = p->HaveControl = FALSE;
+        p->HaveLine = p->HaveControl = p->HaveFlow = FALSE;
+        p->ResendPending = FALSE;
         p->KickFlags = 0;
+        /* After what the previous open left (its DTR drop and close), and
+           before this open's line coding (design 6.3). A chip's bulk
+           transfers wait for both. */
+        p->OpenGen++;
+        UcAddOp(p, AC_OP_OPEN);
+        p->Ops[(p->OpHead + p->OpCount - 1) % UC_OPS].Value = p->OpenGen;
+        p->OpensLeft = 1;
+        p->RestoreOpenOwed = FALSE;
+        p->RxGen++;
+        p->OpenPending = (BOOLEAN)(p->Chip.Family != AC_FAM_CDC);
+        p->AwaitStatus = (BOOLEAN)(p->Chip.Family == AC_FAM_FTDI);
+        p->RestoreMask = 0;                /* the previous open's: superseded */
+        if (AcChipResetsPipes(&p->Chip)) {
+            /* The PL2303 H: both bulk pipes reset first (design 6.3). */
+            p->RxHalted = p->TxHalted = TRUE;
+            UcQueueReset(p);
+        }
+        UcArmPoll(p);
         rc = 0;
     }
     KeReleaseSpinLock(&p->Lock, irql);
@@ -576,6 +799,10 @@ static void __stdcall UcDetach(void *port)
     KeAcquireSpinLock(&p->Lock, &irql);
     p->Attached = FALSE;
     RtlZeroMemory(&p->Cb, sizeof(p->Cb));
+    UcCancelPoll(p);
+    p->RestoreMask = 0;                    /* a closed port needs no restore */
+    if (!p->Gone)
+        UcAddOp(p, AC_OP_CLOSE);           /* after the VxD's DTR drop; drops it again */
     n = UcCollectBusy(p, list, FALSE);
     KeReleaseSpinLock(&p->Lock, irql);
     UCT2("COM%lu detach: cancelling %lu transfers", p->PortNumber, n);
@@ -605,15 +832,23 @@ static long __stdcall UcControl(void *port, const UCIF_OP *op)
     UC_PORT *p = (UC_PORT *)port;
     long rc = 1;
     KIRQL irql;
+    ULONG code, limit;
 
-    if (op == NULL || op->Op < UCOP_LINE_CODING || op->Op > UCOP_BREAK)
+    if (op == NULL)
         return 2;
+    code = op->Op & ~UCOP_F_CLOSING;
+    if (code < UCOP_LINE_CODING || code > UCOP_FLOW)
+        return 2;
+    /* A close's flush may use the places kept for it, less one for the
+       close itself (design 6.3). */
+    limit = (op->Op & UCOP_F_CLOSING) ? UC_OPS - 1 : UC_OPS - UC_OPS_RESERVED;
     InterlockedIncrement(&p->Busy);
     KeAcquireSpinLock(&p->Lock, &irql);
-    if (op->Op == UCOP_BREAK && !(p->Func.Caps & AC_CAP_BREAK)) {
+    if (code == UCOP_BREAK && !(p->Func.Caps & AC_CAP_BREAK)) {
         rc = 0;                          /* not supported: accepted, not sent */
-    } else if (!p->Gone && p->OpCount < UC_OPS) {
+    } else if (!p->Gone && p->OpCount < limit) {
         p->Ops[(p->OpHead + p->OpCount) % UC_OPS] = *op;
+        p->Ops[(p->OpHead + p->OpCount) % UC_OPS].Op = code;
         p->OpCount++;
         rc = 0;
     }
@@ -657,7 +892,10 @@ NTSTATUS UcPortCreate(UC_FDO *fdo, ULONG index, const AC_FUNC *f, UC_PORT **out)
     RtlZeroMemory(p, sizeof(*p));
     KeInitializeSpinLock(&p->Lock);
     KeInitializeDpc(&p->Dpc, UcDpc, p);
+    KeInitializeDpc(&p->PollDpc, UcPollDpc, p);
+    KeInitializeTimer(&p->PollTimer);
     KeInitializeEvent(&p->Drained, NotificationEvent, TRUE);
+    p->CtlOk = TRUE;
     p->Fdo = fdo;
     p->Index = index;
     p->Func = *f;
@@ -735,6 +973,14 @@ void UcPortStop(UC_PORT *p)
         cb.Gone(cb.Context);
     }
     p->OpCount = 0;
+    p->OpStep = 0;
+    p->CtlOk = TRUE;
+    p->ResendPending = FALSE;
+    p->RestoreMask = 0;
+    p->CurRestore = 0;
+    p->RestoreOpenOwed = FALSE;
+    p->OpensLeft = 0;
+    UcCancelPoll(p);
     UCT2("COM%lu stop (VxD told: %lu)", p->PortNumber, cb.Gone != 0);
     KeReleaseSpinLock(&p->Lock, irql);
 
@@ -786,6 +1032,8 @@ void UcPortSuspend(UC_PORT *p)
 
     KeAcquireSpinLock(&p->Lock, &irql);
     p->Suspended = TRUE;
+    p->RxGen++;
+    UcCancelPoll(p);
     n = UcCollectBusy(p, list, FALSE);
     KeReleaseSpinLock(&p->Lock, irql);
     UcCancelList(list, n);
@@ -803,19 +1051,21 @@ void UcPortResume(UC_PORT *p)
     }
     p->Suspended = FALSE;
     p->RxHalted = p->TxHalted = p->NotifyHalted = FALSE;
+    /* The pump puts the line state back at the head once no control
+       transfer is in flight (design 7.10, 6.3). */
     if (p->Attached) {
-        /* At the head: operations queued while suspended are newer and
-           run after the resent state, so they win. */
-        if (p->HaveControl && p->OpCount < UC_OPS) {
-            p->OpHead = (p->OpHead + UC_OPS - 1) % UC_OPS;
-            p->Ops[p->OpHead] = p->SentControl;
-            p->OpCount++;
+        p->ResendPending = TRUE;
+        /* The restore's open: counted once however many resumes come
+           before it has run (they coalesce). */
+        if (!p->RestoreOpenOwed) {
+            p->RestoreOpenOwed = TRUE;
+            p->OpensLeft++;
         }
-        if (p->HaveLine && p->OpCount < UC_OPS) {
-            p->OpHead = (p->OpHead + UC_OPS - 1) % UC_OPS;
-            p->Ops[p->OpHead] = p->SentLine;
-            p->OpCount++;
-        }
+        if (p->Chip.Family != AC_FAM_CDC)
+            p->OpenPending = TRUE;           /* no bulk transfer before the opens again */
+        if (p->Chip.Family == AC_FAM_FTDI)
+            p->AwaitStatus = TRUE;           /* nor bulk OUT before a fresh CTS */
+        UcArmPoll(p);
     }
     /* Queued under the lock so a concurrent stop sees it counted. */
     InterlockedIncrement(&p->Outstanding);

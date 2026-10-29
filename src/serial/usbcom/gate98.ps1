@@ -191,6 +191,16 @@ function Assert-Usbcom98Inf([string]$Text) {
     if ($got.Count -ne $models.Count -or (Compare-Object $models $got -SyncWindow 0)) {
         throw 'USBCOM.INF: model lines differ from boardids.txt'
     }
+    # The bridges (design 6.3): boards.ps1's list is chipcore.c's "(INF)" rows,
+    # and no "(manual only)" id is matched automatically.
+    $core = Join-Path $PSScriptRoot 'chipcore.c'
+    $inf = @(Get-ChipTableIds $core 'INF' | Sort-Object)
+    $listed = @($UsbcomChips | ForEach-Object { $_[1].ToUpperInvariant() } | Sort-Object)
+    if ($inf.Count -eq 0 -or (Compare-Object $inf $listed)) { throw 'USBCOM.INF: the bridge list differs from chipcore.c' }
+    foreach ($id in Get-ChipTableIds $core 'manual only') {
+        $v, $p = $id.Split(':')
+        if ($got | Where-Object { $_ -like "*USB\VID_$v&PID_$p*" }) { throw "USBCOM.INF: manual-only bridge $id matched automatically" }
+    }
     Assert-Exact $s 'USBCOM' @('CopyFiles=UsbCom.Copy', 'AddReg=UsbCom.AddReg')
     Assert-Exact $s 'USBCOM.ADDREG' @('HKR,,DevLoader,,*ntkern', 'HKR,,NTMPDriver,,USBCOM.SYS')
     Assert-Exact $s 'USBCOM.COPY' @('USBCOM.SYS')

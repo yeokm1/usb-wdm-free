@@ -86,7 +86,7 @@ function Build-Sys([string]$dir) {
            '/D_WIN32_WINNT=0x0500', '/DWIN32_LEAN_AND_MEAN=1', '/DDEVL=1')
     $c += if ($Flavour -eq 'free') { @('/Oxs', '/DDBG=0') } elseif ($Flavour -eq 'trace') { @('/Oxs', '/DDBG=0', '/DUC_TRACE_E9=1') } elseif ($Flavour -eq 'split') { @('/Oxs', '/DDBG=0', '/DUC_TRACE_E9=1', '/DUC_TEST_SPLIT_CANCEL=1') } else { @('/Od', '/Oi', '/Zi', "/Fd$obj\usbcom.pdb", '/DDBG=1') }
     $inc = @("/I$ddk\inc\ddk\wdm", "/I$ddk\inc\ddk", "/I$ddk\inc", "/I$vc\Include")
-    foreach ($f in 'usbcom', 'ucio', 'acmcore') {
+    foreach ($f in 'usbcom', 'ucio', 'acmcore', 'chipcore', 'ftdibaud') {
         Run "$vc\BIN\CL.EXE" ($c + $inc + @("/Fo$obj\$f.obj", "$src\$f.c")) | Out-Null
     }
     # Second compile against the 98 DDK's own WDM/USB headers: anything the
@@ -102,7 +102,8 @@ function Build-Sys([string]$dir) {
     Run "$tools\MSVC600\Common\MSDev98\Bin\RC.EXE" @('/l', '0x409', "/I$vc\Include", "/fo$obj\usbcom.res", "$src\usbcom.rc") | Out-Null
     $l = @('/nologo', '/DRIVER', '/SUBSYSTEM:NATIVE,4.00', '/ENTRY:DriverEntry@8', '/BASE:0x10000', '/ALIGN:0x20',
            '/NODEFAULTLIB', '/INCREMENTAL:NO', '/OPT:REF', '/OPT:ICF', '/MACHINE:IX86', '/RELEASE', "/MAP:$dir\usbcom.map",
-           "/OUT:$dir\USBCOM.SYS", "$obj\usbcom.obj", "$obj\ucio.obj", "$obj\acmcore.obj", "$obj\usbcom.res",
+           "/OUT:$dir\USBCOM.SYS", "$obj\usbcom.obj", "$obj\ucio.obj", "$obj\acmcore.obj", "$obj\chipcore.obj",
+           "$obj\ftdibaud.obj", "$obj\usbcom.res",
            "$ddk\libfre\i386\wdm.lib")
     if ($Flavour -eq 'checked') { $l += @('/DEBUG', "/PDB:$dir\usbcom.pdb") }
     Run "$vc\BIN\LINK.EXE" $l | Out-Null

@@ -16,6 +16,7 @@
 #include <usbdi.h>
 #include <usbdlib.h>
 #include "acmcore.h"
+#include "chipcore.h"
 #include "ucif.h"
 
 /*
@@ -59,8 +60,19 @@ void UcTraceV(const char *fmt, const AC_U32 *v, int n);
 #define UC_OUT_URBS     1
 #define UC_OUT_SIZE     4096
 #define UC_NOTIFY_SIZE  64
-#define UC_OPS          32       /* control operations queued per port */
+#define UC_OPS          64       /* control operations queued per port */
+/* Of them, kept for a session's end: a close's flush (UCIF_CLOSE_OPS),
+   the close and a status poll. */
+#define UC_OPS_RESERVED (UCIF_CLOSE_OPS + 2)
+
+/* Resume (design 7.10, 6.3) restores the line state outside the FIFO, in
+   this order, from the operations last sent; repeated resumes coalesce. */
+#define UC_RS_OPEN      0x01
+#define UC_RS_LINE      0x02
+#define UC_RS_FLOW      0x04
+#define UC_RS_CONTROL   0x08
 #define UC_RESET_TRIES  3        /* pipe resets before a pipe is left halted */
+#define UC_POLL_MS      100      /* CP210x modem status poll while open (design 6.3) */
 
 typedef enum UC_KIND { UcKindFdo = 1, UcKindPdo = 2 } UC_KIND;
 
@@ -83,6 +95,7 @@ typedef struct UC_XFER {
     UCHAR   Held;          /* IN: completed, data not yet all delivered */
     UCHAR   Index;
     UCHAR   Kind;          /* UC_X_* */
+    ULONG   Gen;           /* IN: the port's RxGen when it was submitted */
 #if defined(UC_TEST_SPLIT_CANCEL)
     ULONG   Seq;           /* IN: submission number (test flavour "split") */
 #endif
@@ -114,8 +127,12 @@ struct UC_PORT {
     BOOLEAN         Suspended;
     BOOLEAN         NamesWritten;
     BOOLEAN         RxHalted, TxHalted, NotifyHalted;
-    BOOLEAN         HaveLine, HaveControl;
-    UCIF_OP         SentLine, SentControl;  /* last sent, resent on resume */
+    BOOLEAN         HaveLine, HaveControl, HaveFlow;
+    BOOLEAN         ResendPending;  /* resume: restore the line state when idle */
+    BOOLEAN         AwaitStatus;    /* FTDI: no bulk OUT before a fresh status after the open */
+    ULONG           RestoreMask;    /* UC_RS_*: restore operations still to run (resume) */
+    ULONG           CurRestore;     /* the UC_RS_* in progress, 0 if the head is the FIFO's */
+    UCIF_OP         SentLine, SentControl, SentFlow;  /* last sent, resent on resume */
     ULONG           RxResets, TxResets;
     UCIF_CALLBACKS  Cb;
     LONG            KickFlags;      /* interlocked */
@@ -132,10 +149,26 @@ struct UC_PORT {
     UC_XFER         Out[UC_OUT_URBS];
     UC_XFER         Notify;
     UC_XFER         Ctl;
-    UCHAR           CtlData[8];
+    UCHAR           CtlData[AC_SETUP_MAX];
+    ULONG           CtlLen;         /* IN bytes the last step returned */
+    BOOLEAN         CtlOk;          /* the last step succeeded */
+    BOOLEAN         PollArmed;      /* PollTimer set, its count taken */
+    BOOLEAN         PollDue;        /* a status poll is owed */
+    BOOLEAN         OpenPending;    /* chip: no bulk transfer until its opens have run (6.3) */
+    BOOLEAN         RestoreOpenOwed; /* a resume's open is owed (counted in OpensLeft) */
+    ULONG           OpensLeft;      /* this attachment's opens still to run (FIFO, restore) */
+    ULONG           RxGen;          /* bumped at attach and suspend: older INs carry no status */
+    ULONG           OpenGen;        /* the attachment's number; its open carries it in Value */
+    ULONG           RestoreGen;     /* the attachment a pending restore belongs to */
 
-    UCIF_OP         Ops[UC_OPS];
+    /* The USB side of the port: chip module or CDC-ACM (chipcore.h). */
+    AC_CHIP         Chip;
+
+    UCIF_OP         Ops[UC_OPS];    /* UCOP_* and AC_OP_* (chipcore.h) */
     ULONG           OpHead, OpCount;
+    ULONG           OpStep;         /* step of the head operation */
+    KTIMER          PollTimer;
+    KDPC            PollDpc;
     USHORT          LastState;
 
     /* Outstanding IRPs and table callers; Drained is set at zero. */
@@ -166,6 +199,7 @@ struct UC_FDO {
     ULONG           ConfigLength;
     PURB            Select;         /* the select-configuration URB */
     ULONG           Quirks;
+    int             Family;         /* AC_FAM_* (chipcore.h) */
     ULONG           NumPorts;
     UC_PORT        *Ports[AC_MAX_FUNCS];
     WCHAR           KeyTag[24];     /* from the device's driver key name */
@@ -183,6 +217,7 @@ NTSTATUS UcCallLowerSync(UC_FDO *fdo, PIRP irp);
 NTSTATUS UcSubmitUrbSync(UC_FDO *fdo, PURB urb);
 
 /* ucio.c */
+void     UcBuildControlUrb(PURB urb, const AC_SETUP *s, PUCHAR buf);
 NTSTATUS UcPortCreate(UC_FDO *fdo, ULONG index, const AC_FUNC *f, UC_PORT **out);
 void     UcPortFree(UC_PORT *port);
 void     UcPortStop(UC_PORT *port);

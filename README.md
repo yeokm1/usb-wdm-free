@@ -40,7 +40,9 @@ Windows 8.1 and 10 are not targets and were not evaluated.
 ## How each driver was evaluated
 
 <a name="tested-by-the-author"></a>
-No driver has been evaluated on a real PC with a real connection yet.
+`uac2`, `uvc98` and `ax88179` have run on a real PC with a real device
+under Windows 98 SE (the owner, reported 2026-10-29) (l). Every other
+cell is a virtual machine.
 "Real device (VM)" means a real device passed through to Windows running
 in a virtual machine; "Simulator only" means a simulated device. Cells are
 32-bit Windows unless they say x64; "-" means the driver is not meant for
@@ -48,13 +50,13 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
-| `uac2` | Simulator only (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
+| `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
-| `uvc98` | Real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
+| `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
 | `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
-| `ax88179` | Real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
+| `ax88179` | Real PC (l); real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
 | `noaud` | Real device (VM) | - | - | - | - | - | - |
@@ -72,6 +74,7 @@ that Windows.
 - (i) Install and device listing only; no data transfers.
 - (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
 - (k) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
+- (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

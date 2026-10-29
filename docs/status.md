@@ -68,6 +68,9 @@ system: [build.md section 7.1](design/build.md)).
 Release 0.1.2 (owner, 2026-10-26): every package re-released under
 GPL-2.0-or-later, `rtl815x` with its rewritten chip core
 ([release 0.1.2](testing/2026-10-26-release-0.1.2.md)).
+Real PC (owner, reported 2026-10-29): `uac2`, `uvc98` and `ax88179` ran
+on a real PC under Windows 98 SE with real devices (footnote 10 of the
+table below).
 Earlier: `noaud` 1.0.0.0, an INF-only Windows 98 SE workaround
 (below and [docs/release-notes.md](release-notes.md)). Wave 1 has experimental source builds: UAC2 X4 M1
 integration (simulated playback passes; physical playback pending), the USB floppy INFs and the NT CDC-ACM INF. Build and test
@@ -190,12 +193,12 @@ it is tested there too.
 
 | Package | 98 SE | ME | 2000 | XP | XP x64 | Vista | Vista x64 | 7 | 7 x64 | 8 | 8 x64 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `uvc98` | Built, not tested | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
-| `uac2` | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested |
+| `uvc98` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
+| `uac2` | Tested on a real PC (10) | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested |
 | `usbmidi` | Built, not tested | Built, not tested (1) | Built, not tested | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) |
 | `cdcnet` | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Not a target | Not a target |
 | `rtl815x` | Built, not tested | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
-| `ax88179` | Built, not tested | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
+| `ax88179` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
 | `usbcom` | Built, not tested | Built, not tested | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) |
 | `xpad98` | Built, not tested | Built, not tested | Built, not tested | Built, not tested (3) | Built, not tested (3) | Built, not tested (3) | Built, not tested | Not a target (8) | Not a target (8) | Not a target (8) | Not a target (8) |
 | `usbprn` | Planned | Planned (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
@@ -224,6 +227,11 @@ it is tested there too.
    xHCI98, QEMU `usb-audio` and a Logitech Brio 100 passed through; 0 of
    30 plugs froze with the INF, 16 of 30 without), so the cell is not
    "Tested": no real PC yet.
+10. The owner, reported 2026-10-29: run on a real PC under Windows 98 SE
+   with a real device. The device, the host controller driver (xHCI98 or
+   an EHCI stack) and what was exercised are not recorded yet, so the
+   rule above that a driver is ready only when both host controller
+   drivers pass is not yet shown.
 
 ### Legs run so far, by kind of device
 

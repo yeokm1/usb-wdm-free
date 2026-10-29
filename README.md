@@ -125,3 +125,17 @@ This project was developed with substantial help from AI coding agents:
 - Codex GPT 6 Astra as an adversarial reviewer
 
 The agents wrote and revised code, tests and documentation under the guidance in [AGENTS.md](AGENTS.md).
+
+## Changelog
+
+Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
+
+- **v0.1.4** (2026-10-28):
+  - `rtl815x` 0.2.0.0 adds the Realtek RTL8153D, RTL8156, RTL8156B, RTL8157 and RTL8159. It is now also copied for XP to 7, 32-bit and x64.
+  - `uac2` 0.1.4.0 adds playback volume and mute. Windows' software MIDI synth can play through the device.
+  - Every x64 image is signed with a new test certificate (thumbprint `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`).
+  - The free and non-free `rtl815x` exclude each other on every system.
+- **v0.1.3** (2026-10-26): class drivers match their USB class where Windows has no driver of its own. `usbcom` now does on 98 SE, ME and 2000. `cdcnet`'s RNDIS INF leaves Windows 7's own RNDIS match alone.
+- **v0.1.2** (2026-10-26): the licence is now GPL-2.0-or-later and every package is re-released. `rtl815x` has a rewritten chip core.
+- **v0.1.1** (2026-10-25): `ax88179` for ASIX AX88179 and AX88178A Gigabit Ethernet adapters on 98 SE, ME and 2000. `uac2` is staged on ME too.
+- **v0.1.0** (2026-10-24): the first release: `uac2`, `usbmidi`, `uvc98`, `usbcom`, `cdcnet`, `rtl815x`, `xpad98`, `usbflop` and `libusb0`, and the CamCheck webcam preview.

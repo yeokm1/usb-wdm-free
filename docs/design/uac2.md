@@ -1323,7 +1323,8 @@ with a UHCI companion; no xHCI98), `uac2` 0.1.4.0 put where Windows looks
 | 7 SP1 x86 | `pnputil -a` and `UACCI.INF` each asked "Windows can't verify the publisher" (Install anyway). The unsigned class co-installer DLL loads: first plug, `usbaudio nodes marked=1`, "Your device is ready to use", `uac2wdm` RUNNING, `usbaudio` not installed, playback through `Media.SoundPlayer` reached the device |
 | Vista SP2 x86 | `pnputil -a` asked "can't verify the publisher"; `UACCI.INF` registered after Windows' own `mmcico.dll,MediaClassCoInstaller`, which it kept. First plug: `usbaudio nodes marked=1`, `uac2wdm` RUNNING, `usbaudio` not installed; playback reached the device (Media Player) |
 | 8.1 x86 | as Vista for the setup (`mmcico.dll` entry kept). First plug: the co-installer was called, but `usbaudio nodes marked=0`: no `wdma_usb.inf` node with the `usbaudio` service was in the list (why - 8.1's own INF excluding the UAC 2.0 ids, or the node being another INF's - not read); `uac2wdm` RUNNING, playback reached the device. So 8.1 does not need the co-installer for this device; it does no harm there |
-| 98 SE, ME | not read yet (no co-installers there; the first-plug ranking is owed) |
+| 98 SE | Stock 98 SE (the `pc` pristine base, Windows' own UHCI, no NUSB, no xHCI98), `uac2wdm.inf` copied to `INF\OTHER` with the driver index deleted, a never-seen Full Speed UAC 2.0 device (`fs`): 98's hub presents "USB Composite Device" (`USB.INF`), then a child "USB Audio Device", for which the wizard's best driver is `WDMA_USB.INF`. `uac2` was not a candidate: its lines need `&Prot_20`, which the ids 98's own hub gives that child evidently lack (not read further). So on stock 98 SE Windows' driver wins a first plug; 98 has no co-installers; what 98's setup could offer instead is a question for the coordinator (2026-10-30) |
+| ME | not read yet |
 | 8 x86, x64 systems | not read yet; owed |
 
 ### 16.6 USB Audio 3.0 devices (owner, 2026-10-29: a reading only)

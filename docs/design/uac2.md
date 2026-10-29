@@ -897,6 +897,18 @@ quirk, never the reason the codec works (15.3 item 7 is revised by
 this). The jack names come from the terminal types; no listening check
 is owed before the real-board reading (xHCI98 45-E.13).
 
+Before `815957c` `uac2` did not start on this codec at all: its 68
+streaming alternates (one of them skipped) passed the parser's 64
+(`UAC_TOO_MANY_ALTS`). With `UAC_MAX_ALTS` 128 and each terminal's own
+formats (`UacPlanFormatsFor`), the capture replayed by `uacemu.py`
+(profile `alc4080cap`) on XP SP3 x86 under xHCI98 bound `uac2` from the
+Found New Hardware wizard and played to the first playback terminal
+(13, the speaker, IF4: 2 channels 16-bit 48 kHz, adaptive), 2026-10-29.
+Every terminal on its own clock source (playback 5, 6, 8; capture 1, 3,
+4) means the clock-domain rule of 15.3 item 5 has nothing to share on
+this board. Recording and the other outputs wait for the endpoints of
+15.3.
+
 ### 15.2 What `uac2` does with it today
 
 - Binding: if the function is USB Audio 2.0 and its PDO offers
@@ -1228,8 +1240,10 @@ with a UHCI companion; no xHCI98), `uac2` 0.1.4.0 put where Windows looks
 | XP SP3 x86 | `UACCI.INF` asked once ("has not passed Windows Logo testing"), then registered as the only MEDIA class entry. First plug: the log reads `select ... usbaudio nodes marked=1`; the wizard offered "UAC2 USB audio (experiment)" by itself, `uac2wdm` RUNNING, `usbaudio` never installed (`sc query`: 1060). A second device (`FFFF:0299`, another port): the same. `UacUninstall` and `UacInstall` with a foreign entry (`Other.dll,X`) in the value: install appends once, uninstall leaves `Other.dll,X` alone; with only ours, uninstall removes the value. Playback through `uac2` was read on the earlier XP legs, not again here |
 | 2000 SP4 | `UACCI.INF` asked once (Digital Signature Not Found, Yes). First plug: `usbaudio nodes marked=1`, the wizard named the device "UAC2 USB audio (experiment)" and installed `uac2` (2000's own hub does not split the IAD device: `uac2` takes the whole device, as section 3 says). Control, the co-installer removed by `UacUninstall`, a second never-seen device: the wizard chose `uac2` all the same and the log has no call: **2000 already ranks `uac2` above `usbaudio`** (no signature penalty there). Playback on 2000 not read (`uac2` has no 2000 leg yet) |
 | 7 SP1 x86 | `pnputil -a` and `UACCI.INF` each asked "Windows can't verify the publisher" (Install anyway). The unsigned class co-installer DLL loads: first plug, `usbaudio nodes marked=1`, "Your device is ready to use", `uac2wdm` RUNNING, `usbaudio` not installed, playback through `Media.SoundPlayer` reached the device |
+| Vista SP2 x86 | `pnputil -a` asked "can't verify the publisher"; `UACCI.INF` registered after Windows' own `mmcico.dll,MediaClassCoInstaller`, which it kept. First plug: `usbaudio nodes marked=1`, `uac2wdm` RUNNING, `usbaudio` not installed; playback reached the device (Media Player) |
+| 8.1 x86 | as Vista for the setup (`mmcico.dll` entry kept). First plug: the co-installer was called, but `usbaudio nodes marked=0`: no `wdma_usb.inf` node with the `usbaudio` service was in the list (why - 8.1's own INF excluding the UAC 2.0 ids, or the node being another INF's - not read); `uac2wdm` RUNNING, playback reached the device. So 8.1 does not need the co-installer for this device; it does no harm there |
 | 98 SE, ME | not read yet (no co-installers there; the first-plug ranking is owed) |
-| Vista x86, 8, 8.1, x64 | not read yet; owed |
+| 8 x86, x64 systems | not read yet; owed |
 
 ### 16.6 USB Audio 3.0 devices (owner, 2026-10-29: a reading only)
 

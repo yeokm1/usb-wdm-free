@@ -162,12 +162,17 @@ static NTSTATUS BusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
     stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     status = CallAndDrain(lower, irp, &event);
     if (!NT_SUCCESS(status)) return status;
-    /* Answered, but not with an interface this module can use: not the
-     * "no answer" status UacUsbOpen treats as a 9x stack without USB 2.0. */
+    /* Answered, but not with an interface this module can use: refused. */
     status = STATUS_DEVICE_CONFIGURATION_ERROR;
     if (bus.Size >= sizeof(bus) && bus.Version >= 1 && bus.IsHighSpeed && bus.Dereference) {
         *high = bus.IsHighSpeed(bus.BusContext) ? TRUE : FALSE;
         status = STATUS_SUCCESS;
+    } else if (bus.Version == 0 && bus.Size >= FIELD_OFFSET(USB_SPEED_INTERFACE, IsHighSpeed) &&
+               bus.Dereference) {
+        /* A version 0 interface (no IsHighSpeed, which version 1 added
+         * with USB 2.0): ME's own hub answers so (32 bytes, 2026-10-30).
+         * Reported as no answer, for UacUsbOpen's 9x rule. */
+        status = STATUS_NOT_SUPPORTED;
     }
     if (bus.Dereference) bus.Dereference(bus.BusContext);
     return status;
@@ -1037,13 +1042,12 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
     if (UacAltZero(desc->Bytes, desc->Length, numbers, pipes, 32, &ifCount) != UAC_OK)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     status = BusSpeed(lower, &high);
-    /* No answer to the USBDI interface query (STATUS_NOT_SUPPORTED: the
-     * IRP kept its initial status; an unusable answer fails otherwise)
-     * on a system below WDM 1.10 (98 SE, ME): Windows' own 9x stack, UHCI
-     * or OHCI without USB 2.0, has no such interface (ME, 2026-10-30), and
-     * a device runs at Full Speed there. NUSB's EHCI stack and xHCI98
-     * answer the query. On 2000 and later no answer is still refused: the
-     * speed is not guessed there. */
+    /* No speed from the USBDI interface (STATUS_NOT_SUPPORTED: no answer,
+     * or a version 0 interface, which predates USB 2.0; any other unusable
+     * answer fails otherwise) on a system below WDM 1.10 (98 SE, ME):
+     * Windows' own 9x stack, UHCI or OHCI without USB 2.0, where a device
+     * runs at Full Speed. NUSB's EHCI stack and xHCI98 give version 1. On
+     * 2000 and later it is still refused: the speed is not guessed there. */
     if (status == STATUS_NOT_SUPPORTED && !IoIsWdmVersionAvailable(1, 0x10)) {
         high = FALSE;
         status = STATUS_SUCCESS;

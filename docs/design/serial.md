@@ -822,7 +822,11 @@ the SYS's: data written after `SetCommState` goes at the new rate. When the
 VxD's queue has emptied into the SYS's, it asks the SYS to pull the
 transmit queue again. On the FTDI, bulk OUT after an open also waits for
 the first status report (the chip sends one within its latency timer, 16 ms
-by default), so the VxD's CTS hold (below) never works from an old CTS.
+by default), so the VxD's CTS hold (below) never works from an old CTS. A
+device that sends none (QEMU's `usb-serial` model returns NAK until it has
+data) does not hold the port for ever: two to three status poll periods
+(`UC_POLL_MS`) after the opens have run with no report, bulk OUT goes on
+the CTS last known.
 Resume (7.10) restores *open*, the line coding, flow control and control
 lines, from the operations last sent, before the FIFO's next operation and
 outside it, once no control transfer is in flight; an operation the device

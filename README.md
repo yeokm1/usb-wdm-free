@@ -90,8 +90,15 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   `NOAUD98.INF`.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
-- **XP x64 installs its own USB audio driver for a `uac2` device first.**
-  Changing it to `uac2` can hang. If it does, restart Windows.
+- **XP and XP x64 install their own USB audio driver for a `uac2` device
+  first** ("USB Audio Device"). Changing it to `uac2` then hangs, and so
+  do disabling it and shutting down after unplugging it; after a restart
+  (reset the PC if the shutdown hangs) `uac2` takes the device. To change
+  it without the hang (read on 32-bit XP): unplug the device, restart Windows, run
+  `cmd /c "set devmgr_show_nonpresent_devices=1&& devmgmt.msc"`, choose
+  View, Show hidden devices, update the greyed "USB Audio Device" to
+  `uac2`, then plug the device in. Under xHCI98 from 3.4.0.0 Windows'
+  driver no longer takes such a device.
 
 ## Installing
 

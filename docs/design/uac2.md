@@ -837,3 +837,186 @@ None at present.
   other folders built, not tested (section 10).
 - **M7, MIDI.** The shared MIDI engine inside the audio function (section
   11), with the MIDI design's milestones.
+
+## 15. On-board codecs with several jacks: the Realtek ALC4080
+
+Status: design, 2026-10-29, reviewed and revised, before any descriptor
+of a real ALC4080 has been read (xHCI98's roadmap task 45.25; the
+real-board reading is its 45-E.13). Every point the device's own
+descriptors decide is marked as the capture's, and the design below
+holds only where the capture shows the layout it assumes.
+
+### 15.1 What is known
+
+Facts only, from Linux `sound/usb` at commit `c339f401`
+(`docs/references/linux-c339f401/`, files under GPL-2.0-or-later, read for
+facts; nothing adapted):
+
+- `mixer_maps.c` renames three entities of the MSI MPG X570S Carbon Max
+  WiFi "with ALC4080": unit 29 "Speaker Playback", unit 30 "Front
+  Headphone Playback" and unit 32 "IEC958 Playback", and applies that map
+  to `0DB0:419C` (that board), `0DB0:A073` (MSI MAG X570S Torpedo Max) and
+  `0DB0:CC78` (MSI MAG B850M Mortar WiFi): the codec appears under the
+  board maker's vendor and product ids, not Realtek's. Three named units
+  do not say how many streaming interfaces or terminals feed them: three
+  paths may share one streaming terminal, or sit in alternates of one
+  interface. The capture says.
+- For those ids the inspected `card.c`, `quirks.c` and `mixer_quirks.c`
+  carry no start-up request, quirk flag or mixer quirk; Linux runs the
+  device with its class driver. That does not show that every ALC4080
+  board needs none. `mixer_quirks.c`'s Realtek HD Audio verb requests (62,
+  88 and 89 with `wValue` 0x38, and 72 with 0) belong to the ALC4020 of two docks, a USB
+  Audio 1.0 device, where they read jacks and also write the codec's
+  power state and manual mode; nothing in those files sends them to an
+  ALC4080.
+- Not known here, and the capture's (15.5): whether the ALC4080 is USB
+  Audio 2.0 (Linux's class driver takes 1.0 and 2.0 alike), the
+  streaming interfaces, terminals, alternates, sync types and feedback,
+  clock entities and rates, the capture paths, which terminal is which
+  jack, and the ids of other makers' boards.
+
+### 15.2 What `uac2` does with it today
+
+- Binding: if the function is USB Audio 2.0 and its PDO offers
+  `USB\Class_01&SubClass_00&Prot_20` (or the AudioControl interface's
+  id), by class, as section 3 says; a device whose function the parent
+  does not present that way needs the whole-device path of section 3
+  (`UacWholeFirst` takes its first audio function only). A runtime table
+  cannot make the driver bind.
+- Streams: one wave filter with one render and one capture pin.
+  `UacPlanTerminal` takes the terminal of the first runnable streaming
+  alternate of each direction in descriptor order, and the stream picks
+  only alternates linked to it (`UacPlanPick`). If the ALC4080 has one
+  streaming interface per jack, only the first in descriptor order plays.
+- Volume and mute: `uacvol.c` walks from a physical Output Terminal back
+  to the playback streaming terminal (render only); one devnode value,
+  `Uac2Level`, keeps the level.
+
+### 15.3 The design (applies only to a device in the table, 15.3.7)
+
+1. **One owner of the function.** The adapter, not each wave filter,
+   opens the function once (`UacUsbOpen`: the configuration, the
+   descriptor model, the transport, the clock and selector claims and
+   the per-interface alternates) and holds it across power and removal;
+   every filter refers to it. Today each `Wave` opens its own, which
+   with several filters would select the configuration under another's
+   pipes.
+2. **Endpoints are streaming interfaces.** An endpoint is a streaming
+   interface whose runnable alternates all link one terminal, and no
+   other interface's alternates link that terminal. If the capture shows
+   anything else (two terminals in one interface's alternates, one
+   terminal behind two interfaces), the device keeps today's one
+   endpoint per direction. `UacPlanTerminals` lists a direction's
+   terminals in that order; the interface check is step 2's.
+3. **Indexed duplex pairs.** Pair k is the k-th playback endpoint and the
+   k-th capture endpoint (either may be absent), as one wave filter and
+   one topology filter, k = 1 to 4. Pair 1 keeps today's reference
+   strings "Wave" and "Topology", so a one-endpoint device registers
+   exactly as now; pairs 2 to 4 are "Wave2"/"Topology2" to
+   "Wave4"/"Topology4", unique on the adapter for its life.
+   `PcAddAdapterDevice` is given 8 subdevices (it is 2 today); endpoints
+   past the fourth of a direction are not served. The INF provisions the
+   interfaces of all eight reference strings; a string the driver does
+   not register stays not enabled.
+4. **What each pair shows.** Its wave filter offers only its endpoints'
+   formats (`UacPlanFormats` per terminal). Its topology filter's bridge
+   pins take the category of the physical terminal the endpoint reaches
+   (Terminal Types 2.0 to `KSNODETYPE_*`: 0x0301 speaker, 0x0302
+   headphones, 0x0603 line connector, 0x0605 S/PDIF interface, 0x0201
+   microphone; anything else, or several reachable terminals, the
+   generic speaker or microphone, as today), so Vista's endpoint builder
+   names the jacks; on 98 SE to XP the interface's `FriendlyName` carries
+   the same word, two endpoints of one type numbered.
+5. **One clock, claimed at open.** Endpoints whose terminals reach the
+   same clock entities (`UacClockPath`: sources, selectors and
+   multipliers) form a domain. A stream reserves its rate and selector
+   positions in the domain when it is created (`NewStream`), and a second
+   stream asking another rate or another position is refused there; the
+   reservation is dropped when the stream closes or fails, and taken
+   again at RUN under `UAC_DEV`'s lock, so a stream opened before a
+   reset can still fail at RUN. For a device in the table both
+   directions list 48 kHz first, so KMixer's usual open of a duplex pair
+   asks one rate (today capture lists its rates ascending). The rule
+   holds on every target; Vista's shared-mode format is one more opener.
+6. **Volume and mute per endpoint.** The playback walk as now from each
+   playback endpoint; a capture walk from each capture streaming
+   terminal back to its physical Input Terminal (new); the level kept per
+   endpoint, keyed by direction and streaming terminal (`Uac2LevelP<id>`
+   and `Uac2LevelC<id>`, the id in hex), and shared where two endpoints
+   reach one Feature Unit. Today's `Uac2Level` (playback only) is read
+   once for the first playback endpoint when its own value is absent, and
+   then written under the new name.
+7. **Behind a device table.** Several endpoints change what every such
+   device shows - the Sound Blaster X4 already plays to two terminals, 3
+   and the S/PDIF 17 (`desctest`), and its legs ran with one - so the
+   driver serves every endpoint only for the ids of a table
+   (`UacPlanQuirks`, flag `UAC_QUIRK_ENDPOINTS`): the three MSI ids
+   above, and the owner's board once the capture names its ids. The key
+   is the device's idVendor and idProduct; the function is found from
+   the PDO's descriptors as today, never by an assumed `MI_nn`; a later
+   entry may also name a configuration, an interface and a `bcdDevice`.
+   Every other device keeps one endpoint per direction. A second audio
+   function of the same device (a front headphone presented as its own
+   function) is its own devnode and adapter; a separate USB device needs
+   its own capture.
+8. **No vendor request** at start or at a stream's start, until a capture
+   shows one is needed.
+
+### 15.4 The simulated device
+
+`uacemu.py`'s profile `alc4080` is an assumed layout, not a capture: High
+Speed, one programmable clock (44.1 and 48 kHz families to 192 kHz), three
+playback streaming interfaces - 8-channel speaker (Output Terminal 0x0301
+through Feature Unit 29), 2-channel front headphone (0x0302 through 30),
+2-channel S/PDIF (0x0605 through 32), as Linux's map numbers them - and
+two capture interfaces, line in (0x0603) and microphone (0x0201), one
+terminal each; asynchronous playback with explicit feedback, 16- and
+24-bit alternates, ids `FFFF:0208` as every built profile (`--vid 0db0
+--pid 419c` gives a board id the table lists). The capture replaces it
+with the recorded configuration.
+
+### 15.5 What the capture must answer
+
+The owner's capture script (xHCI98 task 45.25) packs, for every USB audio
+device, `lsusb -v`, the sysfs `descriptors` bytes and identity, and for
+every USB card `stream*`, `usbmixer`, `usbid` and the `amixer` controls.
+From it:
+
+- `descriptors-*.bin` holds the device descriptor and then every
+  configuration: each is cut out by its own `wTotalLength` and kept as
+  `testdata/<board>/config<value>.bin` beside the original dump, and read
+  with the parser in a test of its own (`desctest` is the X4's): the
+  class version, functions and their interfaces, streaming interfaces,
+  terminals and which alternates link them, sync types, feedback (and
+  implicit feedback pairing), clock sources, selectors and multipliers,
+  units on each path (selectors, extension and vendor units included),
+  and an AudioControl interrupt endpoint;
+- `lsusb -v`: the same, decoded, as a check on the cut;
+- `stream*`: the formats and rates Linux lists per endpoint (offered,
+  not shown to work at each rate);
+- `usbmixer` and `amixer`: the units Linux kept, their ids against the
+  map above, the selectors' current positions and the controls' ranges;
+- `card*-usbid` against the descriptors: which card is which function or
+  device, when the board has two;
+- the owner's note of which jack is which, and whether two jacks play at
+  once (for 15.3's endpoints and names).
+
+Nothing in the archive records the control transfers Linux made, or a
+clock change from outside; an AudioControl interrupt endpoint, if
+present, is noted and not served at first.
+
+### 15.6 Steps
+
+1. Now: `UacPlanQuirks`, `UacPlanTerminals` and the `alc4080` profile,
+   with host tests. Nothing the driver does changes yet.
+2. After the capture: its fixture and test; 15.3 checked against it and
+   changed where it differs; the adapter-owned function, the pairs, the
+   clock reservation, the capture walk and the per-endpoint levels,
+   behind the table.
+3. Legs with the simulated device (and the capture's layout once it is a
+   profile) on 98 SE under NUSB's EHCI and under xHCI98, on XP and on 7
+   x64 under xHCI98 and Windows' own stack: each endpoint alone, two
+   playbacks, two captures, duplex, conflicting rates opened in both
+   orders, one stopped while another runs, pause and restart, levels
+   after a restart, unplug and standby with several streams running.
+4. 45-E.13: the real board.

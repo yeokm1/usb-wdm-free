@@ -112,6 +112,24 @@ int main(int argc, char **argv)
         } else CHECK(0);
     }
     CHECK(playback == 6 && capture == 2 && spdif == 2);
+    {
+        unsigned int t[4], k;
+        k = UacPlanTerminals(&parsed, 0, 1, t, 4);
+        /* Every streaming terminal per direction (uac2.md section 15):
+         * the X4 plays to two, 3 and the S/PDIF 17, and records from 6. */
+        CHECK(k == 2 && t[0] == 3 && t[1] == 17);
+        CHECK(t[0] == UacPlanTerminal(&parsed, 0, 1));
+        CHECK(UacPlanTerminals(&parsed, 0, 1, t, 1) == 1 && t[0] == 3);
+        CHECK(UacPlanTerminals(&parsed, 0, 1, NULL, 4) == 0);
+        CHECK(UacPlanTerminals(NULL, 0, 1, t, 4) == 0);
+        k = UacPlanTerminals(&parsed, 1, 1, t, 4);
+        CHECK(k == 1 && t[0] == 6 && t[0] == UacPlanTerminal(&parsed, 1, 1));
+        CHECK(UacPlanQuirks(0x0db0, 0x419c) == UAC_QUIRK_ENDPOINTS);
+        CHECK(UacPlanQuirks(0x0db0, 0xa073) == UAC_QUIRK_ENDPOINTS);
+        CHECK(UacPlanQuirks(0x0db0, 0xcc78) == UAC_QUIRK_ENDPOINTS);
+        CHECK(UacPlanQuirks(0x041e, 0x3278) == 0);
+        CHECK(UacPlanQuirks(0x0db0, 0x0000) == 0);
+    }
     CHECK(UacClock(&parsed, 3, NULL, &source) == UAC_OK && source == 33);
     CHECK(UacClock(&parsed, 6, NULL, &source) == UAC_OK && source == 37);
     CHECK(UacClock(&parsed, 17, NULL, &source) == UAC_OK && source == 35);

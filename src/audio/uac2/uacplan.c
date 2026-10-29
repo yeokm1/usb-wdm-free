@@ -88,6 +88,40 @@ unsigned int UacPlanTerminal(const UAC_DESC *desc, int capture, int highSpeed)
     return 0;
 }
 
+unsigned int UacPlanTerminals(const UAC_DESC *desc, int capture, int highSpeed,
+                              unsigned int *out, unsigned int max)
+{
+    unsigned int i, j, n = 0;
+    if (!desc || !out) return 0;
+    for (i = 0; i < desc->AltCount && n < max; i++) {
+        const UAC_ALT *a = &desc->Alt[i];
+        if (((a->DataEndpoint & 0x80) != 0) != (capture != 0)) continue;
+        if (!Runnable(a, highSpeed)) continue;
+        for (j = 0; j < n; j++)
+            if (out[j] == a->Terminal) break;
+        if (j < n) continue;
+        out[n++] = a->Terminal;
+    }
+    return n;
+}
+
+static const struct {
+    unsigned short Vid, Pid;
+    unsigned int Quirks;
+} quirks[] = {
+    { 0x0db0, 0x419c, UAC_QUIRK_ENDPOINTS },  /* MSI MPG X570S Carbon Max WiFi */
+    { 0x0db0, 0xa073, UAC_QUIRK_ENDPOINTS },  /* MSI MAG X570S Torpedo Max */
+    { 0x0db0, 0xcc78, UAC_QUIRK_ENDPOINTS },  /* MSI MAG B850M Mortar WiFi */
+};
+
+unsigned int UacPlanQuirks(unsigned int vid, unsigned int pid)
+{
+    unsigned int i;
+    for (i = 0; i < sizeof(quirks) / sizeof(quirks[0]); i++)
+        if (quirks[i].Vid == vid && quirks[i].Pid == pid) return quirks[i].Quirks;
+    return 0;
+}
+
 int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
                 unsigned int channels, unsigned int subslot, unsigned int bits,
                 unsigned int config, unsigned int rate, int highSpeed, unsigned int *index)

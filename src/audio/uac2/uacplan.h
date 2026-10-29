@@ -60,6 +60,22 @@ int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
  * serve: the one a single wave pin represents. 0 if none. */
 unsigned int UacPlanTerminal(const UAC_DESC *desc, int capture, int highSpeed);
 
+/* Every USB-streaming terminal a direction's runnable alternates serve,
+ * each once, in descriptor order, at most max: the endpoints a device
+ * UacPlanQuirks lists offers one wave filter each (docs/design/uac2.md
+ * section 15.3). out[0] is UacPlanTerminal's. Returns the count. */
+unsigned int UacPlanTerminals(const UAC_DESC *desc, int capture, int highSpeed,
+                              unsigned int *out, unsigned int max);
+
+/* Every endpoint of a direction, not the first only (section 15.3 item 5). */
+#define UAC_QUIRK_ENDPOINTS 0x1U
+
+/* The quirks of a device by its idVendor and idProduct: 0 for a device
+ * the table does not list. The ids are the boards Linux's sound/usb
+ * mixer_maps.c (commit c339f401) names as carrying the Realtek ALC4080;
+ * facts only. */
+unsigned int UacPlanQuirks(unsigned int vid, unsigned int pid);
+
 /* wMaxPacketSize as payload capacity: bits 10..0 times 1 + bits 12..11. */
 unsigned int UacPlanCapacity(unsigned int maxPacket);
 

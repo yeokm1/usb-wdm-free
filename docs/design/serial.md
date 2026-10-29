@@ -8,7 +8,13 @@ built ([first build](../testing/2026-10-22-usbcom98.md)), and has run in 98 SE
 guests with the simulated CDC-ACM device under xHCI98 and under NUSB's EHCI
 ([guest legs](../testing/2026-10-22-usbcom98-legs.md)). Section 15 lists
 where the implementation departs from this draft; 15.1 what the guest legs
-settled.
+settled. 2026-10-29: the chip modules (M5, 6.3) are written. Every
+simulated part passes in 98 SE and ME guests under xHCI98; under NUSB's
+EHCI every check passes but a 64 KiB echo on four parts, a loss suspected
+below the driver and not proven. QEMU's FT232BM passes what its backend
+allows
+([chip legs](../testing/2026-10-29-usbcom-chips.md)); real chips are owed
+(xHCI98's bench task 45-E.14). 15.2 lists what those legs settled.
 
 ## 1. Scope, and the owner's decision
 
@@ -1483,4 +1489,33 @@ lines and `COMTEST.EXE` ([guest legs](../testing/2026-10-22-usbcom98-legs.md)).
   Hardware wizard again for `USBCOM\COMPORT`; it finds `USBCOMP.INF` in the
   same folder by itself, but the user clicks through it (section 8 expected
   no second prompt).
+
+### 15.2 What the M5 legs settled, 2026-10-29
+
+These were read in 98 SE and ME guests (QEMU, xHCI98 3.2.0.0 and NUSB 3.3's
+EHCI). The devices were the SIMULATED bridges (`chipemu.py`) and QEMU's
+`usb-serial` ([chip legs](../testing/2026-10-29-usbcom-chips.md)).
+
+- **An FTDI that sends no status report.** QEMU's FT232BM answers bulk IN
+  with NAK until it has data. With the wait for a first status report
+  (6.3), it therefore never sent a byte. The wait now ends two poll periods
+  after the opens. A real chip's report comes within its latency timer, so
+  the wait still holds bulk OUT behind a fresh CTS there.
+- **The FT4232H needs xHCI98 3.2.0.0.** Its four functions have two
+  endpoints each. xHCI98 3.1.0.0 allows four transfer rings per device, so
+  it configured only two of the four functions (`0xC000009A` for the
+  others). 3.2.0.0 allows 16.
+- **Later parts need no wizard.** Once `USBCOM.INF` is installed (the
+  first bridge goes through the Found New Hardware wizard and the child's
+  wizard), each other part's ports come up with only the "New Hardware
+  Found" notice, the four COM ports of an FT4232H or CP2108 included.
+- **The CP2105's two interfaces are two ports with their own limits.** The
+  first (interface 0) gets 300 to 2000000, the second (interface 1) 2400 to
+  921600 and its narrower framing, each in its own `COMMPROP`. Either may
+  get the lower COM number: interface 1 did on one 98 SE guest, interface 0
+  on the other guests.
+- **The limits work as designed.** `SetCommState` refuses a rate just
+  outside the port's range and a framing the port does not offer, and the
+  port keeps its state. The VxD holds a write by CTS where the chip cannot
+  (FTDI, PL2303); the CP210x holds it itself.
 

@@ -162,7 +162,9 @@ static NTSTATUS BusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
     stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     status = CallAndDrain(lower, irp, &event);
     if (!NT_SUCCESS(status)) return status;
-    status = STATUS_NOT_SUPPORTED;
+    /* Answered, but not with an interface this module can use: not the
+     * "no answer" status UacUsbOpen treats as a 9x stack without USB 2.0. */
+    status = STATUS_DEVICE_CONFIGURATION_ERROR;
     if (bus.Size >= sizeof(bus) && bus.Version >= 1 && bus.IsHighSpeed && bus.Dereference) {
         *high = bus.IsHighSpeed(bus.BusContext) ? TRUE : FALSE;
         status = STATUS_SUCCESS;
@@ -1035,6 +1037,17 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
     if (UacAltZero(desc->Bytes, desc->Length, numbers, pipes, 32, &ifCount) != UAC_OK)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     status = BusSpeed(lower, &high);
+    /* No answer to the USBDI interface query (STATUS_NOT_SUPPORTED: the
+     * IRP kept its initial status; an unusable answer fails otherwise)
+     * on a system below WDM 1.10 (98 SE, ME): Windows' own 9x stack, UHCI
+     * or OHCI without USB 2.0, has no such interface (ME, 2026-10-30), and
+     * a device runs at Full Speed there. NUSB's EHCI stack and xHCI98
+     * answer the query. On 2000 and later no answer is still refused: the
+     * speed is not guessed there. */
+    if (status == STATUS_NOT_SUPPORTED && !IoIsWdmVersionAvailable(1, 0x10)) {
+        high = FALSE;
+        status = STATUS_SUCCESS;
+    }
     if (!NT_SUCCESS(status)) return STATUS_NOT_SUPPORTED; /* speed unknown: not guessed */
     d = ExAllocatePoolWithTag(NonPagedPool, sizeof(*d), TAG);
     if (!d) return STATUS_INSUFFICIENT_RESOURCES;

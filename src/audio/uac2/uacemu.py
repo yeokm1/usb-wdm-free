@@ -37,6 +37,14 @@ Profiles (--profile):
             (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
             not in that listing: 44.1 to 384 kHz, both families, assumed.
             Its HID interface is not modelled.
+  alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
+            (docs/design/uac2.md section 15.4), not a capture: one
+            programmable clock, three playback endpoints - 8-channel
+            speaker, front headphone, S/PDIF - through Feature Units 29, 30
+            and 32 as Linux's sound/usb/mixer_maps.c numbers an ALC4080
+            board's, and two capture endpoints, line in and microphone;
+            async playback with explicit feedback, 16/24-bit alternates.
+            Pass --vid 0db0 --pid 419c for a board id uac2's table lists.
 
 Every profile answers the standard requests and the clock source
 (SAM_FREQ CUR/RANGE, CLOCK_VALID), clock selector (CUR), clock multiplier
@@ -344,12 +352,27 @@ def build(name, fu='full'):
         b.output_terminal(3, 0x0302, 2, 9)
         b.stream(1, 'out', 2, [(2, 16), (3, 24), (4, 32)], 384000, sync='sync', sizes=[192, 288, 384])
         pid = 0x0207
+    elif name == 'alc4080':
+        b = Builder('high')
+        b.clock_source(40)
+        rates = {40: sorted(FAMILY_44 + FAMILY_48)}
+        b.input_terminal(1, 0x0101, 40, 8); b.output_terminal(13, 0x0301, b.feature_unit(29, 1, 8, fu), 40)
+        b.input_terminal(2, 0x0101, 40, 2); b.output_terminal(14, 0x0302, b.feature_unit(30, 2, 2, fu), 40)
+        b.input_terminal(3, 0x0101, 40, 2); b.output_terminal(15, 0x0605, b.feature_unit(32, 3, 2, fu), 40)
+        b.input_terminal(4, 0x0603, 40, 2); b.feature_unit(27, 4, 2); b.output_terminal(16, 0x0101, 27, 40)
+        b.input_terminal(5, 0x0201, 40, 2); b.feature_unit(28, 5, 2); b.output_terminal(17, 0x0101, 28, 40)
+        b.stream(1, 'out', 8, [(2, 16), (3, 24)], 192000)
+        b.stream(2, 'out', 2, [(2, 16), (3, 24)], 192000)
+        b.stream(3, 'out', 2, [(2, 16), (3, 24)], 192000)
+        b.stream(16, 'in', 2, [(2, 16), (3, 24)], 192000)
+        b.stream(17, 'in', 2, [(2, 16), (3, 24)], 192000)
+        pid = 0x0208
     else:
         raise ValueError('profile')
     return b.speed, b.configuration(), rates, pid
 
 
-PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993')
+PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080')
 FU_MODES = ('full', 'master', 'channels', 'readonly', 'none')
 VOLUME_RANGE = (-0x6000, 0, 0x100)
 
@@ -427,6 +450,7 @@ class Model:
         self.mute, self.volume = {}, {}
         self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
         self.rpeak = {}         # the same after the units in force at each packet
+        self.ep_peak = {}       # (endpoint, channel): received, rendered - several outputs
 
     @property
     def clock(self):
@@ -478,7 +502,7 @@ class Model:
                  feedback_packets=self.feedback_packets, zero_feedback=self.zero_feedback,
                  in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest(),
                  **self.levels())
-        self.peak, self.rpeak = {}, {}
+        self.peak, self.rpeak, self.ep_peak = {}, {}, {}
 
     # -- the rendered signal -------------------------------------------------
     def path_units(self, terminal):
@@ -542,10 +566,16 @@ class Model:
             received.append(dbfs(self.peak[ch]))
             rendered.append(dbfs(self.rpeak.get(ch, 0.0)))
             gains.append(None if muted else round(db, 2))
-        return dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
-                    unit_gain_db=gains, units=units)
+        result = dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
+                      unit_gain_db=gains, units=units)
+        if len({ep for ep, _ in self.ep_peak}) > 1:
+            result['endpoint_peaks_dbfs'] = {
+                '%02x' % ep: [[dbfs(self.ep_peak[(e, ch)][0]), dbfs(self.ep_peak[(e, ch)][1])]
+                              for e, ch in sorted(self.ep_peak) if e == ep]
+                for ep in sorted({e for e, _ in self.ep_peak})}
+        return result
 
-    def measure(self, payload, info, units):
+    def measure(self, payload, info, units, ep=None):
         """Track each channel's largest sample of one OUT packet, as
         received and as rendered by the units in force now."""
         subslot, channels = info['subslot'], info['channels']
@@ -565,6 +595,9 @@ class Model:
                 out = 0.0 if muted else top * 10 ** (db / 20)
                 self.peak[ch] = max(self.peak.get(ch, 0.0), top)
                 self.rpeak[ch] = max(self.rpeak.get(ch, 0.0), out)
+                if ep is not None:
+                    r, o = self.ep_peak.get((ep, ch), (0.0, 0.0))
+                    self.ep_peak[(ep, ch)] = (max(r, top), max(o, out))
 
     def reset_streams(self):
         self.streams.clear()
@@ -807,7 +840,8 @@ class Model:
         self.nonzero += sum(byte != 0 for byte in payload)
         self.lengths[length] += 1
         self.digest.update(payload)
-        self.measure(payload, own[2], self.playback_units())
+        terminal = self.p.alts[(own[0], own[1])].get('terminal')
+        self.measure(payload, own[2], self.path_units(terminal) if terminal else [], ep)
         if self.pcm is not None:
             if self.pcm_bytes + length > 4 * 1024 * 1024:
                 raise ValueError('simulated PCM capture exceeds four MiB')

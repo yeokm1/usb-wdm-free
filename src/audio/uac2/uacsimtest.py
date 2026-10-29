@@ -255,6 +255,10 @@ class ProfileTest(unittest.TestCase):
         cls.dll.UacPlanFormats.restype = c.c_uint
         cls.dll.UacPlanTerminal.argtypes = [c.c_void_p, c.c_int, c.c_int]
         cls.dll.UacPlanTerminal.restype = c.c_uint
+        cls.dll.UacPlanTerminals.argtypes = [c.c_void_p, c.c_int, c.c_int, c.POINTER(c.c_uint), c.c_uint]
+        cls.dll.UacPlanTerminals.restype = c.c_uint
+        cls.dll.UacPlanQuirks.argtypes = [c.c_uint, c.c_uint]
+        cls.dll.UacPlanQuirks.restype = c.c_uint
         cls.dll.UacPlanPick.argtypes = [c.c_void_p, c.c_int, c.c_uint, c.c_uint, c.c_uint, c.c_uint,
                                         c.c_uint, c.c_uint, c.c_int, c.POINTER(c.c_uint)]
         cls.dll.UacPlanPacketBytes.argtypes = [c.c_uint, c.c_int, c.c_uint, c.c_uint, c.c_int]
@@ -343,6 +347,8 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(shape['adaptive'], ([(2, 2, 16)], [(2, 2, 16)]))
         # The CX31993 model: synchronous playback only, the listed packet sizes.
         self.assertEqual(shape['cx31993'], ([(2, 2, 16), (2, 3, 24), (2, 4, 32)], []))
+        self.assertEqual(shape['alc4080'], ([(2, 2, 16), (2, 3, 24), (8, 2, 16), (8, 3, 24)],
+                                            [(2, 2, 16), (2, 3, 24)]))
         self.assertEqual([uacemu.Profile('cx31993').stream_alt(1, a)['data']['max'] for a in (1, 2, 3)],
                          [192, 288, 384])
         self.assertIsNone(uacemu.Profile('cx31993').stream_alt(1, 1)['feedback'])
@@ -350,6 +356,39 @@ class ProfileTest(unittest.TestCase):
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)
         self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 3)
+
+    def test_alc4080_endpoints(self):
+        # The assumed ALC4080 layout (uac2.md section 15.4): the planner
+        # lists every streaming terminal per direction in descriptor order,
+        # each with its own formats and its own Feature Unit, all on one
+        # clock; uac2's table lists the board ids Linux names.
+        p = uacemu.Profile('alc4080')
+        rc, d = self.parse(p.config)
+        self.assertEqual(rc, 0)
+        t = (c.c_uint * 4)()
+        self.assertEqual(self.dll.UacPlanTerminals(c.byref(d), 0, 1, t, 4), 3)
+        self.assertEqual(list(t)[:3], [1, 2, 3])
+        self.assertEqual(self.dll.UacPlanTerminal(c.byref(d), 0, 1), 1)
+        self.assertEqual(self.dll.UacPlanTerminals(c.byref(d), 1, 1, t, 4), 2)
+        self.assertEqual(list(t)[:2], [16, 17])
+        for terminal in (1, 2, 3, 16, 17):
+            self.assertEqual(self.driver_clock(d, terminal), (0, 40))
+        for terminal, unit in ((1, 29), (2, 30), (3, 32)):
+            self.assertEqual(p.entities[unit]['source'], terminal)
+        fmts = (UacFormat * 16)()
+        n = self.dll.UacPlanFormats(c.byref(d), 0, 1, fmts, 16)
+        self.assertEqual(sorted((fmts[k].Terminal, fmts[k].Channels, fmts[k].Bits) for k in range(n)),
+                         [(1, 8, 16), (1, 8, 24), (2, 2, 16), (2, 2, 24), (3, 2, 16), (3, 2, 24)])
+        for terminal, channels in ((2, 2), (3, 2)):
+            index = c.c_uint()
+            self.assertEqual(self.dll.UacPlanPick(c.byref(d), 0, terminal, channels, 2, 16,
+                                                  uacemu.CHANNEL_CONFIG[channels], 48000, 1,
+                                                  c.byref(index)), 0)
+            self.assertEqual(d.Alt[index.value].Terminal, terminal)
+        self.assertEqual(self.dll.UacPlanQuirks(0x0db0, 0x419c), 1)
+        self.assertEqual(self.dll.UacPlanQuirks(p.vid, p.pid), 0)
+        self.assertEqual(uacemu.Profile('alc4080', vid=0x0db0, pid=0x419c).device[8:12],
+                         struct.pack('<HH', 0x0db0, 0x419c))
 
     def test_clock_paths_through_driver(self):
         p = uacemu.Profile('clocks')
@@ -570,6 +609,25 @@ class ProfileTest(unittest.TestCase):
         m, _, _ = self.model('x4full')
         self.assertEqual(m.path_units(3), [1])
         self.assertEqual(m.path_units(17), [14])
+
+    def test_rendered_per_endpoint(self):
+        # The assumed ALC4080: speaker (IF1, FU 29) and headphone (IF2, FU
+        # 30) playing at once; FU 30 muted renders the headphone silent and
+        # leaves the speaker as received, each endpoint measured through its
+        # own units.
+        m, _, _ = self.model('alc4080')
+        self.configure(m, (1, 1), (2, 1))
+        m.handle(12, 1, bytes((1, 8, 4)))
+        m.handle(12, 2, bytes((2, 8, 4)))
+        self.control(m, 1, 0x21, 0x100, 30 << 8, 1, b'\1')
+        m.handle(102, 0, struct.pack('<BBH', 1, 0, 96) + struct.pack('<8h', *([16384] * 8)) * 6)
+        m.handle(102, 0, struct.pack('<BBH', 2, 0, 24) + struct.pack('<hh', 16384, 16384) * 6)
+        peaks = m.levels()['endpoint_peaks_dbfs']
+        self.assertEqual(peaks['01'], [[-6.02, -6.02]] * 8)
+        self.assertEqual(peaks['02'], [[-6.02, None]] * 2)
+        self.assertEqual(m.path_units(1), [29])
+        self.assertEqual(m.path_units(2), [30])
+        self.assertEqual(m.path_units(3), [32])
 
     def test_feature_unit_masks(self):
         # cx31993: master mute only (0x03), channel volume only (0x0c);

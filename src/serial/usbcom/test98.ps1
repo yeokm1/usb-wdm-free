@@ -25,6 +25,8 @@ $badP = @{
     'manual id dropped'    = $p.Replace('%Manual%=UsbCom,USBCOM\MANUAL_CDC_ACM', '')
     'board PID changed'    = $p.Replace('USB\VID_0483&PID_5740', 'USB\VID_0483&PID_5741')
     'string swapped'       = $p.Replace('%ArduinoBoot%=UsbCom,USB\VID_2341&PID_0036', '%Arduino%=UsbCom,USB\VID_2341&PID_0036')
+    'bridge dropped'       = $p.Replace("%Cp2108%=UsbCom,USB\VID_10C4&PID_EA71&MI_03`r`n", '').Replace("%Cp2108%=UsbCom,USB\VID_10C4&PID_EA71&MI_03`n", '')
+    'manual bridge listed' = $p.Replace('%FtdiX%=UsbCom,USB\VID_0403&PID_6015', '%FtdiX%=UsbCom,USB\VID_0403&PID_6001')
 }
 foreach ($k in $badP.Keys) { if ($badP[$k] -ceq $p) { throw "Mutation did not change USBCOM.INF: $k" } }
 $badC = @{

@@ -34,6 +34,30 @@ function Get-BoardString($r) {
     }
 }
 
+# The USB serial bridges of USBCOM.INF (design 6.3): string, VID:PID, ports.
+# A part with more than one port is listed as a whole device (98 SE's own
+# stack and NUSB's EHCI leave the split to Windows' composite parent, and a
+# hardware id wins over USB\COMPOSITE) and per function (xHCI98 splits it).
+# The gate checks this list against chipcore.c's table, whose "(INF)" rows
+# are exactly these ids.
+$UsbcomChips = @(
+    @('FtdiX', '0403:6015', 1), @('Ft232h', '0403:6014', 1), @('Ft4232h', '0403:6011', 4),
+    @('Pl2303', '067B:2303', 1), @('Pl2303', '067B:2304', 1),
+    @('Pl2303g', '067B:23A3', 1), @('Pl2303g', '067B:23B3', 1), @('Pl2303g', '067B:23C3', 1),
+    @('Pl2303g', '067B:23D3', 1), @('Pl2303g', '067B:23E3', 1), @('Pl2303g', '067B:23F3', 1),
+    @('Cp2105', '10C4:EA70', 2), @('Cp2108', '10C4:EA71', 4))
+
+# The ids chipcore.c's family table marks "(INF)" and "(manual only)".
+function Get-ChipTableIds([string]$ChipCore, [string]$Mark) {
+    $ids = @()
+    foreach ($l in Get-Content -LiteralPath $ChipCore) {
+        if ($l -match '^\s*\{ 0x([0-9A-Fa-f]{4}), 0x([0-9A-Fa-f]{4}), AC_FAM_[A-Z0-9]+ \},\s*/\*.*\((INF|manual only)\) \*/') {
+            if ($Matches[3] -eq $Mark) { $ids += ($Matches[1] + ':' + $Matches[2]).ToUpperInvariant() }
+        }
+    }
+    return $ids
+}
+
 # Returns an ordered list of "%Str%,ID" pairs (install section added by the caller).
 function Get-UsbcomModels([string]$Inf, [string]$Section, [string]$BoardIds) {
     $rows = Read-BoardIds $BoardIds
@@ -48,6 +72,13 @@ function Get-UsbcomModels([string]$Inf, [string]$Section, [string]$BoardIds) {
             $s = Get-BoardString $r
             [void]$m.Add(@($s, (& $id $r)))
             if ($r.Kind -eq 'composite') { [void]$m.Add(@($s, ((& $id $r) + '&MI_00'))) }
+        }
+        foreach ($c in $UsbcomChips) {
+            $v, $p = $c[1].Split(':')
+            [void]$m.Add(@($c[0], "USB\VID_$v&PID_$p"))
+            if ($c[2] -gt 1) {
+                for ($i = 0; $i -lt $c[2]; $i++) { [void]$m.Add(@($c[0], ("USB\VID_$v&PID_$p&MI_{0:D2}" -f $i))) }
+            }
         }
         # Owner, 2026-10-26 (xHCI98 roadmap 44.44): 98 SE and ME have no
         # CDC-ACM COM-port driver of their own (serial.md 2.5, 5.4).

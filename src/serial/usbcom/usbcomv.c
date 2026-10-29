@@ -289,7 +289,7 @@ static void UvZero(void *d, ULONG n)
 #define UV_RX_DEFAULT 16384
 #define UV_TX_DEFAULT 65536
 #define UV_TX_MIN     65536               /* see PortWrite */
-#define UV_OPS        16
+#define UV_OPS        UCIF_VXD_OPS
 #define UV_MAGIC      0x56434F55          /* 'UOCV' */
 #define UV_NAMES      16
 #define UV_W32DCB     28                  /* sizeof the Win32 DCB */
@@ -306,6 +306,13 @@ typedef struct UV_PORT {
     AC_FLOW         Flow;
     AC_QUEUE        RxQ, TxQ;
     UCHAR           WireDtr, WireRts, Break, Pad;
+    UCIF_LIMITS     Lim;                  /* copied at open: the table is the SYS's */
+    ULONG           Caps;
+    ULONG           HwFlow;               /* the UCOP_FLOW value last queued */
+    ULONG           WantFlow;             /* the one the DCB asks for */
+    ULONG           LineDirty;            /* a line coding still to queue */
+    ULONG           ControlDirty;         /* a DTR/RTS state still to queue */
+    ULONG           CtsKnown;             /* a chip has reported its lines since open */
     volatile ULONG  SysGone;
     volatile ULONG  Closing;
     ULONG           RxStalled;
@@ -352,34 +359,121 @@ static void UvKick(UV_PORT *p, ULONG flags)
     UvSchedule(p);
 }
 
-static void UvQueueOp(UV_PORT *p, ULONG op, ULONG value, const UCHAR *data)
+/* Returns nonzero if the operation was queued. */
+static void UvPutOp(UV_PORT *p, ULONG op, ULONG value, const UCHAR *data);
+
+static ULONG UvQueueOp(UV_PORT *p, ULONG op, ULONG value, const UCHAR *data)
 {
-    ULONG f;
+    ULONG f, ok = 0;
     UV_LOCK(f);
     if (p->OpCount < UV_OPS) {
-        UCIF_OP *o = &p->Ops[(p->OpHead + p->OpCount) % UV_OPS];
-        o->Op = op;
-        o->Value = value;
-        if (data)
-            UvCopy(o->Data, data, 7);
-        p->OpCount++;
+        ok = 1;
+        UvPutOp(p, op, value, data);
     }
     UV_UNLOCK(f);
     UvSchedule(p);
+    return ok;
 }
 
+/* Puts an operation in the queue; lock held, room checked by the caller. */
+static void UvPutOp(UV_PORT *p, ULONG op, ULONG value, const UCHAR *data)
+{
+    UCIF_OP *o = &p->Ops[(p->OpHead + p->OpCount) % UV_OPS];
+    o->Op = op;
+    o->Value = value;
+    if (data)
+        UvCopy(o->Data, data, 7);
+    p->OpCount++;
+}
+
+/*
+ * The DCB's line coding, read under the lock, so the newest one is what
+ * goes; if the queue is full it is kept (LineDirty) and queued by the next
+ * event, so a rate change is never lost (design 6.3).
+ */
 static void UvQueueLine(UV_PORT *p)
 {
     AC_LINE line;
     UCHAR lc[7];
+    ULONG f;
+    UV_LOCK(f);
     AcDcbToLine(&p->Dcb, &line);
     AcEncodeLineCoding(line.Rate, line.StopBits, line.Parity, line.DataBits, lc);
-    UvQueueOp(p, UCOP_LINE_CODING, 0, lc);
+    if (p->OpCount < UV_OPS) {
+        UvPutOp(p, UCOP_LINE_CODING, 0, lc);
+        p->LineDirty = 0;
+    } else {
+        p->LineDirty = 1;
+    }
+    UV_UNLOCK(f);
+    /* Full: the queue's own event or its retry timer comes anyway. */
+    if (!p->LineDirty)
+        UvSchedule(p);
 }
 
+/* A chip's flow control (UCOP_FLOW) when it differs from what was last
+   queued; the setting and its acknowledgement change under the lock. */
+static void UvQueueFlow(UV_PORT *p)
+{
+    ULONG f, ok = 0;
+    if (!(p->Caps & UCIF_CAP_FLOW))
+        return;
+    UV_LOCK(f);
+    if (p->WantFlow != p->HwFlow && p->OpCount < UV_OPS) {
+        UvPutOp(p, UCOP_FLOW, p->WantFlow, 0);
+        p->HwFlow = p->WantFlow;
+        ok = 1;
+    }
+    UV_UNLOCK(f);
+    if (ok)
+        UvSchedule(p);
+}
+
+/* Settings not yet in the queue (a full queue held them back). Lock held. */
+static ULONG UvSettingsOwed(UV_PORT *p)
+{
+    return p->LineDirty || p->ControlDirty || ((p->Caps & UCIF_CAP_FLOW) && p->WantFlow != p->HwFlow);
+}
+
+/*
+ * The wire's DTR and RTS, one operation per change (7.2). If the queue is
+ * full the newest state is kept (ControlDirty) and queued by a later event:
+ * a change is never lost, though changes made while full coalesce.
+ */
 static void UvQueueControl(UV_PORT *p)
 {
-    UvQueueOp(p, UCOP_CONTROL, (p->WireDtr ? 1 : 0) | (p->WireRts ? 2 : 0), 0);
+    ULONG f, ok = 0;
+    UV_LOCK(f);
+    if (p->OpCount < UV_OPS) {
+        UvPutOp(p, UCOP_CONTROL, (p->WireDtr ? 1 : 0) | (p->WireRts ? 2 : 0), 0);
+        p->ControlDirty = 0;
+        ok = 1;
+    } else {
+        p->ControlDirty = 1;
+    }
+    UV_UNLOCK(f);
+    if (ok)
+        UvSchedule(p);
+}
+
+/*
+ * A chip's CTS (design 6.3). fOutxCtsFlow is the chip's own when it can hold
+ * its transmitter by CTS alone (CP210x) or when fRtsFlow is set too (FTDI
+ * and PL2303 have one mode for both); otherwise the transmit queue is held
+ * here while CTS is off, and on a chip that reports CTS soon after open,
+ * until it has. Returns nonzero if the hold was released. Lock held.
+ */
+static ULONG UvCtsHold(UV_PORT *p)
+{
+    ULONG was = p->Flow.Status & AC_fCtsHold;
+    ULONG mine = (p->Caps & UCIF_CAP_FLOW) && !(p->Caps & UCIF_CAP_CTSFLOW) &&
+                 (p->Dcb.BitMask & AC_fOutXCTSFlow) &&
+                 !((p->Caps & UCIF_CAP_PAIRFLOW) && (p->Dcb.BitMask & AC_fRTSFlow));
+    if (mine && ((p->State & AC_SS_NOCTS) || ((p->Caps & UCIF_CAP_CTSNOW) && !p->CtsKnown)))
+        p->Flow.Status |= AC_fCtsHold;
+    else
+        p->Flow.Status &= ~AC_fCtsHold;
+    return was && !(p->Flow.Status & AC_fCtsHold);
 }
 
 /* Raises enabled events: the event variable, then the client callback. */
@@ -413,7 +507,7 @@ static void UvNotifyTx(UV_PORT *p)
 /* The only place that calls USBCOM.SYS after PortOpen (not interrupt time). */
 static void UvEvent(UV_PORT *p)
 {
-    ULONG f, kick, check;
+    ULONG f, kick, check, handed = 0, empty = 0;
     UCIF_OP op;
 
     UV_LOCK(f);
@@ -443,8 +537,20 @@ static void UvEvent(UV_PORT *p)
         UV_LOCK(f);
         p->OpHead = (p->OpHead + 1) % UV_OPS;
         p->OpCount--;
+        empty = p->OpCount == 0;
         UV_UNLOCK(f);
+        handed++;
     }
+    /* Settings that did not fit before (UvQueueLine, UvQueueFlow). */
+    if (p->LineDirty)
+        UvQueueLine(p);
+    if (p->WantFlow != p->HwFlow)
+        UvQueueFlow(p);
+    if (p->ControlDirty)
+        UvQueueControl(p);
+    /* A chip's TX waited behind these (UvTxPull): pull it now (6.3). */
+    if (handed && empty && (p->Caps & UCIF_CAP_FLOW))
+        kick |= UCK_TX;
     if (kick)
         p->T->Kick(p->T->Port, kick);
     if (check) {
@@ -512,7 +618,9 @@ static unsigned long __stdcall UvTxPull(void *ctx, unsigned char *buf,
 
     UV_LOCK(f);
     before = p->Pd.QOutCount;
-    n = AcTxPull(&p->TxQ, &p->Flow, buf, max);
+    /* A chip's data waits behind the settings queued before it (6.3). */
+    n = ((p->Caps & UCIF_CAP_FLOW) && (p->OpCount || UvSettingsOwed(p))) ? 0
+        : AcTxPull(&p->TxQ, &p->Flow, buf, max);
     UV_UNLOCK(f);
     if (n && p->TxTrigger != 0xFFFFFFFF && before >= p->TxTrigger)
         UvNotifyTx(p);
@@ -531,15 +639,19 @@ static void __stdcall UvTxDone(void *ctx, unsigned long sent, unsigned long idle
 static void __stdcall UvSerialState(void *ctx, unsigned short state)
 {
     UV_PORT *p = (UV_PORT *)ctx;
-    ULONG ev = 0, err = 0, f;
+    ULONG ev = 0, err = 0, f, rel;
     UCHAR msr = AcStateToMsr(p->State, state, &ev, &err);
 
     p->State = state;
     UV_LOCK(f);
     *p->pMsr = msr;
     p->Pd.dwCommError |= err;
+    p->CtsKnown = 1;
+    rel = UvCtsHold(p);
     UV_UNLOCK(f);
     UvRaise(p, ev);
+    if (rel)
+        UvKick(p, UCK_TX);
 }
 
 static void __stdcall UvGone(void *ctx)
@@ -576,7 +688,7 @@ static BOOL PortSetCommState(UV_PORT *p, _DCB *dcb, ULONG mask)
     AC_DCB nd;
     AC_LINE oldLine, newLine;
     long rc;
-    ULONG f;
+    ULONG f, rel;
 
     if (dcb == NULL)
         return UV_FAIL(p, IE_INVALIDPARAM);
@@ -586,22 +698,35 @@ static BOOL PortSetCommState(UV_PORT *p, _DCB *dcb, ULONG mask)
         return UV_FAIL(p, rc);
     AcDcbToLine(&p->Dcb, &oldLine);
     AcDcbToLine(&nd, &newLine);
+    /* What this port takes (design 6.3; CDC-ACM: every valid line). */
+    rc = AcCheckLine(&p->Lim, newLine.Rate, newLine.DataBits, newLine.Parity, newLine.StopBits);
+    if (rc)
+        return UV_FAIL(p, rc);
     UV_LOCK(f);
     p->Dcb = nd;
+    rel = UvCtsHold(p);
     UV_UNLOCK(f);
     UVT4("SetCommState mask %08lx: %lu baud, %lu bits, parity %lu", mask, newLine.Rate,
          newLine.DataBits, newLine.Parity);
     if (oldLine.Rate != newLine.Rate || oldLine.DataBits != newLine.DataBits ||
         oldLine.Parity != newLine.Parity || oldLine.StopBits != newLine.StopBits)
         UvQueueLine(p);
+    /* Flow control before the lines: a chip ignores RTS while its own
+       handshake drives it, so leaving the handshake comes first. */
+    if (mask & AC_mBitMask) {
+        UV_LOCK(f);
+        p->WantFlow = AcDcbFlow(&nd);
+        UV_UNLOCK(f);
+        UvQueueFlow(p);
+    }
     if ((mask & AC_mBitMask) &&
         (newLine.Dtr != p->WireDtr || newLine.Rts != p->WireRts)) {
         p->WireDtr = newLine.Dtr;
         p->WireRts = newLine.Rts;
         UvQueueControl(p);
     }
-    if (mask & AC_mBitMask)
-        UvKick(p, UCK_TX);           /* XON/XOFF settings may release TX */
+    if ((mask & AC_mBitMask) || rel)
+        UvKick(p, UCK_TX);           /* XON/XOFF or CTS settings may release TX */
     return UV_OK(p);
 }
 
@@ -722,15 +847,32 @@ static BOOL PortClose(UV_PORT *p)
         p->TimeoutHandle = 0;
     }
     if (!p->SysGone) {
-        /* Flush queued operations, then drop DTR and RTS (design 7.6). */
+        /* Flush queued operations, then drop DTR and RTS (design 7.6).
+           The SYS keeps room for all of them (UCOP_F_CLOSING). */
         while (p->OpCount) {
             op = p->Ops[p->OpHead];
+            op.Op |= UCOP_F_CLOSING;
             if (p->T->Control(p->T->Port, &op) != 0)
                 break;
             p->OpHead = (p->OpHead + 1) % UV_OPS;
             p->OpCount--;
         }
-        op.Op = UCOP_CONTROL;
+        /* Settings a full queue held back, newest last (a 1200-baud touch). */
+        if (p->LineDirty) {
+            AC_LINE line;
+            AcDcbToLine(&p->Dcb, &line);
+            op.Op = UCOP_LINE_CODING | UCOP_F_CLOSING;
+            op.Value = 0;
+            AcEncodeLineCoding(line.Rate, line.StopBits, line.Parity, line.DataBits, op.Data);
+            (void)p->T->Control(p->T->Port, &op);
+        }
+        if ((p->Caps & UCIF_CAP_FLOW) && p->WantFlow != p->HwFlow) {
+            op.Op = UCOP_FLOW | UCOP_F_CLOSING;
+            op.Value = p->WantFlow;
+            (void)p->T->Control(p->T->Port, &op);
+        }
+        /* (An owed DTR/RTS state needs no flush: the drop below replaces it.) */
+        op.Op = UCOP_CONTROL | UCOP_F_CLOSING;
         op.Value = 0;
         (void)p->T->Control(p->T->Port, &op);
         p->T->Detach(p->T->Port);
@@ -741,7 +883,7 @@ static BOOL PortClose(UV_PORT *p)
 
 static void UvComstat(UV_PORT *p, _COMSTAT *cs)
 {
-    cs->BitMask = p->Flow.Status & (AC_fXoffHold | AC_fXoffSent | AC_fEof | AC_fTximmed);
+    cs->BitMask = p->Flow.Status & (AC_fCtsHold | AC_fXoffHold | AC_fXoffSent | AC_fEof | AC_fTximmed);
     cs->cbInque = p->Pd.QInCount;
     cs->cbOutque = p->Pd.QOutCount;
 }
@@ -778,6 +920,19 @@ static BOOL PortSetModemStatusShadow(UV_PORT *p, ULONG mask, UCHAR *msr)
     return UV_OK(p);
 }
 
+/* The BAUD_* bits of COMMPROP (vcomm.h: BAUD_075 to BAUD_128K in bits 0
+   to 16) inside the port's range. */
+static ULONG UvSettableBauds(const UCIF_LIMITS *l)
+{
+    static const ULONG rate[17] = { 75, 110, 135, 150, 300, 600, 1200, 1800, 2400, 4800,
+                                    7200, 9600, 14400, 19200, 38400, 56000, 128000 };
+    ULONG bits = 0, i;
+    for (i = 0; i < 17; i++)
+        if (rate[i] >= l->MinBaud && rate[i] <= l->MaxBaud)
+            bits |= 1UL << i;
+    return bits;
+}
+
 static BOOL PortGetProperties(UV_PORT *p, _COMMPROP *cp)
 {
     if (cp == NULL)
@@ -793,10 +948,20 @@ static BOOL PortGetProperties(UV_PORT *p, _COMMPROP *cp)
                              PCF_INTTIMEOUTS | PCF_SPECIALCHARS;
     cp->dwSettableParams = SP_PARITY | SP_BAUD | SP_DATABITS | SP_STOPBITS |
                            SP_HANDSHAKING | SP_PARITY_CHECK | SP_RLSD;
-    cp->dwSettableBaud = 0x0001FFFF | BAUD_USER;
-    cp->wSettableData = DATABITS_5 | DATABITS_6 | DATABITS_7 | DATABITS_8 | DATABITS_16;
-    cp->wSettableStopParity = STOPBITS_10 | STOPBITS_15 | STOPBITS_20 | PARITY_NONE |
-                              PARITY_ODD | PARITY_EVEN | PARITY_MARK | PARITY_SPACE;
+    cp->dwSettableBaud = UvSettableBauds(&p->Lim) | BAUD_USER;
+    cp->wSettableData = (USHORT)(((p->Lim.DataBits & (1UL << 5)) ? DATABITS_5 : 0) |
+                                 ((p->Lim.DataBits & (1UL << 6)) ? DATABITS_6 : 0) |
+                                 ((p->Lim.DataBits & (1UL << 7)) ? DATABITS_7 : 0) |
+                                 ((p->Lim.DataBits & (1UL << 8)) ? DATABITS_8 : 0) |
+                                 ((p->Lim.DataBits & (1UL << 16)) ? DATABITS_16 : 0));
+    cp->wSettableStopParity = (USHORT)(((p->Lim.StopBits & 1) ? STOPBITS_10 : 0) |
+                                       ((p->Lim.StopBits & 2) ? STOPBITS_15 : 0) |
+                                       ((p->Lim.StopBits & 4) ? STOPBITS_20 : 0) |
+                                       ((p->Lim.Parity & 1) ? PARITY_NONE : 0) |
+                                       ((p->Lim.Parity & 2) ? PARITY_ODD : 0) |
+                                       ((p->Lim.Parity & 4) ? PARITY_EVEN : 0) |
+                                       ((p->Lim.Parity & 8) ? PARITY_MARK : 0) |
+                                       ((p->Lim.Parity & 16) ? PARITY_SPACE : 0));
     cp->dwCurrentTxQueue = p->Pd.QOutSize;
     cp->dwCurrentRxQueue = p->Pd.QInSize;
     return UV_OK(p);
@@ -1129,6 +1294,8 @@ static UV_PORT *PortOpen(char *name, ULONG vm, ULONG *err)
     p->Magic = UV_MAGIC;
     p->NameSlot = slot;
     p->T = t;
+    p->Lim = t->Limits;                  /* the VxD's own copy (ucif.h) */
+    p->Caps = t->Caps;
     p->Pd.PDLength = sizeof(PortData);
     p->Pd.PDVersion = 0x0100;            /* no documented value; checked in M1 */
     p->Pd.PDfunctions = &g_Funcs;
@@ -1173,7 +1340,15 @@ static UV_PORT *PortOpen(char *name, ULONG vm, ULONG *err)
         g_Open[slot] = 1;
     UV_UNLOCK(f);
     UvQueueLine(p);
+    if (p->Caps & UCIF_CAP_FLOW) {
+        p->WantFlow = AcDcbFlow(&p->Dcb);
+        p->HwFlow = p->WantFlow ^ 0x80000000UL;    /* differs: always sent at open */
+        UvQueueFlow(p);
+    }
     UvQueueControl(p);
+    UV_LOCK(f);
+    (void)UvCtsHold(p);
+    UV_UNLOCK(f);
     UVT2("PortOpen %s: port %08lx", name, p);
     return p;
 }

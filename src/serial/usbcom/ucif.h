@@ -26,7 +26,7 @@
 #ifndef UCIF_H
 #define UCIF_H
 
-#define UCIF_VERSION 1
+#define UCIF_VERSION 2        /* 2: the limits, UCIF_CAP_FLOW and UCOP_FLOW (M5) */
 
 /* CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS) */
 #define IOCTL_USBCOM_GET_INTERFACE 0x00222400UL
@@ -48,6 +48,16 @@ typedef struct UCIF_REQUEST {
 #define UCOP_LINE_CODING  1  /* Data[0..6] = SET_LINE_CODING payload */
 #define UCOP_CONTROL      2  /* Value bit0 = DTR, bit1 = RTS */
 #define UCOP_BREAK        3  /* Value = SEND_BREAK wValue (0xFFFF on, 0 off) */
+#define UCOP_FLOW         4  /* chips (CDC ignores it): Value bit0 = fOutxCtsFlow, bit1 = fRtsFlow */
+
+/* Or-ed into UCIF_OP.Op by PortClose's flush: the SYS takes the operation
+   into the places it keeps for it (an open's last settings, such as a
+   1200-baud touch, are never lost at close). The VxD keeps at most
+   UCIF_VXD_OPS operations, plus a line coding and a flow setting a full
+   queue held back, and then sends the DTR drop: UCIF_CLOSE_OPS in all. */
+#define UCOP_F_CLOSING    0x80000000UL
+#define UCIF_VXD_OPS      16
+#define UCIF_CLOSE_OPS    (UCIF_VXD_OPS + 3)
 
 typedef struct UCIF_OP {
     unsigned long Op;
@@ -75,8 +85,31 @@ typedef struct UCIF_CALLBACKS {
 } UCIF_CALLBACKS;
 
 /* UCIF_TABLE.Caps */
-#define UCIF_CAP_BREAK  0x0001   /* ACM bmCapabilities D2 */
-#define UCIF_CAP_LINE   0x0002   /* ACM bmCapabilities D1 */
+#define UCIF_CAP_BREAK  0x0001   /* ACM bmCapabilities D2; a chip that sends break */
+#define UCIF_CAP_LINE   0x0002   /* ACM bmCapabilities D1; every chip */
+#define UCIF_CAP_FLOW   0x0004   /* a chip: RTS/CTS handshake (UCOP_FLOW), real CTS */
+#define UCIF_CAP_CTSFLOW 0x0008  /* the chip holds its transmitter by CTS on its own (CP210x) */
+#define UCIF_CAP_CTSNOW 0x0010   /* the chip reports CTS soon after open, unasked (FTDI, CP210x) */
+#define UCIF_CAP_PAIRFLOW 0x0020 /* one RTS/CTS mode for both directions (FTDI, PL2303) */
+
+#define UCIF_FLOW_CTS   0x0001   /* UCOP_FLOW: transmit held while CTS is off */
+#define UCIF_FLOW_RTS   0x0002   /* UCOP_FLOW: RTS driven by the receive side */
+
+/*
+ * What the port takes (design 6.3). A bit set in DataBits for each data
+ * bit count (bit n: n bits), in StopBits and Parity for each DCB value
+ * (StopBits 0 = 1, 1 = 1.5, 2 = 2; Parity 0 to 4). Max56Baud, if not 0,
+ * is the highest rate with 5 or 6 data bits. The VxD copies them at open:
+ * the table is not read after Gone.
+ */
+typedef struct UCIF_LIMITS {
+    unsigned long MinBaud;
+    unsigned long MaxBaud;
+    unsigned long DataBits;
+    unsigned long StopBits;
+    unsigned long Parity;
+    unsigned long Max56Baud;
+} UCIF_LIMITS;
 
 typedef struct UCIF_TABLE {
     unsigned long Version;
@@ -84,6 +117,7 @@ typedef struct UCIF_TABLE {
     void *Port;
     unsigned long Caps;
     unsigned long PortNumber;           /* n of COMn chosen by the SYS */
+    UCIF_LIMITS Limits;                 /* version 2 */
     /* Returns 0 on success, nonzero if the port is gone or busy. */
     long (__stdcall *Attach)(void *port, const UCIF_CALLBACKS *cb);
     void (__stdcall *Detach)(void *port);

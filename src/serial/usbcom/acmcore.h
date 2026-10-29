@@ -14,6 +14,8 @@
 #ifndef ACMCORE_H
 #define ACMCORE_H
 
+#include "ucif.h"
+
 typedef unsigned char  AC_U8;
 typedef unsigned short AC_U16;
 typedef unsigned long  AC_U32;
@@ -71,6 +73,16 @@ typedef struct AC_IFACE {
  */
 int  AcFindFunctions(const AC_U8 *cfg, AC_U32 len, AC_U32 quirks,
                      AC_FUNC *out, int max);
+
+/*
+ * A USB serial bridge's ports (design 6.3): each interface at alternate
+ * setting 0 with a bulk IN and a bulk OUT endpoint, in interface order, as
+ * a combined function (CommIf = DataIf). NotifyEp is its first interrupt IN
+ * endpoint, or with `notifyFromFirst` (the PL2303) the first one of
+ * interface 0 when it has none. Returns the count or -1 if malformed.
+ */
+int  AcFindVendorPorts(const AC_U8 *cfg, AC_U32 len, int notifyFromFirst,
+                       AC_FUNC *out, int max);
 
 /*
  * Lists the interfaces of the configuration (every alternate setting) into
@@ -167,6 +179,15 @@ typedef struct AC_LINE {
 /* Derives the line from a validated DCB. */
 void   AcDcbToLine(const AC_DCB *dcb, AC_LINE *line);
 
+/*
+ * Checks a line against a port's limits (ucif.h, design 6.3): 0, or the
+ * VCOMM error (negative): IE_BAUDRATE, IE_BYTESIZE or IE_DEFAULT.
+ */
+long   AcCheckLine(const UCIF_LIMITS *l, AC_U32 rate, AC_U8 bits, AC_U8 parity, AC_U8 stop);
+
+/* The UCOP_FLOW value a DCB asks for (ucif.h UCIF_FLOW_*). */
+AC_U32 AcDcbFlow(const AC_DCB *dcb);
+
 /* Default DCB for a new port: 9600 8N1, DTR and RTS enabled. */
 void   AcDefaultDcb(AC_DCB *dcb, AC_U32 rxQueueSize);
 
@@ -187,6 +208,9 @@ long   AcApplyDcb(AC_DCB *cur, const AC_DCB *req, AC_U32 mask);
 #define AC_SS_FRAMING 0x0010
 #define AC_SS_PARITY  0x0020
 #define AC_SS_OVERRUN 0x0040
+/* Not PSTN: set by the chip modules (chipcore.h) when CTS is off. CDC never
+   sets it, so CTS reads as asserted there (design 7.2, 6.3). */
+#define AC_SS_NOCTS   0x8000
 
 /* 8250 MSR layout ("Notifications", comm_12np) */
 #define AC_MSR_DCTS 0x01
@@ -245,7 +269,8 @@ int    AcNextNotify(const AC_U8 *buf, AC_U32 len, AC_U32 *off, AC_U8 commIf,
  * The modem status shadow after a new SERIAL_STATE. `prevState` is the
  * previous SERIAL_STATE. Returns the MSR byte (current lines plus the
  * deltas of this change) and ORs the events and errors raised into
- * *events / *errors. CTS reads as always asserted (design 7.2).
+ * *events / *errors. CTS reads as asserted unless AC_SS_NOCTS is set
+ * (design 7.2, 6.3).
  */
 AC_U8  AcStateToMsr(AC_U16 prevState, AC_U16 state, AC_U32 *events,
                     AC_U32 *errors);
@@ -304,7 +329,8 @@ AC_U32 AcTxPut(const AC_QUEUE *q, const AC_U8 *data, AC_U32 len);
 
 /*
  * The USB side asks for bytes to send: an owed XON/XOFF first, then a
- * TransmitCommChar byte, then the queue unless an XOFF holds it.
+ * TransmitCommChar byte, then the queue unless an XOFF or CTS (a chip's
+ * fOutxCtsFlow done in the VxD, design 6.3) holds it.
  */
 AC_U32 AcTxPull(const AC_QUEUE *q, AC_FLOW *flow, AC_U8 *out, AC_U32 max);
 

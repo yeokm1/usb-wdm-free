@@ -131,6 +131,57 @@ static int AcClaimed(const AC_FUNC *f, int n, AC_U8 number)
     return 0;
 }
 
+int AcFindVendorPorts(const AC_U8 *cfg, AC_U32 len, int notifyFromFirst,
+                      AC_FUNC *out, int max)
+{
+    AC_ALT alts[AC_MAX_ALTS];
+    int nalts, i, n = 0, firstIntr = -1, k;
+    AC_U8 firstIntrIf = 0;
+
+    nalts = AcScan(cfg, len, alts, AC_MAX_ALTS);
+    if (nalts < 0)
+        return -1;
+    for (i = 0; i < nalts; i++) {
+        if (alts[i].If.Number == 0 && alts[i].If.Alt == 0 && (k = AcFindEp(&alts[i], 3, 1)) >= 0) {
+            firstIntr = i;
+            firstIntrIf = (AC_U8)k;
+            break;
+        }
+    }
+    for (i = 0; i < nalts && n < max; i++) {
+        const AC_ALT *a = &alts[i];
+        AC_FUNC *f = &out[n];
+        int bi, bo, ni;
+        if (a->If.Alt != 0 || !AcHasBulkPair(a) || AcClaimed(out, n, a->If.Number))
+            continue;
+        bi = AcFindEp(a, 2, 1);
+        bo = AcFindEp(a, 2, 0);
+        ni = AcFindEp(a, 3, 1);
+        f->CommIf = f->DataIf = a->If.Number;
+        f->CommAlt = f->DataAlt = 0;
+        f->BulkIn = a->EpAddr[bi];
+        f->InMax = a->EpMax[bi];
+        f->BulkOut = a->EpAddr[bo];
+        f->OutMax = a->EpMax[bo];
+        f->NotifyEp = 0;
+        f->NotifyInterval = 0;
+        f->NotifyMax = 0;
+        if (ni >= 0) {
+            f->NotifyEp = a->EpAddr[ni];
+            f->NotifyInterval = a->EpInterval[ni];
+            f->NotifyMax = a->EpMax[ni];
+        } else if (notifyFromFirst && firstIntr >= 0) {
+            f->NotifyEp = alts[firstIntr].EpAddr[firstIntrIf];
+            f->NotifyInterval = alts[firstIntr].EpInterval[firstIntrIf];
+            f->NotifyMax = alts[firstIntr].EpMax[firstIntrIf];
+        }
+        f->Caps = AC_CAP_LINE | AC_CAP_BREAK;
+        f->Flags = AC_F_COMBINED;
+        n++;
+    }
+    return n;
+}
+
 int AcFindFunctions(const AC_U8 *cfg, AC_U32 len, AC_U32 quirks,
                     AC_FUNC *out, int max)
 {
@@ -281,6 +332,27 @@ void AcDcbToLine(const AC_DCB *dcb, AC_LINE *line)
     line->Rts = (AC_U8)((dcb->BitMask & AC_fRTSDisable) ? 0 : 1);
 }
 
+long AcCheckLine(const UCIF_LIMITS *l, AC_U32 rate, AC_U8 bits, AC_U8 parity, AC_U8 stop)
+{
+    if (rate == 0 || rate < l->MinBaud || rate > l->MaxBaud)
+        return AC_IE_BAUDRATE;
+    if (bits > 16 || !(l->DataBits & (1UL << bits)))
+        return AC_IE_BYTESIZE;
+    if ((bits == 5 || bits == 6) && l->Max56Baud && rate > l->Max56Baud)
+        return AC_IE_BAUDRATE;
+    if (parity > 4 || !(l->Parity & (1UL << parity)))
+        return AC_IE_DEFAULT;
+    if (stop > 2 || !(l->StopBits & (1UL << stop)))
+        return AC_IE_DEFAULT;
+    return 0;
+}
+
+AC_U32 AcDcbFlow(const AC_DCB *dcb)
+{
+    return ((dcb->BitMask & AC_fOutXCTSFlow) ? UCIF_FLOW_CTS : 0) |
+           ((dcb->BitMask & AC_fRTSFlow) ? UCIF_FLOW_RTS : 0);
+}
+
 void AcDefaultDcb(AC_DCB *d, AC_U32 rxQueueSize)
 {
     AC_U8 *p = (AC_U8 *)d;
@@ -365,9 +437,10 @@ int AcParseNotify(const AC_U8 *buf, AC_U32 len, AC_U8 commIf, AC_U16 *state)
 
 AC_U8 AcStateToMsr(AC_U16 prev, AC_U16 state, AC_U32 *events, AC_U32 *errors)
 {
-    AC_U8 msr = AC_MSR_CTS;
+    AC_U8 msr = (AC_U8)((state & AC_SS_NOCTS) ? 0 : AC_MSR_CTS);
     AC_U16 changed = (AC_U16)(prev ^ state);
 
+    if (changed & AC_SS_NOCTS) { msr |= AC_MSR_DCTS; *events |= AC_EV_CTS; }
     if (state & AC_SS_DSR)  msr |= AC_MSR_DSR;
     if (state & AC_SS_RING) msr |= AC_MSR_RI;
     if (state & AC_SS_DCD)  msr |= AC_MSR_DCD;
@@ -382,8 +455,10 @@ AC_U8 AcStateToMsr(AC_U16 prev, AC_U16 state, AC_U32 *events, AC_U32 *errors)
             *events |= AC_EV_RingTe;
         }
     }
-    if (changed & (AC_SS_DSR | AC_SS_DCD)) {
-        *events |= AC_EV_CTSS;
+    /* The state bits that go with a line change (Win16's EV_CTSS, EV_DSRS,
+       EV_RLSDS): the lines as they are now. */
+    if (changed & (AC_SS_DSR | AC_SS_DCD | AC_SS_NOCTS)) {
+        if (!(state & AC_SS_NOCTS)) *events |= AC_EV_CTSS;
         if (state & AC_SS_DSR) *events |= AC_EV_DSRS;
         if (state & AC_SS_DCD) *events |= AC_EV_RLSDS;
     }
@@ -507,7 +582,9 @@ AC_U32 AcTxPull(const AC_QUEUE *q, AC_FLOW *flow, AC_U8 *out, AC_U32 max)
 {
     AC_U32 n = 0;
 
-    if (max == 0)
+    /* A CTS hold stops even the XON/XOFF and TransmitCommChar bytes: they
+       are subject to flow control too. */
+    if (max == 0 || (flow->Status & AC_fCtsHold))
         return 0;
     if (flow->FlowPending) {
         out[n++] = flow->FlowChar;
@@ -517,7 +594,7 @@ AC_U32 AcTxPull(const AC_QUEUE *q, AC_FLOW *flow, AC_U8 *out, AC_U32 max)
         out[n++] = flow->Immediate;
         flow->Status &= ~AC_fTximmed;
     }
-    if (!(flow->Status & AC_fXoffHold) && AcQueueOk(q)) {
+    if (!(flow->Status & (AC_fXoffHold | AC_fCtsHold)) && AcQueueOk(q)) {
         const AC_U8 *base = (const AC_U8 *)*q->Addr;
         while (n < max && *q->Count > 0) {
             out[n++] = base[*q->Get];

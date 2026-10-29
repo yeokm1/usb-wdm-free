@@ -1060,19 +1060,17 @@ waveOut's mixer and every mixer line) and `UACWAV`:
   8 of 8 and `ramp` on pair 0, the waveOut order stable.
 - The real X4 passed through from the host (QEMU `usb-host`, the owner's
   device): two playback pairs, each mixer paired with its waveOut; `ramp`
-  (8 of 8 longer buffers, volume and mute) on both pairs; a 2-second
+  (8 of 8 longer buffers, volume and mute) on both pairs; a 3-second
   `play` completed 6 of 8 buffers on both pairs, and the 0.1.4 driver
   does the same on that rig (6 of 8, twice): not new with this build;
   its cause (the passthrough, or a defect both builds share) is not read.
   One reading since (2026-10-30): the same real X4 through the same
-  passthrough under XP's own `usbehci.sys` (no xHCI98), this build, played
-  the 3-second `play` 8 of 8 in about 3.3 s on both pairs, three runs. So
-  the passthrough is not the cause; the short play belongs to the xHCI
-  path (xHCI98, or QEMU's `qemu-xhci` isochronous scheduling): there the
-  same command takes about 11.5 s with the simulated X4 too, which
-  completes 8 of 8 only because its stream keeps no real-time deadline.
-  Which of the two is not read; the release notes' known issue should say
-  "under xHCI98 in a virtual machine". During one run the passthrough re-enumerated the
+  passthrough under XP's own `usbehci.sys` (no xHCI98), this build,
+  completed the same 3-second `play` 8 of 8 in about 3.3 s, three runs
+  on both pairs. The short play is so far seen only on the virtual xHCI
+  path (xHCI98 on QEMU's `qemu-xhci`, with the passthrough), where the
+  simulated X4 also takes about 11.5 s for the same command; its cause
+  is not read. During one run the passthrough re-enumerated the
   device once.
 - The ALC4080 capture replayed (`alc4080cap`) with the fixed build: three
   playback pairs (Speaker, Headphones, Speaker for S/PDIF) and three

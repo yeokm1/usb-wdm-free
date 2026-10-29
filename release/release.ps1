@@ -14,6 +14,7 @@
 #      Include/Needs, reported), whole-device hardware ids only where the definition
 #      records them, no bare USB\Class_xx id; each image's architecture (x86 unsigned,
 #      x64 with an embedded signature by -Thumbprint whose SHA-1 image digest matches);
+#      a setup INF (no models, a DefaultInstall section) on a COPY line only;
 #   2. checks every file and folder name under free\ for 8.3, reserved DOS names and
 #      case-insensitive collisions;
 #   3. checks each folder holds exactly its files (README.TXT and declared extras aside);
@@ -235,7 +236,13 @@ function Test-Inf([string]$Path, [string]$Folder, $Pkg, [string[]]$FolderFiles, 
             if ($Pkg.DeviceIds -notcontains '*' -and $Pkg.DeviceIds -notcontains $id) { Fail "$label`: whole-device id $id not recorded as allowed for $($Pkg.Id)" }
         }
     }
-    foreach ($x in $Sys) { if (@(Get-SystemModelIds $inf $x).Count -eq 0) { Fail "$label`: matches nothing on $x, a system its STAGE.TXT line names" } }
+    if (@(Get-ModelSections $inf).Count -eq 0 -and $inf.Contains('defaultinstall')) {
+        # A setup INF (uac2's UACCI.INF): no models, a DefaultInstall section run
+        # by hand, so it matches no device; its line is COPY only (the folder loop).
+        Note "$label`: a setup INF (no models, DefaultInstall), matched on no system"
+    } else {
+        foreach ($x in $Sys) { if (@(Get-SystemModelIds $inf $x).Count -eq 0) { Fail "$label`: matches nothing on $x, a system its STAGE.TXT line names" } }
+    }
     return @($need.Keys)
 }
 
@@ -524,6 +531,7 @@ foreach ($p in $def.Packages) {
                 $infsAll += $rel
                 if (-not $f.Stage.ContainsKey($n)) { Fail "$rel`: no STAGE.TXT line in the definition"; continue }
                 $s = $f.Stage[$n]
+                if ($s[0] -eq 'STAGE' -and @(Get-ModelSections (Read-Inf $full)).Count -eq 0) { Fail "$rel`: an INF with no models on a STAGE line (a setup INF is COPY only)" }
                 foreach ($t in ($s[1] -split '\s+')) { if ($Systems -notcontains $t) { Fail "$rel`: unknown system token $t" } }
                 $stageLines += [pscustomobject]@{ Pkg = $p.Id; Action = $s[0]; Systems = @($s[1] -split '\s+'); Inf = $rel; Note = $s[2]; Path = $full }
                 if ($s[0] -eq 'STAGE') { $tok += ($s[1] -split '\s+') }

@@ -1020,3 +1020,81 @@ present, is noted and not served at first.
    orders, one stopped while another runs, pause and restart, levels
    after a restart, unplug and standby with several streams running.
 4. 45-E.13: the real board.
+
+## 16. Keeping Windows' USB Audio 1.0 driver off a UAC 2.0 function: a MEDIA class co-installer
+
+Status: step 1 (the gating probe) read on XP SP3 x86, 2026-10-29; the
+co-installer itself not designed yet (owner, 2026-10-29; xHCI98 task
+45.24's follow-up).
+
+### 16.1 The problem
+
+Under Windows' own USB stack on 2000 to 8.1 a UAC 2.0 function offers the
+bare `USB\Class_01` compatible id, and Windows' signed `wdma_usb.inf`
+(`usbaudio.sys`, USB Audio 1.0 only) outranks the unsigned `uac2wdm.inf`.
+Once `usbaudio` holds the function no change of that devnode completes
+until a restart (`docs/testing/2026-10-29-uac2-xp-hang.md`). Changing one
+devnode does not help the next: a device without a serial number on
+another port, a second device, or a devnode installed again all get
+`usbaudio` again. xHCI98 from 3.4.0.0 drops the bare id itself (its
+design record 13 section 10.7.2); this section is for Windows' own stack.
+
+### 16.2 The goal
+
+A MEDIA class co-installer DLL shipped with `uac2`: for a function whose
+compatible ids carry exactly `USB\Class_01&SubClass_0x&Prot_20`, it marks
+`usbaudio`'s driver node `DNF_BAD_DRIVER`, so the default handler selects
+`uac2` on every new install. `Prot_30` (USB Audio 3.0) is left out of the
+rule, an owner question. Registration: `HKLM\SYSTEM\CurrentControlSet\
+Control\CoDeviceInstallers`, value `{4D36E96C-E325-11CE-BFC1-08002BE10318}`
+(`REG_MULTI_SZ`, the entry appended, others kept), by `uac2`'s setup step;
+`usbaudio`'s node identified by its INF and section (and service), never
+by its description or provider; USB Audio 1.0, MIDI, composite parents
+and other MEDIA devices left alone; the uninstall removes only this
+entry.
+
+### 16.3 Step 1: the probe (`uacci.c`, test-only)
+
+`uacci.c` logs every DIF code the class co-installer receives, before and
+after the default handler, with the device's instance id and class GUID,
+its compatible ids, every node of the compatible driver list (INF,
+section, hardware id, rank, `DNF_` flags) and the selected node, to
+`%windir%\UACCI.LOG`. It changes nothing. (The XP reading below ran
+the first build, which also asked for post-processing of
+`DIF_ALLOW_INSTALL` and wrote each record in two writes; the probe now
+does neither, and logs a driver node's detail error.)
+
+**XP SP3 x86, 2026-10-29** (q35 guest, Windows' own `usbehci.sys`, no
+xHCI98; `uac2` 0.1.4.0's `w2k-xp` files in `C:\UAC2`, added to
+`DevicePath`; `UACCI.DLL` registered as the only MEDIA class co-installer,
+none being there before; a never-seen simulated UAC 2.0 device,
+`uacemu.py` `hs24`, `FFFF:0201`, on the EHCI port):
+
+- The co-installer is loaded in the device installer's process and
+  called at the first plug at `DIF_SELECTBESTCOMPATDRV`, before and after
+  the default handler. At that point the device's class GUID is already
+  MEDIA, its compatible ids are `USB\Class_01&SubClass_00&Prot_20`,
+  `USB\Class_01&SubClass_00`, `USB\Class_01`, and the compatible list
+  holds both nodes: `wdma_usb.inf`, section `USBAudio`, hardware id
+  `usb\class_01`, rank `0x2002`, flags `0x2244`; and `uac2wdm.inf`,
+  section `UAC2`, rank `0xA000` (unsigned), flags `0x240`. After the
+  default handler `wdma_usb.inf`'s node is selected.
+- Then `DIF_ALLOW_INSTALL` (the default handler's status `0xE000020E`),
+  `DIF_INSTALLDEVICEFILES`, `DIF_REGISTER_COINSTALLERS`,
+  `DIF_INSTALLINTERFACES` and `DIF_INSTALLDEVICE`, each with `usbaudio`'s
+  node selected.
+- With `uac2` a candidate the Found New Hardware wizard was shown (the
+  earlier legs without it installed `usbaudio` silently).
+- The first install of `usbaudio` itself never finished: the log has the
+  `DIF_INSTALLDEVICE` call before the default handler and none after it,
+  for more than five minutes, the wizard at "USBAUDIO.sys To
+  C:\WINDOWS\system32\drivers". Where in that request it waits (the
+  class installer, the file copy, the default handler or the driver's
+  start) was not read; `usbaudio`'s start on a UAC 2.0 function is the
+  hypothesis, pending a stack.
+
+**The gate: passed on XP.** A first plug reaches the class co-installer at
+`DIF_SELECTBESTCOMPATDRV` with both nodes in the list, which is where the
+design's `DNF_BAD_DRIVER` acts; `DIF_ALLOW_INSTALL` also comes before any
+`usbaudio` code runs. The real co-installer is designed next, and the same
+reading is owed on 98 SE, ME, 2000, Vista, 7, 8 and 8.1.

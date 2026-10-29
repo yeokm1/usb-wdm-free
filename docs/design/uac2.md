@@ -1019,6 +1019,19 @@ this board. Recording and the other outputs wait for the endpoints of
 - A later pair that fails to come up fails the start as a whole (a
   registered subdevice cannot be withdrawn on every target).
 
+**The leg (2026-10-30, `b9f6ae3`, `uac2wdm.sys` x86 `3a78670d...`).** XP
+SP3 x86 under xHCI98 (`3.4.0.0` tree), the capture replayed
+(`alc4080cap`), `uac2` installed from Found New Hardware: Sounds and Audio
+Devices lists three playback devices ("UAC2 USB audio (experiment)", "...
+2", "... 3") and three recording ones. With each made the default,
+`sndrec32` played through IF4 (speaker), IF5 (headphones) and IF6
+(S/PDIF) in turn, 2 channels 16-bit 48 kHz, signal at the simulator;
+`UACWAV rec 2 16 48000 3` recorded from the first input (IF1, analog
+connector): 8 of 8 buffers, the 1 kHz tone. Not read yet: two outputs at
+once, the second and third inputs, the bridge categories as Vista and 7
+show them, 98 SE and 7 x64, and the Sound Blaster X4 layout, which now
+gets two playback pairs (analog and S/PDIF).
+
 ### 15.4 The simulated device
 
 `uacemu.py`'s profile `alc4080` is an assumed layout, not a capture: High

@@ -1076,6 +1076,18 @@ waveOut's mixer and every mixer line) and `UACWAV`:
   playback pairs (Speaker, Headphones, Speaker for S/PDIF) and three
   inputs (Analog Connector, Line, Microphone); on each pair `play`, `rec`
   (the 1 kHz tone) and `ramp` (Feature Units 29, 30 and 32) passed.
+- Outputs at once (2026-10-30), the same capture and build, XP under
+  xHCI98: the three pairs started together (`UACWAV_PAIR` 0, 1 and 2, a
+  5-second `play` each, 2 channels, 16 bits, 48 kHz). All three opened and
+  streamed at the same time on their own endpoints (interfaces 4, 5 and
+  6), and the simulator read the tone on each (-20 dBFS). Each completed
+  4 of 8 buffers in `UACWAV`'s 15-second wait, as one pair played alone
+  just after did (4 of 8). The simulator counted 69,418 packets over
+  the three streams in that time and 24,824 for the one, about 2.8 times;
+  it counts all endpoints together, so how the 69,418 split between the
+  streams, and whether they slowed one another at all, is not read. Each
+  ran at about the slow rate the virtual xHCI path shows for one stream
+  (xHCI98 roadmap 45.39).
 
 ### 15.4 The simulated device
 

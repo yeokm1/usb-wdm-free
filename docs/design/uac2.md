@@ -1066,7 +1066,7 @@ does neither, and logs a driver node's detail error.)
 
 **XP SP3 x86, 2026-10-29** (q35 guest, Windows' own `usbehci.sys`, no
 xHCI98; `uac2` 0.1.4.0's `w2k-xp` files in `C:\UAC2`, added to
-`DevicePath`; `UACCI.DLL` registered as the only MEDIA class co-installer,
+`DevicePath`; `UACCI1.DLL` registered as the only MEDIA class co-installer,
 none being there before; a never-seen simulated UAC 2.0 device,
 `uacemu.py` `hs24`, `FFFF:0201`, on the EHCI port):
 
@@ -1098,3 +1098,95 @@ none being there before; a never-seen simulated UAC 2.0 device,
 design's `DNF_BAD_DRIVER` acts; `DIF_ALLOW_INSTALL` also comes before any
 `usbaudio` code runs. The real co-installer is designed next, and the same
 reading is owed on 98 SE, ME, 2000, Vista, 7, 8 and 8.1.
+
+### 16.4 The co-installer (design)
+
+One source, `uacci.c`, builds two DLLs: `UACCI1.DLL` (the co-installer,
+shipped with `uac2` in its `w2k-xp`, `wxp-x64`, `wv-8-x86` and `wv-8-x64`
+folders) and, with `UACCI_PROBE` defined, the probe of 16.3 (test-only).
+98 SE and ME have no co-installers; 16.5 records what they do instead.
+
+**The rule.** A device is `uac2`'s case when its compatible ids
+(`SPDRP_COMPATIBLEIDS`) hold, case-insensitively, a string of exactly the
+form `USB\Class_01&SubClass_0h&Prot_20` (`h` one hex digit). Nothing
+else is read from the device. USB Audio 1.0 functions (`Prot_00`), MIDI
+(subclass 03, protocol 00), composite parents (no class 01 id) and every
+other MEDIA device fail the rule and are left alone. `Prot_30` is not in
+the rule (an owner question).
+
+**Windows' node.** A compatible driver node is `usbaudio`'s when the base
+name of its INF (`SP_DRVINFO_DETAIL_DATA.InfFileName`, any directory, the
+driver store's included) is `wdma_usb.inf` and the install section it
+would run (`SetupDiGetActualSectionToInstall` on that INF and the node's
+`SectionName`) has a `.Services` section whose `AddService` names the
+service `usbaudio`. Never by description or provider.
+
+**What it does.**
+
+1. `DIF_SELECTBESTCOMPATDRV`, before the default handler: for a device
+   under the rule, every compatible node that is `usbaudio`'s gets
+   `DNF_BAD_DRIVER` (`SetupDiSetDriverInstallParams`); the default handler
+   then picks the best remaining node, `uac2` where its INF is on the
+   machine. If none remains, the default handler fails with
+   `ERROR_NO_COMPAT_DRIVERS` and the device is left without a driver
+   (code 28), which is better than the wait.
+2. `DIF_ALLOW_INSTALL`: for a device under the rule whose selected node is
+   `usbaudio`'s (a path that skipped step 1, or a user's own pick in the
+   Update Driver list), it returns `ERROR_DI_DONT_INSTALL`, so nothing of
+   `usbaudio` is installed on it.
+3. Every other request, and every device outside the rule: `NO_ERROR`,
+   nothing touched, no post-processing.
+4. Each decision (rule met, node marked, install refused) is one line in
+   `%windir%\UACCI.LOG`, bounded and serialised as the probe's; the file
+   grows only on audio installs. An error before the rule is decided (the
+   ids cannot be read) leaves the device as Windows would have it. Once
+   the rule is met, an error (a node whose INF or section cannot be read,
+   a mark that fails) fails the request: step 1 returns the error, so the
+   selection fails and the device stays without a driver until the next
+   plug or Update Driver retries; step 2 refuses the install when the
+   selected node, its INF name or (for a `wdma_usb.inf` node) its
+   services cannot be read. A node from another INF whose details read
+   is never refused. Both are logged. A test build injects each failure
+   (the details of the selected node, the section of a `wdma_usb.inf`
+   node) and the legs check that `usbaudio` is not installed.
+
+**Registration.** `UACCI.INF`, a non-device INF beside `uac2wdm.inf`, run
+by `uac2`'s setup step (right-click Install, or `rundll32
+setupapi,InstallHinfSection DefaultInstall 132 <path>\UACCI.INF`; xHCI98's
+installer when it stages `uac2`), never by `uac2` winning a device
+install:
+
+- `[DefaultInstall]` (and `.NTamd64`): `UACCI1.DLL` to `%11%`; `AddReg`
+  `HKLM,SYSTEM\CurrentControlSet\Control\CoDeviceInstallers,`
+  `{4D36E96C-E325-11CE-BFC1-08002BE10318},0x00010008,"UACCI1.DLL,UacCoInstaller"`
+  (`FLG_ADDREG_TYPE_MULTI_SZ | FLG_ADDREG_APPEND`: appended once,
+  other entries kept);
+- The file name carries the co-installer's version (`UACCI1.DLL` now;
+  the next is `UACCI2.DLL`, 8.3): a loaded DLL is never replaced in
+  place. An upgrade runs the new DLL's `rundll32 %11%\UACCI2.DLL,UacInstall`
+  after its `UACCI.INF` copied the file: it removes every `UACCIn.DLL`
+  string other than its own, appends its own once, and reads the value
+  back; the old file goes at the next start. (The first version's INF
+  appends by `AddReg`; `UacInstall` exists from it on, so later versions
+  need no `AddReg`.)
+- The uninstall is the DLL's own helper, `rundll32 %11%\UACCI1.DLL,UacUninstall`,
+  on every system: it reads the value, removes every string naming a
+  `UACCIn.DLL` and nothing else, and writes the rest back (removing the
+  value only when nothing else was in it). `DelReg`'s
+  `FLG_DELREG_MULTI_SZ_DELSTRING` is not used: before XP it is not
+  documented, and on 2000 a plain `DelReg` of the value would drop the
+  other installers' entries too. xHCI98's uninstall and the README call
+  the helper; its file is deleted at the next start.
+- The co-installer only steers a device to `uac2` when `uac2wdm.inf` is
+  where Windows looks (the driver store, or `DevicePath`): the setup step
+  stages it too (xHCI98's installer already does, `SetupCopyOEMInf`;
+  standalone, the user's Have Disk once, or the README's step).
+
+**What the legs read, per system** (2000, XP, XP x64, Vista, 7, 8, 8.1,
+x86 and x64 where the system has it): a never-seen simulated UAC 2.0
+device on Windows' own USB 2.0 stack, `uac2` staged, `UACCI.INF`
+installed: the log's decisions, `uac2wdm` running, playback; the same
+device plugged into a second port and a second device; a USB Audio 1.0
+device still on `usbaudio`; the uninstall leaving the other class
+co-installer entries. Vista to 8.1: whether an unsigned class
+co-installer DLL loads at all, and the prompts.

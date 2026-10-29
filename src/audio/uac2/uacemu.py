@@ -45,6 +45,13 @@ Profiles (--profile):
             board's, and two capture endpoints, line in and microphone;
             async playback with explicit feedback, 16/24-bit alternates.
             Pass --vid 0db0 --pid 419c for a board id uac2's table lists.
+  uac3dual  two configurations, as USB Audio 3.0 section 3.3 requires of a
+            3.0 device: configuration 1 (index 0) is hs24's UAC 2.0
+            function, configuration 2 a USB Audio 3.0 function (IAD
+            01/01/30, AudioControl 01/01/30, one AudioStreaming 01/02/30 at
+            alternate 0), standard descriptors only, no BOS. Only
+            configuration 1 streams; the log records which configuration
+            the host selects (docs/design/uac2.md section 16.6).
 
 Every profile answers the standard requests and the clock source
 (SAM_FREQ CUR/RANGE, CLOCK_VALID), clock selector (CUR), clock multiplier
@@ -372,7 +379,16 @@ def build(name, fu='full'):
     return b.speed, b.configuration(), rates, pid
 
 
-PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080')
+PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080',
+                 'uac3dual')
+
+# Configuration 2 of uac3dual: a USB Audio 3.0 function by its standard
+# descriptors (ADC 3.0 4.1: IAD, the AudioControl interface first, then the
+# AudioStreaming ones), protocol 30h (IP_VERSION_03_00).
+UAC3_CONFIG2 = bytes((9, 2, 35, 0, 2, 2, 0, 0x80, 50,
+                      8, 0x0b, 0, 2, 1, 0x01, 0x30, 0,
+                      9, 4, 0, 0, 0, 1, 1, 0x30, 0,
+                      9, 4, 1, 0, 0, 1, 2, 0x30, 0))
 FU_MODES = ('full', 'master', 'channels', 'readonly', 'none')
 VOLUME_RANGE = (-0x6000, 0, 0x100)
 
@@ -393,7 +409,9 @@ class Profile:
             self.allowed = {(4, 1)} if name == 'x4' else None
             self.fu_settable = name == 'x4full'
         else:
-            self.speed, self.config, self.rates, default_pid = build(name, fu)
+            self.speed, self.config, self.rates, default_pid = build('hs24' if name == 'uac3dual' else name, fu)
+            if name == 'uac3dual':
+                default_pid = 0x0230
             self.vid, self.pid = vid or 0xffff, pid or default_pid
             self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x200, 0xef, 2, 1, 64,
                                       self.vid, self.pid, 0x0001, 1, 2, 0, 1)
@@ -401,6 +419,10 @@ class Profile:
             self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
                             2: usb_string('UAC2 %s - SIMULATED' % name)}
             self.allowed, self.fu_settable = None, True
+        self.config2 = None
+        if name == 'uac3dual':
+            self.config2 = UAC3_CONFIG2
+            self.device = self.device[:17] + bytes((2,))
         self.layout = layout(self.config)
         self.ac, self.entities, self.alts = audio_function(self.config)
         for cid, e in self.entities.items():
@@ -481,7 +503,10 @@ class Model:
         packets[0] = packets[16] = 64
         numbers, classes, subclasses, protocols = (bytearray(32) for _ in range(4))
         for interface, alternate in self.alts.items():
-            cls, endpoints = self.p.layout[(interface, alternate)]
+            if self.config == 2:
+                cls, endpoints = (1, 1 if interface == 0 else 2, 0x30), []
+            else:
+                cls, endpoints = self.p.layout[(interface, alternate)]
             numbers[interface] = interface
             classes[interface], subclasses[interface], protocols[interface] = cls
             for ep, kind, interval, maximum in endpoints:
@@ -641,6 +666,7 @@ class Model:
             kind, number = value >> 8, value & 255
             data = p.device if kind == 1 and number == 0 else \
                 p.config if kind == 2 and number == 0 else \
+                p.config2 if kind == 2 and number == 1 and p.config2 else \
                 p.qualifier if kind == 6 and number == 0 else \
                 p.strings.get(number) if kind == 3 else None
             status, data = (0, data) if data is not None else (4, b'')
@@ -733,11 +759,15 @@ class Model:
                 raise ValueError('configuration length')
             status = 0
             if kind == 6:
-                status = 0 if packet[0] in (0, 1) else 4
+                status = 0 if packet[0] in (0, 1) or (packet[0] == 2 and self.p.config2) else 4
+                self.log('set_configuration', value=packet[0], status=status)
                 if not status:
                     self.reset_streams()
                     self.config = packet[0]
-                    self.alts = {i: 0 for i in self.p.interfaces}
+                    if packet[0] == 2:
+                        self.alts = {0: 0, 1: 0}
+                    else:
+                        self.alts = {i: 0 for i in self.p.interfaces}
                     self.info()
             self.send(8, ident, bytes((status, self.config)))
         elif kind in (9, 10):

@@ -1,0 +1,5 @@
+LIBRARY UACCI1
+EXPORTS
+    UacCoInstaller
+    UacInstall
+    UacUninstall

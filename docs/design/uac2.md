@@ -1166,7 +1166,7 @@ install:
   place. An upgrade runs the new DLL's `rundll32 %11%\UACCI2.DLL,UacInstall`
   after its `UACCI.INF` copied the file: it removes every `UACCIn.DLL`
   string other than its own, appends its own once, and reads the value
-  back; the old file goes at the next start. (The first version's INF
+  back; the old file stays in the system folder. (The first version's INF
   appends by `AddReg`; `UacInstall` exists from it on, so later versions
   need no `AddReg`.)
 - The uninstall is the DLL's own helper, `rundll32 %11%\UACCI1.DLL,UacUninstall`,
@@ -1176,7 +1176,7 @@ install:
   `FLG_DELREG_MULTI_SZ_DELSTRING` is not used: before XP it is not
   documented, and on 2000 a plain `DelReg` of the value would drop the
   other installers' entries too. xHCI98's uninstall and the README call
-  the helper; its file is deleted at the next start.
+  the helper; its file stays (a reinstall before a restart reuses it).
 - The co-installer only steers a device to `uac2` when `uac2wdm.inf` is
   where Windows looks (the driver store, or `DevicePath`): the setup step
   stages it too (xHCI98's installer already does, `SetupCopyOEMInf`;

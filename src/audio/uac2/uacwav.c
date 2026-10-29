@@ -62,16 +62,26 @@ static int Uac2(const char *name)
     return strstr(upper, "UAC2") != NULL;
 }
 
+/* UACWAV_PAIR=k (environment) takes the k-th UAC2 device of a direction
+ * (0 the first), for a device with several endpoint pairs. */
+static UINT Wanted(void)
+{
+    char v[8];
+    DWORD n = GetEnvironmentVariable("UACWAV_PAIR", v, sizeof(v));
+    if (!n || n >= sizeof(v) || v[0] < '0' || v[0] > '9') return 0;
+    return (UINT)atoi(v);
+}
+
 static UINT List(int print, int input)
 {
-    UINT n, i, chosen = (UINT)-1;
+    UINT n, i, chosen = (UINT)-1, skip = Wanted();
     if (input || print) {
         WAVEINCAPS c;
         n = waveInGetNumDevs();
         if (print) printf("waveIn devices=%u\n", n);
         for (i = 0; i < n; i++) if (!waveInGetDevCaps(i, &c, sizeof(c))) {
             if (print) printf("  in %u: %s channels=%u formats=%08lX\n", i, c.szPname, c.wChannels, c.dwFormats);
-            if (input && Uac2(c.szPname) && chosen == (UINT)-1) chosen = i;
+            if (input && Uac2(c.szPname) && chosen == (UINT)-1 && !skip--) chosen = i;
         }
     }
     if (!input || print) {
@@ -80,7 +90,7 @@ static UINT List(int print, int input)
         if (print) printf("waveOut devices=%u\n", n);
         for (i = 0; i < n; i++) if (!waveOutGetDevCaps(i, &c, sizeof(c))) {
             if (print) printf("  out %u: %s channels=%u formats=%08lX\n", i, c.szPname, c.wChannels, c.dwFormats);
-            if (!input && Uac2(c.szPname) && chosen == (UINT)-1) chosen = i;
+            if (!input && Uac2(c.szPname) && chosen == (UINT)-1 && !skip--) chosen = i;
         }
     }
     return chosen;
@@ -157,6 +167,11 @@ static int Mixer(HMIXER *mx, MIXERLINE *line)
     line->cbStruct = sizeof(*line);
     line->dwComponentType = MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
     r = mixerGetLineInfo((HMIXEROBJ)*mx, line, MIXER_GETLINEINFOF_COMPONENTTYPE);
+    if (r) {
+        /* A headphone output (several endpoint pairs) has no speaker line. */
+        line->dwComponentType = MIXERLINE_COMPONENTTYPE_DST_HEADPHONES;
+        r = mixerGetLineInfo((HMIXEROBJ)*mx, line, MIXER_GETLINEINFOF_COMPONENTTYPE);
+    }
     if (r) { printf("FAIL: no speaker line (%u)\n", r); mixerClose(*mx); return 0; }
     printf("mixer %u for waveOut %u: line \"%s\" channels=%lu controls=%lu\n", id, dev,
            line->szName, line->cChannels, line->cControls);

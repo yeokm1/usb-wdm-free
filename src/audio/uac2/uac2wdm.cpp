@@ -990,14 +990,16 @@ public:
         levelName[i] = 0;
     }
     static const GUID *JackGuid(unsigned int type, BOOLEAN capture) {
+        /* A playback bridge is a speaker or headphones only: on XP WDMAud
+         * made an S/PDIF output bridge (KSNODETYPE_SPDIF_INTERFACE) a mixer
+         * destination of type WAVEIN with no waveOut target, so that
+         * output's mixer had no speaker line (the X4 gate, 2026-10-30). */
+        if (!capture) return type == 0x0302 ? &KSNODETYPE_HEADPHONES : &KSNODETYPE_SPEAKER;
         switch (type) {
-        case 0x0301: return &KSNODETYPE_SPEAKER;
-        case 0x0302: return &KSNODETYPE_HEADPHONES;
-        case 0x0201: return &KSNODETYPE_MICROPHONE;
         case 0x0601: return &KSNODETYPE_ANALOG_CONNECTOR;
         case 0x0603: return &KSNODETYPE_LINE_CONNECTOR;
         case 0x0605: return &KSNODETYPE_SPDIF_INTERFACE;
-        default: return capture ? &KSNODETYPE_MICROPHONE : &KSNODETYPE_SPEAKER;
+        default: return &KSNODETYPE_MICROPHONE;
         }
     }
     const GUID *Jack(BOOLEAN capture) const { return jack[capture ? 1 : 0]; }

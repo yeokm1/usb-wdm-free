@@ -1032,6 +1032,44 @@ once, the second and third inputs, the bridge categories as Vista and 7
 show them, 98 SE and 7 x64, and the Sound Blaster X4 layout, which now
 gets two playback pairs (analog and S/PDIF).
 
+**The Sound Blaster X4 gate (2026-10-30).** Under build 18 the X4 gets
+two playback pairs (analog terminal 3, S/PDIF terminal 17). XP SP3 x86
+under xHCI98, readings with `MIXLIST` (a test program listing each
+waveOut's mixer and every mixer line) and `UACWAV`:
+
+- The cross-pairing first reported was not one: each waveOut maps to its
+  own pair's mixer. What failed was the S/PDIF pair's topology bridge,
+  `KSNODETYPE_SPDIF_INTERFACE` on an output: WDMAud made its mixer
+  destination a `WAVEIN` line with no waveOut target, so that output had
+  no speaker line (`mix` and `ramp` failed, the mixer looked foreign).
+  Fix: a playback bridge is `KSNODETYPE_SPEAKER`, or
+  `KSNODETYPE_HEADPHONES` for a headphone terminal (0x0302), only; the
+  capture bridges keep their jack categories. After it each pair's mixer
+  has a speaker (or headphones) destination with the Wave source and its
+  waveOut target.
+- The S/PDIF pair's slow stream after a replug (about 400 packets per
+  second against about 2000, feedback normal at about 1000 per second)
+  did not recur on a fresh overlay: five replugs, every stream at about
+  2000 packets per second and 8 of 8 buffers. It was read once, on the
+  overlay that had first had the mixer failures, and is not attributed;
+  nothing in the driver was changed for it.
+- Gate, simulated X4 (`x4full`), the fixed build: two playback pairs;
+  `play` 8 of 8 and `ramp` (volume and mute writes to Feature Unit 1) on
+  pair 0; `play` 8 of 8 and `ramp` (writes to Feature Unit 14) on the
+  S/PDIF pair (`UACWAV_PAIR=1`); two hot replugs, each followed by `play`
+  8 of 8 and `ramp` on pair 0, the waveOut order stable.
+- The real X4 passed through from the host (QEMU `usb-host`, the owner's
+  device): two playback pairs, each mixer paired with its waveOut; `ramp`
+  (8 of 8 longer buffers, volume and mute) on both pairs; a 2-second
+  `play` completed 6 of 8 buffers on both pairs, and the 0.1.4 driver
+  does the same on that rig (6 of 8, twice): not new with this build;
+  its cause (the passthrough, or a defect both builds share) is not read. During one run the passthrough re-enumerated the
+  device once.
+- The ALC4080 capture replayed (`alc4080cap`) with the fixed build: three
+  playback pairs (Speaker, Headphones, Speaker for S/PDIF) and three
+  inputs (Analog Connector, Line, Microphone); on each pair `play`, `rec`
+  (the 1 kHz tone) and `ramp` (Feature Units 29, 30 and 32) passed.
+
 ### 15.4 The simulated device
 
 `uacemu.py`'s profile `alc4080` is an assumed layout, not a capture: High

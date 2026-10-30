@@ -175,8 +175,8 @@ Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB
 DAC: playback through `uac2` starts clean, but seeking within a track can
 leave the sound garbled. Seen in VLC with 16-bit 44.1 kHz WAV and FLAC,
 and in Windows Media Player with FLAC through the K-Lite codecs; Windows
-Media Player with WAV was not affected. `uac2` 0.1.5.0; seen under both
-Windows' own EHCI and xHCI98. Not yet reproduced or read. To read: the stream's stop, pause and run
+Media Player with WAV was not affected. `uac2` 0.1.5.0. Not yet reproduced
+or read; to be read under Windows' own EHCI and under xHCI98. To read: the stream's stop, pause and run
 transitions and its position and buffer state across a seek, in a VM with
 the UAC 2.0 simulator and a player that seeks.
 

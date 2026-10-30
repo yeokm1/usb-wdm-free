@@ -169,16 +169,28 @@ Loading the audio stack at boot does not prevent it (a USB audio device
 running from boot did not protect the next plug), so no boot-time driver
 is offered. Read in QEMU only; real-PC readings are owed.
 
-### Open report: `uac2` playback garbled after seeking (XP, Conexant CX31993)
+### Fixed for the next release: `uac2` playback garbled after seeking (XP, Conexant CX31993)
 
 Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB
-DAC: playback through `uac2` starts clean, but seeking within a track can
-leave the sound garbled. Seen in VLC with 16-bit 44.1 kHz WAV and FLAC,
-and in Windows Media Player with FLAC through the K-Lite codecs; Windows
-Media Player with WAV was not affected. `uac2` 0.1.5.0. Not yet reproduced
-or read; to be read under Windows' own EHCI and under xHCI98. To read: the stream's stop, pause and run
-transitions and its position and buffer state across a seek, in a VM with
-the UAC 2.0 simulator and a player that seeks.
+DAC: playback through `uac2` 0.1.5.0 starts clean, but seeking within a
+track can leave the sound garbled. Seen in VLC with 16-bit 44.1 kHz WAV
+and FLAC, and in Windows Media Player with FLAC through the K-Lite
+codecs; Windows Media Player with WAV was not affected.
+
+Read with the simulator under Windows' own EHCI and under xHCI98: the
+sound carried short pieces of audio from about 85 ms earlier, again and
+again. `uac2` told Windows how far the device had played, while it had
+already taken the next 16 ms of sound for the USB transfers queued
+ahead; after a seek Windows writes the new sound just in time by that
+account, too late for those transfers, which then carried what the
+buffer held before. `uac2` now reports how far it has taken the sound,
+and clears what it took. Fixed in the source (`1ab0dab`), for the next
+release; no workaround was verified. The design is
+[design record 17](design/uac2.md), the legs are
+[uac2-seek](testing/2026-10-31-uac2-seek.md). Side effects: the playback
+position Windows shows runs up to 16 ms (32 ms on some devices) ahead of
+what the device has received, and a pause and resume skips that much
+instead of repeating part of it.
 
 ## Tested by the author
 
@@ -295,8 +307,12 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | 98 SE | xHCI98 3.1.0.0 | emulated: `uacemu.py` `cx31993`, `hs24` with and without a Feature Unit; 0.1.4.0 volume and mute (`93970fc`; the `hs24` hardware leg and the GUI on `4117302`) | PASS: "Master Volume" and "Master Mute" on the Speaker line; SET_CUR per channel (`cx31993`) or master (`hs24`) at 0, -6, -12, -24 dB and mute, the level moving at the device; without a Feature Unit the driver scales and mutes the samples; Volume Control slider, "Mute all", tray popup and balance work | [uac2-volume](testing/2026-10-28-uac2-volume.md) |
 | XP SP3 x86 | Windows' EHCI | emulated: `cx31993`, `hs24` without a Feature Unit; 0.1.4.0 (`93970fc`) | PASS: per-channel SET_CUR and master mute; the software level without a unit; Volume Control slider and "Mute all" | [uac2-volume](testing/2026-10-28-uac2-volume.md) |
 | XP x64 | Windows' EHCI | emulated: `hs24` with and without a Feature Unit, `cx31993`; 0.1.4.0 x64 unsigned (`93970fc`) | PASS: master or per-channel SET_CUR and mute; the software level without a unit; Volume Control, tray popup and Sounds and Audio Devices slider and Mute drive both; levels restored at the next start; `usbaudio.sys` binds first and updating to `uac2` hung (2 of 2), so the legs moved `wdma_usb.inf` aside | [uac2-volume](testing/2026-10-28-uac2-volume.md) |
+| XP SP3 x86 | Windows' EHCI | emulated: `cx31993`, WinMM and DirectSound seeks (`UACSEEK`); 0.1.5.0 and the fix (`1ab0dab`) | 0.1.5.0: 168 to 269 blocks of old sound per 8 s leg (the reported garble); the fix: none in 7 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
+| XP SP3 x86 | xHCI98 3.3.0.0 | the same | 0.1.5.0: 22 and 66 blocks in 2 s; the fix: none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
+| 2000 SP4 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 3 legs. Changing an installed "USB Audio Device" to `uac2` stopped 2000 in `usbhub20.sys` (STOP 0x1E, 2 of 2); installed at the first plug with `UACCI.INF` it did not | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
+| 7 SP1 x86 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
 
-No 2000 leg; ME under xHCI98 only. Real PC: none yet - owner's bench session.
+2000: the seek legs only (2026-10-31); ME under xHCI98 only; the seek legs on 98 SE are owed. Real PC: none yet - owner's bench session.
 
 **`noaud`**
 

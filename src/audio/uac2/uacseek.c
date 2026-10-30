@@ -22,6 +22,8 @@
  * the source by 30011 frames. Each event is printed with GetTickCount and
  * the source frame, on stdout and COM1 when it opens. The last line is
  * PASS: or FAIL: (the API calls succeeded); never claims audibility.
+ * The device's wave volume is set to full first (and the old value
+ * printed): a lower one (2000's default) scales the counted samples.
  */
 #define WIN32_LEAN_AND_MEAN
 #ifndef WIN32
@@ -298,6 +300,16 @@ int main(int argc, char **argv)
     }
     com = CreateFile("COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     src = 1000;
+    {
+        char name[MAXPNAMELEN];
+        UINT dev = Device(name);
+        DWORD old = 0;
+        if (dev != (UINT)-1) {
+            MMRESULT g = waveOutGetVolume((HWAVEOUT)(UINT_PTR)dev, &old);
+            MMRESULT r = waveOutSetVolume((HWAVEOUT)(UINT_PTR)dev, 0xFFFFFFFFUL);
+            Log("wave volume of dev %u was %08lX (%u), set to FFFFFFFF (%u)", dev, old, g, r);
+        }
+    }
     if (!lstrcmpi(argv[1], "wo")) {
         variant = argc >= 7 ? argv[6][0] : 'p';
         if (variant != 'p' && variant != 'r' && variant != 'h') { printf("FAIL: variant\n"); return 2; }

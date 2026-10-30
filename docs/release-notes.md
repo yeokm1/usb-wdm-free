@@ -4,6 +4,58 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.5 (2026-10-30): audio devices with several outputs, serial bridges
+
+`uac2` 0.1.5.0 gives each output and input of a device that has several
+its own Windows sound device, and ships a co-installer that keeps
+Windows' USB Audio 1.0 driver off a UAC 2.0 device. `usbcom` 0.1.5.0
+serves the common USB serial bridges on 98 SE and ME. Every other file
+is 0.1.4's.
+
+- **uac2, several outputs and inputs**: a device whose outputs and
+  inputs each have their own clock (an on-board USB audio codec, say)
+  gets one playback or recording device per output and input (on Vista
+  and later named by its kind: Speakers, Headphones, Line, Microphone).
+  Before, `uac2` served only the first. A device with more than 64
+  streaming alternates now starts too. Known issue: on Vista and later
+  an input of the kind "analog connector" was not listed as a recording
+  device in the legs (on Vista x64 its endpoint read as disabled); not
+  investigated further.
+- **uac2 co-installer** (`UACCI.INF`, `UACCI1.DLL`, in the 2000 to 8.1
+  folders, x86 and x64): Windows' signed USB Audio 1.0 driver outranks
+  `uac2` on 2000 to 7, and on XP changing it to `uac2` afterwards
+  waits until a restart. Before plugging the device in, put `uac2`
+  where Windows looks (`pnputil -a uac2wdm.inf` on Vista and later; its
+  folder on `DevicePath` on 2000 and XP) and install `UACCI.INF` once
+  (right-click, Install): then the first plug installs `uac2`. USB Audio
+  1.0 devices keep Windows' driver. 8 and 8.1 install `uac2` without the
+  co-installer; their x64 `pnputil` wants a signed catalog, which this
+  package has none of.
+- **uac2 on 98 SE and ME with Windows' own USB 1.1 stack**: `uac2` now
+  starts there (Full Speed). ME plays and records; 98 SE does too when
+  the known issue below does not strike. Give the wizard
+  `uac2`'s folder at the first plug: a copy in `INF\OTHER` is not seen.
+- **Known issue, 98 SE with Windows' own USB 1.1 stack**: the first
+  start of a Full Speed UAC 2.0 device can hang the system. Use NUSB or
+  xHCI98.
+- **usbcom chip modules** (98 SE and ME): the FTDI FT-X, FT232H and
+  FT4232H, the Prolific PL2303 and the Silicon Labs CP2105 and CP2108,
+  each port with its own rate and framing limits. Later bridges need no
+  wizard once `USBCOM.INF` is installed. Known issue: under NUSB's EHCI
+  on 98 SE a 64 KiB echo lost received bytes once on each of four
+  simulated bridges; the cause (the driver or below it) is not read.
+- **Legs**: simulator only (and the real Sound Blaster X4 through a VM).
+  `uac2`: XP under xHCI98 with a replayed capture of an on-board codec
+  (three outputs, three inputs), the X4 gate, the co-installer on 2000,
+  XP, Vista, 7, 8 and 8.1 (x86 and x64), 98 SE and ME on their own
+  stacks; the x64 legs ran this source signed in the guest with a
+  throwaway certificate. `usbcom`: 98 SE and ME under xHCI98 and NUSB.
+  [uac2 design, section 16](design/uac2.md),
+  [chip legs](testing/2026-10-29-usbcom-chips.md).
+- **Signing**: the x64 `uac2wdm.sys` and `UACCI1.DLL` are signed with
+  0.1.4's test certificate (`usb-wdm-free-test.cer`). The x86 images
+  are unsigned, as always.
+
 ## Release 0.1.4 (2026-10-28): newer Realtek chips, uac2 volume
 
 `rtl815x` 0.2.0.0 adds the Realtek RTL8153D (1 Gb/s), RTL8156 and

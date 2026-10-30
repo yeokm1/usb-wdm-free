@@ -294,8 +294,8 @@ A setup INF (uac2's `UACCI.INF`, uac2.md section 16.4) has no models, only
 a `DefaultInstall` section the user runs by hand. It is on a `COPY` line
 (never staged) for the systems its folder serves; the release operation
 does not ask it to match a device there and refuses it on a `STAGE` line.
-The DLL it copies is a user-mode image, not a driver: unsigned on x86, and
-on x64 not held to the driver signature check above.
+The DLL it copies is unsigned on x86; on x64 it is signed as the drivers are
+(owner, 2026-10-30) and held to the same signature check.
 
 Nothing under `free/` is edited by hand. The release gate also checks that
 `.gitattributes` preserves released bytes. Source documentation is LF;

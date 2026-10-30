@@ -13,7 +13,8 @@
 #      every file it copies present in its folder (or from Windows through LayoutFile,
 #      Include/Needs, reported), whole-device hardware ids only where the definition
 #      records them, no bare USB\Class_xx id; each image's architecture (x86 unsigned,
-#      x64 with an embedded signature by -Thumbprint whose SHA-1 image digest matches);
+#      x64 drivers and DLLs with an embedded signature by -Thumbprint whose SHA-1 image
+#      digest matches);
 #      a setup INF (no models, a DefaultInstall section) on a COPY line only;
 #   2. checks every file and folder name under free\ for 8.3, reserved DOS names and
 #      case-insensitive collisions;
@@ -334,7 +335,7 @@ function Test-Image([string]$Path, [string]$Arch, [string]$Label) {
     $wantMagic = if ($Arch -eq 'x64') { 0x20B } else { 0x10B }
     if ($pe.Machine -ne $want -or $pe.Magic -ne $wantMagic) { Fail ("$Label`: machine 0x{0:X}, magic 0x{1:X} in a {2} folder" -f $pe.Machine, $pe.Magic, $Arch); return }
     if ($Arch -ne 'x64') { if ($pe.CertLen -ne 0) { Fail "$Label`: an x86 image carries a certificate table (policy: unsigned)" }; return }
-    if ($Path -notmatch '\.sys$') { return }
+    if ($Path -notmatch '\.(sys|dll)$') { return }
     if ($pe.CertLen -eq 0) { Fail "$Label`: x64 driver is not signed"; return }
     $len = [BitConverter]::ToUInt32($b, $pe.CertOff)
     $rev = [BitConverter]::ToUInt16($b, $pe.CertOff + 4)

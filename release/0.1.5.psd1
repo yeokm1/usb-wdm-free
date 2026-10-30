@@ -1,12 +1,15 @@
 # Release definition for usb-wdm-free 0.1.5 (docs/design/build.md section 7),
-# read by release\release.ps1: release 0.1.4 plus, in uac2, the MEDIA class
-# co-installer UACCI1.DLL and its setup INF UACCI.INF (docs/design/uac2.md
-# section 16.4), copy only, beside uac2wdm.inf in the 2000 to 8.1 folders (NT
-# only: 98 SE and ME read no co-installers). UACCI.INF has no models (run by
-# hand: DefaultInstall), so its line is COPY. Both images are from out\ by
-# src\audio\uac2\uacco.cmd, x64 unsigned (a user-mode DLL, not a driver).
-# Prepared before the cut: uac2wdm is still 0.1.4.0 here and usbcom's 0.1.5
-# entries are not in it yet.
+# read by release\release.ps1: release 0.1.4 plus uac2 0.1.5.0 and usbcom 0.1.5.0
+# (owner, 2026-10-30). uac2: one wave and topology pair per endpoint, the
+# 9x Full Speed rule, and the MEDIA class co-installer UACCI1.DLL with its
+# setup INF UACCI.INF (docs/design/uac2.md section 16.4), copy only, beside
+# uac2wdm.inf in the 2000 to 8.1 folders (NT only: 98 SE and ME read no
+# co-installers). UACCI.INF has no models (run by hand: DefaultInstall), so
+# its line is COPY. uac2's x86 images and INF are from out\; its x64 images
+# (uac2wdm.sys and UACCI1.DLL) are the owner's signed copies of
+# out\audio\uac2\wdm64\free\uac2wdm.sys and out\audio\uac2\uacco\x64\UACCI1.DLL. usbcom: the
+# chip modules (docs/design/serial.md section 6.3, milestone M5); USBCOM.SYS
+# and USBCOMV.VXD from out\, USBCOM.INF 0.1.5.0 from the tree.
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
 # VID/PID), Desc (the STAGE.TXT PACKAGE words), DeviceIds (whole-device
@@ -25,6 +28,8 @@
     # image in the tree with its signature removed (its image digest unchanged).
     X64Builds = @{ 'uac2.wxp-x64.uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys'
                    'uac2.wv-8-x64.uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys'
+                   'uac2.wxp-x64.UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'
+                   'uac2.wv-8-x64.UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'
                    'rtl815x.wxp-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
                    'rtl815x.wv-7-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
                    'usbmidi.wxp-x64.usbmidi.sys' = 'strip:free\audio\usbmidi\wxp-x64\usbmidi.sys'
@@ -43,23 +48,23 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', 'every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1); 0.1.4.0 volume and mute passed on 98 SE (simulator)') } }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', '0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf'; 'UACCI1.DLL' = 'out\audio\uac2\uacco\x86\UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', 'playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg; 0.1.4.0 volume and mute passed on XP (simulator)')
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', '0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only')
                               'UACCI.INF' = @('COPY', 'W2K WXP', 'the co-installer, set up by hand (DefaultInstall); on 2000 and XP (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio') } }
                 @{ Name = 'wv-8-x86'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf'; 'UACCI1.DLL' = 'out\audio\uac2\uacco\x86\UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', 'playback and capture passed on 7 x86 (simulator, real X4 via VM); 8 has no leg; 0.1.4.0 playback with volume and mute passed on Vista and 7 x86 (simulator; endpoint volume and mute reach the device)')
-                              'UACCI.INF' = @('COPY', 'WVISTA W7 W8', 'the co-installer, set up by hand (DefaultInstall); on Vista and 7 x86 (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio; 8.1 x86 did not need it; 8 has no leg') } }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W7', '0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)')
+                              'UACCI.INF' = @('COPY', 'WVISTA W7 W8', 'the co-installer, set up by hand (DefaultInstall); on Vista and 7 x86 (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio; 8 and 8.1 x86 did not need it') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wxp-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf'; 'UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WXP64', 'copy only (owner, 2026-10-24): no XP x64 leg; 0.1.4.0 volume and mute passed on XP x64 (simulator, unsigned build)')
-                              'UACCI.INF' = @('COPY', 'WXP64', 'the co-installer, set up by hand (DefaultInstall); no XP x64 leg') } }
+                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wxp-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf'; 'UACCI1.DLL' = 'x64:uac2.wxp-x64.UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WXP64', 'copy only (owner, 2026-10-24); 0.1.5.0 source signed in the guest with a throwaway certificate: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)')
+                              'UACCI.INF' = @('COPY', 'WXP64', 'the co-installer, set up by hand (DefaultInstall); passed on XP x64 (simulator, its test build)') } }
                 @{ Name = 'wv-8-x64'; Arch = 'x64'
-                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wv-8-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf'; 'UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted; 0.1.4.0 volume and mute: no Vista to 8 x64 leg')
-                              'UACCI.INF' = @('COPY', 'WVISTA64 W7X64 W8X64', 'the co-installer, set up by hand (DefaultInstall); no Vista to 8 x64 leg') } }
+                   Files = @{ 'uac2wdm.sys' = 'x64:uac2.wv-8-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf'; 'UACCI1.DLL' = 'x64:uac2.wv-8-x64.UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
+                   Stage = @{ 'uac2wdm.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'copy only (owner, 2026-10-24); test signing on; 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)')
+                              'UACCI.INF' = @('COPY', 'WVISTA64 W7X64 W8X64', 'the co-installer, set up by hand (DefaultInstall); passed on Vista to 8.1 x64 (simulator, its test build)') } }
             )
         }
         @{
@@ -118,9 +123,9 @@
             WindowsSections = @('FakeModemCopyFileSection')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'USBCOM.SYS' = 'tree:free\serial\usbcom\w98se-me\USBCOM.SYS'; 'USBCOMV.VXD' = 'tree:free\serial\usbcom\w98se-me\USBCOMV.VXD'
+                   Files = @{ 'USBCOM.SYS' = 'out\serial\usbcom\wdmx86\free\USBCOM.SYS'; 'USBCOMV.VXD' = 'out\serial\usbcom\vxd9x\free\USBCOMV.VXD'
                               'USBCOM.INF' = 'tree:src\serial\usbcom\USBCOM.INF'; 'USBCOMP.INF' = 'tree:src\serial\usbcom\USBCOMP.INF' }
-                   Stage = @{ 'USBCOM.INF' = @('STAGE', 'W98SE WME', 'the USB device; xHCI98, UHCI and NUSB EHCI legs passed (listed boards); the CDC-ACM class match from 0.1.3: ranking read from the INFs, no leg')
+                   Stage = @{ 'USBCOM.INF' = @('STAGE', 'W98SE WME', 'the USB device; 0.1.5.0 chip modules (FT-X, FT232H, FT4232H, PL2303, CP2105, CP2108) passed under xHCI98 (98 SE and ME) and NUSB EHCI (98 SE; a 64 KiB echo failed once on four parts there) (simulator); CDC-ACM boards as before')
                               'USBCOMP.INF' = @('STAGE', 'W98SE WME', 'its COM port (USBCOM\COMPORT)') } }
                 @{ Name = 'w2k-8'; Arch = 'inf'
                    Files = @{ 'USBCDC.INF' = 'tree:src\serial\usbcom\USBCDC.INF' }

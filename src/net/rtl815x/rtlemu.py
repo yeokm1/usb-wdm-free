@@ -47,6 +47,9 @@ Chips (--chip): 8152 (id 4C10, 0BDA:8152, 100 Mb/s), 8153 (id 5C10,
 1.0); --flap-after/--flap-for take the cable out once; --ext-init and
 --power-cut start the PHY in its external-init state or after a power cut;
 --phy-patched lets the 8159 link above 5 Gb/s, as with its PHY patch.
+--serial gives the device a serial number string (index 3; by default it
+has none) and --serial-stall N STALLs the first N reads of it in this run,
+so a host's instance id rules can be exercised (xHCI98 task 45.40).
 No physical USB device is accessed.
 """
 import argparse
@@ -492,10 +495,10 @@ class Network:
         return [self.frame(b'\xff' * 6, 0x0800, ipv4(HOST_IP, b'\xff' * 4, 17, udp))]
 
 
-def device_descriptor(kind, speed):
+def device_descriptor(kind, speed, serial=False):
     bcd = kind.usb3 if speed == 'super' else 0x0210 if speed == 'high' else 0x0200
     return struct.pack('<BBHBBBBHHHBBBB', 18, 1, bcd, 0, 0, 0, 9 if speed == 'super' else 64,
-                       0x0bda, kind.pid, 0x3000, 1, 2, 0, 1)
+                       0x0bda, kind.pid, 0x3000, 1, 2, 3 if serial else 0, 1)
 
 
 def bulk_size(speed):
@@ -545,7 +548,7 @@ def usb_string(text):
 class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
                  link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
-                 power_cut=False, phy_patch=False):
+                 power_cut=False, phy_patch=False, serial=None, serial_stall=0):
         self.connection, self.trace, self.now = connection, trace, now
         self.chip_name, self.speed = chip, speed or default_speed(chip)
         self.chip = Chip(chip, ext_init, power_cut, phy_patch)
@@ -554,13 +557,16 @@ class Model:
             raise ValueError('%s is a USB 2.0 chip' % kind.name)
         self.partner = partner
         self.net = Network(self.log)
-        self.device = device_descriptor(kind, self.speed)
+        self.device = device_descriptor(kind, self.speed, serial is not None)
         self.config_desc = config_descriptor(self.speed)
         self.other = None if self.speed == 'super' else \
             config_descriptor('full' if self.speed == 'high' else 'high', 7)
         self.bos = bos_descriptor(kind, self.speed)
         self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
                         2: usb_string('%s Ethernet - SIMULATED' % kind.name)}
+        if serial is not None:
+            self.strings[3] = usb_string(serial)
+        self.serial_stall = serial_stall           # serial string reads still to STALL
         self.bulk_max = bulk_size(self.speed)
         self.link_after, self.flap_after, self.flap_for = link_after, flap_after, flap_for
         self.peer_caps = 0
@@ -784,6 +790,10 @@ class Model:
     # -- control -------------------------------------------------------------
     def descriptor(self, kind, number):
         if kind == 3:
+            if number == 3 and number in self.strings and self.serial_stall > 0:
+                self.serial_stall -= 1
+                self.log('serial_stalled', left=self.serial_stall)
+                return None
             return self.strings.get(number)
         if number:
             return None
@@ -964,7 +974,16 @@ def main():
     ap.add_argument('--power-cut', action='store_true', help='the chip reports a power cut at start')
     ap.add_argument('--phy-patched', action='store_true',
                     help='8159: links above 5 Gb/s as if its PHY patch were loaded (none is modelled)')
+    ap.add_argument('--serial', help='a serial number string (iSerialNumber 3); none by default')
+    ap.add_argument('--serial-stall', type=int, default=0,
+                    help='STALL the first N reads of the serial number string of this run')
     args = ap.parse_args()
+    if args.serial is not None and not (0 < len(args.serial) <= 126 and args.serial.isascii()):
+        ap.error('--serial needs 1 to 126 ASCII characters (a string descriptor holds 126)')
+    if args.serial_stall < 0:
+        ap.error('--serial-stall needs 0 or more')
+    if args.serial_stall and args.serial is None:
+        ap.error('--serial-stall needs --serial')
     speed = args.speed or default_speed(args.chip)
     if speed == 'super' and not CHIPS[args.chip].usb3:
         ap.error('%s is a USB 2.0 chip' % CHIPS[args.chip].name)
@@ -978,7 +997,8 @@ def main():
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, args.chip, speed, link_after=args.link_after,
                           flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
-                          ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched)
+                          ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched,
+                          serial=args.serial, serial_stall=args.serial_stall)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

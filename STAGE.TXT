@@ -46,11 +46,15 @@
 
 # ---- audio/uac2
 PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs
-STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | every simulator profile passed under xHCI98 (build 16); ME: x4full playback and capture passed under xHCI98 (0.1.1); 0.1.4.0 volume and mute passed on 98 SE (simulator)
-STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | playback passed (simulator, real X4 via VM); capture fails on XP; 2000 has no leg; 0.1.4.0 volume and mute passed on XP (simulator)
-STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | playback and capture passed on 7 x86 (simulator, real X4 via VM); 8 has no leg; 0.1.4.0 playback with volume and mute passed on Vista and 7 x86 (simulator; endpoint volume and mute reach the device)
-COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24): no XP x64 leg; 0.1.4.0 volume and mute passed on XP x64 (simulator, unsigned build)
-COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test-signed: loads and plays on 7 x64 with test signing on and the certificate trusted; 0.1.4.0 volume and mute: no Vista to 8 x64 leg
+STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98
+COPY  | W2K WXP | free/audio/uac2/w2k-xp/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on 2000 and XP (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio
+STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only
+COPY  | WVISTA W7 W8 | free/audio/uac2/wv-8-x86/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on Vista and 7 x86 (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio; 8 and 8.1 x86 did not need it
+STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | 0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)
+COPY  | WXP64 | free/audio/uac2/wxp-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on XP x64 (simulator, its test build)
+COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24); 0.1.5.0 source signed in the guest with a throwaway certificate: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on Vista to 8.1 x64 (simulator, its test build)
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test signing on; 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)
 
 # ---- audio/usbmidi
 PACKAGE  | audio/usbmidi | CLASS | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces
@@ -70,7 +74,7 @@ STAGE | W2K | free/video/uvc98/w2k/UVCM2.INF | Windows EHCI legs passed (simulat
 # ---- serial/usbcom
 PACKAGE  | serial/usbcom | CLASS | USB serial (usbcom): CDC ACM serial ports and modems
 STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOMP.INF | its COM port (USBCOM\COMPORT)
-STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOM.INF | the USB device; xHCI98, UHCI and NUSB EHCI legs passed (listed boards); the CDC-ACM class match from 0.1.3: ranking read from the INFs, no leg
+STAGE | W98SE WME | free/serial/usbcom/w98se-me/USBCOM.INF | the USB device; 0.1.5.0 chip modules (FT-X, FT232H, FT4232H, PL2303, CP2105, CP2108) passed under xHCI98 (98 SE and ME) and NUSB EHCI (98 SE; a 64 KiB echo failed once on four parts there) (simulator); CDC-ACM boards as before
 STAGE | W7X64 | free/serial/usbcom/w2k-8/USBCDC.INF | binds Windows usbser.sys; 7 x64 echoes passed; 2000 and XP copy only (owner, 2026-10-24)
 
 # ---- net/cdcnet

@@ -9,7 +9,12 @@
 # (uac2wdm.sys and UACCI1.DLL) are the owner's signed copies of
 # out\audio\uac2\wdm64\free\uac2wdm.sys and out\audio\uac2\uacco\x64\UACCI1.DLL. usbcom: the
 # chip modules (docs/design/serial.md section 6.3, milestone M5); USBCOM.SYS
-# and USBCOMV.VXD from out\, USBCOM.INF 0.1.5.0 from the tree.
+# and USBCOMV.VXD from out\, USBCOM.INF 0.1.5.0 from the tree. rtl815x is
+# unchanged since 0.1.4 and ships 0.1.4's bytes: every image and INF from the
+# tree, its x64 images as strip: entries, as usbmidi, xpad98 and cdcnet. A
+# fresh link of the same source differs only in its PE TimeDateStamp and
+# checksum, and the TimeDateStamp is inside the Authenticode digest, so a
+# fresh build cannot match 0.1.4's signature (the 0.1.5 release record).
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
 # VID/PID), Desc (the STAGE.TXT PACKAGE words), DeviceIds (whole-device
@@ -30,8 +35,8 @@
                    'uac2.wv-8-x64.uac2wdm.sys' = 'out\audio\uac2\wdm64\free\uac2wdm.sys'
                    'uac2.wxp-x64.UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'
                    'uac2.wv-8-x64.UACCI1.DLL' = 'out\audio\uac2\uacco\x64\UACCI1.DLL'
-                   'rtl815x.wxp-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
-                   'rtl815x.wv-7-x64.RTL815X.SYS' = 'out\net\rtl815x\ndis51\free\rtl815x.sys'
+                   'rtl815x.wxp-x64.RTL815X.SYS' = 'strip:free\net\rtl815x\wxp-x64\RTL815X.SYS'
+                   'rtl815x.wv-7-x64.RTL815X.SYS' = 'strip:free\net\rtl815x\wv-7-x64\RTL815X.SYS'
                    'usbmidi.wxp-x64.usbmidi.sys' = 'strip:free\audio\usbmidi\wxp-x64\usbmidi.sys'
                    'usbmidi.wv-8-x64.usbmidi.sys' = 'strip:free\audio\usbmidi\wv-8-x64\usbmidi.sys'
                    'xpad98.wxp-x64.xpad98.sys' = 'strip:free\hid\xpad98\wxp-x64\xpad98.sys'
@@ -168,24 +173,24 @@
             Services = @('rtl815x')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL81598.INF' = 'out\net\rtl815x\ndis5\free\RTL81598.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\w98se-me\RTL815X.SYS'; 'RTL81598.INF' = 'tree:free\net\rtl815x\w98se-me\RTL81598.INF' }
                    Stage = @{ 'RTL81598.INF' = @('COPY', 'W98SE WME', 'copy only (owner, 2026-10-24): simulator legs only, no device; chip core rewritten in 0.1.2') } }
                 @{ Name = 'w2k'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL815X.INF' = 'out\net\rtl815x\ndis5\free\RTL815X.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\w2k\RTL815X.SYS'; 'RTL815X.INF' = 'tree:free\net\rtl815x\w2k\RTL815X.INF' }
                    Stage = @{ 'RTL815X.INF' = @('COPY', 'W2K', 'copy only (owner, 2026-10-24): no leg') } }
                 # XP to 7 (owner, 2026-10-27): the new chips only, one INF with a models
                 # section per system (ethernet.md section 7.6).
                 @{ Name = 'wxp'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\wxp\RTL815X.SYS'; 'RTLXP7.INF' = 'tree:free\net\rtl815x\wxp\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP', 'copy only: simulator legs only, no device') } }
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
-                   Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'tree:free\net\rtl815x\wv-7-x86\RTL815X.SYS'; 'RTLXP7.INF' = 'tree:free\net\rtl815x\wv-7-x86\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA W7', 'copy only: simulator legs only, no device') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wxp-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wxp-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'tree:free\net\rtl815x\wxp-x64\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WXP64', 'copy only: simulator legs only, no device') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
-                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wv-7-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
+                   Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wv-7-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'tree:free\net\rtl815x\wv-7-x64\RTLXP7.INF' }
                    Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only: simulator legs only, no device; test-signed') } }
             )
         }

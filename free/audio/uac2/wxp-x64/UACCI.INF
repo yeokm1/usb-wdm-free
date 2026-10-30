@@ -1,0 +1,40 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; UACCI.INF - registers UACCI1.DLL, uac2's MEDIA class co-installer
+; (docs/design/uac2.md section 16.4): Windows' USB Audio 1.0 driver is then
+; never installed on a USB Audio 2.0 function. Right-click, Install. To
+; remove it: rundll32 UACCI1.DLL,UacUninstall (in the system folder).
+
+[Version]
+Signature="$Windows NT$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/29/2026,0.1.5.0
+
+[DefaultInstall]
+CopyFiles=UacCi.Copy
+AddReg=UacCi.Reg
+
+[DefaultInstall.NTamd64]
+CopyFiles=UacCi.Copy
+AddReg=UacCi.Reg
+
+[DestinationDirs]
+UacCi.Copy=11
+
+[UacCi.Copy]
+UACCI1.DLL
+
+[UacCi.Reg]
+HKLM,"SYSTEM\CurrentControlSet\Control\CoDeviceInstallers","{4D36E96C-E325-11CE-BFC1-08002BE10318}",0x00010008,"UACCI1.DLL,UacCoInstaller"
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+UACCI1.DLL=1
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="uac2"

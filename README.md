@@ -98,22 +98,32 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   `cmd /c "set devmgr_show_nonpresent_devices=1&& devmgmt.msc"`, choose
   View, Show hidden devices, update the greyed "USB Audio Device" to
   `uac2`, then plug the device in. Under xHCI98 from 3.4.0.0 Windows'
-  driver no longer takes such a device.
+  driver no longer takes such a device. From 0.1.5 the co-installer
+  avoids this on 2000 to 7: see Installing.
 
 ## Installing
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.4` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.5` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.4). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.5). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.4 is signed with a new test certificate. Trust the
-`usb-wdm-free-test.cer` of this release, not an earlier one. Its
+0.1.5 is signed with the test certificate 0.1.4 introduced. Trust the
+`usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
 thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
+
+`uac2` on 2000 to 7: before plugging a UAC 2.0 device in, put `uac2`
+where Windows looks (`pnputil -a uac2wdm.inf` on Vista and 7; its
+folder on `DevicePath` on 2000 and XP) and install the folder's
+`UACCI.INF` once (right-click, Install). Then the first plug installs
+`uac2` and not Windows' USB Audio 1.0 driver. 8 and 8.1 install `uac2`
+without the co-installer; their x64 `pnputil` wants a signed catalog,
+which this package has none of
+([release notes](docs/release-notes.md), 0.1.5).
 
 `free/tools/camcheck/` holds CamCheck (`CAMCHECK.EXE`), a webcam preview
 for 98 SE, ME and 2000 that works with `uvc98` and any other Video for
@@ -140,6 +150,9 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.5** (2026-10-30):
+  - `uac2` 0.1.5.0 gives each output and input of a device its own Windows sound device, starts on 98 SE's and ME's own USB 1.1 stack (Full Speed), and ships the co-installer `UACCI1.DLL` with `UACCI.INF` (in the 2000 to 8.1 folders; needed on 2000 to 7): installed by hand before the first plug, it keeps Windows' USB Audio 1.0 driver off a UAC 2.0 device.
+  - `usbcom` 0.1.5.0 adds chip modules for the FTDI FT-X, FT232H and FT4232H, the Prolific PL2303 and the Silicon Labs CP2105 and CP2108 on 98 SE and ME.
 - **v0.1.4** (2026-10-28):
   - `rtl815x` 0.2.0.0 adds the Realtek RTL8153D, RTL8156, RTL8156B, RTL8157 and RTL8159. It is now also copied for XP to 7, 32-bit and x64.
   - `uac2` 0.1.4.0 adds playback volume and mute. Windows' software MIDI synth can play through the device.

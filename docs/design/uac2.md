@@ -386,12 +386,15 @@ The driver's rules:
   arrives (`IsoPacket[i].Length`).
 - **The ring.** Playback copies from the WaveCyclic buffer into the URB's
   own non-paged transfer buffer at refill time; capture copies from the URB
-  buffer into the cyclic buffer on completion. Position and the PortCls
-  notification (`IPortWaveCyclic::Notify` on the service group) advance from
-  completions, not from a timer.
-- **Underrun.** If PortCls has not written far enough, the URB carries
-  silence and the position does not advance past what was written. A failed
-  or late packet is counted, never retried.
+  buffer into the cyclic buffer on completion. The PortCls notification
+  (`IPortWaveCyclic::Notify` on the service group) advances from
+  completions, not from a timer. The playback position is how far the
+  refills have read the cyclic buffer, the capture position how far
+  completions have written it (section 17).
+- **Underrun.** The driver cannot see how far PortCls has written: the
+  position tells PortCls which bytes the next refill takes, and PortCls
+  puts data or silence there. A failed or late packet is counted, never
+  retried.
 
 ### 4.5 Feedback and rate matching
 
@@ -1385,3 +1388,171 @@ a 3.0 function by its standard descriptors, no BOS; `FFFF:0230`):
   function of a 3.0 device would need the parent to select configuration
   1 and split it (xHCI98's design record 13 section 10.8; on Windows'
   stack, not this repository's to change). No 3.0 driver work (owner).
+
+## 17. The play position is the fetch cursor (seek report, 2026-10-31)
+
+### 17.1 The report
+
+A user of `uac2` 0.1.5.0 on 32-bit XP with a Conexant CX31993 DAC
+(`docs/status.md`, "Open report: `uac2` playback garbled after seeking"):
+playback starts clean, but seeking within a track can leave the sound
+garbled; VLC with 16-bit 44.1 kHz WAV and FLAC, and Windows Media Player
+with FLAC through the K-Lite codecs; Windows Media Player with WAV not.
+
+### 17.2 What a seek does at the driver
+
+Rig: XP SP3 x86 (q35), Windows' own `usbehci.sys`, no xHCI98; `uac2`
+0.1.5.0 as released (`free/audio/uac2/w2k-xp`, `uac2wdm.sys`
+`528f2ad0...`); `uacemu.py --profile cx31993` (the layout of 2026-10-28:
+one synchronous playback endpoint, no feedback, High Speed `bInterval`
+1) with its received-PCM capture; `UACSEEK.EXE` (`uacseek.c`, test
+only) playing a counted signal and seeking the way a player does:
+
+- WinMM: eight 20 ms buffers kept queued; a seek is `waveOutPause`,
+  `waveOutReset`, new buffers from 30011 frames further on,
+  `waveOutRestart` (or `waveOutReset` alone);
+- DirectSound: a one-second looping secondary buffer kept full behind
+  the play cursor; a seek is `Stop`, `SetCurrentPosition(0)`, a refill
+  from the new place, `Play`.
+
+`uacseek.py` reads the capture back to the source frame numbers (or, when
+KMixer converts 44.1 kHz to the device's 48 kHz, to the right channel's
+staircase, which survives the conversion).
+
+What was read:
+
+- **No KS state change at a seek.** In both APIs the device's
+  alternate setting stayed selected from the first buffer to the close:
+  KMixer keeps its pin on `uac2` in `KSSTATE_RUN` and mixes silence
+  while the client is paused or reset. So a seek reaches the driver only
+  as a gap in the data PortCls writes into the cyclic buffer.
+- **The garble is old ring data.** The received stream holds blocks of
+  2 to 8 ms (whole or half URBs) whose frames are exactly one ring older
+  than their neighbours (16 KiB, 4096 frames at 48 kHz 16-bit stereo, the
+  ring's minimum size), then the correct sequence again. DirectSound at
+  48 kHz: 330 such blocks in 8 s, every 20 to 60 ms, before and
+  after each seek; WinMM at 44.1 kHz (converted to 48 kHz by KMixer): 269
+  blocks in 8 s; WinMM at 48 kHz: a few, around the seeks. That is the
+  sound of the report: the music with short pieces of 85 ms ago spliced
+  in, for as long as it lasts.
+
+### 17.3 The cause
+
+`UacStream` (`uacstream.h`) keeps two cursors in the cyclic buffer:
+`filled`, how far the USB side has copied bytes out into URBs (each URB is
+filled when it is submitted), and `completed`, how far URBs have come
+back. `GetPosition` reported `completed`. With four data URBs queued
+(section 4.4) the copy runs about 16 ms ahead of `completed` (32 ms at High
+Speed `bInterval` 4).
+
+Read from the measurements (PortCls's code is not read, and its write
+scheduling is inferred, not documented): PortCls's WaveCyclic port treats
+the reported position as the point up to which the device has taken the
+data, and writes the next data, or silence when it has none, from there
+on. While it has plenty of data queued it has written well ahead and
+nothing shows. When its lead shrinks below the URB queue (a
+client that flushed and restarted, DirectSound's streaming), it writes the
+bytes at `completed` + a few ms just before they are due by its account,
+which is after the URB that carries them was filled: that URB carries what
+the ring held one lap earlier. Nothing in the driver resynchronises it; it
+lasts while the lead stays short, which after a seek can be the rest of
+the track.
+
+Why Windows Media Player with WAV was spared was not read (no player was
+run): the lead PortCls has depends on the client's own queueing, which
+differs between renderers.
+
+### 17.4 The change
+
+1. **The render position is the fetch cursor.** `GetPosition` of a
+   playback stream returns `filled`: every byte before it has been copied
+   into a URB and can no longer change what is sent, every byte from it on
+   is still read from the ring. PortCls then writes data or silence at
+   exactly the bytes the next URB will take. Capture is unchanged: its
+   position is where received frames have been written (`completed`, which
+   `WriteBytes` keeps equal to `filled`).
+
+   This departs from the documented contract on purpose. Microsoft Learn
+   (`IMiniportWaveCyclicStream::GetPosition`, read 2026-10-31) describes
+   the position as the driver's best estimate of the sample at the
+   converter, as distinct from the DMA position, buffering delays taken
+   into account. A device whose data must be handed over 16 to 32 ms
+   before it is played cannot give both: reporting the played position
+   lets PortCls overwrite, or leave unwritten, bytes already handed over
+   (17.2), which is audible; reporting the fetch cursor makes positions
+   early by the queue (below), which is not. The second is chosen, on the
+   measurements of 17.2 and the legs of this change.
+2. **No rewind on pause.** `RUN` to `PAUSE` (or `STOP`) used to set
+   `filled = completed`, so a paused stream resent the data of the URBs
+   the stop cancelled. With the position at `filled` that would move the
+   position backwards, which PortCls cannot take (a smaller position reads
+   as a wrap of nearly the whole ring). The cursor now stays: the cancelled
+   URBs' data (at most the queue, 16 ms, 32 ms at High Speed `bInterval`
+   4; some of it may have been played)
+   is dropped, and a resumed stream goes on from where PortCls believes
+   the device is. `STOP` still resets both cursors to 0.
+3. **A byte taken is cleared.** `FillBytes` zeroes the ring bytes it
+   has copied out, under the ring lock and before the new position can be
+   read. A byte nobody has written since a URB took it a lap earlier goes
+   out as silence in the next lap, not as that lap's audio: an underrun
+   (PortCls's data late) is heard as a gap. It is no guarantee against
+   every stale byte: a write PortCls began before the fetch and finished
+   after it (through `CopyTo`, which takes the same lock, but still after
+   the clear) lands in a lap already taken and is sent a lap late if
+   nothing replaces it; the lock orders the copies, it cannot tell which
+   lap a write meant. With 1 and 2 alone one such block was still read in
+   8 s of DirectSound pausing (17.2's rig, `ds ... h`: a 2 ms block one
+   ring old right after a resume). Zero is silence for every format the
+   stream takes (signed 16-, 24- and 32-bit PCM). For playback nothing
+   reads a byte behind the position again; capture does not use
+   `FillBytes`.
+4. **What stays.** `completed` still counts completed URBs (for render it
+   no longer equals `filled` minus the queue after a pause, and nothing
+   uses it so); notifications (`IPortWaveCyclic::Notify`) still come from
+   completions, never a timer, at most one per completion when the
+   completed bytes reach the `SetNotificationFreq` interval (several
+   intervals in one URB give one). The URB queue, its depth, the packet
+   sizes and the transport are unchanged.
+5. **Not covered: a ring no larger than the queue.** `SetBufferSize` can
+   make the ring (`used`) no larger than the bytes the four queued URBs
+   take (for example 3072 bytes, exactly the 16 ms queued of 16-bit
+   stereo at 48 kHz, or 1536 bytes, 8 ms). The first `RUN` then takes a
+   whole lap or more at once and the position comes back to where it was
+   or wraps past bytes PortCls has not refilled; no position can say that,
+   and with the clearing of item 3 the next URBs take zeros. The ring must
+   be larger than the queue, with room for PortCls to see the position
+   move between its writes. This was so before the change (section 4.4's "not guarded")
+   and stays so; the legs did not meet it (KMixer's pins keep the
+   allocated ring).
+
+Consequences:
+
+- The position a client reads (`KSPROPERTY_AUDIO_POSITION`, WinMM's
+  `waveOutGetPosition`, DirectSound's play cursor) runs ahead of what the
+  device has received by the queue (up to about 16 ms, 32 ms at
+  `bInterval` 4), as the DMA position of a PCI device runs ahead of its
+  converter by its FIFO. Before, it ran behind what had been taken from
+  the ring by the same amount.
+- A pause and resume skips the queued audio (up to the same 16 or 32 ms)
+  instead of repeating part of it.
+- An underrun plays silence instead of old audio, for the bytes nobody
+  wrote since the last lap (item 3's late write excepted).
+- `uacstream.h` is one header for every system and both architectures
+  (98 SE, ME, 2000, XP, Vista to 8.1, x86 and x64), so the change applies
+  to all; it does not depend on the host controller or its driver.
+
+### 17.5 Tests
+
+- `streamtest.cpp`: a render stream's position follows `FillBytes`, not
+  `CompleteBytes`; the bytes taken read zero afterwards; a pause keeps the
+  position; `STOP` resets it; capture keeps its write position;
+  notifications still follow completed bytes.
+- `UACSEEK.EXE` and `uacseek.py`: a stale block is a run of the counted
+  signal that is older than the run before it while the run after it
+  joins the run before (as if the block were not there, or replaced
+  nothing); with KMixer converting the rate, a backward jump of the
+  right channel's staircase undone 0.5 to 100 ms later. Backward jumps
+  alone are not counted against a leg: a seek's jump of the 16-bit count
+  can read as one. A leg passes with no stale block across its seeks. Legs: XP under Windows' EHCI and under
+  xHCI98 (both APIs, 16-bit and float clients, 44.1 and 48 kHz); 2000 and
+  7 x86 for regressions; 98 SE (the same header runs there).

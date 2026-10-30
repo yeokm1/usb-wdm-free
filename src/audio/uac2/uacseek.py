@@ -206,11 +206,13 @@ def main():
             print('  %-7s at %9d (%8.3f s) len %7d (%7.1f ms) %s%s' %
                   (kind, at, at / a.rate, n, n * 1000.0 / a.rate,
                    ('codes %5d..%5d ' % (first, last)) if kind == 'code' else '', note))
-    # A stale block: a code run between two code runs (no silence between)
-    # whose neighbours join up as if it were not there: the run after it
-    # starts where the run before it ended, or up to the block's length
-    # later (within 1 ms), while the block itself does not continue the run
-    # before. A seek is one jump that the following run continues.
+    # A stale block: a code run shorter than 100 ms between two code runs
+    # (no silence between) whose neighbours join up as if it were not
+    # there: the run after it starts where the run before it ended, or up
+    # to the block's length later (within 1 ms), while the block itself is
+    # older than the run before (stale data is from earlier in the ring). A
+    # longer run is a replay a player made (DirectSound resuming at its
+    # play cursor); a seek is one jump that the following run continues.
     stale = 0
     for k in range(1, len(runs) - 1):
         p, b, n = runs[k - 1], runs[k], runs[k + 1]
@@ -221,7 +223,7 @@ def main():
             gap -= 0x10000
         own = (b[3] - p[4] - 1) & 0xffff
         tol = a.rate // 1000
-        if -tol <= gap <= b[2] + tol and own >= 0x8000:
+        if b[2] < a.rate // 10 and -tol <= gap <= b[2] + tol and own >= 0x8000:
             stale += 1
     print('short_runs(<100ms)=%d backward_jumps=%d stale_blocks=%d' % (short, back, stale))
     return 0

@@ -54,3 +54,11 @@ static address. The fix is xHCI98's (its design record 13 section 10.7,
 devnode and its static address on XP and 7, and a replug whose every read
 failed published nothing until the next connection. Its legs are in its
 run sheet.
+
+Behind hubs (xHCI98 `cf96d6b6`, `0bcb2b41`, `f7f20e1a`, 2026-10-31): with
+`--serial-skip 1` (`253f5a0`: the first serial read answers, so the plug
+names the device, and the re-enumeration's reads STALL), the adapter behind
+a SuperSpeed hub whose port link was dropped, and behind a USB 2.0 hub at
+Full Speed, kept its first devnode and static address on XP and 7, and on
+2000 behind the USB 2.0 hub. `rtl815x` 0.1.4 ran unchanged at Full Speed
+on XP, 7 and 2000 in these legs.

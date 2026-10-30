@@ -568,6 +568,29 @@ class NewerModelTests(unittest.TestCase):
                 status, bos = self.descriptor(15)
                 self.assertEqual((status, [bos[i + 2] for i in self.walk(bos)]), (0, [2]))
 
+    def string(self, index):
+        self.m.control(1, struct.pack('<BBBBHHH', 0x80, 6, 0x80, 0, 0x0300 | index, 0x0409, 255))
+        _, _, reply = self.wire.messages.pop()
+        return reply[3], reply[10:]
+
+    def test_serial_and_its_stall(self):
+        # No serial by default: iSerialNumber 0 and no string 3.
+        self.make('8157')
+        self.assertEqual(self.m.device[16], 0)
+        self.assertEqual(self.string(3)[0], 4)
+        # --serial: index 3 and the string; --serial-stall: its first N reads
+        # STALL, then it answers, and the other strings never STALL.
+        self.make('8157', serial='000334C8D6B113C7', serial_stall=2)
+        self.assertEqual(self.m.device[16], 3)
+        self.assertEqual(self.string(1)[0], 0)
+        self.assertEqual(self.string(3)[0], 4)
+        self.assertEqual(self.string(3)[0], 4)
+        status, text = self.string(3)
+        self.assertEqual((status, text), (0, r.usb_string('000334C8D6B113C7')))
+        self.assertEqual(self.string(3)[0], 0)
+        stalls = [json.loads(x) for x in self.trace.getvalue().splitlines()]
+        self.assertEqual([x['left'] for x in stalls if x['event'] == 'serial_stalled'], [1, 0])
+
     @staticmethod
     def walk(bos):
         i = 5

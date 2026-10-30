@@ -2,7 +2,10 @@
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original stopped-stream/IDmaChannel implementation from portcls.h and
  * published IMiniportWaveCyclic::NewStream / DMA Channel Objects contracts.
- * Positions advance only through explicit USB-completion hooks, never time.
+ * Positions advance only through explicit USB hooks, never time: a render
+ * stream's position is how far URBs have taken the cyclic buffer (fetch),
+ * a capture stream's how far received frames have been written
+ * (docs/design/uac2.md section 17).
  * One PCM format per stream (any channels, 16/24/32-bit containers, any
  * rate the owner accepts); render streams are filled from the cyclic
  * buffer, capture streams write into it.
@@ -316,12 +319,10 @@ public:
         }
         if (next != KSSTATE_STOP && next != KSSTATE_ACQUIRE && next != KSSTATE_PAUSE)
             return STATUS_INVALID_PARAMETER;
-        if (state == KSSTATE_RUN && hooks.Stop) {
-            hooks.Stop(hooks.Context, this);
-            KIRQL oldIrql; KeAcquireSpinLock(&ringLock, &oldIrql);
-            filled = completed; /* queued but canceled data must be resubmitted */
-            KeReleaseSpinLock(&ringLock, oldIrql);
-        }
+        /* The fetch cursor stays: it is the render position, and a position
+         * moving back reads to PortCls as a wrap. Data of the canceled URBs
+         * is dropped (at most the queue), never sent again. */
+        if (state == KSSTATE_RUN && hooks.Stop) hooks.Stop(hooks.Context, this);
         state = next;
         if (next == KSSTATE_STOP) {
             KIRQL oldIrql; KeAcquireSpinLock(&ringLock, &oldIrql);
@@ -331,10 +332,13 @@ public:
         }
         return STATUS_SUCCESS;
     }
+    /* Render: the bytes URBs have taken (PortCls writes from here on, and
+     * a URB takes the next bytes when it is submitted, up to the queue's
+     * 16-32 ms before they play). Capture: the bytes written. */
     STDMETHODIMP GetPosition(PULONG position) {
         if (!position) return STATUS_INVALID_PARAMETER;
         KIRQL oldIrql; KeAcquireSpinLock(&ringLock, &oldIrql);
-        *position = completed;
+        *position = capture ? completed : filled;
         KeReleaseSpinLock(&ringLock, oldIrql);
         return STATUS_SUCCESS;
     }
@@ -391,8 +395,13 @@ public:
             RtlCopyMemory(destination, source, count);
         KeReleaseSpinLock(&ringLock, oldIrql);
     }
-    /* Fill is the submitted cursor, not the reported completed cursor.
-     * Caller serialization/transport drain owns the lifetime of this object. */
+    /* Fill is the submitted cursor, which is the render position. The bytes
+     * taken are cleared under the lock, before the new position can be read:
+     * a byte nobody has written since a URB took it a lap earlier goes out
+     * as silence, not as that lap's audio (zero is silence for the signed
+     * PCM carried; a write begun before the fetch can still land late,
+     * design 17.4 item 3). Caller serialization/transport drain owns this object's
+     * lifetime. */
     void FillBytes(PUCHAR destination, ULONG count) {
         if (!destination || !count) return;
         KIRQL oldIrql; KeAcquireSpinLock(&ringLock, &oldIrql);
@@ -401,6 +410,7 @@ public:
             ULONG part = used - filled;
             if (part > count) part = count;
             RtlCopyMemory(destination, buffer + filled, part);
+            RtlZeroMemory(buffer + filled, part);
             destination += part; count -= part; filled += part;
             if (filled == used) filled = 0;
         }

@@ -169,6 +169,18 @@ Loading the audio stack at boot does not prevent it (a USB audio device
 running from boot did not protect the next plug), so no boot-time driver
 is offered. Read in QEMU only; real-PC readings are owed.
 
+### Open report: `uac2` playback garbled after seeking (XP, Conexant CX31993)
+
+Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB
+DAC: playback through `uac2` starts clean, but seeking within a track can
+leave the sound garbled. Seen in VLC with 16-bit 44.1 kHz WAV and FLAC,
+and in Windows Media Player with FLAC through the K-Lite codecs; Windows
+Media Player with WAV was not affected. Not yet reproduced or read; the
+USB controller and driver the user ran it under, and the `uac2` version,
+are still to be asked. To read: the stream's stop, pause and run
+transitions and its position and buffer state across a seek, in a VM with
+the UAC 2.0 simulator and a player that seeks.
+
 ## Tested by the author
 
 "Tested" means the author installed the driver and used it on that system

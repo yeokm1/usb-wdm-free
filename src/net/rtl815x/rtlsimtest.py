@@ -590,6 +590,10 @@ class NewerModelTests(unittest.TestCase):
         self.assertEqual(self.string(3)[0], 0)
         stalls = [json.loads(x) for x in self.trace.getvalue().splitlines()]
         self.assertEqual([x['left'] for x in stalls if x['event'] == 'serial_stalled'], [1, 0])
+        # --serial-skip: the first K reads answer, then the STALLs, then it
+        # answers again.
+        self.make('8157', serial='S1', serial_stall=1, serial_skip=2)
+        self.assertEqual([self.string(3)[0] for _ in range(4)], [0, 0, 4, 0])
 
     @staticmethod
     def walk(bos):

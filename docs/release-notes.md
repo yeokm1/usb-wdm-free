@@ -20,9 +20,11 @@ Release 0.1.6 plus `usbprn` 0.1.0.0. Every other file is 0.1.6's.
   needed.
 - **Printing on 98 SE**: when the printer is out of paper or offline,
   Windows shows its message with Retry, and the job goes on when the
-  printer is ready. If the printer is unplugged during a job, the job
-  finishes once it is plugged in again and Retry is chosen. On ME, ME's own driver
-  reports no printer status: a job waits until the printer takes it.
+  printer is ready. If the printer is unplugged during a job, Retry
+  after plugging it back in sends the rest of the job; the printer may
+  have lost what it was printing, so that page can come out garbled
+  (cancel and print it again). On ME, ME's own driver reports no printer
+  status: a job waits until the printer takes it.
 - **Limitations**: `usbprn` is a printer port, not a printer driver;
   most current inkjets and host-based printers have no Windows 98 or ME
   driver, so they cannot print. Devices that offer only IEEE 1284.4

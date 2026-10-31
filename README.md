@@ -26,7 +26,7 @@ These drivers are experimental. They may not work with every device and can make
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
 | `libusb0` | libusb-win32 0.1.12.2, driver and library | 98 SE, ME |
-| `usbprn` | USB printers and USB-to-parallel cables, as printer ports USB001, USB002, ... (from the next release; source in `src/print/usbprn/`) | 98 SE, ME (5) |
+| `usbprn` | USB printers and USB-to-parallel cables, as printer ports USB001, USB002, ... | 98 SE, ME (5) |
 
 1. ME, and XP onward: listed devices only; Windows' own driver serves the rest.
 2. RNDIS on XP to 7 is an INF for Windows' own driver.
@@ -114,14 +114,14 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.6` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.7` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.6). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.7). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.6 is signed with the test certificate 0.1.4 introduced. Trust the
+0.1.7 is signed with the test certificate 0.1.4 introduced. Trust the
 `usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
 thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
 
@@ -133,6 +133,10 @@ folder on `DevicePath` on 2000 and XP) and install the folder's
 without the co-installer; their x64 `pnputil` wants a signed catalog,
 which this package has none of
 ([release notes](docs/release-notes.md), 0.1.5).
+
+`usbprn` on 98 SE and ME: plug the printer in, point the wizard at
+`free/print/usbprn/w98se/` or `wme/`, then add the printer with Add
+Printer: its model and the port `USB001` (`USB002` for a second one).
 
 `free/tools/camcheck/` holds CamCheck (`CAMCHECK.EXE`), a webcam preview
 for 98 SE, ME and 2000 that works with `uvc98` and any other Video for
@@ -159,6 +163,8 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.7** (2026-11-01):
+  - `usbprn` 0.1.0.0, new: USB printers and USB-to-parallel printer cables on 98 SE and ME, as printer ports USB001, USB002 and so on.
 - **v0.1.6** (2026-10-31):
   - `uac2` 0.1.6.0 fixes garbled sound after seeking, and on Windows 2000 asks for a restart at install, so changing a device's driver to `uac2` no longer stops 2000.
 - **v0.1.5** (2026-10-30):

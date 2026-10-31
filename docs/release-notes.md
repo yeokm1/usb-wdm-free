@@ -4,6 +4,34 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.7 (2026-11-01): `usbprn`, USB printing on 98 SE and ME
+
+Release 0.1.6 plus `usbprn` 0.1.0.0. Every other file is 0.1.6's.
+
+- **usbprn**: Windows 98 SE and ME print to USB printers and USB to
+  parallel printer cables. Each printer gets a printer port, `USB001`,
+  `USB002` and so on. On 98 SE this is a driver and a port monitor
+  (`free/print/usbprn/w98se/`); on ME an INF that sets up ME's own USB
+  printing driver (`free/print/usbprn/wme/`).
+- **Installing**: plug the printer in and point the Add New Hardware
+  Wizard at `w98se\` or `wme\`. Then add the printer by hand: Add
+  Printer, its make and model, port `USB001` (the next printer gets
+  `USB002`). Windows does not set up the printer itself. No restart is
+  needed.
+- **Printing on 98 SE**: when the printer is out of paper or offline,
+  Windows shows its message with Retry, and the job goes on when the
+  printer is ready. If the printer is unplugged during a job, Retry
+  after plugging it back in sends the rest of the job; the printer may
+  have lost what it was printing, so that page can come out garbled
+  (cancel and print it again). On ME, ME's own driver reports no printer
+  status: a job waits until the printer takes it.
+- **Limitations**: `usbprn` is a printer port, not a printer driver;
+  most current inkjets and host-based printers have no Windows 98 or ME
+  driver, so they cannot print. Devices that offer only IEEE 1284.4
+  (some multi-function printers) are not supported. MS-DOS programs do
+  not see the USB printer port.
+- **Signing**: x86 only, unsigned. No x64 file changed.
+
 ## Release 0.1.6 (2026-10-31): `uac2` seeking, Windows 2000 install
 
 `uac2` 0.1.6.0 fixes garbled sound after seeking and asks for a restart

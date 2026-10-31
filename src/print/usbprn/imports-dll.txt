@@ -1,0 +1,32 @@
+# Imports USBPRNMN.DLL may use (MODULE!name). The gate also requires every
+# name in the 98 SE and ME export tables of its module (exports98/).
+ADVAPI32.DLL!RegCloseKey
+ADVAPI32.DLL!RegCreateKeyExA
+ADVAPI32.DLL!RegEnumKeyA
+ADVAPI32.DLL!RegOpenKeyExA
+ADVAPI32.DLL!RegQueryValueExA
+ADVAPI32.DLL!RegSetValueExA
+KERNEL32.DLL!CloseHandle
+KERNEL32.DLL!CreateFileA
+KERNEL32.DLL!DeviceIoControl
+KERNEL32.DLL!DisableThreadLibraryCalls
+KERNEL32.DLL!LocalAlloc
+KERNEL32.DLL!LocalFree
+KERNEL32.DLL!ReadFile
+KERNEL32.DLL!SetLastError
+KERNEL32.DLL!WriteFile
+KERNEL32.DLL!lstrcmpiA
+KERNEL32.DLL!lstrcpyA
+KERNEL32.DLL!lstrcpynA
+KERNEL32.DLL!lstrlenA
+USER32.DLL!MessageBoxA
+USER32.DLL!wsprintfA
+WINSPOOL.DRV!AddMonitorA
+WINSPOOL.DRV!ClosePrinter
+WINSPOOL.DRV!GetJobA
+WINSPOOL.DRV!OpenPrinterA
+WINSPOOL.DRV!SetJobA
+# trace flavour only (UmTrace)
+KERNEL32.DLL!GetLastError
+KERNEL32.DLL!SetFilePointer
+WINSPOOL.DRV!GetPrinterA

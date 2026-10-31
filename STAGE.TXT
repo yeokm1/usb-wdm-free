@@ -118,6 +118,11 @@ STAGE | W98SE | free/storage/usbflop/w98se/USBFLOP.INF | real drive via VM, UHCI
 STAGE | WME | free/storage/usbflop/wme/USBFLOP.INF | real drive via VM, xHCI98 read passed
 STAGE | W2K WXP W7X64 | free/storage/usbflop/w2k-8/USBFLOP.INF | binds Windows USBSTOR; simulator reads passed, real drive bound on 2000
 
+# ---- print/usbprn
+PACKAGE  | print/usbprn | CLASS | Printers (usbprn): USB printers and USB-to-parallel printer cables
+STAGE | W98SE | free/print/usbprn/w98se/USBPRN.INF | install, USB001, test and Notepad pages, paper-empty and error with Retry, unplug idle and mid-job, a second printer on USB002: passed under xHCI98, NUSB EHCI and Windows UHCI (simulator)
+STAGE | WME | free/print/usbprn/wme/USBPRNME.INF | binds Windows usbprint.sys; install, USB001, test and Notepad pages, replug: passed under Windows UHCI (simulator)
+
 # ---- generic/libusb0
 PACKAGE  | generic/libusb0 | DEVICE | libusb (libusb0): libusb-win32 0.1 for listed programmer devices
 STAGE | W98SE | free/generic/libusb0/w98se-me/LIBUSB0.INF | xHCI98, NUSB EHCI and UHCI install and listing passed; ME has no leg

@@ -55,6 +55,10 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.7 (owner, 2026-11-01): 0.1.6 plus `usbprn` 0.1.0.0, USB
+printing on 98 SE (`USBPRN.SYS` and the port monitor `USBPRNMN.DLL`) and
+on ME (`USBPRNME.INF` over ME's own `usbprint.sys`); every other file is
+0.1.6's ([release 0.1.7](testing/2026-11-01-release-0.1.7.md)).
 Release 0.1.6 (owner, 2026-10-31): `uac2` 0.1.6.0, with the seek fix
 and the restart at install on 2000 below; every other file is 0.1.5's
 ([release 0.1.6](testing/2026-10-31-release-0.1.6.md)).
@@ -136,7 +140,7 @@ Order, after the survey of existing drivers
 - **Wave 2**: `uvc98` (Brio 100 held for testing), `usbcom`'s 98
   SE/ME driver, `usbmidi`, `cdcnet` and `xpad98`.
 - **Later**: the installer and its helper (deferred); `libusb0`; `rtl815x` and `ax88179`, after `cdcnet`; `usbprn`,
-  at low priority (built 2026-10-31, for a later release); `usbcom`'s chip
+  at low priority (built 2026-10-31, released in 0.1.7); `usbcom`'s chip
   modules for the USB serial bridges no vendor driver covers on 98 SE and
   ME (FTDI FT-X, FT232H, FT4232H, PL2303 old and G series, CP2105, CP2108;
   `docs/design/serial.md` milestone M5), released in 0.1.5.
@@ -260,7 +264,7 @@ it is tested there too.
 | `ax88179` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
 | `usbcom` | Built, not tested | Built, not tested | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) |
 | `xpad98` | Built, not tested | Built, not tested | Built, not tested | Built, not tested (3) | Built, not tested (3) | Built, not tested (3) | Built, not tested | Not a target (8) | Not a target (8) | Not a target (8) | Not a target (8) |
-| `usbprn` | Next release | Next release (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
+| `usbprn` | Built, not tested | Built, not tested (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `usbflop` | Built, not tested (5) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) |
 | `noaud` | VM legs only (9) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `libusb0` | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |

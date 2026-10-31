@@ -1,0 +1,1397 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: usb-printer, a USB printer class device (USB Device Class
+Definition for Printing Devices 1.1) for QEMU, with a qtest
+(tests/qtest/usb-printer-test.c, 8 cases on qemu-xhci). Interface 07/01/02
+(bulk OUT 0x01, bulk IN 0x82) or, with protocol=1, 07/01/01. It answers
+GET_DEVICE_ID with the IEEE 1284 id of the device-id property,
+GET_PORT_STATUS from the run-time properties paper-empty, error and offline
+(qom-set), and SOFT_RESET (21h, and 23h as printer class 1.0 had it;
+reset-other-only=on stalls 21h). Bulk OUT goes to the host file named by
+file= (append=on to keep it); it is NAKed while busy is set or, with
+hold-on-fault (default on), while a fault is raised; out-rate=<bytes/s>
+paces it. Bulk IN returns a PJL status reply to "@PJL INFO STATUS" in the
+OUT stream and bytes written to in-inject (ending a reply that fills its last
+packet with a zero-length packet), and NAKs otherwise. A failed write of the
+host file stalls bulk OUT from then on. Also
+highspeed=on (a High Speed descriptor set beside the Full Speed one),
+idvendor=/idproduct=, serial=, log=<file> (one line per request).
+Applies to QEMU v11.1.0 after qemu-usbnet-hs.patch and
+qemu-xhci-cancel.patch (tests/qtest/meson.build context). The emulator as a
+whole remains GPL-2.0-or-later.
+--- a/hw/usb/Kconfig
++++ b/hw/usb/Kconfig
+@@ -110,6 +110,11 @@
+     default y
+     depends on USB
+ 
++config USB_PRINTER
++    bool
++    default y
++    depends on USB
++
+ config USB_SMARTCARD
+     bool
+     default y
+--- a/hw/usb/meson.build
++++ b/hw/usb/meson.build
+@@ -44,6 +44,7 @@
+ system_ss.add(when: 'CONFIG_USB_AUDIO', if_true: files('dev-audio.c'))
+ system_ss.add(when: 'CONFIG_USB_SERIAL', if_true: files('dev-serial.c'))
+ system_ss.add(when: 'CONFIG_USB_NETWORK', if_true: files('dev-network.c'))
++system_ss.add(when: 'CONFIG_USB_PRINTER', if_true: files('dev-printer.c'))
+ if host_os != 'windows'
+   system_ss.add(when: 'CONFIG_USB_STORAGE_MTP', if_true: files('dev-mtp.c'))
+ endif
+--- /dev/null
++++ b/hw/usb/dev-printer.c
+@@ -0,0 +1,664 @@
++/*
++ * USB printer class device (USB Device Class Definition for Printing
++ * Devices 1.1), test-only model.
++ *
++ * Interface 07/01/02 (bidirectional: bulk OUT 0x01, bulk IN 0x82) or, with
++ * protocol=1, 07/01/01 (bulk OUT only).  It answers the three class
++ * requests of the specification's section 4.2:
++ *   GET_DEVICE_ID   (A1h, 0): 2-byte big-endian length, then the IEEE 1284
++ *                             device id from the "device-id" property;
++ *   GET_PORT_STATUS (A1h, 1): one byte, bit 5 Paper Empty, bit 4 Select,
++ *                             bit 3 Not Error (Table 3);
++ *   SOFT_RESET      (21h, 2): also accepted as 23h, the 1.0 code that
++ *                             section 4.2.3 tells hosts to expect.
++ * Bulk OUT is written to the host file named by "file".  Bulk IN returns
++ * queued bytes and NAKs when none are queued.  Bytes are queued by a PJL
++ * "@PJL INFO STATUS" in the OUT stream (a status reply built from the
++ * status bits) and by writing the "in-inject" property.
++ *
++ * Status properties, settable at run time with qom-set: paper-empty,
++ * error, offline, busy.  While paper-empty, error or offline is set (and
++ * hold-on-fault is on, the default) or busy is set, bulk OUT is NAKed, as
++ * a printer that has stopped taking data.  out-rate (bytes per second)
++ * paces bulk OUT so that a job takes long enough to be interrupted.
++ *
++ * Copyright (C) 2026 Yeo Kheng Meng
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/cutils.h"
++#include "qemu/error-report.h"
++#include "qemu/module.h"
++#include "qemu/timer.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/usb/usb.h"
++#include "migration/vmstate.h"
++#include "desc.h"
++#include "qom/object.h"
++
++#define PRN_GET_DEVICE_ID       0
++#define PRN_GET_PORT_STATUS     1
++#define PRN_SOFT_RESET          2
++
++/* SOFT_RESET as printer class 1.0 had it: recipient Other */
++#define ClassOtherOutRequest \
++        ((USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER) << 8)
++
++#define PRN_ST_PAPER_EMPTY      0x20
++#define PRN_ST_SELECT           0x10
++#define PRN_ST_NOT_ERROR        0x08
++
++#define PRN_ID_MAX              1023    /* id bytes; +2 length bytes */
++#define PRN_IN_MAX              4096
++
++#define PRN_DEFAULT_ID \
++    "MFG:Hewlett-Packard;CMD:PJL,PCL;MDL:HP LaserJet 4000 Series;" \
++    "CLS:PRINTER;DES:Hewlett-Packard HP LaserJet 4000 Series;"
++
++struct USBPrinterState {
++    USBDevice dev;
++
++    /* properties */
++    char *device_id;
++    char *file;
++    char *log;
++    uint8_t protocol;
++    bool highspeed;
++    bool append;
++    bool reset_other_only;
++    bool hold_on_fault;
++    uint16_t usb_vid;
++    uint16_t usb_pid;
++    uint32_t out_rate;
++
++    /* run-time status (QOM properties) */
++    bool paper_empty;
++    bool error;
++    bool offline;
++    bool busy;
++
++    USBDesc own_desc;
++    USBEndpoint *ep_out;
++    USBEndpoint *ep_in;
++    FILE *sink;
++    FILE *logf;
++    uint64_t out_total;
++    uint64_t out_naks;
++    bool nak_logged;
++    int64_t next_ok_ns;
++    QEMUTimer *pace;
++
++    uint8_t inq[PRN_IN_MAX];
++    uint32_t inq_len;
++    uint32_t match;             /* chars of "@PJL INFO STATUS" matched */
++    bool zlp_due;               /* last IN data ended on a full packet */
++    bool sink_failed;           /* the host file could not be written */
++};
++
++#define TYPE_USB_PRINTER "usb-printer"
++OBJECT_DECLARE_SIMPLE_TYPE(USBPrinterState, USB_PRINTER)
++
++static const char pjl_info_status[] = "@PJL INFO STATUS";
++
++enum {
++    STR_MANUFACTURER = 1,
++    STR_PRODUCT,
++    STR_SERIALNUMBER,
++};
++
++static const USBDescStrings desc_strings = {
++    [STR_MANUFACTURER]  = "QEMU",
++    [STR_PRODUCT]       = "QEMU USB Printer",
++    [STR_SERIALNUMBER]  = "1",
++};
++
++#define PRN_IFACE(name_, proto_, neps_, mps_)                           \
++static const USBDescIface name_ = {                                     \
++    .bInterfaceNumber              = 0,                                 \
++    .bNumEndpoints                 = (neps_),                           \
++    .bInterfaceClass               = 0x07,                              \
++    .bInterfaceSubClass            = 0x01,                              \
++    .bInterfaceProtocol            = (proto_),                          \
++    .eps = (USBDescEndpoint[]) {                                        \
++        {                                                               \
++            .bEndpointAddress      = USB_DIR_OUT | 0x01,                \
++            .bmAttributes          = USB_ENDPOINT_XFER_BULK,            \
++            .wMaxPacketSize        = (mps_),                            \
++        }, {                                                            \
++            .bEndpointAddress      = USB_DIR_IN | 0x02,                 \
++            .bmAttributes          = USB_ENDPOINT_XFER_BULK,            \
++            .wMaxPacketSize        = (mps_),                            \
++        },                                                              \
++    },                                                                  \
++}
++
++PRN_IFACE(iface_bidi_fs, 0x02, 2, 64);
++PRN_IFACE(iface_bidi_hs, 0x02, 2, 512);
++PRN_IFACE(iface_uni_fs, 0x01, 1, 64);
++PRN_IFACE(iface_uni_hs, 0x01, 1, 512);
++
++#define PRN_DEVICE(name_, bcd_, mp0_, iface_)                           \
++static const USBDescDevice name_ = {                                    \
++    .bcdUSB                        = (bcd_),                            \
++    .bMaxPacketSize0               = (mp0_),                            \
++    .bNumConfigurations            = 1,                                 \
++    .confs = (USBDescConfig[]) {                                        \
++        {                                                               \
++            .bNumInterfaces        = 1,                                 \
++            .bConfigurationValue   = 1,                                 \
++            .bmAttributes          = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER, \
++            .bMaxPower             = 1,                                 \
++            .nif = 1,                                                   \
++            .ifs = &(iface_),                                           \
++        },                                                              \
++    },                                                                  \
++}
++
++PRN_DEVICE(dev_bidi_fs, 0x0110, 64, iface_bidi_fs);
++PRN_DEVICE(dev_bidi_fs2, 0x0200, 64, iface_bidi_fs);
++PRN_DEVICE(dev_bidi_hs, 0x0200, 64, iface_bidi_hs);
++PRN_DEVICE(dev_uni_fs, 0x0110, 64, iface_uni_fs);
++PRN_DEVICE(dev_uni_fs2, 0x0200, 64, iface_uni_fs);
++PRN_DEVICE(dev_uni_hs, 0x0200, 64, iface_uni_hs);
++
++static const USBDesc desc_printer = {
++    .id = {
++        .idVendor          = 0x46f4,
++        .idProduct         = 0x0010,
++        .bcdDevice         = 0x0100,
++        .iManufacturer     = STR_MANUFACTURER,
++        .iProduct          = STR_PRODUCT,
++        .iSerialNumber     = STR_SERIALNUMBER,
++    },
++    .full = &dev_bidi_fs,
++    .str  = desc_strings,
++};
++
++static void prn_log(USBPrinterState *s, const char *fmt, ...)
++    G_GNUC_PRINTF(2, 3);
++
++static void prn_log(USBPrinterState *s, const char *fmt, ...)
++{
++    va_list ap;
++
++    if (!s->logf) {
++        return;
++    }
++    fprintf(s->logf, "%" PRId64 " ",
++            qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
++    va_start(ap, fmt);
++    vfprintf(s->logf, fmt, ap);
++    va_end(ap);
++    fputc('\n', s->logf);
++    fflush(s->logf);
++}
++
++static uint8_t prn_status(USBPrinterState *s)
++{
++    uint8_t st = 0;
++
++    if (s->paper_empty) {
++        st |= PRN_ST_PAPER_EMPTY;
++    }
++    if (!s->offline) {
++        st |= PRN_ST_SELECT;
++    }
++    if (!s->error) {
++        st |= PRN_ST_NOT_ERROR;
++    }
++    return st;
++}
++
++static bool prn_out_held(USBPrinterState *s)
++{
++    if (s->busy) {
++        return true;
++    }
++    return s->hold_on_fault && (s->paper_empty || s->error || s->offline);
++}
++
++static void prn_wake(USBPrinterState *s)
++{
++    if (!s->dev.attached) {
++        return;
++    }
++    if (s->ep_out) {
++        usb_wakeup(s->ep_out, 0);
++    }
++    if (s->ep_in && s->inq_len) {
++        usb_wakeup(s->ep_in, 0);
++    }
++}
++
++static void prn_queue(USBPrinterState *s, const void *buf, size_t len)
++{
++    size_t room = PRN_IN_MAX - s->inq_len;
++
++    if (len > room) {
++        prn_log(s, "IN queue full, %zu bytes dropped", len - room);
++        len = room;
++    }
++    memcpy(s->inq + s->inq_len, buf, len);
++    s->inq_len += len;
++    if (len && s->dev.attached && s->ep_in) {
++        usb_wakeup(s->ep_in, 0);
++    }
++}
++
++/* PJL status reply (PJL INFO STATUS form); codes 10001 ready online,
++ * 10002 offline, 41000 paper out, 40000 other error, as this model's own
++ * choice within PJL's status-code groups. */
++static void prn_pjl_status(USBPrinterState *s)
++{
++    const char *code, *disp, *online;
++    char *r;
++
++    if (s->paper_empty) {
++        code = "41000";
++        disp = "PAPER OUT";
++    } else if (s->error) {
++        code = "40000";
++        disp = "ERROR";
++    } else if (s->offline) {
++        code = "10002";
++        disp = "OFFLINE";
++    } else {
++        code = "10001";
++        disp = "00 READY";
++    }
++    online = (s->offline || s->error) ? "FALSE" : "TRUE";
++    r = g_strdup_printf("@PJL INFO STATUS\r\nCODE=%s\r\nDISPLAY=\"%s\"\r\n"
++                        "ONLINE=%s\r\n\f", code, disp, online);
++    prn_log(s, "PJL INFO STATUS -> CODE=%s", code);
++    prn_queue(s, r, strlen(r));
++    g_free(r);
++}
++
++static void prn_scan(USBPrinterState *s, const uint8_t *p, size_t n)
++{
++    size_t i;
++    const size_t nl = sizeof(pjl_info_status) - 1;
++
++    for (i = 0; i < n; i++) {
++        if (p[i] == (uint8_t)pjl_info_status[s->match]) {
++            if (++s->match == nl) {
++                s->match = 0;
++                prn_pjl_status(s);
++            }
++        } else {
++            s->match = (p[i] == (uint8_t)pjl_info_status[0]) ? 1 : 0;
++        }
++    }
++}
++
++static void prn_pace_cb(void *opaque)
++{
++    USBPrinterState *s = opaque;
++
++    if (s->dev.attached && s->ep_out) {
++        usb_wakeup(s->ep_out, 0);
++    }
++}
++
++static void usb_printer_handle_reset(USBDevice *dev)
++{
++    USBPrinterState *s = USB_PRINTER(dev);
++
++    s->inq_len = 0;
++    s->match = 0;
++    s->zlp_due = false;
++    prn_log(s, "bus reset");
++}
++
++static void usb_printer_handle_control(USBDevice *dev, USBPacket *p,
++                                       int request, int value, int index,
++                                       int length, uint8_t *data)
++{
++    USBPrinterState *s = USB_PRINTER(dev);
++    size_t idlen;
++    int n;
++
++    if (usb_desc_handle_control(dev, p, request, value, index, length,
++                                data) >= 0) {
++        return;
++    }
++
++    switch (request) {
++    case EndpointOutRequest | USB_REQ_CLEAR_FEATURE:
++        prn_log(s, "CLEAR_FEATURE endpoint 0x%02x", index & 0xff);
++        break;
++
++    case ClassInterfaceRequest | PRN_GET_DEVICE_ID:
++        /* wIndex: interface in the high byte, alternate in the low byte;
++         * interface 0 alternate 0 is 0 in either layout. */
++        if ((index >> 8) != 0 || (index & 0xff) != 0 || value != 0) {
++            prn_log(s, "GET_DEVICE_ID wValue=%d wIndex=0x%04x: stall",
++                    value, index);
++            p->status = USB_RET_STALL;
++            break;
++        }
++        idlen = strlen(s->device_id);
++        if (idlen > PRN_ID_MAX) {
++            idlen = PRN_ID_MAX;
++        }
++        {
++            uint8_t buf[PRN_ID_MAX + 2];
++
++            buf[0] = (uint8_t)((idlen + 2) >> 8);
++            buf[1] = (uint8_t)(idlen + 2);
++            memcpy(buf + 2, s->device_id, idlen);
++            n = MIN(length, (int)idlen + 2);
++            memcpy(data, buf, n);
++            p->actual_length = n;
++        }
++        prn_log(s, "GET_DEVICE_ID wLength=%d -> %d of %zu", length, n,
++                idlen + 2);
++        break;
++
++    case ClassInterfaceRequest | PRN_GET_PORT_STATUS:
++        if (index != 0 || length < 1) {
++            p->status = USB_RET_STALL;
++            break;
++        }
++        data[0] = prn_status(s);
++        p->actual_length = 1;
++        prn_log(s, "GET_PORT_STATUS -> 0x%02x", data[0]);
++        break;
++
++    case ClassInterfaceOutRequest | PRN_SOFT_RESET:
++        if (s->reset_other_only) {
++            prn_log(s, "SOFT_RESET 21h: stall (reset-other-only)");
++            p->status = USB_RET_STALL;
++            break;
++        }
++        /* fall through */
++    case ClassOtherOutRequest | PRN_SOFT_RESET:
++        s->inq_len = 0;
++        s->match = 0;
++        s->zlp_due = false;
++        prn_log(s, "SOFT_RESET %02xh", (request >> 8) & 0xff);
++        break;
++
++    default:
++        prn_log(s, "unsupported control 0x%04x wValue=%d wIndex=%d: stall",
++                request, value, index);
++        p->status = USB_RET_STALL;
++        break;
++    }
++}
++
++static void prn_out(USBPrinterState *s, USBPacket *p)
++{
++    size_t len = p->iov.size;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    g_autofree uint8_t *buf = NULL;
++
++    if (prn_out_held(s)) {
++        s->out_naks++;
++        if (!s->nak_logged) {
++            prn_log(s, "OUT held (status 0x%02x busy %d)", prn_status(s),
++                    s->busy);
++            s->nak_logged = true;
++        }
++        p->status = USB_RET_NAK;
++        return;
++    }
++    if (s->out_rate && now < s->next_ok_ns) {
++        timer_mod_ns(s->pace, s->next_ok_ns);
++        p->status = USB_RET_NAK;
++        return;
++    }
++    if (s->nak_logged) {
++        prn_log(s, "OUT resumed after %" PRIu64 " NAKs", s->out_naks);
++        s->nak_logged = false;
++        s->out_naks = 0;
++    }
++    if (s->sink_failed) {
++        p->status = USB_RET_STALL;
++        return;
++    }
++    buf = g_malloc(len ? len : 1);
++    usb_packet_copy(p, buf, len);
++    if (s->sink && len) {
++        if (fwrite(buf, 1, len, s->sink) != len || fflush(s->sink) != 0) {
++            /* data the file did not take is never acknowledged: the OUT
++             * endpoint stalls from here on */
++            s->sink_failed = true;
++            prn_log(s, "file write failed: OUT stalls from now on");
++            error_report("usb-printer: cannot write %s; bulk OUT stalls",
++                         s->file);
++            p->actual_length = 0;   /* nothing of it was taken */
++            p->status = USB_RET_STALL;
++            return;
++        }
++    }
++    s->out_total += len;
++    if (s->out_rate) {
++        s->next_ok_ns = now + (int64_t)len * NANOSECONDS_PER_SECOND /
++                        s->out_rate;
++    }
++    prn_log(s, "OUT %zu total %" PRIu64, len, s->out_total);
++    prn_scan(s, buf, len);
++}
++
++static void prn_in(USBPrinterState *s, USBPacket *p)
++{
++    size_t n;
++
++    if (!s->inq_len) {
++        if (s->zlp_due) {
++            /* the reply ended on a full packet: end the transfer */
++            s->zlp_due = false;
++            prn_log(s, "IN zero-length");
++            return;
++        }
++        p->status = USB_RET_NAK;
++        return;
++    }
++    n = MIN(p->iov.size, (size_t)s->inq_len);
++    usb_packet_copy(p, s->inq, n);
++    memmove(s->inq, s->inq + n, s->inq_len - n);
++    s->inq_len -= n;
++    /* Only a reply that filled the whole packet on a packet boundary
++     * leaves the host waiting; a shorter one ended the transfer itself. */
++    s->zlp_due = s->inq_len == 0 && n == p->iov.size &&
++                 p->ep->max_packet_size > 0 &&
++                 n % p->ep->max_packet_size == 0;
++    prn_log(s, "IN %zu left %u", n, s->inq_len);
++}
++
++static void usb_printer_handle_data(USBDevice *dev, USBPacket *p)
++{
++    USBPrinterState *s = USB_PRINTER(dev);
++
++    if (p->pid == USB_TOKEN_OUT && p->ep->nr == 1) {
++        prn_out(s, p);
++    } else if (p->pid == USB_TOKEN_IN && p->ep->nr == 2 &&
++               s->protocol == 2) {
++        prn_in(s, p);
++    } else {
++        p->status = USB_RET_STALL;
++    }
++}
++
++static void usb_printer_realize(USBDevice *dev, Error **errp)
++{
++    USBPrinterState *s = USB_PRINTER(dev);
++
++    if (s->protocol != 1 && s->protocol != 2) {
++        error_setg(errp, "protocol must be 1 or 2");
++        return;
++    }
++    if (!s->device_id) {
++        s->device_id = g_strdup(PRN_DEFAULT_ID);
++    }
++    s->own_desc = desc_printer;
++    if (s->usb_vid) {
++        s->own_desc.id.idVendor = s->usb_vid;
++    }
++    if (s->usb_pid) {
++        s->own_desc.id.idProduct = s->usb_pid;
++    }
++    if (s->highspeed) {
++        s->own_desc.full = s->protocol == 2 ? &dev_bidi_fs2 : &dev_uni_fs2;
++        s->own_desc.high = s->protocol == 2 ? &dev_bidi_hs : &dev_uni_hs;
++    } else {
++        s->own_desc.full = s->protocol == 2 ? &dev_bidi_fs : &dev_uni_fs;
++    }
++    dev->usb_desc = &s->own_desc;
++
++    if (s->file) {
++        s->sink = fopen(s->file, s->append ? "ab" : "wb");
++        if (!s->sink) {
++            error_setg_errno(errp, errno, "cannot open %s", s->file);
++            return;
++        }
++    }
++    if (s->log) {
++        s->logf = fopen(s->log, "a");
++        if (!s->logf) {
++            error_setg_errno(errp, errno, "cannot open %s", s->log);
++            if (s->sink) {
++                fclose(s->sink);
++                s->sink = NULL;
++            }
++            return;
++        }
++    }
++    usb_desc_create_serial(dev);
++    usb_desc_init(dev);
++    s->ep_out = usb_ep_get(dev, USB_TOKEN_OUT, 1);
++    s->ep_in = s->protocol == 2 ? usb_ep_get(dev, USB_TOKEN_IN, 2) : NULL;
++    s->pace = timer_new_ns(QEMU_CLOCK_VIRTUAL, prn_pace_cb, s);
++    prn_log(s, "realize protocol %u %s id \"%s\"", s->protocol,
++            s->highspeed ? "high+full" : "full", s->device_id);
++}
++
++static void usb_printer_unrealize(USBDevice *dev)
++{
++    USBPrinterState *s = USB_PRINTER(dev);
++
++    prn_log(s, "unrealize, %" PRIu64 " bytes received", s->out_total);
++    if (s->pace) {
++        timer_free(s->pace);
++        s->pace = NULL;
++    }
++    if (s->sink) {
++        fclose(s->sink);
++        s->sink = NULL;
++    }
++    if (s->logf) {
++        fclose(s->logf);
++        s->logf = NULL;
++    }
++}
++
++#define PRN_BOOL_PROP(field_)                                           \
++static bool prn_get_##field_(Object *obj, Error **errp)                 \
++{                                                                       \
++    return USB_PRINTER(obj)->field_;                                    \
++}                                                                       \
++static void prn_set_##field_(Object *obj, bool v, Error **errp)         \
++{                                                                       \
++    USBPrinterState *s = USB_PRINTER(obj);                              \
++    s->field_ = v;                                                      \
++    prn_log(s, "set " #field_ " %d, status 0x%02x", v, prn_status(s));  \
++    prn_wake(s);                                                        \
++}
++
++PRN_BOOL_PROP(paper_empty)
++PRN_BOOL_PROP(error)
++PRN_BOOL_PROP(offline)
++PRN_BOOL_PROP(busy)
++
++static char *prn_get_inject(Object *obj, Error **errp)
++{
++    return g_strdup("");
++}
++
++static void prn_set_inject(Object *obj, const char *v, Error **errp)
++{
++    USBPrinterState *s = USB_PRINTER(obj);
++
++    prn_log(s, "in-inject %zu bytes", strlen(v));
++    prn_queue(s, v, strlen(v));
++}
++
++static void prn_get_total(Object *obj, Visitor *v, const char *name,
++                          void *opaque, Error **errp)
++{
++    uint64_t t = USB_PRINTER(obj)->out_total;
++
++    visit_type_uint64(v, name, &t, errp);
++}
++
++static const VMStateDescription vmstate_usb_printer = {
++    .name = "usb-printer",
++    .unmigratable = 1,
++};
++
++static const Property usb_printer_properties[] = {
++    DEFINE_PROP_STRING("device-id", USBPrinterState, device_id),
++    DEFINE_PROP_STRING("file", USBPrinterState, file),
++    DEFINE_PROP_STRING("log", USBPrinterState, log),
++    DEFINE_PROP_UINT8("protocol", USBPrinterState, protocol, 2),
++    DEFINE_PROP_BOOL("highspeed", USBPrinterState, highspeed, false),
++    DEFINE_PROP_BOOL("append", USBPrinterState, append, false),
++    DEFINE_PROP_BOOL("reset-other-only", USBPrinterState, reset_other_only,
++                     false),
++    DEFINE_PROP_BOOL("hold-on-fault", USBPrinterState, hold_on_fault, true),
++    DEFINE_PROP_UINT16("idvendor", USBPrinterState, usb_vid, 0),
++    DEFINE_PROP_UINT16("idproduct", USBPrinterState, usb_pid, 0),
++    DEFINE_PROP_UINT32("out-rate", USBPrinterState, out_rate, 0),
++};
++
++static void usb_printer_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
++
++    uc->realize        = usb_printer_realize;
++    uc->unrealize      = usb_printer_unrealize;
++    uc->product_desc   = "QEMU USB Printer";
++    uc->usb_desc       = &desc_printer;
++    uc->handle_attach  = usb_desc_attach;
++    uc->handle_reset   = usb_printer_handle_reset;
++    uc->handle_control = usb_printer_handle_control;
++    uc->handle_data    = usb_printer_handle_data;
++    dc->vmsd = &vmstate_usb_printer;
++    dc->desc = "USB printer class device (test model)";
++    device_class_set_props(dc, usb_printer_properties);
++    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
++
++    object_class_property_add_bool(klass, "paper-empty",
++                                   prn_get_paper_empty, prn_set_paper_empty);
++    object_class_property_add_bool(klass, "error",
++                                   prn_get_error, prn_set_error);
++    object_class_property_add_bool(klass, "offline",
++                                   prn_get_offline, prn_set_offline);
++    object_class_property_add_bool(klass, "busy",
++                                   prn_get_busy, prn_set_busy);
++    object_class_property_add_str(klass, "in-inject",
++                                  prn_get_inject, prn_set_inject);
++    object_class_property_add(klass, "bytes-received", "uint64",
++                              prn_get_total, NULL, NULL, NULL);
++}
++
++static const TypeInfo usb_printer_info = {
++    .name          = TYPE_USB_PRINTER,
++    .parent        = TYPE_USB_DEVICE,
++    .instance_size = sizeof(USBPrinterState),
++    .class_init    = usb_printer_class_init,
++};
++
++static void usb_printer_register_types(void)
++{
++    type_register_static(&usb_printer_info);
++}
++
++type_init(usb_printer_register_types)
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -85,6 +85,8 @@
+   (config_all_devices.has_key('CONFIG_USB_XHCI_NEC') ? ['usb-hcd-xhci-test'] : []) +        \
+   (config_all_devices.has_key('CONFIG_USB_XHCI_PCI') and                                    \
+    config_all_devices.has_key('CONFIG_USB_SERIAL') ? ['usb-hcd-xhci-ring-test'] : []) +     \
++  (config_all_devices.has_key('CONFIG_USB_XHCI_PCI') and                                    \
++   config_all_devices.has_key('CONFIG_USB_PRINTER') ? ['usb-printer-test'] : []) +          \
+   (config_all_devices.has_key('CONFIG_TPM_CRB') ? ['tpm-crb-test'] : []) +                  \
+   (config_all_devices.has_key('CONFIG_TPM_CRB') ? ['tpm-crb-swtpm-test'] : []) +            \
+   (config_all_devices.has_key('CONFIG_TPM_TIS_ISA') ? ['tpm-tis-test'] : []) +              \
+--- /dev/null
++++ b/tests/qtest/usb-printer-test.c
+@@ -0,0 +1,671 @@
++/*
++ * QTest testcase for the usb-printer device (USB printer class 1.1 model):
++ * descriptors, the three class requests, the status properties, bulk OUT
++ * into the host file (held while a fault is raised), and bulk IN replies.
++ *
++ * A minimal xHCI driver on qemu-xhci, as usb-hcd-xhci-ring-test.c.
++ *
++ * Copyright (C) 2026 Yeo Kheng Meng
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "libqos/pci-pc.h"
++#include "qobject/qdict.h"
++
++#define DCBAA       0x01000000ULL
++#define CMD_RING    0x01001000ULL
++#define EVT_RING    0x01002000ULL
++#define ERST        0x01003000ULL
++#define IN_CTX      0x01004000ULL
++#define OUT_CTX     0x01005000ULL
++#define EP0_RING    0x01006000ULL
++#define OUT_RING    0x01007000ULL
++#define IN_RING     0x01008000ULL
++#define DATA_BUF    0x01009000ULL
++
++#define RING_TRBS   64
++#define EVT_TRBS    64
++
++#define T_NORMAL    1
++#define T_SETUP     2
++#define T_DATA      3
++#define T_STATUS    4
++#define T_EN_SLOT   9
++#define T_ADDR_DEV  11
++#define T_CFG_EP    12
++#define T_EV_XFER   32
++#define T_EV_CMD    33
++
++#define CC_SUCCESS  1
++#define CC_STALL    6
++#define CC_SHORT    13
++
++#define OUT_DCI     2       /* endpoint 0x01 */
++#define IN_DCI      5       /* endpoint 0x82 */
++
++typedef struct {
++    QTestState *qts;
++    QPCIBus *bus;
++    QPCIDevice *dev;
++    QPCIBar bar;
++    uint32_t op, rt, db;
++    uint32_t cmd_idx, evt_idx, ep0_idx, out_idx, in_idx;
++    bool evt_ccs;
++    uint32_t slot;
++    uint32_t portsc;
++    uint32_t port;
++    char *file;
++} PrnT;
++
++typedef struct {
++    uint64_t ptr;
++    uint32_t status;
++    uint32_t control;
++} Evt;
++
++static uint32_t rd32(PrnT *x, uint32_t off)
++{
++    return qpci_io_readl(x->dev, x->bar, off);
++}
++
++static void wr32(PrnT *x, uint32_t off, uint32_t v)
++{
++    qpci_io_writel(x->dev, x->bar, off, v);
++}
++
++static void wr64(PrnT *x, uint32_t off, uint64_t v)
++{
++    qpci_io_writel(x->dev, x->bar, off, (uint32_t)v);
++    qpci_io_writel(x->dev, x->bar, off + 4, (uint32_t)(v >> 32));
++}
++
++static void put_trb(PrnT *x, uint64_t at, uint64_t param, uint32_t status,
++                    uint32_t control)
++{
++    qtest_writeq(x->qts, at, param);
++    qtest_writel(x->qts, at + 8, status);
++    qtest_writel(x->qts, at + 12, control);
++}
++
++static bool get_evt(PrnT *x, Evt *e)
++{
++    uint64_t at = EVT_RING + 16ULL * x->evt_idx;
++    uint32_t control = qtest_readl(x->qts, at + 12);
++
++    if ((control & 1) != x->evt_ccs) {
++        return false;
++    }
++    e->ptr = qtest_readq(x->qts, at);
++    e->status = qtest_readl(x->qts, at + 8);
++    e->control = control;
++    if (++x->evt_idx == EVT_TRBS) {
++        x->evt_idx = 0;
++        x->evt_ccs = !x->evt_ccs;
++    }
++    wr64(x, x->rt + 0x20 + 0x18, (EVT_RING + 16ULL * x->evt_idx) | 8);
++    return true;
++}
++
++static bool wait_evt(PrnT *x, Evt *e)
++{
++    int i;
++
++    for (i = 0; i < 200; i++) {
++        if (get_evt(x, e)) {
++            return true;
++        }
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    return false;
++}
++
++static int evt_cc(const Evt *e)
++{
++    return e->status >> 24;
++}
++
++static int evt_type(const Evt *e)
++{
++    return (e->control >> 10) & 0x3f;
++}
++
++static Evt cmd(PrnT *x, uint64_t param, uint32_t control)
++{
++    Evt e;
++
++    put_trb(x, CMD_RING + 16ULL * x->cmd_idx, param, 0, control | 1);
++    x->cmd_idx++;
++    g_assert_cmpuint(x->cmd_idx, <, 15);
++    wr32(x, x->db, 0);
++    do {
++        g_assert_true(wait_evt(x, &e));
++    } while (evt_type(&e) != T_EV_CMD);
++    return e;
++}
++
++static void ctx_clear(PrnT *x, uint64_t at)
++{
++    int i;
++
++    for (i = 0; i < 0x440; i += 4) {
++        qtest_writel(x->qts, at + i, 0);
++    }
++}
++
++/*
++ * A control transfer on EP0.  IN data lands in buf (up to wlen bytes);
++ * returns the completion code of the last stage that failed, or
++ * CC_SUCCESS, with *actual the bytes of the data stage.
++ */
++static int ctrl(PrnT *x, uint8_t bmrt, uint8_t breq, uint16_t wval,
++                uint16_t widx, uint16_t wlen, uint8_t *buf, int *actual)
++{
++    uint64_t setup = bmrt | ((uint64_t)breq << 8) | ((uint64_t)wval << 16) |
++                     ((uint64_t)widx << 32) | ((uint64_t)wlen << 48);
++    bool in = (bmrt & 0x80) != 0;
++    uint64_t status_at;
++    int cc = CC_SUCCESS, got = 0;
++    Evt e;
++
++    g_assert_cmpuint(x->ep0_idx + 3, <, RING_TRBS);
++    put_trb(x, EP0_RING + 16ULL * x->ep0_idx++, setup, 8,
++            (T_SETUP << 10) | (1 << 6) |
++            ((wlen ? (in ? 3 : 2) : 0) << 16) | 1);
++    if (wlen) {
++        put_trb(x, EP0_RING + 16ULL * x->ep0_idx++, DATA_BUF, wlen,
++                (T_DATA << 10) | ((in ? 1 : 0) << 16) | (1 << 5) |
++                (1 << 2) | 1);
++    }
++    status_at = EP0_RING + 16ULL * x->ep0_idx++;
++    put_trb(x, status_at, 0, 0, (T_STATUS << 10) |
++            ((wlen && in ? 0 : 1) << 16) | (1 << 5) | 1);
++    wr32(x, x->db + 4 * x->slot, 1);
++    for (;;) {
++        g_assert_true(wait_evt(x, &e));
++        g_assert_cmpint(evt_type(&e), ==, T_EV_XFER);
++        if (evt_cc(&e) == CC_STALL) {
++            cc = CC_STALL;
++            break;
++        }
++        if (e.ptr == status_at) {
++            g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++            break;
++        }
++        g_assert_true(evt_cc(&e) == CC_SUCCESS || evt_cc(&e) == CC_SHORT);
++        got = wlen - (e.status & 0xffffff);
++    }
++    if (buf && got) {
++        qtest_memread(x->qts, DATA_BUF, buf, got);
++    }
++    if (actual) {
++        *actual = got;
++    }
++    return cc;
++}
++
++static void prn_bringup(PrnT *x, const char *props)
++{
++    uint32_t caplen, nports, i, portsc = 0, port = 0;
++    Evt e;
++    int fd;
++    GError *err = NULL;
++
++    memset(x, 0, sizeof(*x));
++    fd = g_file_open_tmp("usb-printer-XXXXXX.prn", &x->file, &err);
++    g_assert_no_error(err);
++    close(fd);
++    x->qts = qtest_initf("-machine pc -m 128 "
++                         "-device qemu-xhci,id=xhci,addr=04.0 "
++                         "-device usb-printer,id=prn,bus=xhci.0,file=%s%s%s",
++                         x->file, props ? "," : "", props ? props : "");
++    x->bus = qpci_new_pc(x->qts, NULL);
++    x->dev = qpci_device_find(x->bus, QPCI_DEVFN(4, 0));
++    g_assert_nonnull(x->dev);
++    qpci_device_enable(x->dev);
++    x->bar = qpci_iomap(x->dev, 0, NULL);
++
++    caplen = rd32(x, 0) & 0xff;
++    nports = rd32(x, 4) >> 24;
++    x->op = caplen;
++    x->db = rd32(x, 0x14) & ~3u;
++    x->rt = rd32(x, 0x18) & ~0x1fu;
++
++    wr32(x, x->op + 0x00, 2);
++    for (i = 0; i < 100 && (rd32(x, x->op) & 2); i++) {
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    wr32(x, x->op + 0x38, 1);
++    for (i = 0; i < 0x3000; i += 4) {
++        qtest_writel(x->qts, DCBAA + i, 0);
++    }
++    wr64(x, x->op + 0x30, DCBAA);
++    wr64(x, x->op + 0x18, CMD_RING | 1);
++    qtest_writeq(x->qts, ERST, EVT_RING);
++    qtest_writel(x->qts, ERST + 8, EVT_TRBS);
++    qtest_writel(x->qts, ERST + 12, 0);
++    wr32(x, x->rt + 0x20 + 0x08, 1);
++    wr64(x, x->rt + 0x20 + 0x18, EVT_RING);
++    wr64(x, x->rt + 0x20 + 0x10, ERST);
++    x->evt_ccs = 1;
++    wr32(x, x->op + 0x00, 1);
++
++    for (i = 1; i <= nports; i++) {
++        portsc = rd32(x, x->op + 0x400 + 0x10 * (i - 1));
++        if (portsc & 1) {
++            port = i;
++            break;
++        }
++    }
++    g_assert_cmpuint(port, !=, 0);
++    wr32(x, x->op + 0x400 + 0x10 * (port - 1), (1 << 9) | (1 << 4));
++    for (i = 0; i < 100; i++) {
++        portsc = rd32(x, x->op + 0x400 + 0x10 * (port - 1));
++        if (portsc & 2) {
++            break;
++        }
++        qtest_clock_step(x->qts, 1000 * 1000);
++    }
++    g_assert_cmpuint(portsc & 2, ==, 2);
++    while (get_evt(x, &e)) {
++    }
++    x->portsc = portsc;
++    x->port = port;
++
++    e = cmd(x, 0, T_EN_SLOT << 10);
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++    x->slot = e.control >> 24;
++
++    ctx_clear(x, IN_CTX);
++    ctx_clear(x, OUT_CTX);
++    for (i = 0; i < 0x1000; i += 4) {
++        qtest_writel(x->qts, EP0_RING + i, 0);
++        qtest_writel(x->qts, OUT_RING + i, 0);
++        qtest_writel(x->qts, IN_RING + i, 0);
++    }
++    qtest_writel(x->qts, IN_CTX + 0x04, 3);
++    qtest_writel(x->qts, IN_CTX + 0x20, (1u << 27) |
++                 (((portsc >> 10) & 0xf) << 20));
++    qtest_writel(x->qts, IN_CTX + 0x24, port << 16);
++    qtest_writel(x->qts, IN_CTX + 0x44, (64 << 16) | (4 << 3) | (3 << 1));
++    qtest_writeq(x->qts, IN_CTX + 0x48, EP0_RING | 1);
++    qtest_writel(x->qts, IN_CTX + 0x50, 8);
++    qtest_writeq(x->qts, DCBAA + 8 * x->slot, OUT_CTX);
++    e = cmd(x, IN_CTX, (T_ADDR_DEV << 10) | (x->slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++}
++
++/* SET_CONFIGURATION(1) and Configure Endpoint for bulk OUT (+ IN). */
++static void prn_configure(PrnT *x, bool bidi)
++{
++    Evt e;
++    uint32_t add = 1 | (1 << OUT_DCI) | (bidi ? (1 << IN_DCI) : 0);
++    int last = bidi ? IN_DCI : OUT_DCI;
++
++    g_assert_cmpint(ctrl(x, 0x00, 9, 1, 0, 0, NULL, NULL), ==, CC_SUCCESS);
++    ctx_clear(x, IN_CTX);
++    qtest_writel(x->qts, IN_CTX + 0x04, add);
++    qtest_writel(x->qts, IN_CTX + 0x20, ((uint32_t)last << 27) |
++                 (((x->portsc >> 10) & 0xf) << 20));
++    qtest_writel(x->qts, IN_CTX + 0x24, x->port << 16);
++    qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * OUT_DCI + 4,
++                 (64 << 16) | (2 << 3) | (3 << 1));
++    qtest_writeq(x->qts, IN_CTX + 0x20 + 0x20 * OUT_DCI + 8, OUT_RING | 1);
++    qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * OUT_DCI + 16, 512);
++    if (bidi) {
++        qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * IN_DCI + 4,
++                     (64 << 16) | (6 << 3) | (3 << 1));
++        qtest_writeq(x->qts, IN_CTX + 0x20 + 0x20 * IN_DCI + 8,
++                     IN_RING | 1);
++        qtest_writel(x->qts, IN_CTX + 0x20 + 0x20 * IN_DCI + 16, 512);
++    }
++    e = cmd(x, IN_CTX, (T_CFG_EP << 10) | (x->slot << 24));
++    g_assert_cmpint(evt_cc(&e), ==, CC_SUCCESS);
++}
++
++static void prn_teardown(PrnT *x)
++{
++    g_free(x->dev);
++    qpci_free_pc(x->bus);
++    qtest_quit(x->qts);
++    unlink(x->file);
++    g_free(x->file);
++}
++
++static void qom_set_bool(PrnT *x, const char *prop, bool v)
++{
++    QDict *r = qtest_qmp(x->qts, "{'execute': 'qom-set', 'arguments': "
++                         "{'path': '/machine/peripheral/prn', "
++                         "'property': %s, 'value': %i}}", prop, v);
++    g_assert_true(qdict_haskey(r, "return"));
++    qobject_unref(r);
++}
++
++static void qom_set_str(PrnT *x, const char *prop, const char *v)
++{
++    QDict *r = qtest_qmp(x->qts, "{'execute': 'qom-set', 'arguments': "
++                         "{'path': '/machine/peripheral/prn', "
++                         "'property': %s, 'value': %s}}", prop, v);
++    g_assert_true(qdict_haskey(r, "return"));
++    qobject_unref(r);
++}
++
++/* Queue one bulk TD (OUT: data written first) and ring the doorbell. */
++static uint64_t bulk_put(PrnT *x, bool in, uint64_t buf, const void *data,
++                         uint32_t len)
++{
++    uint64_t ring = in ? IN_RING : OUT_RING;
++    uint32_t *idx = in ? &x->in_idx : &x->out_idx;
++    uint64_t at = ring + 16ULL * *idx;
++
++    g_assert_cmpuint(*idx + 1, <, RING_TRBS);
++    if (!in && len) {
++        qtest_memwrite(x->qts, buf, data, len);
++    }
++    put_trb(x, at, buf, len, (T_NORMAL << 10) | (1 << 5) | (1 << 2) | 1);
++    (*idx)++;
++    wr32(x, x->db + 4 * x->slot, in ? IN_DCI : OUT_DCI);
++    return at;
++}
++
++static void bulk_wait(PrnT *x, uint64_t at, int *residual)
++{
++    Evt e;
++
++    g_assert_true(wait_evt(x, &e));
++    g_assert_cmpint(evt_type(&e), ==, T_EV_XFER);
++    g_assert_cmphex(e.ptr, ==, at);
++    g_assert_true(evt_cc(&e) == CC_SUCCESS || evt_cc(&e) == CC_SHORT);
++    if (residual) {
++        *residual = e.status & 0xffffff;
++    }
++}
++
++static gchar *file_text(PrnT *x, gsize *len)
++{
++    gchar *t = NULL;
++
++    g_assert_true(g_file_get_contents(x->file, &t, len, NULL));
++    return t;
++}
++
++static void test_descriptors(void)
++{
++    PrnT x = {};
++    uint8_t d[64];
++    int n;
++
++    prn_bringup(&x, NULL);
++    g_assert_cmpint(ctrl(&x, 0x80, 6, 0x0200, 0, 64, d, &n), ==, CC_SUCCESS);
++    g_assert_cmpint(n, ==, 9 + 9 + 7 + 7);
++    /* interface 07/01/02, two endpoints: bulk OUT 0x01, bulk IN 0x82 */
++    g_assert_cmpint(d[9 + 4], ==, 2);
++    g_assert_cmpint(d[9 + 5], ==, 0x07);
++    g_assert_cmpint(d[9 + 6], ==, 0x01);
++    g_assert_cmpint(d[9 + 7], ==, 0x02);
++    g_assert_cmphex(d[18 + 2], ==, 0x01);
++    g_assert_cmpint(d[18 + 3], ==, 2);
++    g_assert_cmphex(d[25 + 2], ==, 0x82);
++    g_assert_cmpint(d[25 + 3], ==, 2);
++    prn_teardown(&x);
++
++    prn_bringup(&x, "protocol=1");
++    g_assert_cmpint(ctrl(&x, 0x80, 6, 0x0200, 0, 64, d, &n), ==, CC_SUCCESS);
++    g_assert_cmpint(n, ==, 9 + 9 + 7);
++    g_assert_cmpint(d[9 + 4], ==, 1);
++    g_assert_cmpint(d[9 + 7], ==, 0x01);
++    g_assert_cmphex(d[18 + 2], ==, 0x01);
++    prn_teardown(&x);
++}
++
++static void test_device_id(void)
++{
++    static const char id[] = "MFG:ACME;MDL:Model-9;CMD:PCL;CLS:PRINTER;";
++    PrnT x = {};
++    uint8_t d[1100];
++    int n;
++
++    prn_bringup(&x, "device-id=MFG:ACME;MDL:Model-9;CMD:PCL;CLS:PRINTER;");
++    prn_configure(&x, true);
++    g_assert_cmpint(ctrl(&x, 0xa1, 0, 0, 0, 1024, d, &n), ==, CC_SUCCESS);
++    g_assert_cmpint(n, ==, (int)strlen(id) + 2);
++    g_assert_cmpint((d[0] << 8) | d[1], ==, (int)strlen(id) + 2);
++    g_assert_cmpmem(d + 2, n - 2, id, strlen(id));
++    /* a short buffer gets the first bytes, length field intact */
++    g_assert_cmpint(ctrl(&x, 0xa1, 0, 0, 0, 4, d, &n), ==, CC_SUCCESS);
++    g_assert_cmpint(n, ==, 4);
++    g_assert_cmpint((d[0] << 8) | d[1], ==, (int)strlen(id) + 2);
++    g_assert_cmpmem(d + 2, 2, "MF", 2);
++    /* another interface: stall */
++    g_assert_cmpint(ctrl(&x, 0xa1, 0, 0, 0x0100, 1024, d, &n), ==, CC_STALL);
++    prn_teardown(&x);
++}
++
++static void test_port_status(void)
++{
++    PrnT x = {};
++    uint8_t d[4];
++    int n;
++
++    prn_bringup(&x, NULL);
++    g_assert_cmpint(ctrl(&x, 0xa1, 1, 0, 0, 1, d, &n), ==, CC_SUCCESS);
++    g_assert_cmpint(n, ==, 1);
++    g_assert_cmphex(d[0], ==, 0x18);            /* Select | Not Error */
++    qom_set_bool(&x, "paper-empty", true);
++    g_assert_cmpint(ctrl(&x, 0xa1, 1, 0, 0, 1, d, &n), ==, CC_SUCCESS);
++    g_assert_cmphex(d[0], ==, 0x38);
++    qom_set_bool(&x, "paper-empty", false);
++    qom_set_bool(&x, "error", true);
++    g_assert_cmpint(ctrl(&x, 0xa1, 1, 0, 0, 1, d, &n), ==, CC_SUCCESS);
++    g_assert_cmphex(d[0], ==, 0x10);
++    qom_set_bool(&x, "error", false);
++    qom_set_bool(&x, "offline", true);
++    g_assert_cmpint(ctrl(&x, 0xa1, 1, 0, 0, 1, d, &n), ==, CC_SUCCESS);
++    g_assert_cmphex(d[0], ==, 0x08);
++    prn_teardown(&x);
++}
++
++static void test_soft_reset(void)
++{
++    PrnT x = {};
++
++    prn_bringup(&x, NULL);
++    g_assert_cmpint(ctrl(&x, 0x21, 2, 0, 0, 0, NULL, NULL), ==, CC_SUCCESS);
++    g_assert_cmpint(ctrl(&x, 0x23, 2, 0, 0, 0, NULL, NULL), ==, CC_SUCCESS);
++    prn_teardown(&x);
++
++    /* a printer that wants the 1.0 code: 21h stalls, 23h works */
++    prn_bringup(&x, "reset-other-only=on");
++    g_assert_cmpint(ctrl(&x, 0x21, 2, 0, 0, 0, NULL, NULL), ==, CC_STALL);
++    prn_teardown(&x);
++    prn_bringup(&x, "reset-other-only=on");
++    g_assert_cmpint(ctrl(&x, 0x23, 2, 0, 0, 0, NULL, NULL), ==, CC_SUCCESS);
++    prn_teardown(&x);
++}
++
++static void test_bulk_out_file(void)
++{
++    static const char job[] = "\x1b%-12345X@PJL\r\n\x1b" "EHello\x0c\x1b" "E";
++    PrnT x = {};
++    gchar *t;
++    gsize len;
++    int res;
++
++    prn_bringup(&x, NULL);
++    prn_configure(&x, true);
++    bulk_wait(&x, bulk_put(&x, false, DATA_BUF, job, sizeof(job) - 1),
++              &res);
++    g_assert_cmpint(res, ==, 0);
++    t = file_text(&x, &len);
++    g_assert_cmpmem(t, len, job, sizeof(job) - 1);
++    g_free(t);
++    prn_teardown(&x);
++}
++
++static void test_out_held_on_fault(void)
++{
++    static const char a[] = "page one", b[] = "page two";
++    PrnT x = {};
++    uint64_t at;
++    gchar *t;
++    gsize len;
++    Evt e;
++
++    prn_bringup(&x, NULL);
++    prn_configure(&x, true);
++    bulk_wait(&x, bulk_put(&x, false, DATA_BUF, a, 8), NULL);
++    qom_set_bool(&x, "paper-empty", true);
++    at = bulk_put(&x, false, DATA_BUF + 0x100, b, 8);
++    qtest_clock_step(x.qts, 50 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));            /* NAKed: no paper */
++    t = file_text(&x, &len);
++    g_assert_cmpmem(t, len, a, 8);
++    g_free(t);
++    qom_set_bool(&x, "paper-empty", false);     /* wakes the endpoint */
++    bulk_wait(&x, at, NULL);
++    t = file_text(&x, &len);
++    g_assert_cmpmem(t, len, "page onepage two", 16);
++    g_free(t);
++
++    /* busy holds data with the status benign */
++    qom_set_bool(&x, "busy", true);
++    at = bulk_put(&x, false, DATA_BUF + 0x200, a, 8);
++    qtest_clock_step(x.qts, 50 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++    qom_set_bool(&x, "busy", false);
++    bulk_wait(&x, at, NULL);
++    prn_teardown(&x);
++}
++
++static void test_out_rate(void)
++{
++    static uint8_t blk[512];
++    PrnT x = {};
++    uint64_t at;
++    Evt e;
++
++    /* 512 bytes per second: the second TD waits about a second */
++    prn_bringup(&x, "out-rate=512");
++    prn_configure(&x, true);
++    bulk_wait(&x, bulk_put(&x, false, DATA_BUF, blk, sizeof(blk)), NULL);
++    at = bulk_put(&x, false, DATA_BUF + 0x400, blk, sizeof(blk));
++    qtest_clock_step(x.qts, 500 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++    qtest_clock_step(x.qts, 600 * 1000 * 1000);
++    bulk_wait(&x, at, NULL);
++    prn_teardown(&x);
++}
++
++static void test_bulk_in(void)
++{
++    static const char q1[] = "\x1b%-12345X@PJL INFO ", q2[] = "STATUS\r\n";
++    static const char ready[] = "@PJL INFO STATUS\r\nCODE=10001\r\n";
++    PrnT x = {};
++    uint64_t at;
++    char r[256];
++    int res;
++    Evt e;
++
++    prn_bringup(&x, NULL);
++    prn_configure(&x, true);
++    /* nothing queued: IN NAKs */
++    at = bulk_put(&x, true, DATA_BUF + 0x800, NULL, 256);
++    qtest_clock_step(x.qts, 20 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++    /* the query split over two TDs is still found; the reply is short */
++    bulk_wait(&x, bulk_put(&x, false, DATA_BUF, q1, sizeof(q1) - 1), NULL);
++    {
++        /* the reply wakes the pending IN: its event may come first */
++        uint64_t out_at = bulk_put(&x, false, DATA_BUF + 0x100, q2,
++                                   sizeof(q2) - 1);
++        bool got_in = false, got_out = false;
++        int i;
++
++        res = -1;
++        for (i = 0; i < 2; i++) {
++            g_assert_true(wait_evt(&x, &e));
++            g_assert_cmpint(evt_type(&e), ==, T_EV_XFER);
++            if (e.ptr == at) {
++                got_in = true;
++                res = e.status & 0xffffff;
++            } else {
++                g_assert_cmphex(e.ptr, ==, out_at);
++                got_out = true;
++            }
++        }
++        g_assert_true(got_in && got_out);
++    }
++    g_assert_cmpint(res, >, 0);
++    qtest_memread(x.qts, DATA_BUF + 0x800, r, 256 - res);
++    g_assert_cmpmem(r, strlen(ready), ready, strlen(ready));
++    g_assert_cmpint(r[256 - res - 1], ==, '\f');
++    prn_teardown(&x);
++
++    /* paper out, data not held: the reply says so */
++    prn_bringup(&x, "hold-on-fault=off");
++    prn_configure(&x, true);
++    qom_set_bool(&x, "paper-empty", true);
++    bulk_wait(&x, bulk_put(&x, false, DATA_BUF, "@PJL INFO STATUS", 16),
++              NULL);
++    bulk_wait(&x, bulk_put(&x, true, DATA_BUF + 0x800, NULL, 256), &res);
++    qtest_memread(x.qts, DATA_BUF + 0x800, r, 256 - res);
++    g_assert_nonnull(g_strstr_len(r, 256 - res, "CODE=41000"));
++    prn_teardown(&x);
++
++    /* in-inject queues raw bytes */
++    prn_bringup(&x, NULL);
++    prn_configure(&x, true);
++    qom_set_str(&x, "in-inject", "XYZ");
++    bulk_wait(&x, bulk_put(&x, true, DATA_BUF + 0x800, NULL, 64), &res);
++    g_assert_cmpint(64 - res, ==, 3);
++    qtest_memread(x.qts, DATA_BUF + 0x800, r, 3);
++    g_assert_cmpmem(r, 3, "XYZ", 3);
++
++    /* a reply that ends on a full packet is ended by a zero-length one
++     * (a host reading one packet per TD, as UHCI does, needs it) */
++    qom_set_str(&x, "in-inject",
++                "0123456789abcdef0123456789abcdef"
++                "0123456789abcdef0123456789abcdef");
++    bulk_wait(&x, bulk_put(&x, true, DATA_BUF + 0x800, NULL, 64), &res);
++    g_assert_cmpint(res, ==, 0);
++    bulk_wait(&x, bulk_put(&x, true, DATA_BUF + 0x800, NULL, 64), &res);
++    g_assert_cmpint(res, ==, 64);
++    /* and then nothing: the next IN NAKs */
++    bulk_put(&x, true, DATA_BUF + 0x800, NULL, 64);
++    qtest_clock_step(x.qts, 20 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++    prn_teardown(&x);
++
++    /* the same reply through a larger TD ends short there: no zero-length
++     * packet follows, the next IN stays pending */
++    prn_bringup(&x, NULL);
++    prn_configure(&x, true);
++    qom_set_str(&x, "in-inject",
++                "0123456789abcdef0123456789abcdef"
++                "0123456789abcdef0123456789abcdef");
++    bulk_wait(&x, bulk_put(&x, true, DATA_BUF + 0x800, NULL, 256), &res);
++    g_assert_cmpint(res, ==, 256 - 64);
++    bulk_put(&x, true, DATA_BUF + 0x800, NULL, 256);
++    qtest_clock_step(x.qts, 20 * 1000 * 1000);
++    g_assert_false(get_evt(&x, &e));
++    prn_teardown(&x);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("/usb/printer/descriptors", test_descriptors);
++    qtest_add_func("/usb/printer/device-id", test_device_id);
++    qtest_add_func("/usb/printer/port-status", test_port_status);
++    qtest_add_func("/usb/printer/soft-reset", test_soft_reset);
++    qtest_add_func("/usb/printer/bulk-out-file", test_bulk_out_file);
++    qtest_add_func("/usb/printer/out-held-on-fault", test_out_held_on_fault);
++    qtest_add_func("/usb/printer/out-rate", test_out_rate);
++    qtest_add_func("/usb/printer/bulk-in", test_bulk_in);
++
++    return g_test_run();
++}

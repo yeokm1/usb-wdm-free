@@ -46,15 +46,15 @@
 
 # ---- audio/uac2
 PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs
-STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98
+STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | 0.1.6.0: the play position is the fetch cursor (the seek fix; its legs on XP, 2000 and 7, none on 98 SE or ME); 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98
 COPY  | W2K WXP | free/audio/uac2/w2k-xp/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on 2000 and XP (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio
-STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only
+STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | 0.1.6.0: the seek fix passed on XP under Windows EHCI and xHCI98 and on 2000 (simulator); 2000 asks for a restart at install, so Update Driver from Windows USB Audio Device no longer stops it, and XP installs with no restart (simulator); 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only
 COPY  | WVISTA W7 W8 | free/audio/uac2/wv-8-x86/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on Vista and 7 x86 (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio; 8 and 8.1 x86 did not need it
-STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | 0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)
+STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | 0.1.6.0: the seek fix passed on 7 x86 (simulator); 0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)
 COPY  | WXP64 | free/audio/uac2/wxp-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on XP x64 (simulator, its test build)
-COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24); 0.1.5.0 source signed in the guest with a throwaway certificate: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)
+COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24); 0.1.6.0 (the seek fix): no XP x64 leg; 0.1.5.0 source signed in the guest with a throwaway certificate: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)
 COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on Vista to 8.1 x64 (simulator, its test build)
-COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test signing on; 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test signing on; 0.1.6.0 source signed in the guest with a throwaway certificate: first plug with no restart prompt and the seek test on 7 x64 (simulator); 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)
 
 # ---- audio/usbmidi
 PACKAGE  | audio/usbmidi | CLASS | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces

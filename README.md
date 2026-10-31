@@ -100,19 +100,23 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   `uac2`, then plug the device in. Under xHCI98 from 3.4.0.0 Windows'
   driver no longer takes such a device. From 0.1.5 the co-installer
   avoids this on 2000 to 7: see Installing.
+- **2000: enabling a disabled `uac2` device can stop Windows** (STOP
+  0x0000001E in Windows' `usbhub20.sys`). Unplug the device instead of
+  disabling it. From 0.1.6 changing a device's driver to `uac2` on 2000
+  asks for a restart and no longer stops.
 
 ## Installing
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.5` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.6` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.5). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.6). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.5 is signed with the test certificate 0.1.4 introduced. Trust the
+0.1.6 is signed with the test certificate 0.1.4 introduced. Trust the
 `usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
 thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
 
@@ -150,6 +154,8 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.6** (2026-10-31):
+  - `uac2` 0.1.6.0 fixes garbled sound after seeking, and on Windows 2000 asks for a restart at install, so changing a device's driver to `uac2` no longer stops 2000.
 - **v0.1.5** (2026-10-30):
   - `uac2` 0.1.5.0 gives each output and input of a device its own Windows sound device, starts on 98 SE's and ME's own USB 1.1 stack (Full Speed), and ships the co-installer `UACCI1.DLL` with `UACCI.INF` (in the 2000 to 8.1 folders; needed on 2000 to 7): installed by hand before the first plug, it keeps Windows' USB Audio 1.0 driver off a UAC 2.0 device.
   - `usbcom` 0.1.5.0 adds chip modules for the FTDI FT-X, FT232H and FT4232H, the Prolific PL2303 and the Silicon Labs CP2105 and CP2108 on 98 SE and ME.

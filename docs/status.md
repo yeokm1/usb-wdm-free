@@ -55,6 +55,9 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.6 (owner, 2026-10-31): `uac2` 0.1.6.0, with the seek fix
+and the restart at install on 2000 below; every other file is 0.1.5's
+([release 0.1.6](testing/2026-10-31-release-0.1.6.md)).
 Release 0.1.4 (owner, 2026-10-27): `rtl815x` 0.2.0.0 serves the Realtek
 RTL8153D, RTL8156, RTL8156B, RTL8157 and RTL8159 on 98 SE, ME and 2000,
 and these chips on XP to 7 where Realtek's driver in the non-free set does
@@ -181,7 +184,7 @@ starts; it happened only when the device had been in use before and
 stayed plugged in. The stop during an Update Driver can also leave
 `ks.sys` damaged, so the next boot stops too.
 
-Fixed in the source for the next release for Update Driver (`76b09bd`,
+Fixed in 0.1.6 for Update Driver (`76b09bd`,
 [design record 18](design/uac2.md)): on 2000 every `uac2` install now
 asks for a restart instead of starting the device, and `uac2` starts
 after the restart. Enable after Disable is not an install and still
@@ -199,7 +202,7 @@ What helps (0.1.5, and Disable/Enable in any version):
 
 Read in QEMU only ([uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md)).
 
-### Fixed for the next release: `uac2` playback garbled after seeking (XP, Conexant CX31993)
+### Fixed in 0.1.6: `uac2` playback garbled after seeking (XP, Conexant CX31993)
 
 Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB
 DAC: playback through `uac2` 0.1.5.0 starts clean, but seeking within a
@@ -214,8 +217,8 @@ already taken the next 16 ms of sound for the USB transfers queued
 ahead; after a seek Windows writes the new sound just in time by that
 account, too late for those transfers, which then carried what the
 buffer held before. `uac2` now reports how far it has taken the sound,
-and clears what it took. Fixed in the source (`1ab0dab`), for the next
-release; no workaround was verified. The design is
+and clears what it took. Fixed in 0.1.6 (`1ab0dab`); no workaround
+was verified for 0.1.5. The design is
 [design record 17](design/uac2.md), the legs are
 [uac2-seek](testing/2026-10-31-uac2-seek.md). Side effects: the playback
 position Windows shows runs up to 16 ms (32 ms on some devices) ahead of

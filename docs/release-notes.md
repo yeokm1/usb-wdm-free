@@ -14,7 +14,10 @@ when it is installed on Windows 2000. Every other file is 0.1.5's.
   pieces of the sound from before the seek, again and again, so it
   sounded garbled. `uac2` now tells Windows how far it has taken the
   sound for the USB transfers rather than how far the device has
-  played, so new sound is never written behind them. The playback
+  played, so Windows writes new sound ahead of what the transfers
+  take, and the sound taken is cleared: sound written too late is
+  heard as a short gap rather than as old sound. Rarely, a block
+  written at the moment of a seek can still play late. The playback
   position Windows shows now runs up to 16 ms (32 ms on some devices)
   ahead of the device, and a pause and resume skips that much instead
   of repeating it. [uac2 design, section 17](design/uac2.md).
@@ -22,8 +25,10 @@ when it is installed on Windows 2000. Every other file is 0.1.5's.
   `uac2` (Update Driver, for instance from the "USB Audio Device"
   Windows installs by itself) could stop Windows (STOP 0x0000001E in
   Windows' `usbhub20.sys`). Every `uac2` install on 2000 now asks for a
-  restart, and `uac2` starts after it. XP and later install as before,
-  with no restart. [uac2 design, section 18](design/uac2.md).
+  restart, and `uac2` starts after it. XP and later install as before:
+  this change adds no restart there, and changing Windows' own USB
+  audio driver to `uac2` on XP still behaves as the README's known
+  issues describe. [uac2 design, section 18](design/uac2.md).
 - **Known issue, Windows 2000**: enabling a disabled `uac2` device can
   still stop Windows the same way. Unplug the device instead of
   disabling it.

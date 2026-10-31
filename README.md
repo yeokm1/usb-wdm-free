@@ -6,6 +6,9 @@ interface, so they run under Windows' own USB 2.0 drivers, NUSB's on
 98 SE, or [xHCI98](https://github.com/yeokm1/xhci98), whose releases carry
 them in their `-free` download.
 
+Device makers' own drivers for old Windows, collected as released, are in
+the companion repository [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree).
+
 These drivers are experimental. They may not work with every device and can make Windows unstable. Report problems at https://github.com/yeokm1/usb-wdm-free.
 
 ## What each driver is for

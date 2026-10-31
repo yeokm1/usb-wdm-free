@@ -35,7 +35,8 @@
 #define UP_SLICE_MS         1500        /* status poll while a write waits (design 5.1) */
 #define UP_CTRL_MS          5000        /* a class request is given up after this */
 #define UP_READ_DEFAULT_MS  1000
-#define UP_QUIESCE_MS       100         /* STOP / D3: abort again this often until I/O drains */
+#define UP_QUIESCE_MS       100         /* STOP / D3: look this often whether I/O has drained */
+#define UP_REABORT_MS       1000        /* ... and abort the pipes again this often */
 #define UP_XFER_WANT        16384       /* bulk MaximumTransferSize asked for */
 #define UP_CFG_MAX          4096
 #define UP_SCAN_BUDGET      8192        /* HKLM\Enum\USB instance keys read at most */
@@ -46,6 +47,7 @@ typedef struct UP_DEV {
     LONG            IoCount;
     KEVENT          WriteLock, ReadLock;    /* one write and one read at a time */
     KEVENT          CtrlLock;               /* one class request on endpoint 0 at a time */
+    KEVENT          PipeLock;               /* one abort or reset pipe request at a time */
     WORK_QUEUE_ITEM PowerWork;              /* D3: drains I/O off the power path */
     PIRP            PowerIrp;               /* the D3 IRP it then passes down */
     KSPIN_LOCK      Lock;                   /* Removed (set), OpenCount, Writers, DeletePending */
@@ -326,8 +328,10 @@ static NTSTATUS UpSubmitBounded(UP_DEV *d, PURB urb, ULONG ms)
     if (st != STATUS_PENDING)
         return st;
     if (!UpWait(&r, ms)) {
+        UPT1("bounded request timed out: cancel (function)", urb->UrbHeader.Function);
         IoCancelIrp(r.Irp);
         UpWait(&r, 0);
+        UPT0("cancelled request completed");
     }
     return UpEnd(&r);
 }
@@ -335,6 +339,7 @@ static NTSTATUS UpSubmitBounded(UP_DEV *d, PURB urb, ULONG ms)
 static NTSTATUS UpPipeRequest(UP_DEV *d, USBD_PIPE_HANDLE pipe, USHORT function)
 {
     struct _URB_PIPE_REQUEST urb;
+    NTSTATUS st;
 
     if (pipe == NULL)
         return STATUS_SUCCESS;
@@ -342,7 +347,12 @@ static NTSTATUS UpPipeRequest(UP_DEV *d, USBD_PIPE_HANDLE pipe, USHORT function)
     urb.Hdr.Length = sizeof(urb);
     urb.Hdr.Function = function;
     urb.PipeHandle = pipe;
-    return UpSubmitBounded(d, (PURB)&urb, UP_CTRL_MS);
+    /* Serialised: a quiesce and a reader or writer giving up may abort at
+       the same time; each request is bounded, so the wait is too. */
+    UpLock(&d->PipeLock);
+    st = UpSubmitBounded(d, (PURB)&urb, UP_CTRL_MS);
+    UpUnlock(&d->PipeLock);
+    return st;
 }
 
 /* Gives up a transfer in flight on pipe: abort the pipe, and if the abort
@@ -853,6 +863,23 @@ static void UpAbortPipes(UP_DEV *d)
     (void)UpPipeRequest(d, d->InPipe, URB_FUNCTION_ABORT_PIPE);
 }
 
+/* Takes the lock, aborting the pipes now and every UP_REABORT_MS while it
+   waits, so a transfer the holder has just started is ended too. */
+static void UpLockAborting(UP_DEV *d, KEVENT *m)
+{
+    ULONG waited = UP_REABORT_MS;
+
+    for (;;) {
+        if (waited >= UP_REABORT_MS) {
+            UpAbortPipes(d);
+            waited = 0;
+        }
+        if (UpTryLock(m, UP_QUIESCE_MS))
+            return;
+        waited += UP_QUIESCE_MS;
+    }
+}
+
 /*
  * After Started or Suspended was changed: aborts the pipes until the write
  * and read in progress (if any) have returned, so none is left using the
@@ -863,18 +890,14 @@ static void UpQuiesce(UP_DEV *d)
 {
     if (d->OutPipe == NULL)
         return;
-    for (;;) {
-        UpAbortPipes(d);
-        if (UpTryLock(&d->WriteLock, UP_QUIESCE_MS))
-            break;
-    }
-    for (;;) {
-        UpAbortPipes(d);
-        if (UpTryLock(&d->ReadLock, UP_QUIESCE_MS))
-            break;
-    }
+    UPT0("quiesce: write");
+    UpLockAborting(d, &d->WriteLock);
+    UPT0("quiesce: read");
+    UpLockAborting(d, &d->ReadLock);
+    UPT0("quiesce: control");
     UpLock(&d->CtrlLock);           /* a class request ends within UP_CTRL_MS */
     UpUnlock(&d->CtrlLock);
+    UPT0("quiesce: done");
     UpUnlock(&d->ReadLock);
     UpUnlock(&d->WriteLock);
 }
@@ -938,6 +961,7 @@ static NTSTATUS UpAddDevice(PDRIVER_OBJECT drv, PDEVICE_OBJECT pdo)
     KeInitializeEvent(&d->WriteLock, SynchronizationEvent, TRUE);
     KeInitializeEvent(&d->ReadLock, SynchronizationEvent, TRUE);
     KeInitializeEvent(&d->CtrlLock, SynchronizationEvent, TRUE);
+    KeInitializeEvent(&d->PipeLock, SynchronizationEvent, TRUE);
     KeInitializeSpinLock(&d->Lock);
     d->Lower = IoAttachDeviceToDeviceStack(dev, pdo);
     if (d->Lower == NULL) {
@@ -1349,6 +1373,7 @@ static NTSTATUS UpRemove(UP_DEV *d, PIRP irp)
     UpRelease(d);
     UpRelease(d);
     KeWaitForSingleObject(&d->RemoveEvent, Executive, KernelMode, FALSE, NULL);
+    UPT0("remove: I/O drained, passing down");
 
     irp->IoStatus.Status = STATUS_SUCCESS;
     IoSkipCurrentIrpStackLocation(irp);

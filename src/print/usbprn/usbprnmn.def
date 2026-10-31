@@ -1,0 +1,10 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; USBPRNMN.DLL exports: the monitor entry (98 DDK "Sample Port Monitor"
+; page: InitializeMonitorEx and the DLL entry point), and InstallMonitor
+; for RUNDLL32 (printing.md 4.1).
+LIBRARY USBPRNMN
+EXPORTS
+    InitializeMonitorEx
+    DllEntryPoint
+    InstallMonitor

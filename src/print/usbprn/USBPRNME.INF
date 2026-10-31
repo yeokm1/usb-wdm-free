@@ -1,0 +1,34 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; USBPRNME.INF - Windows ME: binds Windows ME's own USB printing driver,
+; usbprint.sys, to USB printer class interfaces. ME ships usbprint.sys and
+; its port monitor usbmon.dll (ports USB001, USB002, ...) but no INF that
+; names them for a printer, so a USB printer gets no driver and no port
+; (docs/design/printing.md 2, M0). Original INF; no files of its own.
+; Interface-level class ids only (printing.md 9). Protocol 03 is not
+; listed: 1284.4-only printers are out of scope (printing.md 16, Q6).
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/31/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Bidi%=UsbPrint,USB\Class_07&SubClass_01&Prot_02
+%Uni%=UsbPrint,USB\Class_07&SubClass_01&Prot_01
+
+[UsbPrint]
+AddReg=UsbPrint.AddReg
+
+[UsbPrint.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,usbprint.sys
+
+[Strings]
+Provider="usb-wdm-free"
+Bidi="USB printing support (bidirectional)"
+Uni="USB printing support"

@@ -127,10 +127,12 @@ GPL-2.0+): the class requests, 1284 ID read, protocol selection
 **Size.** About 1,500 lines for the driver and 1,000 for the monitor.
 Estimate.
 
-**Value.** Medium. A real gap on 98 SE only; the user base is people
-with parallel printers and modern machines. No QEMU printer model;
-testing needs a mainstream USB-to-parallel cable and a printer (Owner,
-2026-10-20: real devices only, no gadget rig).
+**Value.** Medium. A real gap on 98 SE (and, M0 showed, on ME: ME ships
+`usbprint.sys` but no INF that binds it); the user base is people with
+parallel printers and modern machines. Testing needs a mainstream
+USB-to-parallel cable and a printer (Owner, 2026-10-20: real devices only,
+no gadget rig). Owner, 2026-10-31: for this class, a QEMU printer model
+comes first, before the bench (Decisions, 6).
 
 ### 2. Still cameras and phones over PTP
 
@@ -348,6 +350,18 @@ Owner, 2026-10-20:
    (`AGENTS.md`, "Sources").
 5. **Test hardware**: real devices, one or two mainstream ones per class.
 
+Owner, 2026-10-31:
+
+6. **USB printing is built now** (`printing.md`), for a later
+   usb-wdm-free release. Before the owner's bench it is tested against a
+   QEMU printer model added to this repository's QEMU patch set
+   (`docs/testing/qemu-printer.patch`): a printer-class device (07/01/02,
+   or 07/01/01) with a configurable IEEE 1284 id, settable port status,
+   `SOFT_RESET`, its bulk OUT written to a host file and optional status
+   bytes on bulk IN. This changes decision 5 ("real devices only, no gadget
+   rig") for this class only; the real-printer bench leg (a USB-to-parallel
+   cable and a printer, or a USB PCL or PostScript laser) stays owed.
+
 ## Open questions
 
 None at present.
@@ -356,7 +370,9 @@ None at present.
 
 - How Microsoft's composite handling on 98 SE, ME and 2000 groups a
   multi-interface function, with and without an IAD.
-- Plug and Play printer install from a USB 1284 ID on 98 SE.
+- Plug and Play printer install from a USB 1284 ID on 98 SE: the 98 DDK
+  documents it for parallel ports only, and the 1284 id checksum is
+  withheld; the first release adds printers by hand (`printing.md` 6).
 - Whether `usbstor.sys` drives unlisted UFI floppies under a class INF.
 - Whether libusb-win32's last builds run on 98 SE and ME (`libusb.md`,
   M0).

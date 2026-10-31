@@ -31,6 +31,7 @@ Compiled 2026-10-22 from the records in this folder. "-" means no leg.
 | rtl815x | PASS / PASS with the SIMULATED RTL8153 (`rtlemu.py`; install, link flap, DHCP, ping 32-1472, removal; `2026-10-23-rtl815x-sim.md`); no real device; the rewritten core (2026-10-25) again with the RTL8153 under both, and the RTL8153B under xHCI98 only, `2026-10-25-rtl815x-rewrite.md` | 98 SE NUSB (simulator) | 98 SE (simulator) | - |
 | libusb0 | PASS / PASS (install, load, listing only; QEMU usb-storage via a test INF) | 98 SE (NUSB 3.3, High Speed) | 98 SE (SuperSpeed) | 98 SE (PASS) |
 | xpad98 | PASS / PASS (simulated pads, after the 2026-10-23 fixes; the receiver unsupported under xHCI98 3.1.0.0, PASS with 43.67) | 98 SE (NUSB 3.3: 360, Xbox One, receiver); 2000 SP4, XP SP3, Vista SP2 x86 (Windows' usbehci) | 98 SE (360, Xbox One; receiver with 43.67), ME (360, Xbox One) | 98 SE, ME (PASS) |
+| usbprn | PASS / PASS (QEMU `usb-printer` model: install, test and Notepad pages, paper-empty and error with Retry, unplug idle and mid-job, two printers, replug cycles; `2026-10-31-usbprn-legs.md`) | 98 SE (NUSB 3.3, High Speed) | 98 SE (Full Speed) | 98 SE (PASS); ME with `USBPRNME.INF` over ME's own driver (PASS) |
 
 Only cdcnet has legs under xHCI98 and under NUSB's EHCI stack on 98 SE
 (QEMU only, `2026-10-22-cdcnet-9x.md`).

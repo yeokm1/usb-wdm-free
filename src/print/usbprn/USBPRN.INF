@@ -1,0 +1,63 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; USBPRN.INF - Windows 98 SE: binds USBPRN.SYS to USB printer class
+; interfaces and installs the port monitor USBPRNMN.DLL, which gives each
+; printer a port USB001, USB002, ... (docs/design/printing.md 4.1, 10).
+; Original INF. Interface-level class ids only, never a whole device by
+; class (printing.md 9). Protocol 03 is listed for printers whose first
+; alternate is 1284.4 but that offer 01 or 02 too.
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=10/31/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Bidi%=UsbPrn,USB\Class_07&SubClass_01&Prot_02
+%Uni%=UsbPrn,USB\Class_07&SubClass_01&Prot_01
+%P1284%=UsbPrn,USB\Class_07&SubClass_01&Prot_03
+
+[UsbPrn]
+CopyFiles=UsbPrn.Sys,UsbPrn.Dll
+AddReg=UsbPrn.AddReg,UsbPrn.Settings
+
+[UsbPrn.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,USBPRN.SYS
+; The spooler takes the monitor from AddMonitor (USBPRNMN.DLL
+; InstallMonitor), run once after the install, so no restart is needed.
+HKLM,"Software\Microsoft\Windows\CurrentVersion\RunOnce","UsbPrnMonitor",,"RUNDLL32.EXE USBPRNMN.DLL,InstallMonitor"
+
+; Every value the monitor reads, at its default; a user's value survives
+; an update (no-clobber). ResetOnCancel: 1 sends SOFT_RESET to a printer
+; whose job was deleted while printing (printing.md 8; off by default).
+[UsbPrn.Settings]
+HKLM,"Software\usb-wdm-free\usbprn","ResetOnCancel",0x00010003,0
+
+[UsbPrn.Sys]
+USBPRN.SYS
+
+[UsbPrn.Dll]
+USBPRNMN.DLL
+
+[DestinationDirs]
+UsbPrn.Sys=10,System32\Drivers
+UsbPrn.Dll=11
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+USBPRN.SYS=1
+USBPRNMN.DLL=1
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="usb-wdm-free USB printing disk"
+Bidi="USB printer (bidirectional)"
+Uni="USB printer"
+P1284="USB printer (IEEE 1284.4)"

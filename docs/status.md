@@ -169,7 +169,7 @@ Loading the audio stack at boot does not prevent it (a USB audio device
 running from boot did not protect the next plug), so no boot-time driver
 is offered. Read in QEMU only; real-PC readings are owed.
 
-### Known issue: Windows 2000 stops when `uac2` takes over a device already in use (Update Driver, Enable)
+### Known issue: Windows 2000 stops when `uac2` takes over a device already in use (Update Driver; Enable)
 
 On Windows 2000 under Windows' own USB 2.0 drivers, changing a device's
 driver to `uac2` in Device Manager (for instance from the "USB Audio
@@ -181,7 +181,13 @@ starts; it happened only when the device had been in use before and
 stayed plugged in. The stop during an Update Driver can also leave
 `ks.sys` damaged, so the next boot stops too.
 
-What helps:
+Fixed in the source for the next release for Update Driver (`76b09bd`,
+[design record 18](design/uac2.md)): on 2000 every `uac2` install now
+asks for a restart instead of starting the device, and `uac2` starts
+after the restart. Enable after Disable is not an install and still
+stops.
+
+What helps (0.1.5, and Disable/Enable in any version):
 
 - Install `uac2` before the first plug (`README.md`, "Installing":
   `uac2`'s folder on `DevicePath`, then `UACCI.INF`): the first plug
@@ -334,7 +340,8 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | XP SP3 x86 | Windows' EHCI | emulated: `cx31993`, WinMM and DirectSound seeks (`UACSEEK`); 0.1.5.0 and the fix (`1ab0dab`) | 0.1.5.0: 168 to 269 blocks of old sound per 8 s leg (the reported garble); the fix: none in 7 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
 | XP SP3 x86 | xHCI98 3.3.0.0 | the same | 0.1.5.0: 22 and 66 blocks in 2 s; the fix: none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
 | 2000 SP4 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 3 legs. Changing an installed "USB Audio Device" to `uac2` stopped 2000 in `usbhub20.sys` (STOP 0x1E, 2 of 2); installed at the first plug with `UACCI.INF` it did not | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
-| 2000 SP4 | Windows' EHCI | emulated: `cx31993`; 0.1.5.0, the fix and a port-0xE9 trace build | the STOP 0x1E in `usbhub20.sys` read: Update Driver from `usbaudio` (3 of 3) and Disable then Enable of a working `uac2` (1 of 1) stop inside `PcAddAdapterDevice`, in the hub driver's answer to PortCls's `IRP_MN_QUERY_INTERFACE`; not `uac2`'s code. Uninstalling `usbaudio` and a no-driver INF do not stop; an INF `Reboot` directive avoided the stop on Update Driver (probe, not shipped) | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
+| 2000 SP4 | Windows' EHCI | emulated: `cx31993`; 0.1.5.0, the fix and a port-0xE9 trace build | the STOP 0x1E in `usbhub20.sys` read: Update Driver from `usbaudio` (3 of 3) and Disable then Enable of a working `uac2` (1 of 1) stop inside `PcAddAdapterDevice`, in the hub driver's answer to PortCls's `IRP_MN_QUERY_INTERFACE`; not `uac2`'s code. Uninstalling `usbaudio` and a no-driver INF do not stop; an INF `Reboot` directive avoided the stop on Update Driver | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
+| 2000 SP4, XP SP3 x86, 7 SP1 x64 | Windows' EHCI | emulated: `cx31993`; the 2000 restart INF (`76b09bd`) | 2000: Update Driver from `usbaudio` asks for a restart, no stop, plays after it; XP and 7 x64: install at the first plug with no restart prompt and play | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
 | 7 SP1 x86 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
 
 2000: the seek legs only (2026-10-31); ME under xHCI98 only; the seek legs on 98 SE are owed. Real PC: none yet - owner's bench session.

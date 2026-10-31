@@ -1556,3 +1556,72 @@ Consequences:
   can read as one. A leg passes with no stale block across its seeks. Legs: XP under Windows' EHCI and under
   xHCI98 (both APIs, 16-bit and float clients, 44.1 and 48 kHz); 2000 and
   7 x86 for regressions; 98 SE (the same header runs there).
+
+## 18. Windows 2000: the install asks for a restart instead of starting the device (2026-10-31)
+
+### 18.1 The problem
+
+On Windows 2000 under Windows' own USB 2.0 drivers, starting `uac2` on a
+device that had been started before and stayed plugged in stops Windows
+(STOP 0x1E in `usbhub20.sys`): Update Driver from Windows' "USB Audio
+Device" (`usbaudio`), and Enable after Disable. The stop comes inside
+`PcAddAdapterDevice`, in the hub driver's answer to the
+`IRP_MN_QUERY_INTERFACE` PortCls sends to the PDO; `uac2` has sent
+nothing by then
+([testing/2026-10-31-uac2-2000-stop.md](../testing/2026-10-31-uac2-2000-stop.md)).
+Windows 2000 binds `usbaudio` to a UAC 2.0 device by itself at the first
+plug unless `UACCI.INF` was installed first, so Update Driver is the
+ordinary way a 2000 user reaches `uac2`.
+
+### 18.2 The change (owner, 2026-10-31)
+
+The install on 2000 carries the INF `Reboot` directive: Setup then marks
+the device as needing a restart and does not start it on the new driver;
+after the restart the hub enumerates the device afresh and `uac2` starts
+on a new PDO, which does not stop (the first-plug legs). Read once with
+the released 0.1.5.0 INF plus `Reboot` (the record above, leg k6c):
+Update Driver from `usbaudio` ended with "will not work until you
+restart", no stop, and after a cold start `uac2` played.
+
+Only 2000 may get it: XP and later do not stop, and a restart prompt at
+every install there would be a regression. Which sections a system reads:
+
+- Windows 2000 reads only the undecorated models section (`[Models]`): the
+  `TargetOSVersion` decorations of the `[Manufacturer]` entry (`NTx86`,
+  `NTamd64`, `NTx86.5.1`) are read from XP on (the driver kit's INF
+  Manufacturer section documentation; `release\release.ps1`,
+  `Get-SystemModelIds`, encodes the same rule). 98 SE reads `[Models]` too.
+  A 2000-only `[Models.NTx86]` is therefore not possible: 2000 would not
+  read it.
+- From `[Models]`, 98 SE installs `[UAC2]`, 2000 `[UAC2.NT]` (the `.NT`
+  install-section decoration is read from 2000 on, 9x reads none).
+- XP and later x86 read `[Models.NTx86]`; x64 reads `[Models.NTamd64]`
+  and installs `[UAC2.NTamd64]` (an architecture decoration wins over
+  `.NT`).
+
+So:
+
+1. `[UAC2.NT]` gains `Reboot`. Only 2000 reaches it once item 2 is done.
+2. `[Models.NTx86]` points its three ids at a new install section
+   `UAC2XP`: `[UAC2XP.NT]`, `[UAC2XP.NT.Services]` and
+   `[UAC2XP.NT.Interfaces]` are `[UAC2.NT]`'s, `[UAC2.NT.Services]`'s
+   and `[UAC2.NT.Interfaces]`'s lines without `Reboot`. Device, ids,
+   files, registry and interfaces are unchanged for XP and later x86.
+3. `[Models]`, `[UAC2]` (98 SE), `[Models.NTamd64]` and the NTamd64
+   sections are unchanged. The x64 copy (`x64\uac2wdm.inf`) takes the same
+   edit, as `release.ps1` requires it to agree.
+4. `UACCI.INF` has no models (a `DefaultInstall` setup INF) and is
+   unchanged; the co-installer does not name install sections.
+
+On 2000 every `uac2` install now asks for a restart, also the first plug
+after `UACCI.INF` (which never stopped): the device works after the
+restart. Enable after Disable is not an install, so `Reboot` does not
+reach it; that stays a known issue (unplug instead of Disable).
+
+### 18.3 Legs
+
+- 2000 under Windows' EHCI: `usbaudio` bound, Update Driver to the new
+  INF: a restart prompt, no stop; after the restart (cold start on the
+  q35 base, whose warm restart hangs) `UACSEEK` plays.
+- XP x86 and 7 x64: install and play with no restart prompt (XP through
+  `[Models.NTx86]`/`UAC2XP`, 7 x64 through the x64 INF).

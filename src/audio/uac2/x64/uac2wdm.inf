@@ -37,11 +37,13 @@ DriverVer=10/30/2026,0.1.5.0
 %Device%=UAC2,USB\Class_01&SubClass_00&Prot_20
 %Device%=UAC2,USB\Class_01&SubClass_01&Prot_20
 
-; XP and later split IAD devices (usbccgp): the function only.
+; XP and later split IAD devices (usbccgp): the function only. XP and
+; later x86 install UAC2XP; 2000 reads no model decoration, so it installs
+; [UAC2.NT] from [Models] above, which asks for a restart (design 18).
 [Models.NTx86]
-%Device%=UAC2,USB\VID_041E&PID_3278&MI_03
-%Device%=UAC2,USB\Class_01&SubClass_00&Prot_20
-%Device%=UAC2,USB\Class_01&SubClass_01&Prot_20
+%Device%=UAC2XP,USB\VID_041E&PID_3278&MI_03
+%Device%=UAC2XP,USB\Class_01&SubClass_00&Prot_20
+%Device%=UAC2XP,USB\Class_01&SubClass_01&Prot_20
 
 [Models.NTamd64]
 %Device%=UAC2,USB\VID_041E&PID_3278&MI_03
@@ -84,7 +86,18 @@ HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
 HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 
+; Windows 2000 only (design 18): its USB 2.0 hub driver stops Windows
+; when uac2 starts on a device the hub had started before (a driver
+; change), so Setup is told to leave the device for a restart, after
+; which it is enumerated afresh.
 [UAC2.NT]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration.NT
+CopyFiles=Driver.Copy.NT
+AddReg=AudioSupport
+Reboot
+; XP and later x86: [UAC2.NT] without Reboot.
+[UAC2XP.NT]
 Include=ks.inf,wdmaudio.inf
 Needs=KS.Registration,WDMAUDIO.Registration.NT
 CopyFiles=Driver.Copy.NT
@@ -97,6 +110,8 @@ AddReg=AudioSupport
 [Driver.Copy.NT]
 uac2wdm.sys
 [UAC2.NT.Services]
+AddService=uac2wdm,0x00000002,Service
+[UAC2XP.NT.Services]
 AddService=uac2wdm,0x00000002,Service
 [UAC2.NTamd64.Services]
 AddService=uac2wdm,0x00000002,Service
@@ -125,6 +140,19 @@ AddInterface=%Audio%,Wave4,Wave4.Interface
 AddInterface=%Audio%,Topology4,Topology4.Interface
 AddInterface=%Topology%,Topology4,Topology4.Interface
 [UAC2.NT.Interfaces]
+AddInterface=%Audio%,Wave,Wave.Interface
+AddInterface=%Audio%,Topology,Topology.Interface
+AddInterface=%Topology%,Topology,Topology.Interface
+AddInterface=%Audio%,Wave2,Wave2.Interface
+AddInterface=%Audio%,Topology2,Topology2.Interface
+AddInterface=%Topology%,Topology2,Topology2.Interface
+AddInterface=%Audio%,Wave3,Wave3.Interface
+AddInterface=%Audio%,Topology3,Topology3.Interface
+AddInterface=%Topology%,Topology3,Topology3.Interface
+AddInterface=%Audio%,Wave4,Wave4.Interface
+AddInterface=%Audio%,Topology4,Topology4.Interface
+AddInterface=%Topology%,Topology4,Topology4.Interface
+[UAC2XP.NT.Interfaces]
 AddInterface=%Audio%,Wave,Wave.Interface
 AddInterface=%Audio%,Topology,Topology.Interface
 AddInterface=%Topology%,Topology,Topology.Interface

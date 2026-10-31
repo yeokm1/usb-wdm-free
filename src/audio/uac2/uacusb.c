@@ -1104,8 +1104,8 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
      * Speed (16 ms queued in DATA_SLOTS); 8 ms at bInterval 4 (32 ms), as
      * High Speed packet counts stay a multiple of 8 (one frame) for the
      * older stacks. Inside the cyclic buffer uacstream.h allocates (at
-     * least 62 ms); a client shrinking it with SetBufferSize below the
-     * queue is not guarded. */
+     * least 62 ms); a client shrinking it with SetBufferSize to the queue
+     * or below is not guarded (docs/design/uac2.md 17.4, item 5). */
     if (d->HighSpeed) {
         s->DataPackets = 32 >> (a->Interval - 1);
         if (s->DataPackets < 8) s->DataPackets = 8;

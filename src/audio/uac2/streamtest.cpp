@@ -62,6 +62,7 @@ static PDMACHANNEL releaseInNotify=NULL;
 static NTSTATUS Start(PVOID,UacStream*){++starts;return STATUS_SUCCESS;}
 static void Stop(PVOID,UacStream*){++stops;}
 static void Close(PVOID,UacStream*){assert(!inNotify&&!inProgress&&deviceRefs==2);++closes;}
+static BOOLEAN AcceptAll(PVOID,BOOLEAN,ULONG,ULONG,ULONG,ULONG,ULONG){return TRUE;}
 static void Notify(PVOID,PSERVICEGROUP){
  ++notices;
  if(releaseInNotify){assert(testIrql==PASSIVE_LEVEL&&inProgress);inNotify=TRUE;PDMACHANNEL last=releaseInNotify;releaseInNotify=NULL;ULONG before=closes;last->Release();assert(queued&&closes==before&&deviceRefs==2);inNotify=FALSE;notifyReturned=TRUE;}
@@ -93,11 +94,17 @@ int main(){
  assert(!second&&!d2&&!g2);
  dma->SetBufferSize(19);assert(dma->BufferSize()==16);
  PUCHAR ring=(PUCHAR)dma->SystemAddress();UCHAR input[20],out[24];for(i=0;i<20;++i)input[i]=(UCHAR)i;
- dma->CopyTo(ring,input,16);memset(out,0xcc,sizeof(out));s->FillBytes(out,20);for(i=0;i<20;++i)assert(out[i]==(UCHAR)(i%16));assert(out[20]==0xcc);
- dma->CopyTo(ring+12,input,8);assert(ring[12]==12&&ring[15]==15);
+ dma->CopyTo(ring,input,16);memset(out,0xcc,sizeof(out));s->FillBytes(out,20);for(i=0;i<16;++i)assert(out[i]==(UCHAR)i);for(i=16;i<20;++i)assert(!out[i]);assert(out[20]==0xcc);
+ for(i=0;i<16;++i)assert(!ring[i]); /* taken bytes are silence: an underrun never resends a lap */
+ dma->CopyTo(ring+12,input,8);assert(!ring[12]&&!ring[15]); /* out of the ring: refused */
  assert(!stream->SetState(KSSTATE_RUN)&&starts==1);ULONG frame=0;assert(stream->SetNotificationFreq(10,&frame)==10&&frame==1920);
- s->CompleteBytes(1000,0);assert(!notices);s->CompleteBytes(1000,1);assert(notices==1);ULONG pos=0;assert(!stream->GetPosition(&pos)&&pos==0);
- s->CompleteBytes(5,0);assert(!stream->SetState(KSSTATE_PAUSE)&&stops==1);s->FillBytes(out,1);assert(out[0]==5);
+ ULONG pos=0;assert(!stream->GetPosition(&pos)&&pos==4); /* 20 bytes taken from a 16-byte ring */
+ s->CompleteBytes(1000,0);assert(!notices);s->CompleteBytes(1000,1);assert(notices==1);assert(!stream->GetPosition(&pos)&&pos==4);
+ dma->CopyTo(ring,input,16);s->CompleteBytes(5,0);assert(!stream->GetPosition(&pos)&&pos==4);
+ assert(!stream->SetState(KSSTATE_PAUSE)&&stops==1);assert(!stream->GetPosition(&pos)&&pos==4);
+ s->FillBytes(out,1);assert(out[0]==4&&!ring[4]);assert(!stream->GetPosition(&pos)&&pos==5); /* no rewind to the completed bytes */
+ assert(!stream->SetState(KSSTATE_RUN)&&starts==2);s->FillBytes(out,2);assert(out[0]==5&&out[1]==6);assert(!stream->GetPosition(&pos)&&pos==7);
+ assert(!stream->SetState(KSSTATE_PAUSE)&&stops==2);
  assert(!stream->SetState(KSSTATE_STOP));assert(!stream->GetPosition(&pos)&&pos==0);for(i=0;i<16;++i)assert(ring[i]==0);
  const LONGLONG values[]={0,1,11,12,192000,4294967296i64,177088743107611695i64};
  for(i=0;i<sizeof(values)/sizeof(values[0]);++i){LONGLONG n=values[i],expected=(n/12)*625+((n%12)*625)/12;assert(!stream->NormalizePhysicalPosition(&n)&&n==expected);}
@@ -112,5 +119,13 @@ int main(){
  inProgress=TRUE;s->CompleteBytes(1920,0);inProgress=FALSE;
  assert(notifyReturned&&queued&&closes==1&&owner.refs==2&&active&&deviceRefs==2);
  RunQueued();assert(closes==2&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
- puts("PASS: stream format/allocation/ring/position ownership; deferred DISPATCH and PASSIVE-in-Notify final release; native callback-return FDO guard and exactly-once close");return 0;
+ UAC_STREAM_HOOKS capHooks={NULL,Start,Stop,Close,Notify,AcceptAll};
+ assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&capHooks,device,TRUE));
+ s=(UacStream*)stream;assert(s->Capture());dma->SetBufferSize(16);ring=(PUCHAR)dma->SystemAddress();
+ assert(!stream->SetState(KSSTATE_RUN));s->WriteBytes(input,12);assert(!stream->GetPosition(&pos)&&pos==12&&ring[11]==11);
+ assert(!stream->SetState(KSSTATE_PAUSE));assert(!stream->GetPosition(&pos)&&pos==12);
+ s->WriteBytes(input,8);assert(!stream->GetPosition(&pos)&&pos==4&&ring[15]==3&&ring[0]==4);
+ assert(!stream->SetState(KSSTATE_STOP));assert(!stream->GetPosition(&pos)&&pos==0);
+ service->Release();stream->Release();dma->Release();RunQueued();assert(closes==3&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
+ puts("PASS: stream format/allocation/ring; render position = fetch cursor, taken bytes cleared, no rewind on pause; capture position = written; deferred DISPATCH and PASSIVE-in-Notify final release; native callback-return FDO guard and exactly-once close");return 0;
 }

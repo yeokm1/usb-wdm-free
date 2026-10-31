@@ -468,7 +468,7 @@ class Profile:
 
 class Model:
     def __init__(self, connection, trace, now=time.monotonic, pcm=None, profile=None,
-                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None):
+                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4):
         self.connection, self.trace, self.now = connection, trace, now
         self.p = profile or Profile('x4')
         self.fb_ppm, self.fb_zero_every, self.fb_stop_after = fb_ppm, fb_zero_every, fb_stop_after
@@ -486,7 +486,7 @@ class Model:
         self.digest = hashlib.sha256()
         self.first_out = self.last_out = None
         self.next_report = self.now() + 0.25
-        self.pcm, self.pcm_bytes = pcm, 0
+        self.pcm, self.pcm_bytes, self.pcm_max = pcm, 0, pcm_max * 1024 * 1024
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
         self.mute, self.volume = {}, {}
@@ -893,8 +893,8 @@ class Model:
         terminal = self.p.alts[(own[0], own[1])].get('terminal')
         self.measure(payload, own[2], self.path_units(terminal) if terminal else [], ep)
         if self.pcm is not None:
-            if self.pcm_bytes + length > 4 * 1024 * 1024:
-                raise ValueError('simulated PCM capture exceeds four MiB')
+            if self.pcm_bytes + length > self.pcm_max:
+                raise ValueError('simulated PCM capture exceeds --pcm-max')
             self.pcm.write(payload)
             self.pcm_bytes += length
         if stamp >= self.next_report:
@@ -1027,6 +1027,11 @@ def main():
     ap.add_argument('--fb-stop-after', type=float,
                     help='seconds into a stream after which every feedback packet is zero-length')
     ap.add_argument('--pcm', type=Path, help='optional bounded SIMULATED received PCM capture')
+    ap.add_argument('--pcm-max', type=int, default=4, choices=range(1, 257), metavar='MIB',
+                    help='the capture bound in MiB (default 4, at most 256)')
+    ap.add_argument('--rates', help='comma-separated rates every clock source offers instead of the '
+                    "profile's (each must be one of them), e.g. 44100 so KMixer opens the device at "
+                    'the client rate')
     ap.add_argument('--fu', choices=FU_MODES, default='full',
                     help='playback feature units of a built profile (not x4, x4full or cx31993)')
     ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
@@ -1039,6 +1044,19 @@ def main():
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
     profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
+    if args.rates:
+        try:
+            only = [int(r) for r in args.rates.split(',')]
+        except ValueError:
+            ap.error('--rates R[,R...]')
+        offered = set(r for rates in profile.rates.values() for r in rates)
+        if any(r not in offered for r in only):
+            ap.error('--rates: the profile offers %s' % ','.join(str(r) for r in sorted(offered)))
+        for cid, rates in profile.rates.items():
+            keep = [r for r in rates if r in only]
+            if not keep:
+                ap.error('--rates: clock %d offers none of %s' % (cid, args.rates))
+            profile.rates[cid] = keep
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
         server.bind(('127.0.0.1', args.port))
@@ -1049,7 +1067,8 @@ def main():
             connection.settimeout(3)
             pcm = args.pcm.open('xb') if args.pcm else None
             model = Model(connection, trace, pcm=pcm, profile=profile, fb_ppm=args.fb_ppm,
-                          fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after)
+                          fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after,
+                          pcm_max=args.pcm_max)
             try:
                 try:
                     model.run()

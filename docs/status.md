@@ -102,7 +102,7 @@ The packages and their design documents:
 | `cdcnet`, `rtl815x`, `ax88179` | USB Ethernet: CDC-ECM, CDC-NCM and RNDIS, 98 SE to 7 (RNDIS on XP to 7 as an INF that binds Windows' own driver); Realtek RTL8152/8153 and ASIX AX88179, 98 SE, ME and 2000 | [docs/design/ethernet.md](design/ethernet.md) | cdcnet: ECM and RNDIS PASS under NUSB EHCI and xHCI98 with QEMU `usb-net`, NCM PASS under both with the SIMULATED `ncmemu.py`; no real device; ax88179: xHCI98 legs (98 SE, ME) with the real dongle; rtl815x: no real device; with the SIMULATED RTL8153 (`rtlemu.py`) 98 SE PASS under NUSB EHCI and xHCI98 |
 | `usbcom` | USB serial (CDC-ACM) as COM ports: a driver for 98 SE and ME, an INF for 2000 to 8; on 98 SE and ME also the FTDI FT-X, FT232H and FT4232H, PL2303 and CP2105/CP2108 bridges (M5) | [docs/design/serial.md](design/serial.md) | 98 SE driver: VM legs PASS under NUSB's EHCI, xHCI98 and the in-box UHCI; ME under xHCI98 (simulated device); no real board. Chip modules (2026-10-29): every SIMULATED part PASS on 98 SE and ME under xHCI98; under NUSB's EHCI all but a 64 KiB echo on four parts (a loss suspected below the driver, not proven); no real chip |
 | `xpad98` | Xbox gamepads as game controllers: Xbox One and Series pads, 98 SE to Vista; the Xbox 360 wireless receiver on 98 SE and ME; on 98 SE to 2000, Xbox 360-protocol pads outside the 25 IDs of Masahiko Morii's `x360c`, such as 8BitDo pads and current clones | [docs/design/gamepad.md](design/gamepad.md) | simulated pads (360, Xbox One, receiver): JOYTEST PASS under NUSB EHCI, xHCI98 and UHCI after the 2026-10-23 fixes; the receiver fails under xHCI98 3.1.0.0 (8 endpoints refused); no real pad |
-| `usbprn` | USB printers and USB-to-parallel cables as `USBnnn` printer ports on 98 SE: a driver and a port monitor. Low priority: built after the other drivers | [docs/design/printing.md](design/printing.md) | not built |
+| `usbprn` | USB printers and USB-to-parallel cables as `USBnnn` printer ports: on 98 SE a driver and a port monitor, on ME an INF for ME's own driver | [docs/design/printing.md](design/printing.md) | with the QEMU printer model ([usbprn-legs](testing/2026-10-31-usbprn-legs.md)): install, USB001, test and Notepad pages, paper-empty and error with Retry, unplug idle and mid-job, two printers: PASS under xHCI98, NUSB's EHCI and Windows' UHCI; ME (INF): PASS under Windows' UHCI |
 | `usbflop` | USB floppy drives (UFI) by class, 98 SE to 8: an INF that binds Windows' own `usbstor.sys` | [docs/design/floppy.md](design/floppy.md) | real Mitsumi via VM: UHCI and xHCI98 read PASS (ME too); NUSB EHCI: REAL CHECK NEEDED (Full Speed drive) |
 | `noaud` | An INF only, released (1.0.0.0, opt-in): no driver for a listed webcam's UAC 1.0 microphone on 98 SE, so `usbaudio.sys` never loads for it. On 98 SE, if plugging a webcam freezes Windows, install NOAUD98.INF for its microphone; the camera keeps working and the microphone is ignored | [docs/release-notes.md](release-notes.md) | QEMU legs: 0 of 30 plugs froze with it, 16 of 30 without (UHCI and xHCI98) |
 | `libusb0` | libusb-win32 0.1.12.2, driver and library, rebuilt for 98 SE and ME (2000 and later: upstream libusb-win32) | [docs/design/libusb.md](design/libusb.md) | install, load and device listing PASS under NUSB EHCI, xHCI98 and UHCI (QEMU `usb-storage` bound by a test copy of the INF); transfers and real devices owed |
@@ -136,10 +136,10 @@ Order, after the survey of existing drivers
 - **Wave 2**: `uvc98` (Brio 100 held for testing), `usbcom`'s 98
   SE/ME driver, `usbmidi`, `cdcnet` and `xpad98`.
 - **Later**: the installer and its helper (deferred); `libusb0`; `rtl815x` and `ax88179`, after `cdcnet`; `usbprn`,
-  at low priority; `usbcom`'s chip modules for the USB serial bridges
-  no vendor driver covers on 98 SE and ME (FTDI FT-X, FT232H, FT4232H,
-  PL2303 old and G series, CP2105, CP2108; `docs/design/serial.md`
-  milestone M5), in the next release (owner, 2026-10-29).
+  at low priority (built 2026-10-31, for a later release); `usbcom`'s chip
+  modules for the USB serial bridges no vendor driver covers on 98 SE and
+  ME (FTDI FT-X, FT232H, FT4232H, PL2303 old and G series, CP2105, CP2108;
+  `docs/design/serial.md` milestone M5), released in 0.1.5.
 
 Other classes considered, and which come next, are surveyed in
 [docs/design/candidates.md](design/candidates.md).
@@ -260,7 +260,7 @@ it is tested there too.
 | `ax88179` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target (7) | Not a target | Not a target |
 | `usbcom` | Built, not tested | Built, not tested | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) | Built, not tested (2) |
 | `xpad98` | Built, not tested | Built, not tested | Built, not tested | Built, not tested (3) | Built, not tested (3) | Built, not tested (3) | Built, not tested | Not a target (8) | Not a target (8) | Not a target (8) | Not a target (8) |
-| `usbprn` | Planned | Planned (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
+| `usbprn` | Next release | Next release (4) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `usbflop` | Built, not tested (5) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) | Built, not tested (6) |
 | `noaud` | VM legs only (9) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `libusb0` | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
@@ -270,7 +270,8 @@ it is tested there too.
 2. An INF that binds Windows' own `usbser.sys`; no driver of ours.
 3. Xbox One/Series pads only. XBCD, a free (GPL-2.0-or-later) driver,
    serves Xbox 360-protocol pads on XP and later.
-4. Only if testing shows that ME's own USB printing support cannot print.
+4. An INF that binds ME's own `usbprint.sys`; ME ships that driver and its
+   port monitor but no INF that names them for a printer.
 5. An INF that binds the `usbstor.sys` of a USB storage driver set for
    98 SE, which must already be installed.
 6. An INF that binds Windows' own `usbstor.sys`; no driver of ours.
@@ -535,8 +536,12 @@ Real PC: none yet - owner's bench session.
 
 **`usbprn`**
 
-Not built.
-Real PC: none yet - owner's bench session.
+| System | Host controller and its driver | Device | Result | Record |
+|---|---|---|---|---|
+| 98 SE | xHCI98 3.2.0.0 | simulated printer (QEMU `usb-printer`), Full Speed | install, USB001, test and Notepad pages, paper-empty and error with Retry, unplug idle and mid-job, USB002 beside it, 15 replug cycles: PASS | [usbprn-legs](testing/2026-10-31-usbprn-legs.md) |
+| 98 SE | NUSB 3.3 EHCI | simulated printer, High Speed | the same, 10 cycles: PASS | [usbprn-legs](testing/2026-10-31-usbprn-legs.md) |
+| 98 SE | Windows' UHCI | simulated printer, Full Speed | the same but a second printer, 10 cycles: PASS | [usbprn-legs](testing/2026-10-31-usbprn-legs.md) |
+| ME | Windows' UHCI, `USBPRNME.INF` | simulated printer, Full Speed | install, USB001, test and Notepad pages, replug: PASS; paper-empty: the job waits (ME's driver shows no status) | [usbprn-legs](testing/2026-10-31-usbprn-legs.md) |
 
 ## Reporting a problem
 

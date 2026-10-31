@@ -49,7 +49,14 @@ The release gate is 98 SE under NUSB's EHCI and under xHCI98
 | 10 | `libusb0` | transfers (control 0-4 KB, bulk to 1 MB, interrupt): only install/listing ran, on QEMU `usb-storage`. Needs a loopback vendor device AND a guest transfer tool (none here yet) | loopback model + tool | owed, low |
 | 11 | `ax88179` | link down/up, multi-record RX aggregates, the TX padding flag, multicast, 100/10 Mb/s rows: all closable on the real dongle | bench, not a model | bench |
 
-Not ranked: `usbprn` (no source). The `usb-wdm-nonfree` set is vendor
+Not ranked: `usbprn`, whose model came with it: `usb-printer` in
+[qemu-printer.patch](qemu-printer.patch) (owner, 2026-10-31), covering the
+three class requests, settable port status, bulk OUT to a host file and PJL
+replies on bulk IN; legs on 98 SE under xHCI98, NUSB's EHCI and Windows'
+UHCI, and ME ([usbprn-legs](2026-10-31-usbprn-legs.md)). Not modelled: a
+printer that stalls OUT while unread IN data waits, `GET_DEVICE_ID` that
+wants the plain interface number in `wIndex`, protocol 03 alternates, an
+MFP. The `usb-wdm-nonfree` set is vendor
 binaries, not class drivers written here (ASIX AX88772/AX88179 for XP-7,
 Realtek RTL815x for XP-7, x360c/x360wc, CH341, FTDI/FT2232D, NUSB's mass
 storage): their characteristics are not designed here, so no profile is

@@ -23,7 +23,7 @@ These drivers are experimental. They may not work with every device and can make
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
 | `libusb0` | libusb-win32 0.1.12.2, driver and library | 98 SE, ME |
-| `usbprn` | USB printers and USB-to-parallel cables (not built yet) | 98 SE (5) |
+| `usbprn` | USB printers and USB-to-parallel cables, as printer ports USB001, USB002, ... (from the next release; source in `src/print/usbprn/`) | 98 SE, ME (5) |
 
 1. ME, and XP onward: listed devices only; Windows' own driver serves the rest.
 2. RNDIS on XP to 7 is an INF for Windows' own driver.
@@ -31,7 +31,9 @@ These drivers are experimental. They may not work with every device and can make
    the `x360c` driver's list: 98 SE to 2000. The Xbox 360 wireless
    receiver: 98 SE and ME.
 4. 98 SE needs a USB storage driver set (such as NUSB's) installed first.
-5. ME only if its own USB printing proves unable to print.
+5. 98 SE: a driver and a port monitor. ME: an INF for ME's own USB printing
+   driver. Add the printer by hand (Add Printer, its model, port USB001); most
+   current inkjets and host-based printers have no Windows 98 or ME driver.
 6. XP and Vista: the RTL8153D, 8156 and 8156B. XP, Vista and 7: the
    RTL8157 and 8159. Realtek's own drivers serve the other chips there.
 
@@ -61,7 +63,7 @@ that Windows.
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
 | `noaud` | Real device (VM) | - | - | - | - | - | - |
 | `libusb0` | Simulator only (i) | Not evaluated | - | - | - | - | - |
-| `usbprn` | Not built | Not built | - | - | - | - | - |
+| `usbprn` | Simulator only | Simulator only | - | - | - | - | - |
 
 - (a) Under NUSB's EHCI, 8-channel playback stalls and Full Speed was not run; the other layouts pass.
 - (b) Playback works; recording fails (half speed, no sound).

@@ -1,6 +1,9 @@
 # USB printing on Windows 98 SE (printer class 07)
 
-Status: design draft, 2026-10-20. No code yet.
+Status: design of 2026-10-20, built 2026-10-31 (sections 4, 5, 7 to 10;
+M1 and M3), revised by what the build and its legs settled (section 18).
+The child PDO of section 6 (M2) is not built. On ME the package is an INF
+over ME's own driver (section 2).
 
 ## 1. Purpose and devices served
 
@@ -77,16 +80,32 @@ Printer class installer: `msprint.inf` `[ClassAddReg]`
   USBPRINT.SYS" says `usbprint.sys` and `usbprint.inf` ship "starting with
   Windows 2000". Their media was not read on this host for this document
   (unverified).
-- **ME: probably no, but unverified.** ME ships `usbprint.sys` and
+- **ME: yes, an INF (M0, 2026-10-31).** ME ships `usbprint.sys` and
   `usbmon.dll` and registers the monitor. However, no INF in ME's cabinets
   names `Class_07` or `usbprint`. ME `subase.inf` `[setup.del.inf]` even
-  deletes a `usbprint.inf` left by an earlier system. So how ME binds
-  `usbprint.sys` to a printer was not found. Milestone M0 settles it: plug a
-  printer into ME, then read the devnode's `Driver` key and the INF it names.
-  Owner, 2026-10-20: ME is targeted only if M0 shows that ME cannot print.
-  If ME prints, this package does not target ME. If it does not, the 98 SE
-  package's INF is tried on ME (same NTKERN and spooler model) and the
-  folder becomes `w98se-me`.
+  deletes a `usbprint.inf` left by an earlier system. Owner, 2026-10-20: ME
+  is targeted only if M0 shows that ME cannot print.
+  - M0 (stock ME, no package of ours, Windows' own UHCI stack, the QEMU
+    printer model of section 14): the Add New Hardware wizard found "QEMU
+    USB Printer" and, with the ME CD present, "was unable to locate the
+    software for this device". The devnode got the interface class ids as
+    compatible ids (`USB\CLASS_07&SUBCLASS_01&PROT_02`,
+    `USB\CLASS_07&SUBCLASS_01`, `USB\CLASS_07`), class Unknown and no
+    `Driver` value; Add Printer listed COM1, FILE and LPT1, no USB port. So
+    ME cannot print to a USB printer as shipped, and ME is a target.
+  - An INF alone is enough: `USBPRNME.INF` binds the interface class ids to
+    ME's own `usbprint.sys` (`DevLoader=*ntkern`, `NTMPDriver=usbprint.sys`,
+    no files copied). Installed on the same stock ME, it bound silently;
+    `usbprint.sys` wrote `PortName=USB001` into the devnode, Add Printer
+    listed "USB001 Virtual printer port for USB" (ME's `usbmon.dll`), and
+    the in-box HP LaserJet 4 driver printed its test page there (71,023
+    bytes of PJL and PCL reached the printer).
+  - So ME's folder is `wme` with `USBPRNME.INF` alone, instead of the
+    `w98se-me` the draft planned: ME's own driver and monitor do the work,
+    and the 98 SE package is not tried there. ME's printer child
+    (`USBPRINT\HEWLETT-PACKARDHP_LA22F9` for "HP LaserJet 4") matched no
+    in-box INF line, which names `...HP_La185F`, so on ME too the printer is
+    added by hand on `USB001` (section 6).
 
 ## 3. Target systems and the plumbing on 98 SE
 
@@ -401,6 +420,31 @@ package's own `usbprn.h` defines the five values.
 
 ## 6. Plug and Play printer install from the 1284 id
 
+**Not built in the first release (2026-10-31).** What the 98 DDK documents,
+read again for this decision (`HELP_OTHER.CHM`, device installation pages
+`devinst_19fd`, `devinst_1c4w` to `devinst_1c8l`), settles the question as
+far as documentation can:
+
+- The DDK documents Plug and Play printer install for **parallel ports
+  only**: `LPTENUM` reads the 1284 id in nibble mode and forms the
+  `LPTENUM\` id; "Plug and Play Printer Installation" speaks of a printer
+  "connected locally ... through a parallel port".
+- It documents the id format and the ranking (6.1) but withholds the
+  checksum ("beyond the scope of this documentation").
+- It says nothing about a printer devnode under any other enumerator, and
+  nothing about how the Printer class installer picks the new printer's
+  port (the `PortMonitor` key names a monitor, not a port).
+
+So PnP install from a USB 1284 id is not documented for 98 SE, and the
+checksum stays unknown: CRC-16/ARC reproduces none of the HP LaserJet ids
+tried, and ME's own `usbprint.sys` produced `HEWLETT-PACKARDHP_LA22F9`
+where 98 SE's and ME's INFs say `...HP_La185F` for the same "HP LaserJet 4"
+(section 2), so even Microsoft's own USB child id misses the in-box line.
+The first release therefore ships the manual install (6.4): Add Printer,
+the model, port `USB00n`. That is what ME's own support needs too. The
+child PDO stays designed below for a later milestone (M2), behind an owner
+decision (section 16).
+
 ### 6.1 How 98 SE matches a printer to its INF
 
 The 98 DDK documents this for parallel printers (`HELP_OTHER.CHM`,
@@ -692,10 +736,20 @@ The child devnode needs no INF of ours. It is Class Printer, installed by
 has no INF for leaves an "unknown" Printer device and a working `USB00n`
 port. The manual says to add the printer by hand (section 6.4).
 
-**Release folder**:
+**`USBPRNME.INF`** (ME; section 2): the same interface-level class ids,
+protocols 01 and 02, bound to ME's own `usbprint.sys` (`DevLoader=*ntkern`,
+`NTMPDriver=usbprint.sys`); no files of its own. ME's `usbmon.dll` gives
+the `USBnnn` ports.
+
+The INF also writes the one setting the monitor reads, at its default and
+without overwriting a user's value: `HKLM\Software\usb-wdm-free\usbprn`,
+`ResetOnCancel`, DWORD 0 (section 8). The build's INF gate checks that
+every `UmReadSetting` in `usbprnmn.c` has such a line.
+
+**Release folders**:
 
 - `free/print/usbprn/w98se/`: `USBPRN.SYS`, `USBPRNMN.DLL`, `USBPRN.INF`.
-- A `w98se-me` folder replaces it only if M0 shows ME cannot print.
+- `free/print/usbprn/wme/`: `USBPRNME.INF`.
 - Folder names follow the one scheme of `README.md`, "Layout".
 - No 2000-and-later folder: nothing is needed there (section 2).
 
@@ -764,8 +818,15 @@ Not used:
 
 ## 14. Test plan
 
-No QEMU printer model exists (`candidates.md`). Development uses real
-printers passed into a 98 SE guest with `usb-host`. Acceptance is on real
+Owner, 2026-10-31: before the owner's bench, the legs run against a QEMU
+printer model, `usb-printer` in [qemu-printer.patch](../testing/qemu-printer.patch)
+(test-only, with a qtest): interface 07/01/02 (or 07/01/01), a configurable
+IEEE 1284 id for `GET_DEVICE_ID`, `GET_PORT_STATUS` with paper-empty, error
+and offline raised at run time, `SOFT_RESET` (21h, and 23h), bulk OUT into a
+host file, bulk IN with PJL status replies, and a paced OUT for jobs that
+can be interrupted. This changes the owner's earlier "real devices only, no
+gadget rig" rule for this class only (`candidates.md`, "Decisions"). The real
+printers below stay owed to the owner's bench; acceptance is on real
 hardware.
 
 **Real devices** (Owner, 2026-10-20: one or two mainstream devices per
@@ -880,6 +941,17 @@ Owner, 2026-10-20, on the questions this draft raised:
   generically (section 9).
 - **Test hardware**: real devices, one or two mainstream ones per class
   (section 14).
+
+Owner, 2026-10-31:
+
+- **Build `usbprn` now**; it ships in a later usb-wdm-free release.
+- **Test with a QEMU printer model first** (section 14): a small emulated
+  printer-class device in this repository's QEMU patch set, answering the
+  three class requests, with settable status, its bulk OUT in a host file.
+  This changes the earlier "real devices only, no gadget rig" rule for this
+  class; the real-printer bench stays owed.
+- **ME first** (M0, section 2): it could not print; an INF over ME's own
+  driver is ME's package.
 - **Back-ported EHCI stacks**: NUSB's EHCI stack on 98 SE is fully
   supported and in the test matrix.
 - **Priority**: low. `usbprn` is built after the other drivers of this
@@ -888,7 +960,9 @@ Owner, 2026-10-20, on the questions this draft raised:
 
 ### Open questions
 
-None at present.
+- **M2, the child PDO** (section 6): not built. Whether to build it later,
+  given that the DDK documents PnP printer install for parallel ports only
+  and the 1284 checksum is unknown.
 
 ## 17. Unverified, and what would settle it
 
@@ -911,3 +985,76 @@ None at present.
 | `IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DEVICE)` maps to the `Enum` hardware key on 98 (also `serial.md` 5.1.4) | M1 |
 | 98 SE "Capture Printer Port" to a share on the same machine | M3, recorded only |
 | Size: about 1,500 lines for the driver and 1,000 for the monitor | Estimate |
+
+## 18. What the build and the legs settled (2026-10-31)
+
+Built: `USBPRN.SYS`, `USBPRNMN.DLL`, `USBPRN.INF`, `USBPRNME.INF`
+(`src/print/usbprn/`, `build.cmd free|trace`), with host tests of the pure
+parts (`prncore.c`: alternate choice, 1284 id parsing, port names, write
+chunking, status mapping) and the import, export and INF gates. The legs
+ran against the QEMU printer model (section 14); the record is
+[2026-10-31-usbprn-legs.md](../testing/2026-10-31-usbprn-legs.md). Where the
+build departs from the draft above, this section is the rule:
+
+- **Port memory (4.2).** The number is remembered as the devnode's own
+  `PortName` (`USB00n`, hardware key), as ME's `usbprint.sys` does it, not
+  in a driver-key table. At start the driver scans `HKLM\Enum\USB` for
+  `PortName` values: a number another devnode names (an unplugged printer)
+  or a started printer holds is not given; a scan that could not read
+  every key gives no new number (start fails rather than risk a
+  duplicate). The monitor's port list is the same scan, limited to
+  devnodes whose driver is `USBPRN.SYS`, so an unplugged printer keeps its
+  port. `AddPort` and `DeletePort` only explain this.
+- **Monitor registration (4.1).** 98 SE's device installer runs the INF's
+  `RunOnce` entry at the end of the install, and `AddMonitor` there makes
+  the ports appear with no restart. `AddMonitor` needs the environment
+  `"Windows 4.0"`: NULL gives `ERROR_INVALID_ENVIRONMENT` (1805).
+- **Job flow (4.3).** `StartDocPort` opens the device but does not fail
+  when the printer is absent: `WritePort` fails instead and the spooler's
+  retry dialog lets the user plug it in. `WritePort` returns TRUE with the
+  bytes moved when some moved, and FALSE only when none did. `ReadPort`
+  opens a read-only handle of its own for each read (a language monitor
+  reads from its own thread while the job's handle may be closing).
+- **Write timeout (4.3, 7.1).** 98 SE passed 45000000 for the printer's
+  "Transmission retry: 45 seconds", both in `SetPortTimeOuts` and in
+  `PRINTER_INFO_5`; the dialog greys those fields for a non-LPT port. The
+  monitor takes the printer's value, read as seconds (1 to 3600), ms (3601
+  to 999999) or that larger unit, when the result is 1 s to 1 hour; else
+  `SetPortTimeOuts` when it is 1 s to 1 hour in ms; else 45 s.
+- **Status errors (7.1), observed on 98 SE.** `ERROR_OUT_OF_PAPER`: "The
+  printer is out of paper. Add more paper. To continue printing, click
+  retry. Windows will automatically retry after 5 seconds." with Retry and
+  Cancel. `ERROR_NOT_READY`: "The printer is not ready. Make sure it is
+  turned on and online.", also with Retry. `ERROR_GEN_FAILURE` ("A device
+  attached to the system is not functioning.") and `ERROR_TIMEOUT` (no
+  text) got an OK-only box and the job was deleted. So paper empty maps to
+  `ERROR_OUT_OF_PAPER` and every other cause (error, offline, a benign
+  status, a printer gone) to `ERROR_NOT_READY`.
+- **Language monitor (7.3).** With the in-box HP LaserJet 4 `.BIDI` driver,
+  98's `PJLMON.DLL` called `GetPrinterDataFromPort` with ControlID 17 at the
+  start of a job and 7 at its end, and read the port with read timeouts of
+  2 s and 5 s. Both ControlIDs fail with `ERROR_INVALID_FUNCTION` and
+  printing goes on.
+- **Driver I/O (5.1).** URBs travel on the driver's own IRPs
+  (`IoInitializeIrp`), so a cancel never races their release. Bulk
+  transfers wait in 1.5 s slices against a monotonic deadline
+  (`KeQueryInterruptTime`), reading `GET_PORT_STATUS` between slices; a
+  transfer past the write timeout is aborted (or cancelled when the abort
+  does not end it) and the write returns short. A stop, removal or D3
+  aborts the pipes and drains the write, the read and endpoint-0 requests
+  before going on; D3 does this in a work item, off the power dispatch
+  path, and I/O is admitted again only after a successful D0.
+- **Removal (8).** With a handle open at removal, `IoDeleteDevice` waits
+  for the last close. On 98 SE both orders were seen: the spooler's failed
+  write closed the job handle before the removal finished (the FDO went at
+  once), or after it (the FDO went at that last close); either way the
+  retry after the replug finished the job with no byte lost or doubled.
+  Pipe aborts and resets go one at a time, and a stop or removal that
+  waits for I/O aborts again once a second, not every 100 ms: one removal
+  under xHCI98 once never finished with the earlier, faster abort loop, a
+  stall not reproduced since (the testing record).
+- **Write access (9).** 98 SE's NTKERN supplies the create's security
+  context, so the one-writer rule works.
+- **`IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DEVICE)`** opens the devnode's
+  `Enum` hardware key on 98 SE (the `PortName` written there is what the
+  monitor's scan finds).

@@ -49,7 +49,9 @@ Chips (--chip): 8152 (id 4C10, 0BDA:8152, 100 Mb/s), 8153 (id 5C10,
 --phy-patched lets the 8159 link above 5 Gb/s, as with its PHY patch.
 --serial gives the device a serial number string (index 3; by default it
 has none) and --serial-stall N STALLs the first N reads of it in this run,
-so a host's instance id rules can be exercised (xHCI98 task 45.40).
+after the first K answered with --serial-skip K (a re-enumeration's reads
+failing once the first ones passed), so a host's instance id rules can be
+exercised (xHCI98 task 45.40).
 No physical USB device is accessed.
 """
 import argparse
@@ -548,7 +550,8 @@ def usb_string(text):
 class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
                  link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
-                 power_cut=False, phy_patch=False, serial=None, serial_stall=0):
+                 power_cut=False, phy_patch=False, serial=None, serial_stall=0,
+                 serial_skip=0):
         self.connection, self.trace, self.now = connection, trace, now
         self.chip_name, self.speed = chip, speed or default_speed(chip)
         self.chip = Chip(chip, ext_init, power_cut, phy_patch)
@@ -567,6 +570,7 @@ class Model:
         if serial is not None:
             self.strings[3] = usb_string(serial)
         self.serial_stall = serial_stall           # serial string reads still to STALL
+        self.serial_skip = serial_skip             # reads answered before the STALLs
         self.bulk_max = bulk_size(self.speed)
         self.link_after, self.flap_after, self.flap_for = link_after, flap_after, flap_for
         self.peer_caps = 0
@@ -790,7 +794,9 @@ class Model:
     # -- control -------------------------------------------------------------
     def descriptor(self, kind, number):
         if kind == 3:
-            if number == 3 and number in self.strings and self.serial_stall > 0:
+            if number == 3 and number in self.strings and self.serial_skip > 0:
+                self.serial_skip -= 1
+            elif number == 3 and number in self.strings and self.serial_stall > 0:
                 self.serial_stall -= 1
                 self.log('serial_stalled', left=self.serial_stall)
                 return None
@@ -977,11 +983,15 @@ def main():
     ap.add_argument('--serial', help='a serial number string (iSerialNumber 3); none by default')
     ap.add_argument('--serial-stall', type=int, default=0,
                     help='STALL the first N reads of the serial number string of this run')
+    ap.add_argument('--serial-skip', type=int, default=0,
+                    help='answer the first K reads of the serial string before those STALLs')
     args = ap.parse_args()
     if args.serial is not None and not (0 < len(args.serial) <= 126 and args.serial.isascii()):
         ap.error('--serial needs 1 to 126 ASCII characters (a string descriptor holds 126)')
-    if args.serial_stall < 0:
-        ap.error('--serial-stall needs 0 or more')
+    if args.serial_stall < 0 or args.serial_skip < 0:
+        ap.error('--serial-stall and --serial-skip need 0 or more')
+    if args.serial_skip and not args.serial_stall:
+        ap.error('--serial-skip needs --serial-stall')
     if args.serial_stall and args.serial is None:
         ap.error('--serial-stall needs --serial')
     speed = args.speed or default_speed(args.chip)
@@ -998,7 +1008,8 @@ def main():
             model = Model(connection, trace, args.chip, speed, link_after=args.link_after,
                           flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
                           ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched,
-                          serial=args.serial, serial_stall=args.serial_stall)
+                          serial=args.serial, serial_stall=args.serial_stall,
+                          serial_skip=args.serial_skip)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

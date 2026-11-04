@@ -114,19 +114,19 @@ unsigned int UacPlanQueueMs(unsigned long raw);
 #define UAC_REALTIME_DEFAULT 1U
 unsigned int UacPlanRealtime(unsigned long raw);
 
-/* The worker's throttle (19.6): more than UAC_SPIN_PASSES passes of its
- * loop inside UAC_SPIN_WINDOW_100NS (interrupt-time units) is a stack that
- * keeps waking it with nothing to wait for; the worker then sleeps
- * UAC_SPIN_SLEEP_100NS so a real-time worker can never hold a processor.
- * In normal running a pass follows each URB completion, about one per 4 ms.
- * UacPlanSpin: given the window's start and its pass count so far (this
- * pass included) at now, 1 when the worker must sleep; *restart 1 when the
- * window starts again at now (elapsed, or after a sleep). */
-#define UAC_SPIN_PASSES 32U
-#define UAC_SPIN_WINDOW_100NS 100000UL
-#define UAC_SPIN_SLEEP_100NS 10000L
-unsigned int UacPlanSpin(unsigned __int64 start, unsigned int passes,
-                         unsigned __int64 now, unsigned int *restart);
+/* The worker's throttle (19.6). A pass whose wait would not block (the
+ * wake already signalled, read with a zero-timeout wait) is a pass without
+ * yielding; more than UAC_SPIN_PASSES of them in a row - however long each
+ * takes - and the worker sleeps UAC_SPIN_SLEEP_100NS, so a real-time worker
+ * can never hold a processor. The count restarts only after a wait that
+ * blocked or a sleep. In normal running the worker blocks between URB
+ * completions (at most about 1.25 a millisecond, High Speed feedback
+ * included); a sleep there would cost 10 ms against a queue of at least
+ * 16 ms. UacPlanYield: the passes without yielding so far, this one
+ * included; 1 when the worker must sleep. */
+#define UAC_SPIN_PASSES 16U
+#define UAC_SPIN_SLEEP_100NS 100000L
+unsigned int UacPlanYield(unsigned int passes);
 
 /* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
  * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered

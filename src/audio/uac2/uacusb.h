@@ -47,8 +47,8 @@ typedef struct UAC_USB_STATS {
      * usable was), whether it is on, and the priority the worker set (0
      * when it set none; KeSetPriorityThread's own answer is not kept). */
     ULONG RealtimeRead, Realtime, WorkerPriority;
-    /* The worker's sleeps for passing UAC_SPIN_PASSES in one window (19.6):
-     * 0 in normal running. */
+    /* The worker's sleeps for more than UAC_SPIN_PASSES passes in a row
+     * without a blocking wait (19.6): 0 in normal running. */
     ULONG WorkerThrottles;
 } UAC_USB_STATS;
 

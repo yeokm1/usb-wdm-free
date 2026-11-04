@@ -1783,14 +1783,20 @@ that range (MMCSS).
   it has any effect there.
 - The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
   (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
-- The throttle (build 21, Codex's review of build 20): the wait on `Wake`
-  bounds nothing if a stack completes URBs inline again and again with
-  nothing delivered (capture with zero-length packets, no `Fail`), and a
-  real-time worker would then hold a single processor, the thread that
-  asks Stop included. So more than 32 passes of the loop inside 10 ms
-  (`UacPlanSpin`; about one pass per 4 ms URB in normal running) make the
-  worker sleep 1 ms (`KeDelayExecutionThread`, already imported), counted
-  in the stats' `WorkerThrottles` (0 in normal running).
+- The throttle (build 22; build 21's pass-rate window, after Codex's
+  review of build 20, let a slow non-blocking loop through): the wait on
+  `Wake` bounds nothing if a stack completes URBs inline again and again
+  with nothing delivered (capture with zero-length packets, no `Fail`),
+  and a real-time worker would then hold a single processor, the thread
+  that asks Stop included. So before each wait a zero-timeout wait on
+  `Wake` reads whether it would block (no new import; `KeReadStateEvent`
+  has no 98 SE evidence). A pass that would not is counted; more than 16
+  in a row (`UacPlanYield`), however long each takes, make the worker
+  sleep 10 ms (`KeDelayExecutionThread`, already imported), counted in
+  the stats' `WorkerThrottles` (0 in normal running). The count restarts
+  only after a wait that blocked or a sleep. In normal running the worker
+  blocks between completions (at most about 1.25 a millisecond); a false
+  trigger would cost 10 ms against a queue of at least 16 ms.
 - Read at every RUN (build 21): a stream kept across a pause or stop
   (`Drain` without destroy) takes the value again at its next RUN, so
   `Uac2Realtime` 0 applies at the next start of playback.

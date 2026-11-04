@@ -82,17 +82,10 @@ static void QueueTests(void)
     CHECK(UacPlanRealtime(UAC_QUEUE_NONE) == 1 && UAC_REALTIME_DEFAULT == 1);
     CHECK(UacPlanRealtime(0) == 0);
     CHECK(UacPlanRealtime(1) == 1 && UacPlanRealtime(2) == 1 && UacPlanRealtime(0x80000000UL) == 1);
-    /* The worker's throttle (19.6). */
-    {
-        unsigned int restart;
-        CHECK(UacPlanSpin(1000, 1, 1000, &restart) == 0 && restart == 0);
-        CHECK(UacPlanSpin(1000, UAC_SPIN_PASSES, 1000 + UAC_SPIN_WINDOW_100NS - 1, &restart) == 0 && restart == 0);
-        CHECK(UacPlanSpin(1000, UAC_SPIN_PASSES + 1, 1050, &restart) == 1 && restart == 1);
-        CHECK(UacPlanSpin(1000, UAC_SPIN_PASSES + 1, 1000 + UAC_SPIN_WINDOW_100NS, &restart) == 0 && restart == 1);
-        CHECK(UacPlanSpin(5000, 3, 1000, &restart) == 0 && restart == 1);
-        /* Normal running, one pass every 4 ms: never a sleep. */
-        CHECK(UacPlanSpin(0, 3, 3 * 40000, &restart) == 0);
-    }
+    /* The worker's throttle (19.6): passes without a blocking wait. */
+    CHECK(UacPlanYield(1) == 0 && UacPlanYield(UAC_SPIN_PASSES) == 0);
+    CHECK(UacPlanYield(UAC_SPIN_PASSES + 1) == 1 && UacPlanYield(1000) == 1);
+    CHECK(UAC_SPIN_PASSES == 16 && UAC_SPIN_SLEEP_100NS == 100000);
     /* The table, no ring bound. */
     for (i = 1; i <= 3; i++) {
         CHECK(UacPlanQueue(1, i, 16, 0, 0, 0, 0, &packets, &span) == 4 && span == 4000 && packets == (32U >> (i - 1)));

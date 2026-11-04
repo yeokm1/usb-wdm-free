@@ -39,6 +39,10 @@ typedef struct UAC_USB_STATS {
     /* Build 10: the stream's format and route. */
     ULONG Capture, Channels, Bits, Subslot, Interface, Alternate, Sync, ClockId;
     ULONG CapturedBytes;
+    /* Build 19 (docs/design/uac2.md 19.3): Uac2QueueMs as read
+     * (UAC_QUEUE_NONE when nothing usable was), the milliseconds in force,
+     * the data URBs kept queued and one data URB's span. */
+    ULONG QueueRead, QueueMs, DataTransfers, TransferUs;
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16
@@ -60,7 +64,9 @@ void UacUsbClose(UAC_DEV *dev);
 NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG *length);
 
 /* Stream: one direction, one format, one rate. Create plans the alternate
- * (UacPlanPick) and changes nothing on the device. Start sets the clock
+ * (UacPlanPick) and the queue (UacPlanQueue: queueMs as UacPlanQueueMs
+ * gave it for queueRead, bounded by the client's ring of ringBytes) and
+ * changes nothing on the device. Start sets the clock
  * path (selector inputs, frequency; a running stream on the same clock
  * keeps its rate: a different rate is STATUS_DEVICE_BUSY), selects the
  * alternate and runs the worker. Stop closes repost, cancels every owned
@@ -72,7 +78,7 @@ NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG
 NTSTATUS UacUsbCreate(UAC_DEV *dev, int capture, UAC_BYTE terminal, ULONG channels,
     ULONG subslot, ULONG bits, ULONG config, ULONG rate,
     UAC_USB_FILL fill, UAC_USB_CAPTURE captured, UAC_USB_PROGRESS progress,
-    PVOID context, UAC_USB **out);
+    PVOID context, ULONG queueRead, ULONG queueMs, ULONG ringBytes, UAC_USB **out);
 NTSTATUS UacUsbStart(UAC_USB *state);
 void UacUsbStop(UAC_USB *state);
 void UacUsbDestroy(UAC_USB *state);

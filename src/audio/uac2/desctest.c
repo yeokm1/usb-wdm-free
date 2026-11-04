@@ -69,6 +69,61 @@ static void CheckControlStructure(const UAC_BYTE *bytes, unsigned int size)
     CHECK(Parse(bytes, size) == UAC_OK);
 }
 
+/* docs/design/uac2.md section 19.4: queue depth from milliseconds. */
+static void QueueTests(void)
+{
+    unsigned int packets, i;
+    unsigned long span;
+    static const unsigned long raw[] = { 0, 15, 16, 17, 33, 127, 128, 129, 0xFFFFFFFEUL };
+    static const unsigned int ms[] = { 16, 16, 16, 17, 33, 127, 128, 128, 128 };
+    for (i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) CHECK(UacPlanQueueMs(raw[i]) == ms[i]);
+    CHECK(UacPlanQueueMs(UAC_QUEUE_NONE) == UAC_QUEUE_DEFAULT_MS && UAC_QUEUE_DEFAULT_MS == 32);
+    /* The table, no ring bound. */
+    for (i = 1; i <= 3; i++) {
+        CHECK(UacPlanQueue(1, i, 16, 0, 0, 0, 0, &packets, &span) == 4 && span == 4000 && packets == (32U >> (i - 1)));
+        CHECK(UacPlanQueue(1, i, 32, 0, 0, 0, 0, &packets, &span) == 8);
+        CHECK(UacPlanQueue(1, i, 128, 0, 0, 0, 0, &packets, &span) == 32);
+    }
+    CHECK(UacPlanQueue(1, 4, 16, 0, 0, 0, 0, &packets, &span) == 2 && packets == 8 && span == 8000);
+    CHECK(UacPlanQueue(1, 4, 32, 0, 0, 0, 0, &packets, &span) == 4);
+    CHECK(UacPlanQueue(1, 4, 128, 0, 0, 0, 0, &packets, &span) == 16);
+    CHECK(UacPlanQueue(1, 5, 32, 0, 0, 0, 0, &packets, &span) == 2 && span == 16000);
+    CHECK(UacPlanQueue(1, 5, 128, 0, 0, 0, 0, &packets, &span) == 8);
+    CHECK(UacPlanQueue(1, 16, 128, 0, 0, 0, 0, &packets, &span) == 2 && packets == 8 && span == 32768000UL);
+    CHECK(UacPlanQueue(1, 0, 32, 0, 0, 0, 0, &packets, &span) == 8 && span == 4000);
+    CHECK(UacPlanQueue(0, 1, 16, 0, 0, 0, 0, &packets, &span) == 4 && packets == 4 && span == 4000);
+    CHECK(UacPlanQueue(0, 1, 32, 0, 0, 0, 0, &packets, &span) == 8);
+    CHECK(UacPlanQueue(0, 1, 128, 0, 0, 0, 0, &packets, &span) == 32);
+    /* Rounding up to whole URBs; clamped inputs. */
+    CHECK(UacPlanQueue(1, 1, 17, 0, 0, 0, 0, NULL, NULL) == 5);
+    CHECK(UacPlanQueue(1, 1, 33, 0, 0, 0, 0, NULL, NULL) == 9);
+    CHECK(UacPlanQueue(1, 1, 127, 0, 0, 0, 0, NULL, NULL) == 32);
+    CHECK(UacPlanQueue(1, 1, 0, 0, 0, 0, 0, NULL, NULL) == 4);
+    CHECK(UacPlanQueue(1, 1, 1000, 0, 0, 0, 0, NULL, NULL) == 32);
+    CHECK(UacPlanQueue(1, 4, 17, 0, 0, 0, 0, NULL, NULL) == 3);
+    /* The ring bound: 16-bit stereo 48 kHz, one URB 768 + 96 + 32 x 4 = 992. */
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 4096, NULL, NULL) == 3);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 16384, NULL, NULL) == 8);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 16384, NULL, NULL) == 15);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 9 * 992, NULL, NULL) == 8);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 9 * 992 - 1, NULL, NULL) == 7);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 992, NULL, NULL) == 2 &&
+          UacPlanQueue(1, 1, 32, 192000, 4, 0, 2 * 992, NULL, NULL) == 2 &&
+          UacPlanQueue(1, 1, 32, 192000, 4, 0, 3 * 992, NULL, NULL) == 2);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 100, NULL, NULL) == 2);
+    /* 44.1 kHz rounds up: 176400 B/s over 4 ms is 705.6, so 706 + 89 + 128. */
+    CHECK(UacPlanQueue(1, 1, 128, 176400, 4, 0, 6 * 923, NULL, NULL) == 5);
+    CHECK(UacPlanQueue(1, 1, 128, 176400, 4, 0, 6 * 923 - 1, NULL, NULL) == 4);
+    /* 384 kHz, 8 channels, 32-bit under the 1 MiB cap: 49152 + 6144 + 1024,
+     * or the endpoint's capacity when smaller (1600 x 32 = 51200). */
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 0, 1048576UL, NULL, NULL) == 17);
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 1600, 1048576UL, NULL, NULL) == 19);
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 3072, 1048576UL, NULL, NULL) == 17);
+    /* Full Speed and bInterval 4 under a ring. */
+    CHECK(UacPlanQueue(0, 1, 128, 192000, 4, 0, 16384, NULL, NULL) == 17);
+    CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);
+}
+
 int main(int argc, char **argv)
 {
     FILE *f;
@@ -298,6 +353,7 @@ int main(int argc, char **argv)
                 (void)UacClock(&parsed, parsed.Alt[j].Terminal, NULL, &source);
         }
     }
+    QueueTests();
     printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks\n", checks, n);
     return 0;
 }

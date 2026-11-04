@@ -71,6 +71,7 @@ static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN captur
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
+static ULONG GetQueueRaw(PDEVICE_OBJECT fdo);
 #ifndef _WIN64
 /* Windows 98 SE's NTKERN exports no IoAllocateWorkItem/IoQueueWorkItem/
  * IoFreeWorkItem (link probe against the 98 DDK wdm.lib, 2026-10-22). The
@@ -122,6 +123,7 @@ struct UAC_DIR {
     UAC_USB *Usb;
     UacStream *Stream;          /* the stream Usb serves */
     ULONG Channels, Subslot;    /* its device format */
+    ULONG QueueRead, QueueMs;   /* Uac2QueueMs as the open pin read it (19.3) */
     UAC_DIR_FORMATS Formats;
 };
 
@@ -772,7 +774,8 @@ private:
                 d->Subslot = d->Formats.Format[i].Subslot;
                 status = UacUsbCreate(w->dev, d->Capture, d->Formats.Format[i].Terminal,
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
-                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d, &d->Usb);
+                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d,
+                    d->QueueRead, d->QueueMs, stream->BufferSize(), &d->Usb);
             }
             /* The device may have lost its levels in D3 or a stop. */
             if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
@@ -1182,9 +1185,14 @@ public:
         KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
         UAC_STREAM_HOOKS hooks = { d, Run, Halt, Close, Notify, Accept };
         d->Attempts++;
+        /* One reading sizes this pin's ring and, at RUN, its queue (19.3).
+         * The gate admits one stream a direction, so nothing else uses
+         * d->Queue* while this one is open. */
+        ULONG queueRead = GetQueueRaw(device), queueMs = UacPlanQueueMs(queueRead);
         NTSTATUS status = removed || pnpBlocked || powerBlocked ? STATUS_DEVICE_NOT_READY :
             UacStream::Create((PMINIPORTWAVECYCLIC)this, &d->Active, format,
-                stream, dma, service, &hooks, device, capture);
+                stream, dma, service, &hooks, device, capture, queueMs);
+        if (NT_SUCCESS(status)) { d->QueueRead = queueRead; d->QueueMs = queueMs; }
         if (NT_SUCCESS(status)) d->Created++;
         if (!removed) {
             Record(device, 30, status);
@@ -1358,7 +1366,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 18;
+    ULONG build = 19;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1448,6 +1456,27 @@ static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size)
         ZwClose(key);
     }
     return ok;
+}
+
+/* Uac2QueueMs (docs/design/uac2.md 19.3): a REG_DWORD, or the 4-byte
+ * little-endian REG_BINARY a 9x INF writes; UAC_QUEUE_NONE otherwise. */
+static ULONG GetQueueRaw(PDEVICE_OBJECT fdo)
+{
+    HANDLE key;
+    UNICODE_STRING u;
+    UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 16];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+    ULONG got = 0, raw = UAC_QUEUE_NONE;
+    Name(&u, L"Uac2QueueMs");
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
+            PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &key))) {
+        if (NT_SUCCESS(ZwQueryValueKey(key, &u, KeyValuePartialInformation, info, sizeof(buffer), &got)) &&
+            (info->Type == REG_DWORD || info->Type == REG_BINARY) && info->DataLength == 4)
+            raw = info->Data[0] | ((ULONG)info->Data[1] << 8) | ((ULONG)info->Data[2] << 16) |
+                  ((ULONG)info->Data[3] << 24);
+        ZwClose(key);
+    }
+    return raw;
 }
 
 static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)

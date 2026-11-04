@@ -19,7 +19,9 @@
 #include "uacrate.h"
 #include "uacwatch.h"
 
-#define DATA_SLOTS 4
+/* At most UAC_QUEUE_MAX_URBS data URBs (docs/design/uac2.md 19.4); a
+ * stream uses DataSlots of them. */
+#define DATA_SLOTS UAC_QUEUE_MAX_URBS
 #define FEEDBACK_SLOTS 2
 #define SLOTS (DATA_SLOTS + FEEDBACK_SLOTS)
 #define FEEDBACK_PACKETS 8
@@ -58,6 +60,7 @@ struct UAC_USB {
     UAC_DEV *Dev;
     UAC_ALT Alt;
     ULONG Capture, Rate, FrameBytes, Capacity, FeedbackBytes, SlotBytes, DataPackets;
+    ULONG DataSlots, TransferUs, QueueRead, QueueMs; /* 19.4, fixed at Create */
     UAC_CLOCK_PATH Path;    /* the claimed clock path while ClockHeld */
     BOOLEAN Feedback, ClockHeld;
     USBD_PIPE_HANDLE DataPipe, FeedbackPipe;
@@ -1080,8 +1083,10 @@ void UacUsbClose(UAC_DEV *d)
 NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels,
     ULONG subslot, ULONG bits, ULONG config, ULONG rate,
     UAC_USB_FILL fill, UAC_USB_CAPTURE captured, UAC_USB_PROGRESS progress,
-    PVOID context, UAC_USB **out)
+    PVOID context, ULONG queueRead, ULONG queueMs, ULONG ringBytes, UAC_USB **out)
 {
+    unsigned int packets;
+    unsigned long span;
     UAC_USB *s;
     unsigned int index;
     const UAC_ALT *a;
@@ -1101,15 +1106,16 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     s->Feedback = !capture && UacPlanSync(a) == 1;
     s->FeedbackBytes = d->HighSpeed ? 4 : 3;
     /* About 4 ms per data URB at High Speed bInterval 1-3 and at Full
-     * Speed (16 ms queued in DATA_SLOTS); 8 ms at bInterval 4 (32 ms), as
-     * High Speed packet counts stay a multiple of 8 (one frame) for the
-     * older stacks. Inside the cyclic buffer uacstream.h allocates (at
-     * least 62 ms); a client shrinking it with SetBufferSize to the queue
-     * or below is not guarded (docs/design/uac2.md 17.4, item 5). */
-    if (d->HighSpeed) {
-        s->DataPackets = 32 >> (a->Interval - 1);
-        if (s->DataPackets < 8) s->DataPackets = 8;
-    } else s->DataPackets = 4;
+     * Speed; 8 ms at bInterval 4, as High Speed packet counts stay a
+     * multiple of 8 (one frame) for the older stacks. As many URBs as
+     * cover Uac2QueueMs, below the client's ring by at least one URB
+     * (docs/design/uac2.md 19.4); a ring shrunk after RUN is not
+     * followed (17.4 item 5). */
+    s->DataSlots = UacPlanQueue(d->HighSpeed, a->Interval, queueMs,
+        (unsigned long)rate * s->FrameBytes, (unsigned int)s->FrameBytes,
+        (unsigned int)s->Capacity, ringBytes, &packets, &span);
+    s->DataPackets = packets; s->TransferUs = span;
+    s->QueueRead = queueRead; s->QueueMs = UacPlanQueueMs(queueMs);
     s->SlotBytes = s->DataPackets * s->Capacity;
     s->Fill = fill; s->Captured = captured; s->Progress = progress; s->CallbackContext = context;
     KeInitializeSpinLock(&s->Lock); KeInitializeMutex(&s->Operation, 0);
@@ -1201,6 +1207,8 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     s->Stats.Bits = s->Alt.Bits; s->Stats.Subslot = s->Alt.Subslot;
     s->Stats.Interface = s->Alt.Interface; s->Stats.Alternate = s->Alt.Alternate;
     s->Stats.Sync = UacPlanSync(&s->Alt);
+    s->Stats.QueueRead = s->QueueRead; s->Stats.QueueMs = s->QueueMs;
+    s->Stats.DataTransfers = s->DataSlots; s->Stats.TransferUs = s->TransferUs;
     status = SetClock(s);
     if (!NT_SUCCESS(status)) goto done;
     ReadFeature(s);
@@ -1224,7 +1232,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         slot->Owner = s;
         /* First slots are feedback, hence processed/submitted first. */
         slot->Feedback = i < FEEDBACK_SLOTS;
-        slot->Used = slot->Feedback ? s->Feedback : TRUE;
+        slot->Used = slot->Feedback ? s->Feedback : i < FEEDBACK_SLOTS + s->DataSlots;
         if (!slot->Used) continue;
         slot->Packets = slot->Feedback ? FEEDBACK_PACKETS : s->DataPackets;
         size = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) +

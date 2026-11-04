@@ -1625,3 +1625,179 @@ reach it; that stays a known issue (unplug instead of Disable).
   q35 base, whose warm restart hangs) `UACSEEK` plays.
 - XP x86 and 7 x64: install and play with no restart prompt (XP through
   `[Models.NTx86]`/`UAC2XP`, 7 x64 through the x64 INF).
+
+## 19. The queue depth: `Uac2QueueMs`, and the worker's priority (2026-11-04)
+
+### 19.1 The report
+
+A user report (Windows XP x64 SP2 on an AMD Phenom II X4 955 with an
+AMD 790X/SB750 board, a Fresco FL1100 card on a shared level interrupt,
+xHCI98 3.4.0.0): a Conexant CX31993 DAC (`3302:12C3`, High Speed,
+`bInterval` 1) on `uac2` pops often under heavy CPU load (a game). The
+same card in a Xeon 5080 system, and a Phenom II X6 on another board with
+a VL805, are fine. xHCI98's snapshot shows 7743 Ring Underrun (completion
+code 14) and 3 Missed Service (23) completions on the isochronous OUT
+endpoint, and a longest completion pass of about 16 ms on the bulk path
+(a busy UAS drive on the same controller).
+
+### 19.2 What the queue covers
+
+Each data URB carries about 4 ms (section 4.4: 32 packets at High Speed
+`bInterval` 1, 16 at 2, 8 at 3, 4 at Full Speed; 8 ms at High Speed
+`bInterval` 4), and four were kept queued: 16 ms (32 ms at `bInterval`
+4). A URB is refilled and resubmitted by the stream's worker thread after
+its completion. If, from one completion on, the next submissions reach
+the controller more than about 12 ms late (16 ms less the URB that just
+completed), at any layer - the host controller driver's completion
+processing, a DPC, the worker waiting for a processor - the endpoint has
+nothing scheduled: xHCI reports Ring Underrun (xHCI 4.10.3.1), and the
+device gets no packets for that time, a gap that is heard.
+
+The worker is a system thread (`PsCreateSystemThread`) at the priority
+it is created with, the system process's normal priority; the completion
+routine wakes it with `IO_NO_INCREMENT`. Under a load of threads at
+normal priority and above (a game) it waits for a processor like them.
+
+
+### 19.3 The value
+
+- **`Uac2QueueMs`** in the device's driver key (`HKR` of the INF;
+  `IoOpenDeviceRegistryKey` with `PLUGPLAY_REGKEY_DRIVER`, where the
+  driver already records its diagnostics): the milliseconds of data each
+  stream keeps queued to the USB stack. Default **32**; range **16 to
+  128**, a value outside it is clamped to the nearer end; absent, or of
+  another type or size, means the default. Read as a `REG_DWORD`, or a
+  4-byte little-endian `REG_BINARY` (what a 9x INF writes).
+- One value for playback and capture, for every endpoint of the device.
+- Read once when a stream is created (`NewStream`, PASSIVE) and kept with
+  the stream: that one reading sizes the stream's ring (19.5) and, at
+  `RUN`, its transport (19.4). A change takes effect at the next stream a
+  client opens; a running or created stream keeps its reading.
+- Written at the default by every install section, never over a value
+  already there (no-clobber, `0x2`), so the setting is visible and an
+  update keeps a user's choice: the NT sections (`[UAC2.NT]`,
+  `[UAC2XP.NT]`, `[UAC2.NTamd64]`, both INFs) with
+  `HKR,,Uac2QueueMs,0x00010003,32` (`REG_DWORD`); 98 SE / ME's `[UAC2]`
+  with `HKR,,Uac2QueueMs,0x00000003,20,00,00,00` (binary, the four bytes
+  of 32), since 9x does not expand a number into a `DWORD`'s bytes.
+- The values in force are recorded: `Uac2UsbStats` / `Uac2UsbStatsIn`
+  (written when a stream stops) gain `QueueRead` (the raw value read,
+  `0xFFFFFFFF` when none was usable), `QueueMs` (in force),
+  `DataTransfers` and `TransferUs` (one data URB's span in
+  microseconds), appended after the existing fields.
+
+### 19.4 Transfers from milliseconds
+
+The size of one data URB is unchanged (section 4.4): `DataPackets` is 32
+>> (`bInterval` - 1), at least 8, at High Speed, and 4 at Full Speed. Its
+span `T` is `DataPackets` x 2^(`bInterval` - 1) x 125 us at High Speed
+and `DataPackets` x 2^(`bInterval` - 1) x 1 ms at Full Speed. The number
+of data URBs kept queued is `ceil(QueueMs x 1000 / T)`, at least 2 (one
+refilled while one is on the bus) and at most 32. The feedback URBs (two
+of 8 packets) are unchanged.
+
+| Speed, `bInterval` | `T` | 16 ms | 32 ms (default) | 128 ms |
+|---|---|---|---|---|
+| High, 1-3 | 4 ms | 4 | 8 | 32 |
+| High, 4 | 8 ms | 2 | 4 (as before) | 16 |
+| High, 5 | 16 ms | 2 | 2 | 8 |
+| Full, 1 | 4 ms | 4 | 8 | 32 |
+
+**Bounded by the ring.** At `RUN`, the count is then lowered so that the
+queue's bytes stay below the ring PortCls uses (`used`, after any
+`SetBufferSize`) by at least one URB: at most `floor((used - B) / B)`
+URBs, where `B` is the most one URB can take: the stream's nominal bytes
+for `T` (rounded up), plus an eighth (the fastest feedback `uacrate.c`
+accepts is the nominal rate + 12.5%) and one PCM frame per packet (the
+cadence), but no more than the endpoint's packet capacity times the
+packets. The floor of 2 stays: a ring under three URBs (12 ms at
+`bInterval` 1) is the "not guarded" case of 17.4 item 5, as before.
+Examples: a 4096-byte ring of 16-bit stereo at 48 kHz (`B` = 768 + 96 +
+128 = 992 bytes) allows 3 URBs, 12 ms (16 ms before this change: this is
+the one case the change shortens); the default ring (62 ms, here the 16
+KiB minimum, 85 ms) allows 15, so 8 at 32 ms.
+
+For capture the queue takes nothing from the ring ahead of time (each
+completion writes what it received), so the bound only keeps the two
+directions alike.
+
+The computation is `UacPlanQueue` in `uacplan.c` (host-tested); a span
+above 32 ms (`bInterval` 6 and up at High Speed) gives the minimum of 2.
+
+### 19.5 The ring
+
+The cyclic buffer must be larger than the queue (17.4 item 5: the first
+`RUN` takes the whole queue at once). It stays about 62 ms of the format
+(16 KiB to 1 MiB) up to a 32 ms queue, and grows by the queue above 32
+ms: 62 ms + (`QueueMs` - 32) ms, so 158 ms at 128. Every default
+(32 ms) ring is the size it was. Where the 1 MiB cap keeps the ring
+shorter (above about 6.6 MB/s, for example 384 kHz, 8 channels, 32-bit
+at 12.3 MB/s, 85 ms), 19.4's bound lowers the queue (to 17 URBs, 68 ms,
+at 128 ms there, `B` = 56320 bytes) instead of letting the first `RUN`
+lap the ring.
+
+The queue is fixed when the pin's first `RUN` creates its transport; a
+`SetBufferSize` after that is not followed (17.4 item 5, unchanged)
+until the pin is closed and a new one opened.
+
+### 19.6 The worker's wake (a separate step)
+
+The completion routine wakes the worker with `IO_SOUND_INCREMENT`
+instead of `IO_NO_INCREMENT` in `KeSetEvent` (the documented priority
+increment for a sound driver's waits; `KeSetEvent` is imported on every
+system already, 98 SE and ME included). On NT the woken worker runs at
+its base priority plus the increment, at most 15 (the top of the dynamic
+range), the boost decaying by one at each quantum it uses up; so a refill
+after a completion is ahead of normal-priority threads (a game's) but
+never above a real-time thread, and a worker that keeps running falls
+back to its base priority. On 98 SE and ME the increment is accepted;
+its effect there is not measured. No new import, the same binary for
+every system.
+
+A real-time worker (`KeSetPriorityThread` to `LOW_REALTIME_PRIORITY`)
+is not part of the change: no export of it on 98 SE / ME's `NTKERN` is
+proven (xHCI98's import records have the name only), and one binary
+serves 98 SE to 8 x86. It is measured once, for comparison only, in a
+test build that is never released.
+
+### 19.7 Consequences
+
+- The position a client reads runs ahead of what the device received by
+  up to the queue (17.4): 32 ms by default instead of 16 ms; a pause and
+  resume skips up to the queue. Start-up is unchanged (the first URB goes
+  out at once).
+- Non-paged memory: one buffer of `DataPackets` x the endpoint's packet
+  capacity per data URB, 8 instead of 4 by default (for example 8 x 32 x
+  294 bytes for 24-bit stereo at 48 kHz), up to 32 at 128 ms.
+- Under xHCI98 each pipe has four transfer records (xHCI98 `src/hcd.h`,
+  `HCD_PIPE_XFERS`); a URB beyond them waits on the pipe and is handed a
+  record by xHCI98's own completion processing as one retires
+  (`src/hcd_io.c`, the done path's `hcdRecordRelease` and `hcdLaunch`).
+  There the deeper queue does not lengthen what is on the controller's
+  ring (at most 4 URBs, 16 ms at `bInterval` 1); it takes `uac2`'s
+  worker out of the refill for the URBs queued behind them. A completion
+  pass of xHCI98's that is itself late by more than the ring holds still
+  underruns. Microsoft's stacks schedule every queued URB.
+- What is not changed: the URB size, the feedback stream, the transport,
+  `ASAP` scheduling.
+
+### 19.8 Tests
+
+- `desctest` (host), `UacPlanQueue`: 19.4's table; clamping of 0, 15, 16,
+  17, 33, 127, 128, 129 and `0xFFFFFFFF`; never fewer than 2 or more than
+  32; the ring bound at its boundary (a ring of exactly `(n + 1) x B`
+  bytes allows `n`), the 4096-byte ring, the 1 MiB cap with 384 kHz 8
+  channels 32-bit, Full Speed and `bInterval` 4 and 5.
+- `streamtest` (host): the ring is the old size at 16 and 32 ms and grows
+  by the queue above 32 ms, whole frames, within the cap.
+- An INF check (host, in `test.cmd`): both INFs write `Uac2QueueMs` in
+  every install section, no-clobber, at 32 (the NT `DWORD` form in the NT
+  sections, the 9x binary form in `[UAC2]`), and the driver's default is
+  32.
+- VM legs, XP x64 under xHCI98 with the CX31993 simulator: the old
+  driver, the queue alone, the queue and the wake increment, and the
+  test-only real-time build, under disk load, CPU load, both and neither
+  (xHCI98's Ring Underrun and Missed Service counts, the simulator's gaps
+  between OUT packets, each 60 s play's elapsed time); `Uac2QueueMs` 16,
+  32 and 128 read back from the stats; then play, record, ramp and seek
+  on XP x64 (and under Windows' EHCI there) and on a 32-bit system.

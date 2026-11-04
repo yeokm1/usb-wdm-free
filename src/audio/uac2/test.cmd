@@ -23,22 +23,25 @@ pushd "%OUT%"
 type nul > test.log
 cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\desctest.exe" "%SRC%uacdesc.c" "%SRC%uacplan.c" "%SRC%desctest.c" > build.log 2>&1
 if errorlevel 1 goto fail
-desctest.exe "%SRC%testdata\sbx4\config0.bin" "%SRC%testdata\sbx4\xpconf.bin" > test.log 2>&1
+.\desctest.exe "%SRC%testdata\sbx4\config0.bin" "%SRC%testdata\sbx4\xpconf.bin" > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
 cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\watchtest.exe" "%SRC%watchtest.c" > build.log 2>&1
 if errorlevel 1 goto fail
-watchtest.exe > test.log 2>&1
+.\watchtest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
 cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\topotest.exe" "%SRC%uactopo.c" "%SRC%topotest.c" > build.log 2>&1
 if errorlevel 1 goto fail
-topotest.exe > test.log 2>&1
+.\topotest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
 cl /nologo /W4 /WX /MD /O2 /Fe"%OUT%\voltest.exe" "%SRC%uacvol.c" "%SRC%uacctl.c" "%SRC%uacdesc.c" "%SRC%voltest.c" > build.log 2>&1
 if errorlevel 1 goto fail
-voltest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
+.\voltest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%SRC%infchk.ps1" > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
 echo PASS uac2 host > PASS.TXT

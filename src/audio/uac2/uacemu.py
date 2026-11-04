@@ -210,6 +210,9 @@ def audio_function(config):
 # (4.7 AudioControl, 4.9 AudioStreaming, 4.10 endpoints) and the Audio 2.0
 # Formats document (Type I).
 
+# OUT packet gaps counted (milliseconds; at High Speed bInterval 1 a running
+# stream's packets are 0.125 ms apart, at Full Speed 1 ms).
+GAP_MS = (2, 5, 10, 20, 50)
 CHANNEL_CONFIG = {1: 0x4, 2: 0x3, 6: 0x3f, 8: 0x63f}
 
 
@@ -485,6 +488,13 @@ class Model:
         self.lengths = collections.Counter()
         self.digest = hashlib.sha256()
         self.first_out = self.last_out = None
+        # Gaps between successive OUT packets of one endpoint's running
+        # stream (its start or stop, or a reset, begins a new count): a host
+        # that left the endpoint with nothing scheduled shows as a gap above
+        # the service period. Counted over every OUT endpoint; GAP_MS are the
+        # thresholds (gap_ms keys).
+        self.gap_prev, self.gap_max = {}, 0.0
+        self.gaps = {t: 0 for t in GAP_MS}
         self.next_report = self.now() + 0.25
         self.pcm, self.pcm_bytes, self.pcm_max = pcm, 0, pcm_max * 1024 * 1024
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
@@ -546,6 +556,7 @@ class Model:
                  first_out=self.first_out, last_out=self.last_out, span_seconds=elapsed,
                  feedback_packets=self.feedback_packets, zero_feedback=self.zero_feedback,
                  in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest(),
+                 gap_max_ms=round(self.gap_max * 1000, 3), gap_ms={str(t): n for t, n in self.gaps.items()},
                  **self.levels())
         self.peak, self.rpeak, self.ep_peak = {}, {}, {}
 
@@ -646,6 +657,7 @@ class Model:
 
     def reset_streams(self):
         self.streams.clear()
+        self.gap_prev.clear()
         self.fb.clear()
         self.in_streams.clear()
         self.next_feedback = None
@@ -852,6 +864,7 @@ class Model:
     def start(self, ep, own):
         interface, alternate, info = own
         self.streams.add(ep)
+        self.gap_prev.pop(ep, None)
         now = self.now()
         if info['feedback'] and info['feedback']['address'] == ep:
             self.fb[ep] = dict(info=info, next=now, start=now, period=self.period(info['feedback']), count=0)
@@ -866,6 +879,7 @@ class Model:
 
     def stop(self, ep):
         self.streams.discard(ep)
+        self.gap_prev.pop(ep, None)
         self.in_streams.pop(ep, None)
         if self.fb.pop(ep, None) is not None and not self.fb:
             self.next_feedback = None
@@ -885,6 +899,13 @@ class Model:
         if self.first_out is None:
             self.first_out = stamp
         self.last_out = stamp
+        if ep in self.gap_prev:
+            gap = stamp - self.gap_prev[ep]
+            self.gap_max = max(self.gap_max, gap)
+            for t in GAP_MS:
+                if gap * 1000 >= t:
+                    self.gaps[t] += 1
+        self.gap_prev[ep] = stamp
         self.out_packets += 1
         self.out_bytes += length
         self.nonzero += sum(byte != 0 for byte in payload)

@@ -690,6 +690,34 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(m.path_units(3), [1])
         self.assertEqual(m.path_units(17), [14])
 
+    def test_out_gaps_per_endpoint(self):
+        # Two OUT endpoints: one pauses 21 ms while the other keeps going,
+        # and an unrelated stream start in between; the paused one's gap is
+        # counted against its own last packet. A stop ends its count.
+        m, _, trace = self.model('alc4080')
+        self.configure(m, (1, 1), (2, 1))
+        m.handle(12, 1, bytes((1, 8, 4)))
+        m.handle(12, 2, bytes((2, 8, 4)))
+        one = struct.pack('<BBH', 1, 0, 96) + struct.pack('<8h', *([1] * 8)) * 6
+        two = struct.pack('<BBH', 2, 0, 24) + struct.pack('<hh', 1, 1) * 6
+        m.handle(102, 0, one)
+        m.handle(102, 0, two)
+        for _ in range(170):
+            self.time += 0.000125
+            m.handle(102, 0, two)
+        m.handle(102, 0, one)
+        m.report('test')
+        event = json.loads(trace.getvalue().splitlines()[-1])
+        self.assertEqual(event['gap_ms'], {'2': 1, '5': 1, '10': 1, '20': 1, '50': 0})
+        self.assertAlmostEqual(event['gap_max_ms'], 21.25, places=2)
+        m.handle(13, 3, b'\x01')
+        m.handle(12, 4, bytes((1, 8, 4)))
+        self.time += 0.1
+        m.handle(102, 0, one)
+        m.report('test')
+        event = json.loads(trace.getvalue().splitlines()[-1])
+        self.assertEqual(event['gap_ms']['50'], 0)
+
     def test_rendered_per_endpoint(self):
         # The assumed ALC4080: speaker (IF1, FU 29) and headphone (IF2, FU
         # 30) playing at once; FU 30 muted renders the headphone silent and

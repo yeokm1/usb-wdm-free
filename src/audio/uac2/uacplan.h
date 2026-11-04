@@ -94,6 +94,32 @@ unsigned int UacPlanQuirks(unsigned int vid, unsigned int pid);
 /* wMaxPacketSize as payload capacity: bits 10..0 times 1 + bits 12..11. */
 unsigned int UacPlanCapacity(unsigned int maxPacket);
 
+/* The stream queue (docs/design/uac2.md section 19): Uac2QueueMs's
+ * default and range, the most data URBs kept queued, and the raw value
+ * that stands for "nothing usable was read". */
+#define UAC_QUEUE_DEFAULT_MS 32U
+#define UAC_QUEUE_MIN_MS 16U
+#define UAC_QUEUE_MAX_MS 128U
+#define UAC_QUEUE_MAX_URBS 32U
+#define UAC_QUEUE_NONE 0xFFFFFFFFUL
+
+/* Uac2QueueMs in force for a raw reading: UAC_QUEUE_NONE gives the
+ * default, anything else is clamped to the range (19.3). */
+unsigned int UacPlanQueueMs(unsigned long raw);
+
+/* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
+ * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered
+ * so the queue stays at least one URB below ringBytes (0: no ring bound).
+ * One URB's bytes: bytesPerSecond over the span, rounded up, plus an
+ * eighth (the fastest feedback uacrate.c accepts) and one frameBytes per
+ * packet, at most capacity bytes a packet (0: no such cap). Never below 2
+ * or above UAC_QUEUE_MAX_URBS. queueMs is clamped as UacPlanQueueMs;
+ * interval is bInterval (0 taken as 1). */
+unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int queueMs,
+                          unsigned long bytesPerSecond, unsigned int frameBytes,
+                          unsigned int capacity, unsigned long ringBytes,
+                          unsigned int *packets, unsigned long *spanUs);
+
 /* Sync type of an alternate's data endpoint: 1 async, 2 adaptive,
  * 3 synchronous, 0 none. */
 #define UacPlanSync(alt) (((alt)->Attributes >> 2) & 3)

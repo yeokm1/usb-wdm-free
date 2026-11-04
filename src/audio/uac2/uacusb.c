@@ -61,6 +61,7 @@ struct UAC_USB {
     UAC_ALT Alt;
     ULONG Capture, Rate, FrameBytes, Capacity, FeedbackBytes, SlotBytes, DataPackets;
     ULONG DataSlots, TransferUs, QueueRead, QueueMs; /* 19.4, fixed at Create */
+    ULONG RealtimeRead, Realtime;   /* 19.6, set before Start */
     UAC_CLOCK_PATH Path;    /* the claimed clock path while ClockHeld */
     BOOLEAN Feedback, ClockHeld;
     USBD_PIPE_HANDLE DataPipe, FeedbackPipe;
@@ -984,6 +985,17 @@ static VOID Worker(PVOID context)
      * the thread object so the image cannot unload under it. */
     s->Thread = PsGetCurrentThread();
     if (s->WaitThread) ObReferenceObject(s->Thread);
+    /* 19.6: the refill and resubmit run ahead of every normal-class thread
+     * (a game's included, whatever its priority class), as the user report
+     * of 2026-11-04 asked: lowering the game's priority cured the pops. The
+     * work per wake is bounded (the slots, then a wait), so the worker
+     * never holds the processor. LOW_REALTIME_PRIORITY is the lowest of the
+     * real-time range; 98 SE's NTKERN exports the name (xHCI98 record 13,
+     * row 114), its effect there is read by the legs. */
+    if (s->Realtime) {
+        (VOID)KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
+        s->Stats.WorkerPriority = LOW_REALTIME_PRIORITY;
+    }
     KeSetEvent(&s->Ready, IO_NO_INCREMENT, FALSE);
     for (;;) {
         KeClearEvent(&s->Wake);
@@ -1126,6 +1138,7 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     KeInitializeEvent(&s->Ready, NotificationEvent, FALSE);
     KeInitializeEvent(&s->Exited, NotificationEvent, FALSE);
     s->WaitThread = IoIsWdmVersionAvailable(1, 0x10);
+    s->RealtimeRead = UAC_QUEUE_NONE; s->Realtime = UacPlanRealtime(UAC_QUEUE_NONE);
     KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
     d->Streams++;
     KeReleaseMutex(&d->Lock, FALSE);
@@ -1190,6 +1203,12 @@ static VOID CreateWorker(PVOID context)
     KeSetEvent(&job->Done, IO_NO_INCREMENT, FALSE);
 }
 
+void UacUsbSetRealtime(UAC_USB *s, ULONG raw)
+{
+    if (!s) return;
+    s->RealtimeRead = raw; s->Realtime = UacPlanRealtime(raw);
+}
+
 NTSTATUS UacUsbStart(UAC_USB *s)
 {
     NTSTATUS status;
@@ -1212,6 +1231,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     s->Stats.Sync = UacPlanSync(&s->Alt);
     s->Stats.QueueRead = s->QueueRead; s->Stats.QueueMs = s->QueueMs;
     s->Stats.DataTransfers = s->DataSlots; s->Stats.TransferUs = s->TransferUs;
+    s->Stats.RealtimeRead = s->RealtimeRead; s->Stats.Realtime = s->Realtime;
     status = SetClock(s);
     if (!NT_SUCCESS(status)) goto done;
     ReadFeature(s);

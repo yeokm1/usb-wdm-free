@@ -43,6 +43,10 @@ typedef struct UAC_USB_STATS {
      * (UAC_QUEUE_NONE when nothing usable was), the milliseconds in force,
      * the data URBs kept queued and one data URB's span. */
     ULONG QueueRead, QueueMs, DataTransfers, TransferUs;
+    /* Build 20 (19.6): Uac2Realtime as read (UAC_QUEUE_NONE when nothing
+     * usable was), whether it is on, and the priority the worker set (0
+     * when it set none; KeSetPriorityThread's own answer is not kept). */
+    ULONG RealtimeRead, Realtime, WorkerPriority;
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16
@@ -79,6 +83,9 @@ NTSTATUS UacUsbCreate(UAC_DEV *dev, int capture, UAC_BYTE terminal, ULONG channe
     ULONG subslot, ULONG bits, ULONG config, ULONG rate,
     UAC_USB_FILL fill, UAC_USB_CAPTURE captured, UAC_USB_PROGRESS progress,
     PVOID context, ULONG queueRead, ULONG queueMs, ULONG ringBytes, UAC_USB **out);
+/* PASSIVE, before Start: Uac2Realtime's raw reading for this stream
+ * (UacPlanRealtime decides); the worker applies it as it starts. */
+void UacUsbSetRealtime(UAC_USB *state, ULONG raw);
 NTSTATUS UacUsbStart(UAC_USB *state);
 void UacUsbStop(UAC_USB *state);
 void UacUsbDestroy(UAC_USB *state);

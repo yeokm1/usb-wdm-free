@@ -1757,11 +1757,36 @@ back to its base priority. On 98 SE and ME the increment is accepted;
 its effect there is not measured. No new import, the same binary for
 every system.
 
-A real-time worker (`KeSetPriorityThread` to `LOW_REALTIME_PRIORITY`)
-is not part of the change: no export of it on 98 SE / ME's `NTKERN` is
-proven (xHCI98's import records have the name only), and one binary
-serves 98 SE to 8 x86. It is measured once, for comparison only, in a
-test build that is never released.
+**The real-time worker, `Uac2Realtime`** (owner, 2026-11-04, build 20).
+The user who reported the pops found that lowering the game's priority
+cured them: the increment lifts the worker to at most 15, which a game
+running at High priority class (base 13, boosted to 15) only ties. So the
+worker, as it starts, sets itself to `LOW_REALTIME_PRIORITY` (16) with
+`KeSetPriorityThread(KeGetCurrentThread(), ...)`, above every
+normal-class thread whatever a game's class; the increment on the wake
+then changes nothing (a real-time thread takes none). The work per wake is
+bounded - the completed slots retired, the free ones refilled and
+submitted, then a wait - so the worker never holds a processor. It is
+the lowest real-time level; Vista's own audio engine runs its threads in
+that range (MMCSS).
+
+- The value: `Uac2Realtime` in the driver key, `1` on (the default), `0`
+  off; read at each RUN (`UacUsbSetRealtime`, `UacPlanRealtime`), so a
+  change takes effect at the next open. Anything but `0` is on; nothing
+  usable read is the default. The INFs write `1` no-clobber in the same
+  sections as `Uac2QueueMs`, the 9x binary form in `[Queue9x]`.
+- The import: `KeSetPriorityThread` joins both import lists. xHCI98's
+  import records find the name among 98 SE's `NTKERN` exports
+  (xHCI98 record 13, the import table's row 114, graded "ntkern-name
+  only", the weakest evidence), so the one x86 binary is expected to load
+  on 98 SE and ME; the 98 SE and ME legs prove the load and read whether
+  it has any effect there.
+- The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
+  (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
+
+A test build of this (2026-11-04, XP x64 under CPU load) gave 13 Ring
+Underruns against the increment's 62, and 32 against 34 under CPU and
+disk load.
 
 ### 19.7 Consequences
 

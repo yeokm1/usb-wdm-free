@@ -24,6 +24,12 @@ unsigned int UacPlanCapacity(unsigned int maxPacket)
     return (maxPacket & 0x7ff) * (1 + ((maxPacket >> 11) & 3));
 }
 
+unsigned int UacPlanRealtime(unsigned long raw)
+{
+    if (raw == UAC_QUEUE_NONE) return UAC_REALTIME_DEFAULT;
+    return raw != 0 ? 1U : 0U;
+}
+
 unsigned int UacPlanQueueMs(unsigned long raw)
 {
     if (raw == UAC_QUEUE_NONE) return UAC_QUEUE_DEFAULT_MS;

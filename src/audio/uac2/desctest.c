@@ -78,6 +78,10 @@ static void QueueTests(void)
     static const unsigned int ms[] = { 16, 16, 16, 17, 33, 127, 128, 128, 128 };
     for (i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) CHECK(UacPlanQueueMs(raw[i]) == ms[i]);
     CHECK(UacPlanQueueMs(UAC_QUEUE_NONE) == UAC_QUEUE_DEFAULT_MS && UAC_QUEUE_DEFAULT_MS == 32);
+    /* Uac2Realtime (19.6): on by default, off only for 0. */
+    CHECK(UacPlanRealtime(UAC_QUEUE_NONE) == 1 && UAC_REALTIME_DEFAULT == 1);
+    CHECK(UacPlanRealtime(0) == 0);
+    CHECK(UacPlanRealtime(1) == 1 && UacPlanRealtime(2) == 1 && UacPlanRealtime(0x80000000UL) == 1);
     /* The table, no ring bound. */
     for (i = 1; i <= 3; i++) {
         CHECK(UacPlanQueue(1, i, 16, 0, 0, 0, 0, &packets, &span) == 4 && span == 4000 && packets == (32U >> (i - 1)));

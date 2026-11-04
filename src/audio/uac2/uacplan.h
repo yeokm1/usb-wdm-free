@@ -107,6 +107,13 @@ unsigned int UacPlanCapacity(unsigned int maxPacket);
  * default, anything else is clamped to the range (19.3). */
 unsigned int UacPlanQueueMs(unsigned long raw);
 
+/* Uac2Realtime (docs/design/uac2.md 19.6): 1 runs the stream's worker at
+ * LOW_REALTIME_PRIORITY, 0 leaves it at the system thread's priority (the
+ * wake's IO_SOUND_INCREMENT still applies). UAC_QUEUE_NONE (nothing usable
+ * read) gives the default, 1; any other value is 0 for 0, else 1. */
+#define UAC_REALTIME_DEFAULT 1U
+unsigned int UacPlanRealtime(unsigned long raw);
+
 /* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
  * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered
  * so the queue stays at least one URB below ringBytes (0: no ring bound).

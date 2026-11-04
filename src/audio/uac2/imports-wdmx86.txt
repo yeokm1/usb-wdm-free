@@ -46,3 +46,5 @@ NTOSKRNL.EXE!KeDelayExecutionThread
 NTOSKRNL.EXE!ExQueueWorkItem
 # Volume and mute: the saved levels (uac2wdm.cpp, GetValue)
 NTOSKRNL.EXE!ZwQueryValueKey
+# Uac2Realtime (docs/design/uac2.md 19.6): the worker at LOW_REALTIME_PRIORITY
+NTOSKRNL.EXE!KeSetPriorityThread

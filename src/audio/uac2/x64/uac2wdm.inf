@@ -92,8 +92,10 @@ HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 ; DWORD as its four bytes.
 [Queue9x]
 HKR,,Uac2QueueMs,0x00000003,20,00,00,00
+HKR,,Uac2Realtime,0x00000003,01,00,00,00
 [QueueNT]
 HKR,,Uac2QueueMs,0x00010003,32
+HKR,,Uac2Realtime,0x00010003,1
 
 ; Windows 2000 only (design 18): its USB 2.0 hub driver stops Windows
 ; when uac2 starts on a device the hub had started before (a driver

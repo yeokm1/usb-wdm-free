@@ -72,6 +72,7 @@ static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULO
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
 static ULONG GetQueueRaw(PDEVICE_OBJECT fdo);
+static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo);
 #ifndef _WIN64
 /* Windows 98 SE's NTKERN exports no IoAllocateWorkItem/IoQueueWorkItem/
  * IoFreeWorkItem (link probe against the 98 DDK wdm.lib, 2026-10-22). The
@@ -776,6 +777,7 @@ private:
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
                     d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d,
                     d->QueueRead, d->QueueMs, stream->BufferSize(), &d->Usb);
+                if (NT_SUCCESS(status)) UacUsbSetRealtime(d->Usb, GetRealtimeRaw(w->device));
             }
             /* The device may have lost its levels in D3 or a stop. */
             if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
@@ -1366,7 +1368,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 19;
+    ULONG build = 20;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1460,14 +1462,14 @@ static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size)
 
 /* Uac2QueueMs (docs/design/uac2.md 19.3): a REG_DWORD, or the 4-byte
  * little-endian REG_BINARY a 9x INF writes; UAC_QUEUE_NONE otherwise. */
-static ULONG GetQueueRaw(PDEVICE_OBJECT fdo)
+static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value)
 {
     HANDLE key;
     UNICODE_STRING u;
     UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 16];
     PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
     ULONG got = 0, raw = UAC_QUEUE_NONE;
-    Name(&u, L"Uac2QueueMs");
+    Name(&u, value);
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &key))) {
         if (NT_SUCCESS(ZwQueryValueKey(key, &u, KeyValuePartialInformation, info, sizeof(buffer), &got)) &&
@@ -1478,6 +1480,11 @@ static ULONG GetQueueRaw(PDEVICE_OBJECT fdo)
     }
     return raw;
 }
+
+static ULONG GetQueueRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2QueueMs"); }
+
+/* Uac2Realtime (docs/design/uac2.md 19.6): read the same way, at each RUN. */
+static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Realtime"); }
 
 static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
 {

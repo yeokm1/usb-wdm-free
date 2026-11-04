@@ -4,6 +4,32 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.8 (draft, not released): `uac2` under load
+
+`uac2` 0.1.8.0. Every other file would be 0.1.7's.
+
+- **uac2, popping under heavy CPU load**: `uac2` kept 16 ms of sound
+  queued to Windows' USB drivers. When Windows was busy with other
+  programs (a game, say), `uac2` sometimes did not send the next part
+  in time, so the device got no sound for a moment and played a pop.
+  `uac2` now keeps 32 ms queued, and Windows runs it ahead of ordinary
+  programs when the device needs the next part. A host controller
+  driver can hold less of that queue on the controller itself: xHCI98
+  holds 16 ms of it, so a delay in xHCI98 longer than that still
+  interrupts the sound.
+  [uac2 design, section 19](design/uac2.md).
+- **uac2, the queue setting**: the registry value `Uac2QueueMs` in the
+  device's driver key sets how many milliseconds of sound are kept
+  queued, 16 to 128 (default 32; the install writes the default and
+  does not change a value that is already there). A longer queue
+  survives longer delays in `uac2` getting its turn on the processor.
+  The playback position Windows shows runs
+  ahead of the device by the queue, and a pause and resume skips that
+  much. A changed value takes effect when a program next opens the
+  device.
+- **Signing**: the x64 `uac2wdm.sys` is new and needs signing for
+  Vista to 8.1 x64.
+
 ## Release 0.1.7 (2026-11-01): `usbprn`, USB printing on 98 SE and ME
 
 Release 0.1.6 plus `usbprn` 0.1.0.0. Every other file is 0.1.6's.

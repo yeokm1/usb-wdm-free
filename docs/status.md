@@ -206,6 +206,28 @@ What helps (0.1.5, and Disable/Enable in any version):
 
 Read in QEMU only ([uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md)).
 
+### Open (fix prepared for 0.1.8): `uac2` pops under heavy CPU load (XP x64, Conexant CX31993)
+
+Reported 2026-11-04 by a user on Windows XP x64 with a Conexant CX31993
+USB DAC under xHCI98 3.4.0.0 (a Fresco FL1100 card): the sound pops often
+while a game loads the processor. xHCI98's snapshot showed thousands of
+Ring Underrun completions on the DAC's endpoint: the controller had
+nothing left to send. `uac2` 0.1.6.0 kept 16 ms of sound queued, and the
+thread that refills it waited for a processor behind the game's.
+
+Read in QEMU with the simulator under xHCI98 on XP x64: with a busy loop
+on every processor, 0.1.6.0 got about half the sound out in time (4093
+packets a second of 8000; 11204 Ring Underruns over five 60-second plays,
+none of which finished in 70 s); disk load alone did not matter. Prepared for 0.1.8 (`161320d`, `502a8a7`,
+`9f30c79`): 32 ms queued (the registry value `Uac2QueueMs`, 16 to 128),
+and the refill thread is woken with the priority boost Windows gives a
+sound driver's waits; with both, the same load gave 62 Ring Underruns
+over five plays (301 s) at 7986 packets a second. xHCI98 still holds 16
+ms of the queue on the controller (four transfers a pipe), so a delay in
+xHCI98 itself longer than that is not covered. Not yet read on the user's PC.
+The design is [design record 19](design/uac2.md), the legs are
+[uac2-queue](testing/2026-11-04-uac2-queue.md).
+
 ### Fixed in 0.1.6: `uac2` playback garbled after seeking (XP, Conexant CX31993)
 
 Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB

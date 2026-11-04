@@ -732,7 +732,10 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     KeAcquireSpinLock(&s->Lock, &old);
     slot->Status = irp->IoStatus.Status;
     slot->Phase = 2;
-    KeSetEvent(&s->Wake, IO_NO_INCREMENT, FALSE);
+    /* The sound driver's wait increment: on NT the woken worker runs
+     * boosted (at most 15, decaying) ahead of normal-priority threads
+     * (docs/design/uac2.md 19.6). */
+    KeSetEvent(&s->Wake, IO_SOUND_INCREMENT, FALSE);
     KeReleaseSpinLock(&s->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }

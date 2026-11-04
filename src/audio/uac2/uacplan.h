@@ -114,19 +114,25 @@ unsigned int UacPlanQueueMs(unsigned long raw);
 #define UAC_REALTIME_DEFAULT 1U
 unsigned int UacPlanRealtime(unsigned long raw);
 
-/* The worker's throttle (19.6). A pass whose wait would not block (the
- * wake already signalled, read with a zero-timeout wait) is a pass without
- * yielding; more than UAC_SPIN_PASSES of them in a row - however long each
- * takes - and the worker sleeps UAC_SPIN_SLEEP_100NS, so a real-time worker
- * can never hold a processor. The count restarts only after a wait that
- * blocked or a sleep. In normal running the worker blocks between URB
- * completions (at most about 1.25 a millisecond, High Speed feedback
- * included); a sleep there would cost 10 ms against a queue of at least
- * 16 ms. UacPlanYield: the passes without yielding so far, this one
- * included; 1 when the worker must sleep. */
-#define UAC_SPIN_PASSES 16U
-#define UAC_SPIN_SLEEP_100NS 100000L
-unsigned int UacPlanYield(unsigned int passes);
+/* The worker's fairness rule (19.6, build 23). The worker measures, in
+ * interrupt time, how long it runs between its waits (busy) in windows of
+ * at least UAC_DUTY_WINDOW_100NS. A window busy for UAC_DUTY_PERCENT or
+ * more of its length demotes a real-time worker to the priority it was
+ * created at for the next window; a window below it restores real time.
+ * It never sleeps, so a working stream keeps refilling; demoted, it shares
+ * the processor with the normal threads, the one that asks Stop among
+ * them. Busy time is measured, not inferred from whether a wait blocked,
+ * so no wake racing a wait can hide a loop. At tick granularity (10 to
+ * 15.6 ms before Windows 8) a short pass is counted only when a tick falls
+ * inside it, which samples the busy fraction; a normal stream (a pass well
+ * under a millisecond, at most about 1.25 a millisecond) stays far below
+ * the threshold. UacPlanDuty: the window's length and busy time so far;
+ * returns the new demoted state (0 or 1) once the window is long enough,
+ * else the current one; *closed 1 when the window ends now. */
+#define UAC_DUTY_WINDOW_100NS 2000000UL
+#define UAC_DUTY_PERCENT 60U
+unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
+                         unsigned int demoted, unsigned int *closed);
 
 /* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
  * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered

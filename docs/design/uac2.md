@@ -1783,20 +1783,27 @@ that range (MMCSS).
   it has any effect there.
 - The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
   (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
-- The throttle (build 22; build 21's pass-rate window, after Codex's
-  review of build 20, let a slow non-blocking loop through): the wait on
-  `Wake` bounds nothing if a stack completes URBs inline again and again
-  with nothing delivered (capture with zero-length packets, no `Fail`),
-  and a real-time worker would then hold a single processor, the thread
-  that asks Stop included. So before each wait a zero-timeout wait on
-  `Wake` reads whether it would block (no new import; `KeReadStateEvent`
-  has no 98 SE evidence). A pass that would not is counted; more than 16
-  in a row (`UacPlanYield`), however long each takes, make the worker
-  sleep 10 ms (`KeDelayExecutionThread`, already imported), counted in
-  the stats' `WorkerThrottles` (0 in normal running). The count restarts
-  only after a wait that blocked or a sleep. In normal running the worker
-  blocks between completions (at most about 1.25 a millisecond); a false
-  trigger would cost 10 ms against a queue of at least 16 ms.
+- The fairness rule (build 23; builds 21 and 22 slept the worker after a
+  count of passes, which a wake racing the wait could reset without the
+  worker ever blocking, and whose 10 ms sleep could itself drain a queue
+  that a small client ring holds to 8 or 12 ms; Codex's reviews of builds
+  21 and 22). A stack that completes URBs inline again and again with
+  nothing delivered (capture with zero-length packets, no `Fail`) leaves
+  `Wake` signalled, so a real-time worker would hold a single processor,
+  the thread that asks Stop included. So the worker measures in
+  interrupt time how long it runs between its waits, in windows of at
+  least 200 ms (`UacPlanDuty`). A window busy for 60 % or more demotes it
+  to the priority it was created at (the value `KeSetPriorityThread`
+  returned) for the next window, where the normal threads share the
+  processor with it; a window below that restores real time. It never
+  sleeps, so a working stream keeps refilling. Busy time is measured, not
+  inferred from whether one wait blocked, so no race hides a loop; at
+  tick granularity (10 to 15.6 ms before Windows 8) a short pass counts
+  only when a tick falls inside it, which samples the fraction, and a
+  normal stream (a pass well under a millisecond, at most about 1.25 a
+  millisecond) stays far below 60 %. `WorkerThrottles` counts the
+  demotions (0 in normal running); while demoted, `WorkerPriority` reads
+  the created priority.
 - Read at every RUN (build 21): a stream kept across a pause or stop
   (`Drain` without destroy) takes the value again at its next RUN, so
   `Uac2Realtime` 0 applies at the next start of playback.

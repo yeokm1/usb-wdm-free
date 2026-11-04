@@ -980,8 +980,9 @@ static VOID Worker(PVOID context)
     LONG phase;
     NTSTATUS status;
     LARGE_INTEGER timeout;
-    unsigned int spinPasses;
-    LARGE_INTEGER poll;
+    KPRIORITY basePriority = 0;
+    ULONGLONG windowStart, busy, runStart, now;
+    unsigned int demoted = 0, closed, next;
     /* 98 SE: waiting on a thread object faulted there (usbmidi's stop path,
      * 2026-10-22), so the stop waits for Exited; 2000 and later also wait
      * the thread object so the image cannot unload under it. */
@@ -995,12 +996,11 @@ static VOID Worker(PVOID context)
      * real-time range; 98 SE's NTKERN exports the name (xHCI98 record 13,
      * row 114), its effect there is read by the legs. */
     if (s->Realtime) {
-        (VOID)KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
+        basePriority = KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
         s->Stats.WorkerPriority = LOW_REALTIME_PRIORITY;
     }
     KeSetEvent(&s->Ready, IO_NO_INCREMENT, FALSE);
-    spinPasses = 0;
-    poll.QuadPart = 0;
+    windowStart = runStart = KeQueryInterruptTime(); busy = 0;
     for (;;) {
         KeClearEvent(&s->Wake);
         /* Feedback first so newly prepared data uses the newest valid rate.
@@ -1039,24 +1039,31 @@ static VOID Worker(PVOID context)
         if (!stop && s->Feedback && UacFeedbackLate(KeQueryInterruptTime(), s->LastFeedbackPacket,
                                                     s->Rate_.FeedbackActive))
             Fail(s, STATUS_IO_TIMEOUT); /* no usable rate for 1 s at start, 200 ms after */
-        /* 19.6's throttle: a stack that completes URBs inline, over and
-         * over (nothing delivered, no Fail), leaves Wake signalled, so the
-         * wait below would never block and a real-time worker would hold
-         * the processor. A zero-timeout wait reads whether it would; past
-         * UAC_SPIN_PASSES such passes in a row the worker sleeps, so the
-         * threads below it - the one that asks Stop among them - run. */
-        if (KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &poll) == STATUS_SUCCESS) {
-            if (UacPlanYield(++spinPasses)) {
-                LARGE_INTEGER nap; nap.QuadPart = -UAC_SPIN_SLEEP_100NS;
-                KeDelayExecutionThread(KernelMode, FALSE, &nap);
-                s->Stats.WorkerThrottles++;
-                spinPasses = 0;
+        /* 19.6's fairness rule (build 23): a stack that completes URBs
+         * inline over and over (nothing delivered, no Fail) leaves Wake
+         * signalled, so the wait below returns at once and a real-time
+         * worker would hold the processor. The time run since the last
+         * wait is counted; a window busy past UAC_DUTY_PERCENT demotes the
+         * worker to its created priority for the next window, where the
+         * normal threads - the one that asks Stop among them - share the
+         * processor with it. It never sleeps: a working stream keeps
+         * refilling. Measured, so no wake racing the wait can hide it. */
+        now = KeQueryInterruptTime();
+        busy += now - runStart;
+        if (s->Realtime) {
+            next = UacPlanDuty(now - windowStart, busy, demoted, &closed);
+            if (closed) { windowStart = now; busy = 0; }
+            if (next != demoted) {
+                (VOID)KeSetPriorityThread(KeGetCurrentThread(),
+                                          next ? basePriority : LOW_REALTIME_PRIORITY);
+                s->Stats.WorkerPriority = next ? (ULONG)basePriority : LOW_REALTIME_PRIORITY;
+                if (next) s->Stats.WorkerThrottles++;
+                demoted = next;
             }
-            continue;
         }
-        spinPasses = 0;
         timeout.QuadPart = -1000000; /* watchdog only; events drive PCM */
         KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &timeout);
+        runStart = KeQueryInterruptTime();
     }
     KeAcquireSpinLock(&s->Lock, &old); s->Stats.Running = 0; KeReleaseSpinLock(&s->Lock, old);
     KeSetEvent(&s->Exited, IO_NO_INCREMENT, FALSE); /* last access to s */

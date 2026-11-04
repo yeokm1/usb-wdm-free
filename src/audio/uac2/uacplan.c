@@ -30,9 +30,18 @@ unsigned int UacPlanRealtime(unsigned long raw)
     return raw != 0 ? 1U : 0U;
 }
 
-unsigned int UacPlanYield(unsigned int passes)
+unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
+                         unsigned int demoted, unsigned int *closed)
 {
-    return passes > UAC_SPIN_PASSES ? 1U : 0U;
+    *closed = 0;
+    if (elapsed < UAC_DUTY_WINDOW_100NS) {
+        return demoted;
+    }
+    *closed = 1;
+    if (busy > elapsed) {
+        busy = elapsed;
+    }
+    return busy * 100U >= elapsed * UAC_DUTY_PERCENT ? 1U : 0U;
 }
 
 unsigned int UacPlanQueueMs(unsigned long raw)

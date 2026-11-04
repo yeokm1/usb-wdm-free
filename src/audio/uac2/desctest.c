@@ -82,10 +82,26 @@ static void QueueTests(void)
     CHECK(UacPlanRealtime(UAC_QUEUE_NONE) == 1 && UAC_REALTIME_DEFAULT == 1);
     CHECK(UacPlanRealtime(0) == 0);
     CHECK(UacPlanRealtime(1) == 1 && UacPlanRealtime(2) == 1 && UacPlanRealtime(0x80000000UL) == 1);
-    /* The worker's throttle (19.6): passes without a blocking wait. */
-    CHECK(UacPlanYield(1) == 0 && UacPlanYield(UAC_SPIN_PASSES) == 0);
-    CHECK(UacPlanYield(UAC_SPIN_PASSES + 1) == 1 && UacPlanYield(1000) == 1);
-    CHECK(UAC_SPIN_PASSES == 16 && UAC_SPIN_SLEEP_100NS == 100000);
+    /* The worker's fairness rule (19.6, build 23): busy time per window. */
+    {
+        unsigned int closed;
+        const unsigned __int64 w = UAC_DUTY_WINDOW_100NS;
+        /* Within a window the state holds, whatever the busy time. */
+        CHECK(UacPlanDuty(w - 1, w - 1, 0, &closed) == 0 && closed == 0);
+        CHECK(UacPlanDuty(w - 1, 0, 1, &closed) == 1 && closed == 0);
+        /* A window busy past 60 %: demoted; below: restored. */
+        CHECK(UacPlanDuty(w, w, 0, &closed) == 1 && closed == 1);
+        CHECK(UacPlanDuty(w, w * 60 / 100, 0, &closed) == 1);
+        CHECK(UacPlanDuty(w, w * 60 / 100 - 1, 0, &closed) == 0);
+        CHECK(UacPlanDuty(w, 0, 1, &closed) == 0 && closed == 1);
+        /* A long wait makes a long, idle window: real time again. */
+        CHECK(UacPlanDuty(w * 50, w / 10, 1, &closed) == 0);
+        /* Normal running: a pass of 50 us every 0.8 ms is about 6 %. */
+        CHECK(UacPlanDuty(w, w * 6 / 100, 0, &closed) == 0);
+        /* Busy counted above the window (a long pass): clamped, demoted. */
+        CHECK(UacPlanDuty(w, w * 3, 0, &closed) == 1);
+        CHECK(UAC_DUTY_PERCENT == 60 && UAC_DUTY_WINDOW_100NS == 2000000);
+    }
     /* The table, no ring bound. */
     for (i = 1; i <= 3; i++) {
         CHECK(UacPlanQueue(1, i, 16, 0, 0, 0, 0, &packets, &span) == 4 && span == 4000 && packets == (32U >> (i - 1)));

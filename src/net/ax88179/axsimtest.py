@@ -385,6 +385,74 @@ class Tests(CoreCase):
         frames, _ = self.rx()
         self.assertEqual(len(frames), 1)
 
+    def test_fragmented_ping_is_reassembled_and_answered_in_fragments(self):
+        """ping -l 4000: the guest sends three fragments; the host answers in three."""
+        self.up()
+        _, icmp = echo_request(a.MODEL_MAC, 4000)
+        packets = a.ipv4_fragments(a.GUEST_IP, a.HOST_IP, 1, icmp, 0x1234)
+        self.assertEqual(len(packets), 3)
+        for packet in packets[:2]:
+            self.tx(a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + packet)
+            self.assertFalse(self.m.rx)                  # nothing until the datagram is whole
+        self.tx(a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + packets[2])
+        got = []
+        while len(got) < 3:
+            frames, stats = self.rx()
+            self.assertIsNotNone(frames)
+            got += frames
+        self.assertEqual(len(got), 3)
+        parts = {}
+        for f in got:
+            ip = f[14:]
+            frag = struct.unpack('!H', ip[6:8])[0]
+            self.assertEqual(a.checksum(ip[:20]), 0)
+            self.assertLessEqual(len(ip), 1500)
+            parts[(frag & 0x1fff) * 8] = ip[20:struct.unpack('!H', ip[2:4])[0]]
+        reply = b''.join(parts[k] for k in sorted(parts))
+        self.assertEqual(len(reply), len(icmp))
+        self.assertEqual(reply[0], 0)                    # echo reply
+        self.assertEqual(a.checksum(reply), 0)
+        self.assertEqual(reply[8:], icmp[8:])
+        # A lost middle fragment leaves the datagram unanswered.
+        for packet in (packets[0], packets[2]):
+            self.tx(a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + a.ipv4_fragments(
+                a.GUEST_IP, a.HOST_IP, 1, icmp, 0x1235)[[packets[0], packets[2]].index(packet) * 2])
+        self.assertFalse(self.m.rx)
+
+    def test_reassembly_keys_expiry_and_bounds(self):
+        self.up()
+        _, icmp = echo_request(a.MODEL_MAC, 4000)
+        eth = a.HOST_MAC + a.MODEL_MAC + b'\x08\x00'
+        elsewhere = bytes((192, 168, 77, 9))
+        # The first fragment to another host cannot complete the host's datagram.
+        first = a.ipv4_fragments(a.GUEST_IP, elsewhere, 1, icmp, 0x2000)[0]
+        rest = a.ipv4_fragments(a.GUEST_IP, a.HOST_IP, 1, icmp, 0x2000)[1:]
+        for packet in [first] + rest:
+            self.tx(eth + packet)
+        self.assertFalse(self.m.rx)
+        # A datagram left incomplete past the timer is dropped; its id reused later is whole again.
+        parts = a.ipv4_fragments(a.GUEST_IP, a.HOST_IP, 1, icmp, 0x2001)
+        self.tx(eth + parts[0])
+        self.clock.t += 31
+        for packet in parts[1:]:
+            self.tx(eth + packet)
+        self.assertFalse(self.m.rx)
+        self.assertTrue(self.events('reassembly_timeout'))
+        for packet in parts:
+            self.tx(eth + packet)
+        frames, _ = self.rx()
+        self.assertEqual(len(frames), 3)
+        # No more than REASSEMBLY_DATAGRAMS wait at once; an overlap drops the datagram.
+        for ident in range(0x3000, 0x3000 + 20):
+            self.tx(eth + a.ipv4_fragments(a.GUEST_IP, a.HOST_IP, 1, icmp, ident)[0])
+        self.assertLessEqual(len(self.m.net.fragments), a.Network.REASSEMBLY_DATAGRAMS)
+        parts = a.ipv4_fragments(a.GUEST_IP, a.HOST_IP, 1, icmp, 0x4000)
+        self.tx(eth + parts[0])
+        self.tx(eth + parts[0])                       # the same piece again: an overlap
+        for packet in parts[1:]:
+            self.tx(eth + packet)
+        self.assertFalse(self.m.rx)
+
     def test_stop_halts_receive_and_powers_the_phy_down(self):
         self.up()
         self.assertEqual(self.chip.Stop(self.state, c.byref(self.io)), 0)

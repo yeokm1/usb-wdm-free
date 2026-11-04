@@ -225,7 +225,8 @@ class Chip:
 
 
 # The simulated network and helpers: as rtlemu.py (the same SIMULATED host), except
-# that a request's IPv4 header and ICMP/UDP checksums are checked before it is answered.
+# that a request's IPv4 header and ICMP/UDP checksums are checked before it is answered, and that
+# fragmented datagrams are reassembled and long answers fragmented, as a real host does.
 def ether_crc(data):
     """The bit-reversed, non-inverted CRC-32 of data (netchip.c NcEtherCrc)."""
     crc = 0xffffffff
@@ -247,18 +248,37 @@ def checksum(data):
     return ~s & 0xffff
 
 
-def ipv4(src, dst, proto, payload):
-    head = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(payload), 0, 0x4000, 64, proto, 0, src, dst)
+def ipv4(src, dst, proto, payload, ident=0, frag=0x4000):
+    head = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(payload), ident, frag, 64, proto, 0, src, dst)
     return head[:10] + struct.pack('!H', checksum(head)) + head[12:] + payload
+
+
+IP_MTU = 1500
+
+
+def ipv4_fragments(src, dst, proto, payload, ident):
+    """One datagram as the IPv4 packets an Ethernet host sends it in (RFC 791):
+    one with DF set when it fits the 1500-byte MTU, else fragments of 1480
+    bytes (a multiple of 8) with MF on all but the last."""
+    if 20 + len(payload) <= IP_MTU:
+        return [ipv4(src, dst, proto, payload)]
+    step, out = IP_MTU - 20, []
+    for off in range(0, len(payload), step):
+        more = 0x2000 if off + step < len(payload) else 0
+        out.append(ipv4(src, dst, proto, payload[off:off + step], ident, more | off >> 3))
+    return out
 
 
 class Network:
     """One SIMULATED host behind the adapter."""
 
-    def __init__(self, log):
-        self.log = log
+    def __init__(self, log, now=time.monotonic):
+        self.log, self.now = log, now
         self.lease = None
         self.refused = 0
+        # (source, destination, id, protocol) -> (first seen, {offset: data}, [the last fragment's end])
+        self.fragments = collections.OrderedDict()
+        self.ident = 0x7700
 
     def refuse(self, why, length):
         self.refused += 1
@@ -293,6 +313,11 @@ class Network:
             return []
         proto, sip, dip = body[9], body[12:16], body[16:20]
         data = body[ihl:total]
+        frag = struct.unpack('!H', body[6:8])[0]
+        if frag & 0x3fff:                   # MF or an offset: a fragment, kept until the datagram is whole
+            data = self.reassemble((sip, dip, body[4:6], proto), (frag & 0x1fff) * 8, bool(frag & 0x2000), data)
+            if data is None:
+                return []
         if proto == 1 and checksum(data):
             self.refuse('icmp_checksum_bad', len(frame))
             return []
@@ -310,11 +335,59 @@ class Network:
             self.log('icmp_echo', source=sip.hex(), length=len(data))
             reply = b'\0\0' + b'\0\0' + data[4:]
             reply = reply[:2] + struct.pack('!H', checksum(reply)) + reply[4:]
-            return [self.frame(src, 0x0800, ipv4(HOST_IP, sip, 1, reply))]
+            self.ident = (self.ident + 1) & 0xffff
+            return [self.frame(src, 0x0800, p) for p in ipv4_fragments(HOST_IP, sip, 1, reply, self.ident)]
         if proto == 17 and struct.unpack('!H', data[2:4])[0] == 67:
             return self.dhcp(src, data[8:])
         self.log('ip_ignored', protocol=proto, destination=dip.hex(), length=len(data))
         return []
+
+    REASSEMBLY_SECONDS, REASSEMBLY_DATAGRAMS, REASSEMBLY_BYTES = 30.0, 16, 65515
+
+    def reassemble(self, key, offset, more, data):
+        """The datagram's payload once every fragment is in, else None. An
+        incomplete datagram is dropped after REASSEMBLY_SECONDS (RFC 791's
+        timer), when more than REASSEMBLY_DATAGRAMS are pending (the oldest),
+        or as soon as it cannot be completed: a fragment that is not a
+        multiple of 8 bytes with more to come, one overlapping another or
+        beyond the last, a second last fragment, or more than 65515 bytes."""
+        now = self.now()
+        for k in [k for k, v in self.fragments.items() if now - v[0] > self.REASSEMBLY_SECONDS]:
+            del self.fragments[k]
+            self.refuse('reassembly_timeout', 0)
+        entry = self.fragments.get(key)
+        if entry is None:
+            entry = self.fragments[key] = (now, {}, [None])
+            while len(self.fragments) > self.REASSEMBLY_DATAGRAMS:
+                self.fragments.popitem(last=False)
+                self.refuse('reassembly_evicted', 0)
+        _, parts, end = entry
+        stop = offset + len(data)
+        clash = (more and len(data) % 8) or stop > self.REASSEMBLY_BYTES or \
+            (not more and end[0] is not None) or (end[0] is not None and stop > end[0]) or \
+            any(o < stop and offset < o + len(d) for o, d in parts.items())
+        if not more and not clash and any(o + len(d) > stop for o, d in parts.items()):
+            clash = True
+        if clash:
+            del self.fragments[key]
+            self.refuse('fragment_bad', len(data))
+            return None
+        parts[offset] = data
+        if not more:
+            end[0] = stop
+        if end[0] is None:
+            return None
+        whole, at = bytearray(), 0
+        for off in sorted(parts):
+            if off != at:
+                return None                 # a hole: wait for the rest
+            whole += parts[off]
+            at += len(parts[off])
+        if at != end[0]:
+            return None
+        del self.fragments[key]
+        self.log('reassembled', length=at, fragments=len(parts))
+        return bytes(whole)
 
     def dhcp(self, src, boot):
         if len(boot) < 240 or boot[0] != 1 or boot[236:240] != b'\x63\x82\x53\x63':
@@ -395,7 +468,7 @@ class Model:
         self.speed = speed
         self.chip = Chip(mbps)
         self.fcs = fcs
-        self.net = Network(self.log)
+        self.net = Network(self.log, now)
         self.device = device_descriptor(speed, serial is not None)
         self.config_desc = config_descriptor(speed)
         self.other = None if speed == 'super' else config_descriptor('full' if speed == 'high' else 'high', 7)

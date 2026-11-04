@@ -351,6 +351,7 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | 2000 SP4 | Windows' EHCI | emulated: `cx31993`; 0.1.5.0, the fix and a port-0xE9 trace build | the STOP 0x1E in `usbhub20.sys` read: Update Driver from `usbaudio` (3 of 3) and Disable then Enable of a working `uac2` (1 of 1) stop inside `PcAddAdapterDevice`, in the hub driver's answer to PortCls's `IRP_MN_QUERY_INTERFACE`; not `uac2`'s code. Uninstalling `usbaudio` and a no-driver INF do not stop; an INF `Reboot` directive avoided the stop on Update Driver | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
 | 2000 SP4, XP SP3 x86, 7 SP1 x64 | Windows' EHCI | emulated: `cx31993`; the 2000 restart INF (`76b09bd`) | 2000: Update Driver from `usbaudio` asks for a restart, no stop, plays after it; XP and 7 x64: install at the first plug with no restart prompt and play | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
 | 7 SP1 x86 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
+| XP x64 | xHCI98 3.4.0.0, Windows' EHCI | emulated: `hs24` (first plug), `cx31993` (the seek legs); the released 0.1.6.0 x64 files, `uac2wdm.inf` staged by `SetupCopyOEMInf` with `UACCI.INF` | first plug: the wizard chose `uac2` from the staged INF with no restart prompt; play, rec and ramp PASS; the seek legs: none in 5 legs on each controller | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 2000: the seek legs only (2026-10-31); ME under xHCI98 only; the seek legs on 98 SE are owed. Real PC: none yet - owner's bench session.
 
@@ -437,6 +438,8 @@ Real PC: none yet - owner's bench session.
 | XP SP3 x86 | Windows' UHCI | emulated: QEMU `usb-net`, Full Speed | the released `CDCNET.INF` (0.1.0 re-cut, gadget id): install, DHCP and ping PASS | [release 0.1.0](testing/2026-10-24-release-0.1.0.md) |
 | XP SP3 x86 | Windows' EHCI | emulated: QEMU `usb-net`, High Speed (test patch) | ECM: NETTEST, removal under traffic, replug and NETTEST PASS | [sweep-legs](testing/2026-10-23-sweep-legs.md) |
 | 2000 SP4 | Windows' EHCI (SP4 `usbehci`) | emulated: QEMU `usb-net`, High Speed (test patch) | ECM: install, NETTEST twice, idle removal, removal under traffic, replug and NETTEST PASS | [sweep-legs](testing/2026-10-23-sweep-legs.md) |
+| XP x64 | Windows' UHCI, xHCI98 3.4.0.0 | emulated: QEMU `usb-net`, Full Speed; the released `wxp-x64` files, `CDCNET.INF` staged by `SetupCopyOEMInf` | first plug installs from the staged INF; DHCP, NETTEST 21/21 ICMP and 2 x 1 MiB TFTP PASS on each controller | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
+| XP x64 | Windows' EHCI | emulated, simulator: `ncmemu.py`, an unlisted id (`FFFF:0303`), High Speed | the NCM class line binds; DHCP and ping PASS | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 The other rows ran the test INFs (`CDCT98.INF`, `CDCTEST.INF`), which bind
 the same device with the same install sections; until the 0.1.0 re-cut the
@@ -501,6 +504,7 @@ No real board (Uno R3, Pico) yet; real PC: none yet - owner's bench session.
 | 2000 SP4 | Windows' UHCI | emulated, simulator: the UFI floppy simulator `ufiemu.py` over `usb-redir`, an unlisted drive (`FFFF:0020` CBI, `FFFF:0021` CB), Full Speed, FAT12 medium | class match binds through the wizard; read PASS for CBI and CB (three files, CRC-32s match); Windows writes the root directory's access dates during the read | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
 | XP SP3 x86 | Windows' UHCI | emulated, simulator: the same | read PASS for CBI and CB, the same | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
 | 7 SP1 x64 | Windows' UHCI | emulated, simulator: the same | INF staged with `pnputil`, then the plug installs it without a prompt; read PASS for CBI and CB | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
+| XP x64 | Windows' UHCI, xHCI98 3.4.0.0 | emulated, simulator: the same; `USBFLOP.INF` staged by `SetupCopyOEMInf` | first plug installs from the staged INF; read PASS for CBI and CB under UHCI and for CBI under xHCI98 | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 EHCI legs: REAL CHECK NEEDED (a Full Speed floppy is not carried by
 QEMU's EHCI). Real PC: none yet - owner's bench session.

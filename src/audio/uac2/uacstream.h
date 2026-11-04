@@ -59,11 +59,13 @@ class UacStream : public IMiniportWaveCyclicStream, public IDmaChannel {
           refs(1), owner(parent), active(gate), group(NULL), buffer(NULL),
           used(MinCapacity), state(KSSTATE_STOP), filled(0), completed(0), packetErrors(0),
           notifyBytes(format->BytesPerSecond / 100), pendingNotify(0), cleanupWork(NULL), cleanupDevice(NULL), published(FALSE) {
-        /* About 62 ms of the format, plus the queue's milliseconds above
-         * 32 (docs/design/uac2.md 19.5), whole frames, 16 KiB to 1 MiB. */
+        /* About 62 ms of the format, plus 1.25 times the queue's
+         * milliseconds above 32 (docs/design/uac2.md 19.5: the quarter is
+         * the room UacPlanQueue's bound needs), whole frames, 16 KiB to
+         * 1 MiB. */
         ULONG want = BytesPerSecond / 16;
         if (queueMs > 32) {
-            ULONG extra = queueMs - 32; /* at most 96 */
+            ULONG extra = ((queueMs > 128 ? 128 : queueMs) - 32) * 5 / 4; /* at most 120 */
             want += BytesPerSecond / 1000 * extra + (BytesPerSecond % 1000 * extra + 999) / 1000;
         }
         if (want < MinCapacity) want = MinCapacity;

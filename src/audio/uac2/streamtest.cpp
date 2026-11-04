@@ -128,15 +128,15 @@ int main(){
  assert(!stream->SetState(KSSTATE_STOP));assert(!stream->GetPosition(&pos)&&pos==0);
  service->Release();stream->Release();dma->Release();RunQueued();assert(closes==3&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
  /* docs/design/uac2.md 19.5: the ring is about 62 ms (16 KiB at least) up to a 32 ms queue, and grows by
-  * the queue above 32 ms, whole frames, within 1 MiB (the cap,
+  * 1.25 times the queue above 32 ms, whole frames, within 1 MiB (the cap,
   * multichannel, is UacPlanQueue's to bound: desctest). */
- {static const ULONG q[]={16,32,64,128},want[]={16384,16384,18144,30432};for(i=0;i<4;++i){
+ {static const ULONG q[]={16,32,64,128},want[]={16384,16384,19680,35040};for(i=0;i<4;++i){
   assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device,FALSE,q[i]));
   assert(dma->AllocatedBufferSize()==want[i]&&dma->BufferSize()==want[i]);
   service->Release();stream->Release();dma->Release();RunQueued();assert(!active&&owner.refs==1&&!allocations);}
   f.WaveFormatEx.nSamplesPerSec=384000;f.WaveFormatEx.wBitsPerSample=24;f.WaveFormatEx.nBlockAlign=6;f.WaveFormatEx.nAvgBytesPerSec=2304000;
   UAC_STREAM_HOOKS anyHooks={NULL,Start,Stop,Close,Notify,AcceptAll};assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&anyHooks,device,FALSE,128));
-  assert(dma->AllocatedBufferSize()==365184);
+  assert(dma->AllocatedBufferSize()==420480);
   service->Release();stream->Release();dma->Release();RunQueued();assert(!active&&owner.refs==1&&!allocations);}
  puts("PASS: stream format/allocation/ring (and its size from the queue); render position = fetch cursor, taken bytes cleared, no rewind on pause; capture position = written; deferred DISPATCH and PASSIVE-in-Notify final release; native callback-return FDO guard and exactly-once close");return 0;
 }

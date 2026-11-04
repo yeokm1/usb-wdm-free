@@ -1728,10 +1728,13 @@ above 32 ms (`bInterval` 6 and up at High Speed) gives the minimum of 2.
 
 The cyclic buffer must be larger than the queue (17.4 item 5: the first
 `RUN` takes the whole queue at once). It stays about 62 ms of the format
-(16 KiB to 1 MiB) up to a 32 ms queue, and grows by the queue above 32
-ms: 62 ms + (`QueueMs` - 32) ms, so 158 ms at 128. Every default
-(32 ms) ring is the size it was. Where the 1 MiB cap keeps the ring
-shorter (above about 6.6 MB/s, for example 384 kHz, 8 channels, 32-bit
+(16 KiB to 1 MiB) up to a 32 ms queue, and grows by 1.25 times the
+queue above 32 ms: 62 ms + 1.25 x (`QueueMs` - 32) ms, so 182 ms at 128.
+The quarter is the room 19.4's bound needs (one URB spare and `B`'s
+margins): with the queue alone (158 ms at 128), 48 kHz 16-bit stereo got
+29 URBs, 116 ms, in the first legs; with the quarter it gets all 32.
+Every default (32 ms) ring is the size it was. Where the 1 MiB cap keeps the ring
+shorter (above about 5.7 MB/s, for example 384 kHz, 8 channels, 32-bit
 at 12.3 MB/s, 85 ms), 19.4's bound lowers the queue (to 17 URBs, 68 ms,
 at 128 ms there, `B` = 56320 bytes) instead of letting the first `RUN`
 lap the ring.

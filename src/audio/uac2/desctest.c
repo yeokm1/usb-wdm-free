@@ -119,6 +119,10 @@ static void QueueTests(void)
     CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 0, 1048576UL, NULL, NULL) == 17);
     CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 1600, 1048576UL, NULL, NULL) == 19);
     CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 3072, 1048576UL, NULL, NULL) == 17);
+    /* 19.5's ring at 48 kHz 16-bit stereo holds the whole queue: 64 ms in
+     * 19680 bytes, 128 ms in 35040. */
+    CHECK(UacPlanQueue(1, 1, 64, 192000, 4, 0, 19680, NULL, NULL) == 16);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 35040, NULL, NULL) == 32);
     /* Full Speed and bInterval 4 under a ring. */
     CHECK(UacPlanQueue(0, 1, 128, 192000, 4, 0, 16384, NULL, NULL) == 17);
     CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);

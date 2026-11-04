@@ -1783,27 +1783,35 @@ that range (MMCSS).
   it has any effect there.
 - The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
   (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
-- The fairness rule (build 23; builds 21 and 22 slept the worker after a
+- The fairness rule (build 24; builds 21 and 22 slept the worker after a
   count of passes, which a wake racing the wait could reset without the
   worker ever blocking, and whose 10 ms sleep could itself drain a queue
-  that a small client ring holds to 8 or 12 ms; Codex's reviews of builds
-  21 and 22). A stack that completes URBs inline again and again with
-  nothing delivered (capture with zero-length packets, no `Fail`) leaves
-  `Wake` signalled, so a real-time worker would hold a single processor,
-  the thread that asks Stop included. So the worker measures in
-  interrupt time how long it runs between its waits, in windows of at
-  least 200 ms (`UacPlanDuty`). A window busy for 60 % or more demotes it
-  to the priority it was created at (the value `KeSetPriorityThread`
-  returned) for the next window, where the normal threads share the
-  processor with it; a window below that restores real time. It never
-  sleeps, so a working stream keeps refilling. Busy time is measured, not
-  inferred from whether one wait blocked, so no race hides a loop; at
-  tick granularity (10 to 15.6 ms before Windows 8) a short pass counts
-  only when a tick falls inside it, which samples the fraction, and a
-  normal stream (a pass well under a millisecond, at most about 1.25 a
-  millisecond) stays far below 60 %. `WorkerThrottles` counts the
-  demotions (0 in normal running); while demoted, `WorkerPriority` reads
-  the created priority.
+  a small client ring holds to 8 or 12 ms; build 23 measured in
+  interrupt time, whose 10 to 15.6 ms ticks before Windows 8 can miss a
+  loop's time inside waits that return at once, and let a later RUN turn
+  the rule off under a real-time worker; Codex's reviews of builds 21 to
+  23). A stack that completes URBs inline again and again with nothing
+  delivered (capture with zero-length packets, no `Fail`) leaves `Wake`
+  signalled, so a real-time worker would hold a single processor, the
+  thread that asks Stop included. So the worker:
+  - keeps its own copy of `Uac2Realtime` from its start: a later RUN's
+    value applies to the next worker only;
+  - measures with `KeQueryPerformanceCounter` (HAL; stock 98 SE drivers
+    import it, xHCI98 record 13, the import table's row 102) the time it
+    runs between waits, and counts as busy a wait shorter than 50 us (a
+    return at once, not a block);
+  - in windows of at least 200 ms (`UacPlanDuty`), a window busy for 60 %
+    or more demotes it to the priority it was created at (the value
+    `KeSetPriorityThread` returned) for the next window, where the normal
+    threads share the processor with it; a demoted window always ends in
+    real time again, so a runaway loop holds real time for at most every
+    other window, and a recovered stream is never held down by time it
+    spent preempted while demoted;
+  - never sleeps, so a working stream keeps refilling.
+  A normal stream (a pass well under a millisecond, at most about 1.25 a
+  millisecond) is far below 60 %. `WorkerThrottles` counts the demotions
+  (0 in normal running); while demoted, `WorkerPriority` reads the
+  created priority. The x64 build links `hal.lib` for the counter.
 - Read at every RUN (build 21): a stream kept across a pause or stop
   (`Drain` without destroy) takes the value again at its next RUN, so
   `Uac2Realtime` 0 applies at the next start of playback.

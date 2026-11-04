@@ -31,17 +31,28 @@ unsigned int UacPlanRealtime(unsigned long raw)
 }
 
 unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
-                         unsigned int demoted, unsigned int *closed)
+                         unsigned __int64 window, unsigned int demoted,
+                         unsigned int *closed)
 {
     *closed = 0;
-    if (elapsed < UAC_DUTY_WINDOW_100NS) {
+    if (elapsed < window) {
         return demoted;
     }
     *closed = 1;
+    if (demoted) {
+        return 0;   /* one window demoted at most, then real time again */
+    }
     if (busy > elapsed) {
         busy = elapsed;
     }
     return busy * 100U >= elapsed * UAC_DUTY_PERCENT ? 1U : 0U;
+}
+
+unsigned __int64 UacPlanCounts(unsigned __int64 hz, unsigned long n,
+                               unsigned long perSecond)
+{
+    unsigned __int64 c = hz * n / perSecond;
+    return c != 0 ? c : 1;
 }
 
 unsigned int UacPlanQueueMs(unsigned long raw)

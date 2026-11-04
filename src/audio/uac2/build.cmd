@@ -138,6 +138,7 @@ call :need "%WDK%\inc\ddk\wdm.h" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 call :need "%WDK%\lib\wnet\amd64\ntoskrnl.lib" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 call :need "%WDK%\inc\ddk\portcls.h" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 call :need "%WDK%\lib\wnet\amd64\portcls.lib" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
+call :need "%WDK%\lib\wnet\amd64\hal.lib" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 call :need "%WDK%\bin\x86\rc.exe" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 call :need "%WDK%\bin\x86\rcdll.dll" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 set PATH=%WDK%\bin\x86\amd64;%WDK%\bin\x86;%SystemRoot%\system32;%SystemRoot%\System32\WindowsPowerShell\v1.0
@@ -148,7 +149,7 @@ set CBASE=/GR- /W3 /WX /GS- /Gy /GF /Zl /D_AMD64_=1 /DAMD64=1 /D_WIN64=1 /DNTDDI
 set CFREE=/Oxs /DDBG=0
 set CCHK=/Od /Oi /Zi /Fd"%OUT%\%PKG%.cpdb" /DDBG=1
 set LBASE=/DRIVER /SUBSYSTEM:NATIVE,5.02 /ENTRY:DriverEntry /BASE:0x10000 /NODEFAULTLIB /INCREMENTAL:NO /OPT:REF /OPT:ICF /MERGE:_PAGE=PAGE /MERGE:_TEXT=.text /MACHINE:AMD64
-set LLIBS="%WDK%\lib\wnet\amd64\ntoskrnl.lib" "%WDK%\lib\wnet\amd64\portcls.lib"
+set LLIBS="%WDK%\lib\wnet\amd64\ntoskrnl.lib" "%WDK%\lib\wnet\amd64\hal.lib" "%WDK%\lib\wnet\amd64\portcls.lib"
 set MACHINE=8664
 set SUBSYS=5.02
 set KITVER=WDK 7.1 7600.16385.1 (cl 15.00.30729.207, link 9.00.30729.207), WNET amd64

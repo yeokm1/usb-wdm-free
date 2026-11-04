@@ -981,8 +981,10 @@ static VOID Worker(PVOID context)
     NTSTATUS status;
     LARGE_INTEGER timeout;
     KPRIORITY basePriority = 0;
-    ULONGLONG windowStart, busy, runStart, now;
+    LARGE_INTEGER hz;
+    ULONGLONG windowStart, busy, runStart, waitStart, now, window, shortWait;
     unsigned int demoted = 0, closed, next;
+    BOOLEAN realtime;
     /* 98 SE: waiting on a thread object faulted there (usbmidi's stop path,
      * 2026-10-22), so the stop waits for Exited; 2000 and later also wait
      * the thread object so the image cannot unload under it. */
@@ -995,12 +997,18 @@ static VOID Worker(PVOID context)
      * never holds the processor. LOW_REALTIME_PRIORITY is the lowest of the
      * real-time range; 98 SE's NTKERN exports the name (xHCI98 record 13,
      * row 114), its effect there is read by the legs. */
-    if (s->Realtime) {
+    /* The worker's own copy: a RUN that changes s->Realtime later applies
+     * to the next worker, never to this one's priority or fairness. */
+    realtime = s->Realtime ? TRUE : FALSE;
+    if (realtime) {
         basePriority = KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
         s->Stats.WorkerPriority = LOW_REALTIME_PRIORITY;
     }
     KeSetEvent(&s->Ready, IO_NO_INCREMENT, FALSE);
-    windowStart = runStart = KeQueryInterruptTime(); busy = 0;
+    windowStart = runStart = (ULONGLONG)KeQueryPerformanceCounter(&hz).QuadPart;
+    window = UacPlanCounts((ULONGLONG)hz.QuadPart, UAC_DUTY_WINDOW_MS, 1000UL);
+    shortWait = UacPlanCounts((ULONGLONG)hz.QuadPart, UAC_DUTY_SHORT_WAIT_US, 1000000UL);
+    busy = 0;
     for (;;) {
         KeClearEvent(&s->Wake);
         /* Feedback first so newly prepared data uses the newest valid rate.
@@ -1048,10 +1056,10 @@ static VOID Worker(PVOID context)
          * normal threads - the one that asks Stop among them - share the
          * processor with it. It never sleeps: a working stream keeps
          * refilling. Measured, so no wake racing the wait can hide it. */
-        now = KeQueryInterruptTime();
-        busy += now - runStart;
-        if (s->Realtime) {
-            next = UacPlanDuty(now - windowStart, busy, demoted, &closed);
+        if (realtime) {
+            now = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
+            busy += now - runStart;
+            next = UacPlanDuty(now - windowStart, busy, window, demoted, &closed);
             if (closed) { windowStart = now; busy = 0; }
             if (next != demoted) {
                 (VOID)KeSetPriorityThread(KeGetCurrentThread(),
@@ -1062,8 +1070,14 @@ static VOID Worker(PVOID context)
             }
         }
         timeout.QuadPart = -1000000; /* watchdog only; events drive PCM */
+        if (realtime) waitStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
         KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &timeout);
-        runStart = KeQueryInterruptTime();
+        if (realtime) {
+            runStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
+            /* A wait that returned at once is not idle time (Codex, build
+             * 23): shorter than UAC_DUTY_SHORT_WAIT_US, it counts as busy. */
+            if (runStart - waitStart < shortWait) busy += runStart - waitStart;
+        }
     }
     KeAcquireSpinLock(&s->Lock, &old); s->Stats.Running = 0; KeReleaseSpinLock(&s->Lock, old);
     KeSetEvent(&s->Exited, IO_NO_INCREMENT, FALSE); /* last access to s */

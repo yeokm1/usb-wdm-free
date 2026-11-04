@@ -82,25 +82,30 @@ static void QueueTests(void)
     CHECK(UacPlanRealtime(UAC_QUEUE_NONE) == 1 && UAC_REALTIME_DEFAULT == 1);
     CHECK(UacPlanRealtime(0) == 0);
     CHECK(UacPlanRealtime(1) == 1 && UacPlanRealtime(2) == 1 && UacPlanRealtime(0x80000000UL) == 1);
-    /* The worker's fairness rule (19.6, build 23): busy time per window. */
+    /* The worker's fairness rule (19.6, build 24): busy time per window,
+     * in performance-counter units; one window demoted at most. */
     {
         unsigned int closed;
-        const unsigned __int64 w = UAC_DUTY_WINDOW_100NS;
+        const unsigned __int64 hz = 3579545;    /* the ACPI PM timer */
+        const unsigned __int64 w = UacPlanCounts(hz, UAC_DUTY_WINDOW_MS, 1000UL);
+        CHECK(w == hz / 5);
+        CHECK(UacPlanCounts(hz, UAC_DUTY_SHORT_WAIT_US, 1000000UL) == 178);
+        CHECK(UacPlanCounts(1, 1, 1000000UL) == 1);
         /* Within a window the state holds, whatever the busy time. */
-        CHECK(UacPlanDuty(w - 1, w - 1, 0, &closed) == 0 && closed == 0);
-        CHECK(UacPlanDuty(w - 1, 0, 1, &closed) == 1 && closed == 0);
-        /* A window busy past 60 %: demoted; below: restored. */
-        CHECK(UacPlanDuty(w, w, 0, &closed) == 1 && closed == 1);
-        CHECK(UacPlanDuty(w, w * 60 / 100, 0, &closed) == 1);
-        CHECK(UacPlanDuty(w, w * 60 / 100 - 1, 0, &closed) == 0);
-        CHECK(UacPlanDuty(w, 0, 1, &closed) == 0 && closed == 1);
-        /* A long wait makes a long, idle window: real time again. */
-        CHECK(UacPlanDuty(w * 50, w / 10, 1, &closed) == 0);
+        CHECK(UacPlanDuty(w - 1, w - 1, w, 0, &closed) == 0 && closed == 0);
+        CHECK(UacPlanDuty(w - 1, 0, w, 1, &closed) == 1 && closed == 0);
+        /* A window busy past 60 %: demoted; below: not. */
+        CHECK(UacPlanDuty(w, w, w, 0, &closed) == 1 && closed == 1);
+        CHECK(UacPlanDuty(w, (w * 60 + 99) / 100, w, 0, &closed) == 1);
+        CHECK(UacPlanDuty(w, w * 60 / 100 - 1, w, 0, &closed) == 0);
+        /* A demoted window always ends in real time, busy or not. */
+        CHECK(UacPlanDuty(w, w, w, 1, &closed) == 0 && closed == 1);
+        CHECK(UacPlanDuty(w, 0, w, 1, &closed) == 0 && closed == 1);
         /* Normal running: a pass of 50 us every 0.8 ms is about 6 %. */
-        CHECK(UacPlanDuty(w, w * 6 / 100, 0, &closed) == 0);
+        CHECK(UacPlanDuty(w, w * 6 / 100, w, 0, &closed) == 0);
         /* Busy counted above the window (a long pass): clamped, demoted. */
-        CHECK(UacPlanDuty(w, w * 3, 0, &closed) == 1);
-        CHECK(UAC_DUTY_PERCENT == 60 && UAC_DUTY_WINDOW_100NS == 2000000);
+        CHECK(UacPlanDuty(w, w * 3, w, 0, &closed) == 1);
+        CHECK(UAC_DUTY_PERCENT == 60 && UAC_DUTY_WINDOW_MS == 200 && UAC_DUTY_SHORT_WAIT_US == 50);
     }
     /* The table, no ring bound. */
     for (i = 1; i <= 3; i++) {

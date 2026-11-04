@@ -129,10 +129,20 @@ unsigned int UacPlanRealtime(unsigned long raw);
  * the threshold. UacPlanDuty: the window's length and busy time so far;
  * returns the new demoted state (0 or 1) once the window is long enough,
  * else the current one; *closed 1 when the window ends now. */
-#define UAC_DUTY_WINDOW_100NS 2000000UL
+#define UAC_DUTY_WINDOW_MS 200U
 #define UAC_DUTY_PERCENT 60U
+#define UAC_DUTY_SHORT_WAIT_US 50U
 unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
-                         unsigned int demoted, unsigned int *closed);
+                         unsigned __int64 window, unsigned int demoted,
+                         unsigned int *closed);
+/* Build 24: a demoted window always ends in real time again (one window
+ * demoted at most, then measured afresh), and every interval is in
+ * performance-counter units: window is UAC_DUTY_WINDOW_MS of them, and a
+ * wait shorter than UAC_DUTY_SHORT_WAIT_US counts as busy (an immediate
+ * return, not a block). UacPlanCounts: n microseconds or milliseconds in
+ * counter units at frequency hz (at least 1). */
+unsigned __int64 UacPlanCounts(unsigned __int64 hz, unsigned long n,
+                               unsigned long perSecond);
 
 /* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
  * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered

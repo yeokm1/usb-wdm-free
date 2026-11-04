@@ -980,6 +980,8 @@ static VOID Worker(PVOID context)
     LONG phase;
     NTSTATUS status;
     LARGE_INTEGER timeout;
+    ULONGLONG spinStart;
+    unsigned int spinPasses, spinRestart;
     /* 98 SE: waiting on a thread object faulted there (usbmidi's stop path,
      * 2026-10-22), so the stop waits for Exited; 2000 and later also wait
      * the thread object so the image cannot unload under it. */
@@ -997,7 +999,23 @@ static VOID Worker(PVOID context)
         s->Stats.WorkerPriority = LOW_REALTIME_PRIORITY;
     }
     KeSetEvent(&s->Ready, IO_NO_INCREMENT, FALSE);
+    spinStart = KeQueryInterruptTime(); spinPasses = 0;
     for (;;) {
+        /* 19.6's throttle: a stack that completes URBs inline, over and
+         * over, with nothing delivered (no Fail, no wait that blocks) would
+         * keep a real-time worker on the processor; past UAC_SPIN_PASSES
+         * passes in UAC_SPIN_WINDOW_100NS it sleeps, so the threads below
+         * it - the one that asks Stop among them - always run. */
+        {
+            ULONGLONG now = KeQueryInterruptTime();
+            if (UacPlanSpin(spinStart, ++spinPasses, now, &spinRestart)) {
+                LARGE_INTEGER nap; nap.QuadPart = -UAC_SPIN_SLEEP_100NS;
+                KeDelayExecutionThread(KernelMode, FALSE, &nap);
+                s->Stats.WorkerThrottles++;
+                now = KeQueryInterruptTime();
+            }
+            if (spinRestart) { spinStart = now; spinPasses = 1; }
+        }
         KeClearEvent(&s->Wake);
         /* Feedback first so newly prepared data uses the newest valid rate.
          * Data completions are retired in sequence even if callbacks reorder. */

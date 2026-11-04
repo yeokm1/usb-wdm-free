@@ -30,6 +30,21 @@ unsigned int UacPlanRealtime(unsigned long raw)
     return raw != 0 ? 1U : 0U;
 }
 
+unsigned int UacPlanSpin(unsigned __int64 start, unsigned int passes,
+                         unsigned __int64 now, unsigned int *restart)
+{
+    *restart = 0;
+    if (now < start || now - start >= UAC_SPIN_WINDOW_100NS) {
+        *restart = 1;
+        return 0;
+    }
+    if (passes > UAC_SPIN_PASSES) {
+        *restart = 1;
+        return 1;
+    }
+    return 0;
+}
+
 unsigned int UacPlanQueueMs(unsigned long raw)
 {
     if (raw == UAC_QUEUE_NONE) return UAC_QUEUE_DEFAULT_MS;

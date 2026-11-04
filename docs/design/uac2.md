@@ -1783,6 +1783,17 @@ that range (MMCSS).
   it has any effect there.
 - The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
   (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
+- The throttle (build 21, Codex's review of build 20): the wait on `Wake`
+  bounds nothing if a stack completes URBs inline again and again with
+  nothing delivered (capture with zero-length packets, no `Fail`), and a
+  real-time worker would then hold a single processor, the thread that
+  asks Stop included. So more than 32 passes of the loop inside 10 ms
+  (`UacPlanSpin`; about one pass per 4 ms URB in normal running) make the
+  worker sleep 1 ms (`KeDelayExecutionThread`, already imported), counted
+  in the stats' `WorkerThrottles` (0 in normal running).
+- Read at every RUN (build 21): a stream kept across a pause or stop
+  (`Drain` without destroy) takes the value again at its next RUN, so
+  `Uac2Realtime` 0 applies at the next start of playback.
 
 A test build of this (2026-11-04, XP x64 under CPU load) gave 13 Ring
 Underruns against the increment's 62, and 32 against 34 under CPU and

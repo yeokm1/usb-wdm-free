@@ -777,8 +777,10 @@ private:
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
                     d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d,
                     d->QueueRead, d->QueueMs, stream->BufferSize(), &d->Usb);
-                if (NT_SUCCESS(status)) UacUsbSetRealtime(d->Usb, GetRealtimeRaw(w->device));
             }
+            /* 19.6: at every RUN, a stream kept from a pause or stop
+             * (Drain without destroy) included. */
+            if (NT_SUCCESS(status) && d->Usb) UacUsbSetRealtime(d->Usb, GetRealtimeRaw(w->device));
             /* The device may have lost its levels in D3 or a stop. */
             if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
             if (NT_SUCCESS(status)) status = UacUsbStart(d->Usb);
@@ -1368,7 +1370,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 20;
+    ULONG build = 21;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));

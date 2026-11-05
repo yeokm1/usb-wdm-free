@@ -150,23 +150,29 @@ Final run, 14 cycles:
   came back and played.
 - The simulator starts afresh with each attach, so its time to come back
   includes its own start.
-- Earlier cycles, 8 before the fixes and 2 after the first fix:
-  - Real devices: 5 PASS. The one fail, an X4 cycle, was a harness race:
-    the X4 was attached to port 1 before the simulator's `device_del` had
-    finished ("usb port 1 ... in use"). Re-run by hand (X4 removed 3 s
-    into a play, 3 s gap, attached again), it played.
-  - One X1 cycle (idle, 1 s gap) had "no UAC2 output" at 25 s. It ran
-    before the second check existed and stays unexplained. The X1 passed
-    its other 7 cycles.
-  - Simulator cycles (4) failed at the first plug. The reason was a
-    Found New Hardware wizard for the X4's driverless function, left open
-    behind a window. XP installs one new device at a time, so the
+- Earlier runs, 12 cycles, before and between the harness fixes:
+
+  | run | cycles | real devices | simulators |
+  |---|---|---|---|
+  | first | 8 | X4 x2, X1 x2: 4 PASS | cx31993 x2, hs24 x2: 4 "no UAC2 output" |
+  | after fix 1 (fresh simulator log) | 2 | X4 (mid-play, 3 s gap): "no UAC2 output" | cx31993: PASS |
+  | after fix 2 (wait for port 1) | 2 | X1 (idle, 1 s gap): "no UAC2 output" | hs24: PASS |
+
+  - The X4 fail was a harness race. The X4 was attached to port 1 before
+    the simulator's `device_del` had finished ("usb port 1 ... in use";
+    the harness hid the error then). Re-run by hand (X4 removed 3 s into
+    a play, 3 s gap, attached again), it played.
+  - The X1 fail ran before the second check existed and stays
+    unexplained. The X1 passed its 6 other cycles: 2 in the first run, 4
+    in the final run.
+  - The 4 simulator fails in the first run were at the first plug. A
+    Found New Hardware wizard for the X4's driverless function was left
+    open behind a window. XP installs one new device at a time, so the
     simulators' new IDs were queued behind it. In addition, the harness
-    reused the simulator's log name on the next attach, so the replugged
-    simulator never started (uacemu refuses an existing log).
-  - With the wizard answered and the harness fixed, the simulators
-    installed and played. A hand replug of the cx31993 with a 30 s wait
-    played.
+    reused the simulator's log name on the next attach, so a replugged
+    simulator never started (uacemu refuses an existing log). With the
+    wizard answered and the harness fixed, the simulators installed and
+    played. A hand replug of the cx31993 with a 30 s wait played.
 - UACWAV prints "PASS: all buffers played" for a play whose device was
   removed part-way: its buffers complete. So a pass on a cut play is not
   evidence that it played.
@@ -186,13 +192,18 @@ Each capture was also fitted to a sine per 10 ms.
 | x4full | same | 2 ch, 16-bit, 48 kHz | -20.0 dBFS | -82 / -99.8 dB | 0 | 1-4 |
 | x1 | same | 2 ch, 16-bit, 48 kHz | -20.0 dBFS | -82 / -98 to -99 dB | 0 | 1-4 |
 
-- **No distortion measured.** In each capture every 10 ms block after
-  the first second is within -40 dB of a pure sine. The first 0.86-1.13 s
-  of each capture holds a different sound, about 200 Hz, -13 to
-  -15 dBFS, before the test tone. That is most likely Windows' device
-  arrival sound, since a new device becomes the default when it is the
-  only one. It is the "worst window" and the peak in the per-window
-  figures.
+- **No distortion measured in the test tone.** Each capture holds
+  first a different sound, then the tone:
+  - The first 0.44-1.14 s is a sound of about 200 Hz at -13 to
+    -15 dBFS. It is most likely Windows' device arrival sound, since a
+    new device becomes the default when it is the only one.
+  - Then the 5 s tone. In each of the 28 tone captures, every 10 ms
+    block from the end of that sound to the end of the tone (4.94-4.96 s
+    each) is within -40 dB of a pure 440 Hz sine.
+
+  The arrival sound accounts for the per-window "worst" figures and the
+  peak; the levels and THD in the table are the median of the 1 s
+  windows.
 - **Volume and mute are the device's.** The received samples were the
   same at 100 %, 50 % and 10 % and with mute on. `uac2` sent the feature
   unit `SET_CUR` requests (class, interface) instead of scaling samples.

@@ -4,7 +4,7 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
-## Release 0.1.8 (prepared 2026-11-05, not released: awaiting the x64 signature and the tag): `uac2` under load, its volume and its device names
+## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 
 `uac2` 0.1.8.26 (build 26). `STAGE.TXT` also stages these on more
 systems: `uac2`, `cdcnet` and `usbflop` on XP x64, as on XP x86, and

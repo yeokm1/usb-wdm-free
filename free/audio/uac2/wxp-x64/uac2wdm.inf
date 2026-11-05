@@ -11,7 +11,7 @@ Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/31/2026,0.1.6.0
+DriverVer=11/05/2026,0.1.8.26
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86
@@ -62,7 +62,7 @@ Driver.Copy.NT=12
 Include=ks.inf,wdmaudio.inf
 Needs=KS.Registration,WDMAUDIO.Registration
 CopyFiles=Driver.Copy
-AddReg=Loader,AudioSupport
+AddReg=Loader,AudioSupport,Queue9x
 [Driver.Copy]
 uac2wdm.sys
 [Loader]
@@ -86,6 +86,21 @@ HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
 HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 
+; Uac2QueueMs (docs/design/uac2.md 19.3): the milliseconds of audio each
+; stream keeps queued to the USB stack, 16 to 128, default 32. Written at
+; the default, never over a value already there (no-clobber); 9x takes the
+; DWORD as its four bytes. Uac2VolAboveZero (design 20): 1 offers a
+; device's whole volume range, gain above 0 dB included; 0, the default,
+; tops the range at 0 dB. Written the same way.
+[Queue9x]
+HKR,,Uac2QueueMs,0x00000003,20,00,00,00
+HKR,,Uac2Realtime,0x00000003,01,00,00,00
+HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00
+[QueueNT]
+HKR,,Uac2QueueMs,0x00010003,32
+HKR,,Uac2Realtime,0x00010003,1
+HKR,,Uac2VolAboveZero,0x00010003,0
+
 ; Windows 2000 only (design 18): its USB 2.0 hub driver stops Windows
 ; when uac2 starts on a device the hub had started before (a driver
 ; change), so Setup is told to leave the device for a restart, after
@@ -94,19 +109,19 @@ HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 Include=ks.inf,wdmaudio.inf
 Needs=KS.Registration,WDMAUDIO.Registration.NT
 CopyFiles=Driver.Copy.NT
-AddReg=AudioSupport
+AddReg=AudioSupport,QueueNT
 Reboot
 ; XP and later x86: [UAC2.NT] without Reboot.
 [UAC2XP.NT]
 Include=ks.inf,wdmaudio.inf
 Needs=KS.Registration,WDMAUDIO.Registration.NT
 CopyFiles=Driver.Copy.NT
-AddReg=AudioSupport
+AddReg=AudioSupport,QueueNT
 [UAC2.NTamd64]
 Include=ks.inf,wdmaudio.inf
 Needs=KS.Registration,WDMAUDIO.Registration.NT
 CopyFiles=Driver.Copy.NT
-AddReg=AudioSupport
+AddReg=AudioSupport,QueueNT
 [Driver.Copy.NT]
 uac2wdm.sys
 [UAC2.NT.Services]

@@ -1579,6 +1579,53 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
  * device without a usable product string is named, a later pair " N". */
 static const char NameFallback[] = "UAC2 USB audio (experiment)";
 
+/* Windows Vista and later (WDM 6.00) name the audio endpoints after the
+ * devnode's FriendlyName, read when an endpoint arrives (section 21.2):
+ * the name is written there too, the instance key being the parent of
+ * the devnode's Device Parameters key (PLUGPLAY_REGKEY_DEVICE). Earlier
+ * systems take the interfaces' FriendlyName and are left alone here.
+ * Returns the status recorded as Uac2NameDevnode (STATUS_NOT_SUPPORTED
+ * before Vista). */
+static NTSTATUS NameDevnode(PDEVICE_OBJECT fdo, const UAC_WORD *name, ULONG n)
+{
+    EXT *ext = Extension(fdo);
+    HANDLE device, instance;
+    /* KEY_NAME_INFORMATION (ntddk.h; this build's wdm.h has only the class). */
+    struct KeyName { ULONG NameLength; WCHAR Name[1]; };
+    UCHAR buffer[sizeof(KeyName) + 512 * sizeof(WCHAR)];
+    KeyName *info = (KeyName *)buffer;
+    static const WCHAR tail[] = L"\\Device Parameters";
+    const ULONG tailChars = sizeof(tail) / sizeof(WCHAR) - 1;
+    ULONG got = 0, chars, i;
+    NTSTATUS s;
+    if (!IoIsWdmVersionAvailable(6, 0)) return STATUS_NOT_SUPPORTED;
+    s = IoOpenDeviceRegistryKey(ext->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_READ, &device);
+    if (!NT_SUCCESS(s)) return s;
+    s = ZwQueryKey(device, (KEY_INFORMATION_CLASS)3 /* KeyNameInformation, WDK 7.1 wdm.h */, info, sizeof(buffer) - sizeof(WCHAR), &got);
+    ZwClose(device);
+    if (!NT_SUCCESS(s)) return s;
+    chars = info->NameLength / sizeof(WCHAR);
+    if (info->NameLength > sizeof(buffer) - sizeof(KeyName) || chars <= tailChars)
+        return STATUS_OBJECT_NAME_INVALID;
+    for (i = 0; i < tailChars; i++) {
+        WCHAR a = info->Name[chars - tailChars + i], b = tail[i];
+        if (a >= L'a' && a <= L'z') a = (WCHAR)(a - L'a' + L'A');
+        if (b >= L'a' && b <= L'z') b = (WCHAR)(b - L'a' + L'A');
+        if (a != b) return STATUS_OBJECT_NAME_INVALID;
+    }
+    UNICODE_STRING path, value;
+    OBJECT_ATTRIBUTES oa;
+    path.Buffer = info->Name;
+    path.Length = path.MaximumLength = (USHORT)((chars - tailChars) * sizeof(WCHAR));
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    s = ZwOpenKey(&instance, KEY_SET_VALUE, &oa);
+    if (!NT_SUCCESS(s)) return s;
+    Name(&value, L"FriendlyName");
+    s = ZwSetValueKey(instance, &value, 0, REG_SZ, (PVOID)name, (n + 1) * sizeof(WCHAR));
+    ZwClose(instance);
+    return s;
+}
+
 /* The product string (section 21): the device descriptor's iProduct, in
  * 0x0409 when string descriptor 0 lists it, else its first language (0x0409
  * when that list cannot be read); each read at most 5 s (UacUsbDescriptor).
@@ -1621,6 +1668,9 @@ static void ReadName(PDEVICE_OBJECT fdo)
         Name(&u, L"Uac2Name");
         ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
         ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
+        NTSTATUS devnode = n ? NameDevnode(fdo, name, n) : STATUS_UNSUCCESSFUL;
+        Name(&u, L"Uac2NameDevnode");
+        ZwSetValueKey(key, &u, 0, REG_DWORD, &devnode, sizeof(devnode));
         ZwClose(key);
     }
 }

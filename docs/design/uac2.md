@@ -1908,8 +1908,11 @@ the top 62 % of the slider is gain:
 
 The PCM the driver sent was clean in every row: THD+N -90.5 dB at -1
 dBFS, alternate 1 (16-bit), 48 kHz, 24-byte packets in every
-microframe. That rules out the adaptive packet sizes and the sample
-packing at that format. "Past full scale" counts the samples that the
+microframe: the payload the driver builds (sample values, packing,
+frames a packet) is clean at that format. The simulator does not play
+packets against a DAC clock, and the emulated controller is not the
+user's FL1100, so packet timing on that controller is not measured
+here. "Past full scale" counts the samples that the
 volume in force takes over full scale, which a DAC that clips
 digitally cuts off. With the tone at +12 dB, THD+N after the cut is
 -9.4 dB; at +3 dB it is -20.7 dB. A gain above 0 dB on a full-scale

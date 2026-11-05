@@ -2007,3 +2007,121 @@ a pass-through node (section 4.1). Its one control on this device
 - Emulator legs on XP x64 under xHCI98 (20.2's table; the plug-in
   lowering, `Uac2VolAboveZero` = 1 and devices whose range tops at
   0 dB unchanged: `docs/testing/2026-11-05-uac2-gain.md`).
+
+## 21. The device's name: its USB product string (build 26, 2026-11-05)
+
+### 21.1 The problem
+
+Up to build 25, every `uac2` device appeared under the INF's one name,
+"UAC2 USB audio (experiment)" ("... 2" and so on for a later endpoint
+pair, section 15.3). That name showed in Sounds and Audio Devices, in
+the Vista+ sound panel, in `waveOutGetDevCaps` and in the device menus
+of applications such as VLC. Devices on Windows' own USB Audio 1.0
+driver show their product names.
+
+### 21.2 Where each system takes the name
+
+Measured on the emulator (21.5):
+
+- **98 SE and XP x64** show the `FriendlyName` of the filter's
+  `KSCATEGORY_AUDIO` device interface key. That is where the INF writes
+  its name (`AddInterface=%Audio%,Wave,...` with
+  `HKR,,FriendlyName,,%Device%`; `HKR` of an `AddInterface` section is
+  the key `IoOpenDeviceInterfaceRegistryKey` opens). Writing it there
+  before the interface arrives changed `szPname` and the control
+  panel's list on both systems. 98 SE, 2000 and XP share this WDMAud
+  path; 2000 and XP x86 were not run.
+- **7 x86** ignores that value. The endpoint is named "Headphones
+  (<devnode FriendlyName>)", read at each arrival. With the interface
+  keys renamed, the panel kept "4- UAC2 USB audio (experiment)". With
+  the devnode's `FriendlyName` set by hand (as SYSTEM) and the device
+  replugged, the panel and `szPname` showed "Headphones (Devnode Named
+  DAC)". Vista, 8 and 8.1 have the same audio endpoint builder but
+  were not run.
+
+Not used:
+- `KSPROPERTY_GENERAL_COMPONENTID` with a `MediaCategories` Name GUID,
+  which needs a registry entry per name.
+- `IoSetDevicePropertyData`, which exists from Vista only and would
+  need `MmGetSystemRoutineAddress`. The one x86 binary cannot import
+  that, because 98 SE's NTKERN lacks it (98 DDK `wdm.lib`).
+
+### 21.3 The change
+
+- **The string.** At each start (`ReadName`, before the first pair
+  registers), the device descriptor is read for `iProduct`, then string
+  descriptor 0 for the languages: 0x0409 when it is listed, else the
+  first, and 0x0409 when the list cannot be read. Then the product
+  string is read. Each read goes through `UacUsbDescriptor`, the
+  transport's request path: cancelled after 5 s and drained, as every
+  request of the driver.
+- **The name** (`UacName`, uacdesc.c, host-tested):
+  - The UTF-16 string is cleaned: control characters (below U+0020,
+    U+007F to U+009F) become spaces; surrogates, U+FEFF, U+FFFE and
+    U+FFFF are dropped; runs of spaces collapse to one and the ends are
+    trimmed.
+  - It is then cut to fit 31 characters, the most `szPname` holds
+    (`MAXPNAMELEN` 32). A later pair's " 2" to " 4" stays inside those
+    31, cut from the name before it.
+  - A malformed descriptor, or one with nothing printable left, gives
+    no name.
+- **The interfaces.** The name is written as `FriendlyName` on the
+  pair's two `KSCATEGORY_AUDIO` interfaces (reference strings
+  `Wave`/`Topology`, `Wave2`/`Topology2` and so on), before
+  `PcRegisterSubdevice` enables them. `IoRegisterDeviceInterface`
+  returns the link PortCls registers next, and
+  `IoOpenDeviceInterfaceRegistryKey` opens it.
+- **The devnode, Vista and later.** When `IoIsWdmVersionAvailable(6,
+  0)`, pair 0's name is also written as `FriendlyName` in the devnode's
+  instance key (`NameDevnode`). The key's path comes from the devnode's
+  `Device Parameters` key (`PLUGPLAY_REGKEY_DEVICE`, `ZwQueryKey`
+  `KeyNameInformation`) less its last component, and is opened with
+  `ZwOpenKey`. Device Manager reads the same value; that was not
+  checked here. Earlier systems are left alone.
+- **Fallback.** Without a usable string (no `iProduct`, a read that
+  fails, nothing printable), the INF's own name is written in both
+  places, so a name from an earlier start never stays. The driver's
+  copy of that name is checked against both INFs' `Device` string by
+  `infchk.ps1`.
+- **Recorded** in the driver key:
+  - `Uac2Name`: pair 0's name as written.
+  - `Uac2NameStatus`: 0 the product string, 1 no `iProduct`, 2 device
+    descriptor unread, 3 string unread, 4 nothing printable.
+  - `Uac2NameDevnode`: the devnode write's status, `STATUS_NOT_SUPPORTED`
+    (0xC00000BB) before Vista.
+- **Imports.** `IoRegisterDeviceInterface`,
+  `IoOpenDeviceInterfaceRegistryKey`, `ZwQueryKey` and `ZwOpenKey` are
+  all in the 98 DDK's `wdm.lib`, the NTKERN export set. Build 26 loaded
+  and named its devices on 98 SE.
+- **Test tools.** UACWAV and UACSEEK found their device by "UAC2" in
+  the name. Every simulator profile's product string still holds it.
+  For a real device, `UACWAV_NAME=<text>` names the device to use.
+  `uacemu.py --product TEXT` / `--no-product` set the simulated
+  `iProduct`.
+
+### 21.4 Not covered
+
+- Vista, 8 and 8.1, 2000, XP x86 and ME were not run. Each shares a
+  measured system's path (21.2).
+- An endpoint the Vista+ endpoint builder already holds keeps its
+  cached properties until it arrives again; the next plug or start
+  shows the new name (seen on 7).
+- Real devices.
+
+### 21.5 Tests
+
+- `desctest` (host), `UacNameLanguage` and `UacName`:
+  - lists with 0x0409 first, later or absent;
+  - malformed lists and strings (type, odd or short `bLength`, past the
+    buffer, empty);
+  - control characters, collapsing and trimming;
+  - non-ASCII kept and surrogates dropped;
+  - the 31-character cut with and without " 2", " 10";
+  - a sweep of every `bLength` checking the length cap, the NUL and
+    that no control character or end space survives.
+- `infchk`: the driver's fallback equals both INFs' `Device` string.
+- `uacsimtest`: `--product` / `--no-product` and the string over
+  `GET_DESCRIPTOR`.
+- Emulator legs (`docs/testing/2026-11-05-uac2-names.md`): XP x64, 7
+  x86 and 98 SE, with distinct product strings, no product, an empty
+  product, a long one, and a rename on the same instance.

@@ -1968,13 +1968,13 @@ a pass-through node (section 4.1). Its one control on this device
   lowered a control), after the existing fields.
   `KsMax` there is now the top offered.
 - `Uac2UsbStats` / `Uac2UsbStatsIn` (written at each stream stop) grow
-  from 65 to 88 words, append-only. Word 65, `VolLayout`, is 25 when
+  from 65 to 94 words, append-only. Word 65, `VolLayout`, is 25 when
   the words after it are filled. Then come `VolUnit`, `VolMode` (0
   software, 1 master, 2 per channel), `VolChannels`, `VolAboveZero`,
   `VolLowered`, `VolRangeRead` and `VolStartKnown` (bit n: slot n's
   RANGE was read / its CUR was read at start; slot 0 is the master, 1
-  and 2 the logical channels). Then, three words each for slots 0, 1
-  and 2: `VolCount` (subranges), `VolMin` (first MIN, silence read as
+  and 2 the logical channels). Then seven arrays of three words (slots
+  0, 1 and 2), words 73 to 93, in this order: `VolCount` (subranges), `VolMin` (first MIN, silence read as
   the next step), `VolMax` (last MAX), `VolRes` (smallest RES),
   `VolTop`, `VolOffered`, and `VolStartCur` (CUR at start), all in
   1/256 dB, signed. `VolStartCur` is the CUR as read, before any

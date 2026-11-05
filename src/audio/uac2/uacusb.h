@@ -51,7 +51,7 @@ typedef struct UAC_USB_STATS {
      * UAC_DUTY_PERCENT (19.6, build 23): 0 in normal running. While
      * demoted, WorkerPriority reads the priority it was created at. */
     ULONG WorkerThrottles;
-    /* Build 25 (docs/design/uac2.md 20.5), words 65 to 87, written by
+    /* Build 25 (docs/design/uac2.md 20.5), words 65 to 93, written by
      * uac2wdm.cpp (the transport leaves them 0): the render line's
      * volume as the driver found it at start. VolLayout is 25 when they
      * are filled. Slots 0 master, 1 and 2 logical channels 1 and 2; bit

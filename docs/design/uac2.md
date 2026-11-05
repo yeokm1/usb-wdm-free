@@ -1928,13 +1928,16 @@ the descriptors, the symptom and these numbers agree on.
   to `KsMax` (`UacVolFromKs`), so a SET, a restored `Uac2Level` or the
   0 dB a master-mode extra channel is normalized to never writes gain.
   For a device whose range tops out at or below 0 dB nothing changes.
-- **A device left above it is lowered at start.** If a controlled
-  channel's CUR at start is above `KsMax`, or cannot be read while its
-  range reaches above `KsMax`, the driver takes the volume over and
-  writes the level in force: the device's own, clamped to `KsMax`.
-  Until build 24 the device kept its own setting until the first SET
-  (section 5.3). It still does wherever that setting is inside the
-  range offered.
+- **A device left above it is lowered at start.** At start, each
+  volume control the driver writes (the master, the channels, or a
+  master-mode extra with a RANGE) whose CUR reads above `KsMax` is set
+  to `KsMax`. Only that control is set. Nothing is taken over (the
+  driver does not own the volume until a SET, section 5.3), and no
+  other control changes, so a master-mode extra keeps its attenuation:
+  every channel ends at most as loud as before. A CUR that cannot be
+  read is left as it is, because writing a target computed without it
+  could raise the level. The device keeps its own setting wherever
+  that setting is inside the range offered.
 - **The unknown is assumed at the device's top.** Where a CUR is not
   known, the software gain takes the device to be at `KsTop`, not
   `KsMax`, so it is never louder than asked (`Assumed`).
@@ -1962,7 +1965,7 @@ a pass-through node (section 4.1). Its one control on this device
 
 - `Uac2VolMap` (written at each level change) gains `KsTop`, then
   `AboveZero` (the option in force) and `Lowered` (1 when the start
-  took the volume over to lower it), after the existing fields.
+  lowered a control), after the existing fields.
   `KsMax` there is now the top offered.
 - `Uac2UsbStats` / `Uac2UsbStatsIn` (written at each stream stop) grow
   from 65 to 88 words, append-only. Word 65, `VolLayout`, is 25 when
@@ -1974,8 +1977,9 @@ a pass-through node (section 4.1). Its one control on this device
   and 2: `VolCount` (subranges), `VolMin` (first MIN, silence read as
   the next step), `VolMax` (last MAX), `VolRes` (smallest RES),
   `VolTop`, `VolOffered`, and `VolStartCur` (CUR at start), all in
-  1/256 dB, signed. So the next report from a device shows its RANGE
-  and its level at plug-in.
+  1/256 dB, signed. `VolStartCur` is the CUR as read, before any
+  lowering. So the next report from a device shows its RANGE and its
+  level at plug-in.
 
 ### 20.6 Tests
 

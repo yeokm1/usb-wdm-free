@@ -50,7 +50,8 @@ Profiles (--profile):
             Extension Unit (0x04) sits between it and the headphones; one
             ADAPTIVE playback interface, 16/24/32-bit stereo. The device's
             volume RANGE and rate list are not in the report: --vol-range
-            and --vol-cur set the one, the rates are cx31993's, assumed.
+            and --vol-cur (--vol-cur-at, --vol-cur-stall) set the one,
+            the rates are cx31993's, assumed.
             The HID interface answers nothing.
   alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
             (docs/design/uac2.md section 15.4), not a capture: one
@@ -88,7 +89,9 @@ only), 'channels' (each channel only), 'readonly' (master and channels
 readable, not writable) or 'none' (no feature unit: each output terminal
 takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
 signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
-(1/256 dB, default 0) shape the volume control. Playback is "rendered"
+(1/256 dB, default 0) shape the volume control; --vol-cur-at CH=V sets
+one logical channel's CUR at plug-in (0 the master), --vol-cur-stall N
+stalls the first N volume GET CURs. Playback is "rendered"
 through the feature units on its path: every 0.25 s the log carries the
 received peak per channel (dBFS) and the rendered peak (each packet with
 the units' volume in force when it arrived; none while muted or at the
@@ -432,6 +435,7 @@ class Profile:
         if not -32768 <= lo <= hi <= 32767 or res < 0 or not -32768 <= vol_cur <= 32767:
             raise ValueError('volume range')
         self.name, self.fu, self.vol_range, self.vol_cur = name, fu, (lo, hi, res), vol_cur
+        self.vol_at = {}        # logical channel: volume CUR at plug-in instead of vol_cur
         if name == 'alc4080cap':
             self.speed, self.config = 'high', (ALC_FIXTURE / 'config0.bin').read_bytes()
             base = (ALC_FIXTURE / 'device.bin').read_bytes()
@@ -512,7 +516,7 @@ class Profile:
 
 class Model:
     def __init__(self, connection, trace, now=time.monotonic, pcm=None, profile=None,
-                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4):
+                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4, vol_stall=0):
         self.connection, self.trace, self.now = connection, trace, now
         self.p = profile or Profile('x4')
         self.fb_ppm, self.fb_zero_every, self.fb_stop_after = fb_ppm, fb_zero_every, fb_stop_after
@@ -538,6 +542,7 @@ class Model:
         self.gaps = {t: 0 for t in GAP_MS}
         self.next_report = self.now() + 0.25
         self.pcm, self.pcm_bytes, self.pcm_max = pcm, 0, pcm_max * 1024 * 1024
+        self.vol_stall = vol_stall
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
         self.mute, self.volume = {}, {}
@@ -634,7 +639,7 @@ class Model:
                     continue
                 muted = muted or bool(self.mute.get((uid, ch), 0))
                 if self.p.entities[uid]['controls'][ch] >> 2 & 1:
-                    value = self.volume.get((uid, ch), self.p.vol_cur)
+                    value = self.volume.get((uid, ch), self.p.vol_at.get(ch, self.p.vol_cur))
                     if value == -32768:
                         muted = True
                     else:
@@ -804,8 +809,14 @@ class Model:
             if not access & 1:
                 return 4, b''
             if get and request == 1:
+                if selector == 2 and self.vol_stall > 0:
+                    # --vol-cur-stall: this many volume GET CURs stall first.
+                    self.vol_stall -= 1
+                    self.log('feature_stalled', entity=entity, channel=channel)
+                    return 4, b''
                 return 0, struct.pack('<B' if selector == 1 else '<h',
-                                      store.get(key, 0 if selector == 1 else self.p.vol_cur))
+                                      store.get(key, 0 if selector == 1 else
+                                                self.p.vol_at.get(channel, self.p.vol_cur)))
             if get and request == 2 and selector == 2:
                 return 0, struct.pack('<Hhhh', 1, lo, hi, res)
             if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
@@ -1105,6 +1116,10 @@ def main():
     ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
                     help='volume RANGE MIN:MAX:RES in 1/256 dB')
     ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
+    ap.add_argument('--vol-cur-at', action='append', default=[], metavar='CH=V',
+                    help='volume CUR at plug-in of logical channel CH (0 master) of every feature unit')
+    ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N',
+                    help='the first N volume GET CUR requests stall')
     args = ap.parse_args()
     if args.fu != 'full' and args.profile in ('x4', 'x4full', 'cx31993'):
         ap.error('--fu applies to the built profiles other than cx31993')
@@ -1112,6 +1127,14 @@ def main():
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
     profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
+    for item in args.vol_cur_at:
+        try:
+            ch, value = (int(v) for v in item.split('='))
+        except ValueError:
+            ap.error('--vol-cur-at CH=V')
+        if not 0 <= ch <= 255 or not -32768 <= value <= 32767:
+            ap.error('--vol-cur-at CH=V')
+        profile.vol_at[ch] = value
     if args.rates:
         try:
             only = [int(r) for r in args.rates.split(',')]
@@ -1136,7 +1159,7 @@ def main():
             pcm = args.pcm.open('xb') if args.pcm else None
             model = Model(connection, trace, pcm=pcm, profile=profile, fb_ppm=args.fb_ppm,
                           fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after,
-                          pcm_max=args.pcm_max)
+                          pcm_max=args.pcm_max, vol_stall=args.vol_cur_stall)
             try:
                 try:
                     model.run()

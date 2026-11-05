@@ -154,7 +154,7 @@ struct UAC_LEVEL {
     BOOLEAN VolumeNormal, MuteNormal; /* the extra channel controls set (VolumeExtra, MuteExtra) */
     unsigned int NoRange;       /* extras without a usable RANGE: read and counted, not written */
     BOOLEAN AboveZero;          /* Uac2VolAboveZero: the whole range offered (section 20) */
-    BOOLEAN Lowered;            /* taken over at start: the device was above the top offered */
+    BOOLEAN Lowered;            /* a control was above the top offered at start: set to it */
     unsigned int RangeRead, StartKnown;  /* bit n: slot n's RANGE read, CUR read at start */
     int StartActual[UAC_VOL_SLOTS];      /* volume CUR at start, where StartKnown */
     LONG Gain[UAC_VOL_CHANNELS];  /* Q16 per stream channel, read by the USB worker */
@@ -183,7 +183,7 @@ struct UAC_LEVEL_DIAG {
     LONG Actual[UAC_VOL_SLOTS], ActualMute[UAC_VOL_SLOTS];
     /* Build 25 (section 20), after the fields above: the top the device's
      * range reaches (KsMax is the top offered), Uac2VolAboveZero in force,
-     * and whether the start took the volume over to lower it. */
+     * and whether the start lowered a control. */
     LONG KsTop;
     ULONG AboveZero, Lowered;
 };
@@ -438,6 +438,18 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         ReadState();
         for (n = 0; n < UAC_VOL_SLOTS; n++)
             if (v->Known[n]) { v->StartKnown |= 1u << n; v->StartActual[n] = v->Actual[n]; }
+        /* A written control whose CUR, read now, is above the top offered
+         * is set to that top, that control alone: a lowering only, nothing
+         * taken over, no other control (a master-mode extra's attenuation
+         * included) touched. A CUR not read is left as it is (section 20). */
+        if (m->VolumeMode != UAC_VOL_NONE && DeviceReady())
+            for (n = 0; n < UAC_VOL_SLOTS; n++)
+                if (VolumeSlot(n, &extra) && !(extra && (v->NoRange & (1u << (n - 1)))) && v->Known[n] &&
+                    v->Actual[n] != UAC_VOL_SILENCE && UacVolToKs(v->Actual[n]) > v->Range[n].KsMax) {
+                    int top = (int)(v->Range[n].KsMax / 256);
+                    if (WriteCur(m->VolumeUnit, 2, n, top)) { v->Actual[n] = top; v->Lowered = TRUE; }
+                    else v->Known[n] = FALSE;   /* may or may not have taken it: Assumed */
+                }
         /* The levels: restored, else the device's own (0 dB in software). */
         for (c = 0; c < v->Channels; c++) {
             n = m->VolumeMode == UAC_VOL_MASTER ? 0 : c + 1;
@@ -460,19 +472,6 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         }
         for (c = 0; c < v->Channels; c++)
             v->Level[c] = UacVolToKs(UacVolFromKs(v->Level[c], KsRange(c)));
-        /* A volume CUR above the top offered, or unknown under a range that
-         * reaches above it: the driver takes the volume over, and Prepare's
-         * ApplyLocked writes the levels above (the device's own, clamped to
-         * that top), so the device never stays at a gain the KS range
-         * cannot show (section 20). */
-        if (m->VolumeMode != UAC_VOL_NONE && !v->VolumeOwned)
-            for (n = 0; n < UAC_VOL_SLOTS; n++)
-                if (VolumeSlot(n, &extra) && !(extra && (v->NoRange & (1u << (n - 1)))) &&
-                    (v->Known[n] ? UacVolToKs(v->Actual[n]) > v->Range[n].KsMax
-                                 : v->Range[n].KsTop > v->Range[n].KsMax)) {
-                    v->VolumeOwned = v->VolumeDirty = TRUE;
-                    v->Lowered = TRUE;
-                }
         v->Present = TRUE;
     }
     BOOLEAN DeviceReady() const { return dev && !removed && !pnpBlocked && !powerBlocked; }

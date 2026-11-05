@@ -647,6 +647,14 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -0x3b80))[0], 0)
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', -32768))[0], 0)
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', -32768)))
+        # One channel's CUR at plug-in, and the first volume GET CURs stalled.
+        m, _, _ = self.model('hs24', vol_range=(-0x3c00, 0xc00, 0x100), vol_cur=0x600, vol_stall=1)
+        m.p.vol_at[1] = -0x2800
+        self.configure(m)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x201, 0x0200, 2)[0], 4)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x201, 0x0200, 2), (0, struct.pack('<h', -0x2800)))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x0200, 2), (0, struct.pack('<h', 0x600)))
+        self.assertEqual(m.channel_gain([2], 1), (6.0 - 40.0, False))
         with self.assertRaises(ValueError):
             uacemu.Profile('hs24', fu='loud')
         with self.assertRaises(ValueError):

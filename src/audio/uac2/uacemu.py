@@ -15,6 +15,11 @@ Profiles (--profile):
   x4full    the same captured layout with every alternate functional:
             playback 2/6/8 channels at 16 and 24 bits (IF4, IF6), capture
             (IF5), feature-unit SET.
+  x1        the captured Creative Sound Blaster X1 layout (testdata/sbx1),
+            every alternate functional: HID, CDC ACM and a UAC 2 function
+            (playback 2/6/8 channels 16/24-bit, async with explicit
+            feedback; 1-channel capture 16/24-bit); strings replaced by
+            SIMULATED labels, serial index zero.
   hs24      High Speed, one programmable clock (44.1 to 192 kHz), playback
             2 channels 16/24/32-bit (subslots 2, 3, 4), capture 2 channels
             16/24-bit; async playback with explicit feedback.
@@ -390,8 +395,9 @@ def build(name, fu='full'):
 
 
 PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080',
-                 'uac3dual', 'alc4080cap')
+                 'uac3dual', 'alc4080cap', 'x1')
 ALC_FIXTURE = Path(__file__).resolve().parent / 'testdata/alc4080'
+X1_FIXTURE = Path(__file__).resolve().parent / 'testdata/sbx1'
 
 # Configuration 2 of uac3dual: a USB Audio 3.0 function by its standard
 # descriptors (ADC 3.0 4.1: IAD, the AudioControl interface first, then the
@@ -423,6 +429,16 @@ class Profile:
                             3: usb_string('usb-wdm-free SIMULATED')}
             all44 = sorted(FAMILY_44 + FAMILY_48)
             self.rates = {1: all44, 3: all44, 4: all44, 5: all44, 6: all44 + [352800, 384000], 8: all44}
+            self.allowed, self.fu_settable = None, True
+        elif name == 'x1':
+            self.speed, self.config, self.rates = 'high', (X1_FIXTURE / 'config0.bin').read_bytes(), {}
+            base = bytearray((X1_FIXTURE / 'device.bin').read_bytes())
+            base[14:17] = bytes((1, 2, 0))
+            self.vid, self.pid = vid or 0x041e, pid or 0x3286
+            self.device = bytes(base[:8]) + struct.pack('<HH', self.vid, self.pid) + bytes(base[12:])
+            self.qualifier = (X1_FIXTURE / 'qualifier.bin').read_bytes()
+            self.strings = {0: b'	',
+                            **{i: usb_string('UAC2 X1 layout - SIMULATED') for i in range(1, 9)}}
             self.allowed, self.fu_settable = None, True
         elif name in ('x4', 'x4full'):
             self.speed, self.config, self.rates = 'high', CONFIG, {}

@@ -237,7 +237,7 @@ class UacDesc(c.Structure):
                 ('AltCount', c.c_uint), ('Skipped', c.c_uint), ('Alt', UacAlt * 128)]
 
 
-CAPTURED = ('x4', 'x4full', 'alc4080cap')
+CAPTURED = ('x4', 'x4full', 'alc4080cap', 'x1')
 BUILT = [n for n in uacemu.PROFILE_NAMES if n not in CAPTURED]
 
 
@@ -332,7 +332,26 @@ class ProfileTest(unittest.TestCase):
                 self.assertEqual(driver, model)
                 # The X4 and the ALC4080 capture each have one alternate both skip.
                 self.assertEqual(d.Skipped, len(p.alts) - len(model))
-                self.assertEqual(d.Skipped, 1 if name in CAPTURED else 0)
+                self.assertEqual(d.Skipped, 1 if name in ('x4', 'x4full', 'alc4080cap') else 0)
+
+    def test_x1_capture(self):
+        # The owner's Sound Blaster X1 (041E:3286), read over WinUSB on
+        # 2026-11-05 (testdata/sbx1): every streaming alternate parsed, as
+        # captured: playback IF4 2/6/8 channels at 16 and 24 bits, OUT 0x01
+        # with explicit feedback 0x83; capture IF5 one channel 16/24 bits,
+        # IN 0x81 with no feedback.
+        p = uacemu.Profile('x1')
+        rc, d = self.parse(p.config)
+        self.assertEqual(rc, 0)
+        got = sorted((d.Alt[i].Interface, d.Alt[i].Alternate, d.Alt[i].Channels, d.Alt[i].Subslot,
+                      d.Alt[i].Bits, d.Alt[i].DataEndpoint, d.Alt[i].FeedbackEndpoint, d.Alt[i].MaxPacket)
+                     for i in range(d.AltCount))
+        self.assertEqual(got, [(4, 1, 2, 2, 16, 0x01, 0x83, 64), (4, 2, 2, 3, 24, 0x01, 0x83, 96),
+                               (4, 3, 6, 2, 16, 0x01, 0x83, 192), (4, 4, 8, 2, 16, 0x01, 0x83, 256),
+                               (4, 5, 6, 3, 24, 0x01, 0x83, 288), (4, 6, 8, 3, 24, 0x01, 0x83, 384),
+                               (5, 1, 1, 2, 16, 0x81, 0, 128), (5, 2, 1, 3, 24, 0x81, 0, 192)])
+        self.assertEqual(p.device[8:12], struct.pack('<HH', 0x041e, 0x3286))
+        self.assertEqual(p.device[16], 0)
 
     def test_built_shapes(self):
         shape = {}

@@ -83,6 +83,11 @@ void UacUsbClose(UAC_DEV *dev);
  * UacCtlSetup made (interface recipient only; wLength is the buffer).
  * *length in: wLength; out: the bytes moved. */
 NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG *length);
+/* PASSIVE, before UacUsbOpen too: GET_DESCRIPTOR from the device below
+ * lower (type, index, language), at most 5 s, then cancelled and drained
+ * as every request here; *got the bytes moved (0 on failure). */
+NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
+                          PVOID buffer, USHORT size, ULONG *got);
 
 /* Stream: one direction, one format, one rate. Create plans the alternate
  * (UacPlanPick) and the queue (UacPlanQueue: queueMs as UacPlanQueueMs

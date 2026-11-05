@@ -95,4 +95,14 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
         $n++
     }
 }
-Write-Output "PASS infchk: Uac2QueueMs at $default and Uac2VolAboveZero at 0 in every install section of both INFs; $n mutations refused"
+# The driver's fallback name (uac2wdm.cpp NameFallback, docs/design/uac2.md 21)
+# is each INF's Device string.
+$cpp = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'uac2wdm.cpp'))
+if ($cpp -notmatch 'static const char NameFallback\[\] = "([^"]*)";') { throw 'NameFallback not found in uac2wdm.cpp' }
+$fallback = $Matches[1]
+foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
+    $t = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $inf))
+    if ($t -notmatch '(?m)^Device="([^"]*)"\s*$') { throw "${inf}: no Device string" }
+    if ($Matches[1] -cne $fallback) { throw "${inf}: Device string '$($Matches[1])' is not the driver's fallback '$fallback'" }
+}
+Write-Output "PASS infchk: Uac2QueueMs at $default and Uac2VolAboveZero at 0 in every install section of both INFs, Device the driver fallback name; $n mutations refused"

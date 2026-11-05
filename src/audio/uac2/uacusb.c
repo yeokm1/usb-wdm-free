@@ -442,6 +442,25 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
 
 int UacUsbHighSpeed(UAC_DEV *d) { return d && d->HighSpeed; }
 
+NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
+                          PVOID buffer, USHORT size, ULONG *got)
+{
+    struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
+    NTSTATUS status;
+    *got = 0;
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
+    urb.TransferBufferLength = size;
+    urb.TransferBuffer = buffer;
+    urb.DescriptorType = type;
+    urb.Index = index;
+    urb.LanguageId = language;
+    status = UsbRequest(lower, (PURB)&urb);
+    if (NT_SUCCESS(status)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
+    return status;
+}
+
 NTSTATUS UacUsbClassRequest(UAC_DEV *d, const UCHAR *setup, PVOID bytes, ULONG *length)
 {
     struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST urb;

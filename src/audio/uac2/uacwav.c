@@ -19,7 +19,8 @@
  * The mixer commands go through the mixer API, the path the Volume
  * Control (sndvol32) takes.
  * UACWAV_DBFS=<n> (environment, n from 0 down to -60) plays the sine at n
- * dB full scale instead of -20.
+ * dB full scale instead of -20. UACWAV_NAME=<text> picks the devices whose
+ * name holds that text instead of "UAC2".
  * Bits 16 is WAVE_FORMAT_PCM for 1-2 channels; 24/32 bits or more than two
  * channels is WAVE_FORMAT_EXTENSIBLE (container = bits). Output on stdout;
  * the last line is PASS: or FAIL:. Never claims audibility.
@@ -57,11 +58,17 @@ static void Format(WFX *w, unsigned ch, unsigned bits, unsigned rate)
     w->SubFormat = PcmSub;
 }
 
+/* A device of ours: its name holds "UAC2" (the INF's name, every
+ * simulator profile's product string), or UACWAV_NAME (environment, any
+ * case) when set: build 26 names a device by its product string. */
 static int Uac2(const char *name)
 {
-    char upper[MAXPNAMELEN];
+    char upper[MAXPNAMELEN], want[MAXPNAMELEN];
+    DWORD n = GetEnvironmentVariable("UACWAV_NAME", want, sizeof(want));
+    if (!n || n >= sizeof(want)) lstrcpy(want, "UAC2");
+    CharUpperBuff(want, lstrlen(want));
     lstrcpyn(upper, name, sizeof(upper)); CharUpperBuff(upper, lstrlen(upper));
-    return strstr(upper, "UAC2") != NULL;
+    return strstr(upper, want) != NULL;
 }
 
 /* UACWAV_PAIR=k (environment) takes the k-th UAC2 device of a direction

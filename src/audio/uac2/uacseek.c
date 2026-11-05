@@ -64,11 +64,16 @@ static void Log(const char *fmt, ...)
     if (com != INVALID_HANDLE_VALUE) WriteFile(com, line, k, &n, NULL);
 }
 
+/* Ours: the name holds "UAC2", or UACWAV_NAME (environment, any case)
+ * when set, as UACWAV (build 26 names a device by its product string). */
 static int Uac2(const char *name)
 {
-    char upper[MAXPNAMELEN];
+    char upper[MAXPNAMELEN], want[MAXPNAMELEN];
+    DWORD n = GetEnvironmentVariable("UACWAV_NAME", want, sizeof(want));
+    if (!n || n >= sizeof(want)) lstrcpy(want, "UAC2");
+    CharUpperBuff(want, lstrlen(want));
     lstrcpyn(upper, name, sizeof(upper)); CharUpperBuff(upper, lstrlen(upper));
-    return strstr(upper, "UAC2") != NULL;
+    return strstr(upper, want) != NULL;
 }
 
 static UINT Wanted(void)

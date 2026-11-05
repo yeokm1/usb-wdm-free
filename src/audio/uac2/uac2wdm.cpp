@@ -1549,23 +1549,17 @@ static ULONG GetQueueRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Que
 /* Uac2Realtime (docs/design/uac2.md 19.6): read the same way, at each RUN. */
 static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Realtime"); }
 
-/* GET_DESCRIPTOR from the device: type, index, language; *got the bytes
- * the bus driver moved. */
-static NTSTATUS DescriptorOf(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
-                             PVOID buffer, USHORT size, ULONG *got)
+static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
 {
     struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
     KEVENT event;
     IO_STATUS_BLOCK ios;
-    *got = 0;
     RtlZeroMemory(&urb, sizeof(urb));
     urb.Hdr.Length = sizeof(urb);
     urb.Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
     urb.TransferBufferLength = size;
     urb.TransferBuffer = buffer;
-    urb.DescriptorType = type;
-    urb.Index = index;
-    urb.LanguageId = language;
+    urb.DescriptorType = USB_CONFIGURATION_DESCRIPTOR_TYPE;
     KeInitializeEvent(&event, NotificationEvent, FALSE);
     PIRP irp = IoBuildDeviceIoControlRequest(IOCTL_INTERNAL_USB_SUBMIT_URB,
         lower, NULL, 0, NULL, 0, TRUE, &event, &ios);
@@ -1576,24 +1570,22 @@ static NTSTATUS DescriptorOf(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHO
         KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
         s = ios.Status;
     }
-    if (NT_SUCCESS(s) && !USBD_SUCCESS(urb.Hdr.Status)) s = STATUS_DEVICE_DATA_ERROR;
-    if (NT_SUCCESS(s)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
+    if (NT_SUCCESS(s) && (!USBD_SUCCESS(urb.Hdr.Status) || urb.TransferBufferLength != size))
+        s = STATUS_DEVICE_DATA_ERROR;
     return s;
 }
 
-static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
-{
-    ULONG got;
-    NTSTATUS s = DescriptorOf(lower, USB_CONFIGURATION_DESCRIPTOR_TYPE, 0, 0, buffer, size, &got);
-    if (NT_SUCCESS(s) && got != size) s = STATUS_DEVICE_DATA_ERROR;
-    return s;
-}
+/* The INF's name (its Device string; infchk.ps1 checks they agree): what a
+ * device without a usable product string is named, a later pair " N". */
+static const char NameFallback[] = "UAC2 USB audio (experiment)";
 
 /* The product string (section 21): the device descriptor's iProduct, in
  * 0x0409 when string descriptor 0 lists it, else its first language (0x0409
- * when that list cannot be read). Uac2NameStatus records the outcome: 0
- * named, 1 no iProduct, 2 device descriptor unread, 3 string unread, 4 no
- * printable name; Uac2Name the name of pair 0. Nothing here fails a start. */
+ * when that list cannot be read); each read at most 5 s (UacUsbDescriptor).
+ * Without a usable one, the INF's name, so a name written at an earlier
+ * start does not stay. Uac2NameStatus records the outcome: 0 named, 1 no
+ * iProduct, 2 device descriptor unread, 3 string unread, 4 no printable
+ * name; Uac2Name the name of pair 0. Nothing here fails a start. */
 static void ReadName(PDEVICE_OBJECT fdo)
 {
     EXT *ext = Extension(fdo);
@@ -1601,18 +1593,25 @@ static void ReadName(PDEVICE_OBJECT fdo)
     ULONG got = 0, status = 0, language = 0x0409;
     UAC_WORD name[UAC_NAME_MAX + 1];
     ext->NameLength = 0;
-    if (!NT_SUCCESS(DescriptorOf(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
+    if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
         got != sizeof(device) || device[0] != 18 || device[1] != 1) status = 2;
     else if (!device[15]) status = 1;
     else {
-        if (NT_SUCCESS(DescriptorOf(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
+        if (NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
             unsigned int l = UacNameLanguage(list, got);
             if (l) language = l;
         }
-        if (!NT_SUCCESS(DescriptorOf(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
-                                     ext->Name, sizeof(ext->Name), &got))) status = 3;
+        if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
+                                         ext->Name, sizeof(ext->Name), &got))) status = 3;
         else if (!UacName(ext->Name, got, 0, name, UAC_NAME_MAX)) status = 4;
         else ext->NameLength = got;
+    }
+    if (!ext->NameLength) {
+        /* The INF's name as a string descriptor, for UacName. */
+        ULONG i, n = sizeof(NameFallback) - 1;
+        ext->Name[0] = (UCHAR)(2 + 2 * n); ext->Name[1] = 3;
+        for (i = 0; i < n; i++) { ext->Name[2 + 2 * i] = (UCHAR)NameFallback[i]; ext->Name[3 + 2 * i] = 0; }
+        ext->NameLength = 2 + 2 * n;
     }
     HANDLE key;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(ext->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
@@ -1620,22 +1619,17 @@ static void ReadName(PDEVICE_OBJECT fdo)
         Name(&u, L"Uac2NameStatus");
         ZwSetValueKey(key, &u, 0, REG_DWORD, &status, sizeof(status));
         Name(&u, L"Uac2Name");
-        if (ext->NameLength) {
-            ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
-            ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
-        } else {
-            WCHAR none = 0;
-            ZwSetValueKey(key, &u, 0, REG_SZ, &none, sizeof(none));
-        }
+        ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
+        ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
         ZwClose(key);
     }
 }
 
 /* Before PcRegisterSubdevice: the pair's KSCATEGORY_AUDIO interfaces
  * (Wave and Topology reference strings, as the INF's AddInterface lines)
- * get the device's name as FriendlyName, where the INF wrote its own; the
- * registration is the one PortCls makes next (IoRegisterDeviceInterface
- * returns the same link). Without a name the INF's stands. */
+ * get the device's name (ReadName's, the INF's when there is none) as
+ * FriendlyName, where the INF wrote its own; the registration is the one
+ * PortCls makes next (IoRegisterDeviceInterface returns the same link). */
 static void NameInterfaces(PDEVICE_OBJECT fdo, ULONG k, PWSTR wave, PWSTR topo)
 {
     EXT *ext = Extension(fdo);

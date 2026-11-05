@@ -1,1 +1,7 @@
-Binary file /c/Users/yeokm1/AppData/Local/Temp/claude/ebefcd40b3ce5287/1652dc57-e90b-4140-b2cd-99c0fe0ce09b/scratchpad/sbx1/strings.txt matches
+1 Creative Technology Ltd
+2 Sound Blaster X1
+3 Sound Blaster X1
+4 Sound Blaster X1
+5 Microphone Array
+6 Speaker
+8 Microphone Array

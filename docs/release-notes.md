@@ -8,7 +8,8 @@ Per package, newest first. A release is a commit and a tag
 
 `uac2` 0.1.8.26 (build 26). `STAGE.TXT` also stages these on more
 systems: `uac2`, `cdcnet` and `usbflop` on XP x64, as on XP x86, and
-`ax88179` on 2000, after their legs. Every other file is 0.1.7's.
+`ax88179` on 2000, after their legs. Every other file is 0.1.7's,
+but for `NOTICE.md`'s entry for the `ax88179` simulator.
 
 - **uac2, popping under heavy CPU load**:
   - `uac2` kept 16 ms of sound queued to Windows' USB drivers. When

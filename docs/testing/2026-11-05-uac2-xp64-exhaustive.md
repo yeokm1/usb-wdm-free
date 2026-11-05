@@ -123,7 +123,9 @@ Longer runs, with no action for 6 minutes after the swap:
   menu listed "UAC2 USB audio (experiment)" and "UAC2 USB audio
   (experiment) 2", the second being the removed device, until VLC was
   restarted. UAC1 devices show their product names. The per-device
-  product name is in build 26 (owner, 2026-11-05).
+  product name is in build 26 (owner, 2026-11-05). Build 26 on these
+  devices, XP x64 to 8.1 x64:
+  [uac2-build26-nt6x64](2026-11-05-uac2-build26-nt6x64.md).
 
 ## Plug and unplug stress
 

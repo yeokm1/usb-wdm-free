@@ -55,6 +55,12 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.8 (prepared 2026-11-05; awaiting the owner's x64 signature
+and the tag): `uac2` 0.1.8.26 (the queue, the real-time worker, the volume
+topped at 0 dB, the device names) and the STAGE.TXT lines owner-approved on
+2026-11-04 (`uac2`, `cdcnet`, `usbflop` on XP x64, `ax88179` on 2000);
+`free/` is still 0.1.7's until the release operation runs
+([release 0.1.8](testing/2026-11-05-release-0.1.8.md)).
 Release 0.1.7 (owner, 2026-11-01): 0.1.6 plus `usbprn` 0.1.0.0, USB
 printing on 98 SE (`USBPRN.SYS` and the port monitor `USBPRNMN.DLL`) and
 on ME (`USBPRNME.INF` over ME's own `usbprint.sys`); every other file is

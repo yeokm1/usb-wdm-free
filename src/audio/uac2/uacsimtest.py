@@ -237,7 +237,7 @@ class UacDesc(c.Structure):
                 ('AltCount', c.c_uint), ('Skipped', c.c_uint), ('Alt', UacAlt * 128)]
 
 
-CAPTURED = ('x4', 'x4full', 'alc4080cap', 'x1')
+CAPTURED = ('x4', 'x4full', 'alc4080cap', 'x1', 'cx31993m')
 BUILT = [n for n in uacemu.PROFILE_NAMES if n not in CAPTURED]
 
 
@@ -352,6 +352,41 @@ class ProfileTest(unittest.TestCase):
                                (5, 1, 1, 2, 16, 0x81, 0, 128), (5, 2, 1, 3, 24, 0x81, 0, 192)])
         self.assertEqual(p.device[8:12], struct.pack('<HH', 0x041e, 0x3286))
         self.assertEqual(p.device[16], 0)
+
+    def test_cx31993m_capture(self):
+        # A user's CX31993 + MAX97220 dongle (3302:12C3, testdata/cx31993m):
+        # adaptive OUT 0x07 at 16/24/32 bits, no feedback; per-channel
+        # volume on Feature Unit 0x10, no mute; the Extension Unit 0x04
+        # crossed on the way to the headphones (0x0F).
+        p = uacemu.Profile('cx31993m')
+        rc, d = self.parse(p.config)
+        self.assertEqual(rc, 0)
+        got = sorted((d.Alt[i].Interface, d.Alt[i].Alternate, d.Alt[i].Channels, d.Alt[i].Subslot,
+                      d.Alt[i].Bits, d.Alt[i].DataEndpoint, d.Alt[i].FeedbackEndpoint, d.Alt[i].MaxPacket)
+                     for i in range(d.AltCount))
+        self.assertEqual(got, [(1, 1, 2, 2, 16, 0x07, 0, 248), (1, 2, 2, 3, 24, 0x07, 0, 372),
+                               (1, 3, 2, 4, 32, 0x07, 0, 496)])
+        self.assertEqual((p.device[8:12], p.device[16]), (struct.pack('<HH', 0x3302, 0x12c3), 0))
+        self.assertEqual(p.stream_alt(1, 1)['data']['attributes'], 0x09)
+        vm = (c.c_uint * 8)()
+        self.assertEqual(self.dll.UacVolFind(c.byref(d), 0x0e, 2, vm), 1)
+        raw = bytes(vm)
+        self.assertEqual((raw[4], raw[5], raw[6]), (0x0f, 0x10, 0))
+        self.assertEqual(struct.unpack_from('<IIII', raw, 8), (2, 0, 2, 0))
+        self.assertEqual(self.dll.UacVolJack(c.byref(d), 0, 0x0e), 0x0302)
+        # The simulator renders through the unit across the Extension Unit,
+        # and counts what a gain above 0 dB takes past full scale.
+        m, _, _ = self.model('cx31993m', vol_range=(-0x7f00, 0x0c00, 0x100))
+        self.configure(m, (1, 1))
+        self.assertEqual(m.playback_units(), [0x10])
+        m.handle(12, 1, bytes((7, 8, 4)))
+        for ch in (1, 2):
+            self.assertEqual(self.control(m, 1, 0x21, 0x200 | ch, 0x1000, 2, struct.pack('<h', 0x0600))[0], 0)
+        loud = struct.pack('<hh', 0x7000, 0x1000) * 6
+        m.handle(102, 0, struct.pack('<BBH', 7, 0, len(loud)) + loud)
+        levels = m.levels()
+        self.assertEqual(levels['unit_gain_db'], [6.0, 6.0])
+        self.assertEqual(levels['rendered_clipped'], [6, 0])
 
     def test_built_shapes(self):
         shape = {}

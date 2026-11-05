@@ -42,6 +42,16 @@ Profiles (--profile):
             (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
             not in that listing: 44.1 to 384 kHz, both families, assumed.
             Its HID interface is not modelled.
+  cx31993m  a user's CX31993 with a MAX97220 headphone amplifier
+            (3302:12C3, testdata/cx31993m) replayed: its device and
+            configuration descriptors as XHCITR printed them, strings
+            replaced by SIMULATED labels, serial index zero. Feature Unit
+            0x10 has per-channel volume only (no master, no mute) and an
+            Extension Unit (0x04) sits between it and the headphones; one
+            ADAPTIVE playback interface, 16/24/32-bit stereo. The device's
+            volume RANGE and rate list are not in the report: --vol-range
+            and --vol-cur set the one, the rates are cx31993's, assumed.
+            The HID interface answers nothing.
   alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
             (docs/design/uac2.md section 15.4), not a capture: one
             programmable clock, three playback endpoints - 8-channel
@@ -195,6 +205,9 @@ def audio_function(config):
                                                 for i in range(n)])
             elif sub in (0x04, 0x05) and size >= 5 and size >= 5 + d[4]:
                 entities[d[3]] = dict(kind='mx', inputs=list(d[5:5 + d[4]]))
+            elif sub in (0x08, 0x09) and size >= 7 and size >= 7 + d[6]:
+                # Processing and Extension Units: pass-through on a path.
+                entities[d[3]] = dict(kind='xu', inputs=list(d[7:7 + d[6]]))
         elif kind == 0x24 and current and current[2:] == (1, 2) and current[1] and size >= 4:
             a = alts[(current[0], current[1])]
             if d[2] == 1 and size >= 16:
@@ -395,9 +408,10 @@ def build(name, fu='full'):
 
 
 PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080',
-                 'uac3dual', 'alc4080cap', 'x1')
+                 'uac3dual', 'alc4080cap', 'x1', 'cx31993m')
 ALC_FIXTURE = Path(__file__).resolve().parent / 'testdata/alc4080'
 X1_FIXTURE = Path(__file__).resolve().parent / 'testdata/sbx1'
+CXM_FIXTURE = Path(__file__).resolve().parent / 'testdata/cx31993m'
 
 # Configuration 2 of uac3dual: a USB Audio 3.0 function by its standard
 # descriptors (ADC 3.0 4.1: IAD, the AudioControl interface first, then the
@@ -439,6 +453,17 @@ class Profile:
             self.qualifier = (X1_FIXTURE / 'qualifier.bin').read_bytes()
             self.strings = {0: b'	',
                             **{i: usb_string('UAC2 X1 layout - SIMULATED') for i in range(1, 9)}}
+            self.allowed, self.fu_settable = None, True
+        elif name == 'cx31993m':
+            self.speed, self.config = 'high', (CXM_FIXTURE / 'config0.bin').read_bytes()
+            base = bytearray((CXM_FIXTURE / 'device.bin').read_bytes())
+            base[14:17] = bytes((1, 2, 0))
+            self.vid, self.pid = vid or 0x3302, pid or 0x12c3
+            self.device = bytes(base[:8]) + struct.pack('<HH', self.vid, self.pid) + bytes(base[12:])
+            self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0xef, 2, 1, 64, 1, 0)
+            self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
+                            2: usb_string('UAC2 CX31993+MAX97220 layout - SIMULATED')}
+            self.rates = {0x1e: sorted(FAMILY_44 + FAMILY_48 + [352800, 384000])}
             self.allowed, self.fu_settable = None, True
         elif name in ('x4', 'x4full'):
             self.speed, self.config, self.rates = 'high', CONFIG, {}
@@ -519,6 +544,7 @@ class Model:
         self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
         self.rpeak = {}         # the same after the units in force at each packet
         self.ep_peak = {}       # (endpoint, channel): received, rendered - several outputs
+        self.clipped = {}       # channel: rendered samples past full scale, since plug-in
 
     @property
     def clock(self):
@@ -590,7 +616,7 @@ class Model:
                     return []
             for uid, e in sorted(entities.items()):
                 feeds = (e['kind'] == 'fu' and e['source'] == eid) or \
-                    (e['kind'] == 'mx' and eid in e['inputs'])
+                    (e['kind'] in ('mx', 'xu') and eid in e['inputs'])
                 if feeds:
                     rest = walk(uid, seen | {eid})
                     if rest is not None:
@@ -639,7 +665,8 @@ class Model:
             rendered.append(dbfs(self.rpeak.get(ch, 0.0)))
             gains.append(None if muted else round(db, 2))
         result = dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
-                      unit_gain_db=gains, units=units)
+                      unit_gain_db=gains, units=units,
+                      rendered_clipped=[self.clipped.get(ch, 0) for ch in sorted(self.peak)])
         if len({ep for ep, _ in self.ep_peak}) > 1:
             result['endpoint_peaks_dbfs'] = {
                 '%02x' % ep: [[dbfs(self.ep_peak[(e, ch)][0]), dbfs(self.ep_peak[(e, ch)][1])]
@@ -665,6 +692,10 @@ class Model:
                 top = max(max(column), -min(column)) / full
                 db, muted = self.channel_gain(units, ch + 1)
                 out = 0.0 if muted else top * 10 ** (db / 20)
+                if out > 1.0:
+                    # Samples the units' gain (above 0 dB) takes past full scale.
+                    limit = full / 10 ** (db / 20)
+                    self.clipped[ch] = self.clipped.get(ch, 0) + sum(abs(s) > limit for s in column)
                 self.peak[ch] = max(self.peak.get(ch, 0.0), top)
                 self.rpeak[ch] = max(self.rpeak.get(ch, 0.0), out)
                 if ep is not None:
@@ -891,7 +922,7 @@ class Model:
                                        ident=0, acc=0.0, phase=0)
         self.log('stream_start', endpoint=ep, interface=interface, alternate=alternate,
                  channels=info['channels'], subslot=info['subslot'], bits=info['bits'],
-                 rate=self.rate(info['clock']))
+                 rate=self.rate(info['clock']), pcm_offset=self.pcm_bytes)
 
     def stop(self, ep):
         self.streams.discard(ep)

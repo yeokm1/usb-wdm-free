@@ -46,15 +46,15 @@
 
 # ---- audio/uac2
 PACKAGE  | audio/uac2 | CLASS | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs
-STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | 0.1.6.0: the play position is the fetch cursor (the seek fix; its legs on XP, 2000 and 7, none on 98 SE or ME); 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98
+STAGE | W98SE WME | free/audio/uac2/w98se-me/uac2wdm.inf | 0.1.8.26: names on 98 SE (simulator, xHCI98 3.4.0.0); the queue and the real-time worker on 98 SE and ME (simulator, builds 20 to 24, paired CPU-load sets); ME: the release kit by Update Driver (Have Disk) from 0.1.6.0, a cold start, then the product name shown, a play and WorkerPriority 16 (simulator, xHCI98 3.4.0.0); 0.1.6.0: the play position is the fetch cursor (the seek fix; its legs on XP, 2000 and 7, none on 98 SE or ME); 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98
 COPY  | W2K WXP | free/audio/uac2/w2k-xp/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on 2000 and XP (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio
-STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | 0.1.6.0: the seek fix passed on XP under Windows EHCI and xHCI98 and on 2000 (simulator); 2000 asks for a restart at install, so Update Driver from Windows USB Audio Device no longer stops it, and XP installs with no restart (simulator); 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only
+STAGE | WXP | free/audio/uac2/w2k-xp/uac2wdm.inf | 0.1.8.26: the release kit by Have Disk on 2000 (from 0.1.6.0; the restart asked, then a cold start) and XP x86 (from 0.1.8.0, no restart), then the product name shown, a play and WorkerPriority 16 (simulator, xHCI98 3.4.0.0); the volume top and the names passed on XP x64 (simulator, the same code); the queue and the real-time worker on XP and 2000 (simulator, 2026-11-04); 0.1.6.0: the seek fix passed on XP under Windows EHCI and xHCI98 and on 2000 (simulator); 2000 asks for a restart at install, so Update Driver from Windows USB Audio Device no longer stops it, and XP installs with no restart (simulator); 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only
 COPY  | WVISTA W7 W8 | free/audio/uac2/wv-8-x86/UACCI.INF | the co-installer, set up by hand (DefaultInstall); on Vista and 7 x86 (simulator, its test build) a UAC 2.0 function got uac2, never usbaudio; 8 and 8.1 x86 did not need it
-STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | 0.1.6.0: the seek fix passed on 7 x86 (simulator); 0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)
+STAGE | W7 | free/audio/uac2/wv-8-x86/uac2wdm.inf | 0.1.8.26: names and the devnode name on 7 x86 (simulator); the queue and the real-time worker on Vista, 7, 8 and 8.1 x86 (simulator, builds 22 to 24); 0.1.6.0: the seek fix passed on 7 x86 (simulator); 0.1.5.0: co-installer first plug on Vista, 7, 8 and 8.1 x86 (simulator; playback on Vista, 7 and 8.1); earlier: playback and capture on 7 x86 (simulator, real X4 via VM)
 COPY  | WXP64 | free/audio/uac2/wxp-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on XP x64 (simulator, its test build)
-COPY  | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | copy only (owner, 2026-10-24); 0.1.6.0 (the seek fix): no XP x64 leg; 0.1.5.0 source signed in the guest with a throwaway certificate: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)
+STAGE | WXP64 | free/audio/uac2/wxp-x64/uac2wdm.inf | 0.1.8.26: the volume top at 0 dB and the names on XP x64 (simulator, unsigned build of the same code); the queue and the real-time worker on XP x64 (simulator, 2026-11-04); the seek fix: simulator legs on XP x64 (2026-11-04): the INF staged by SetupCopyOEMInf with UACCI.INF, the first plug chose uac2 with no restart prompt; play, rec, ramp and the seek test passed under xHCI98 3.4.0.0 and Windows EHCI; 0.1.5.0: co-installer, play, rec, ramp and the ALC4080 capture passed on XP x64 (simulator)
 COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/UACCI.INF | the co-installer, set up by hand (DefaultInstall); passed on Vista to 8.1 x64 (simulator, its test build)
-COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test signing on; 0.1.6.0 source signed in the guest with a throwaway certificate: first plug with no restart prompt and the seek test on 7 x64 (simulator); 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)
+COPY  | WVISTA64 W7X64 W8X64 | free/audio/uac2/wv-8-x64/uac2wdm.inf | copy only (owner, 2026-10-24); test signing on; 0.1.8.26: no Vista to 8.1 x64 leg of build 26 at preparation; 0.1.6.0 source signed in the guest with a throwaway certificate: first plug with no restart prompt and the seek test on 7 x64 (simulator); 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)
 
 # ---- audio/usbmidi
 PACKAGE  | audio/usbmidi | CLASS | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces
@@ -84,7 +84,7 @@ STAGE | W2K WXP | free/net/cdcnet/w2k-xp/CDCNET.INF | binds QEMU usb-net (0525:A
 COPY  | WXP | free/net/cdcnet/w2k-xp/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
 COPY  | WVISTA W7 | free/net/cdcnet/wv-7-x86/CDCNET.INF | no leg on Vista or 7 x86
 COPY  | WVISTA W7 | free/net/cdcnet/wv-7-x86/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
-COPY  | WXP64 | free/net/cdcnet/wxp-x64/CDCNET.INF | no XP x64 leg
+STAGE | WXP64 | free/net/cdcnet/wxp-x64/CDCNET.INF | binds QEMU usb-net (0525:A4A2): simulator legs on XP x64 (2026-11-04): the INF staged by SetupCopyOEMInf, install, DHCP, ping and TFTP passed under UHCI and xHCI98 3.4.0.0; NCM by class (simulator) under EHCI: DHCP and ping; its XP x64 models list no RNDIS id
 COPY  | WXP64 | free/net/cdcnet/wxp-x64/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
 STAGE | W7X64 | free/net/cdcnet/wv-7-x64/CDCNET.INF | UHCI ECM leg on 7 x64 ran its test copy CDCTEST.INF (same install sections); test-signed
 COPY  | WVISTA64 W7X64 | free/net/cdcnet/wv-7-x64/CDCRNDIS.INF | binds Windows RNDIS driver; no passing data leg
@@ -101,7 +101,7 @@ COPY  | WVISTA64 W7X64 | free/net/rtl815x/wv-7-x64/RTLXP7.INF | copy only: simul
 # ---- net/ax88179
 PACKAGE  | net/ax88179 | DEVICE | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip
 STAGE | W98SE WME | free/net/ax88179/w98se-me/AX179F98.INF | real AX88179 via VM: install, DHCP, ping and removal legs passed on 98 SE under xHCI98 and NUSB EHCI, on ME under xHCI98; the final source (settle cycle) ran again on 98 SE only
-COPY  | W2K | free/net/ax88179/w2k/AX179F.INF | copy only: no leg on 2000
+STAGE | W2K | free/net/ax88179/w2k/AX179F.INF | simulator legs on 2000 (2026-11-04), the INF staged by SetupCopyOEMInf: under xHCI98 3.4.0.0 first plug, DHCP, ping 32 to 4000 bytes, removal under traffic and ping -t across a replug passed; under Windows EHCI DHCP, ping 32 and 1472 bytes and removal under traffic; the simulator matched the real adapter on 98 SE
 
 # ---- hid/xpad98
 PACKAGE  | hid/xpad98 | DEVICE | Game pads (xpad98): for Xbox 360 and Xbox One controllers
@@ -116,7 +116,7 @@ STAGE | WVISTA64 | free/hid/xpad98/wv-x64/xpxpv.inf | EHCI Xbox One leg passed w
 PACKAGE  | storage/usbflop | CLASS | USB floppy (usbflop): USB Mass Storage UFI floppy drives
 STAGE | W98SE | free/storage/usbflop/w98se/USBFLOP.INF | real drive via VM, UHCI and xHCI98 reads passed; needs NUSB 3.3 USB storage installed
 STAGE | WME | free/storage/usbflop/wme/USBFLOP.INF | real drive via VM, xHCI98 read passed
-STAGE | W2K WXP W7X64 | free/storage/usbflop/w2k-8/USBFLOP.INF | binds Windows USBSTOR; simulator reads passed, real drive bound on 2000
+STAGE | W2K WXP WXP64 W7X64 | free/storage/usbflop/w2k-8/USBFLOP.INF | binds Windows USBSTOR; simulator reads passed (XP x64, 2026-11-04: CBI and CB under UHCI, CBI under xHCI98 3.4.0.0), real drive bound on 2000
 
 # ---- print/usbprn
 PACKAGE  | print/usbprn | CLASS | Printers (usbprn): USB printers and USB-to-parallel printer cables

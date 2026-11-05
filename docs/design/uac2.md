@@ -570,7 +570,8 @@ without a 16-bit stereo alternate is offered its own formats only.
   5.2.5.7). KS `KSPROPERTY_AUDIO_VOLUMELEVEL` is a `LONG` in 1/65536 dB
   with stepping reported by basic support (`ksmedia.h`, `KSPROPSETID_Audio`).
   Conversion is times 256, per channel; the first subrange is used, as
-  `usbaudio2.sys` does.
+  `usbaudio2.sys` does. The top offered is the highest step at or below
+  0 dB (section 20, build 25).
 - **Mute**: Feature Unit Mute Control, one byte, to `KSPROPERTY_AUDIO_MUTE`.
 - Per-channel controls take precedence over the master control where both
   exist (as `usbaudio2.sys`).
@@ -1625,3 +1626,506 @@ reach it; that stays a known issue (unplug instead of Disable).
   q35 base, whose warm restart hangs) `UACSEEK` plays.
 - XP x86 and 7 x64: install and play with no restart prompt (XP through
   `[Models.NTx86]`/`UAC2XP`, 7 x64 through the x64 INF).
+
+## 19. The queue depth: `Uac2QueueMs`, and the worker's priority (2026-11-04)
+
+### 19.1 The report
+
+A user report (Windows XP x64 SP2 on an AMD Phenom II X4 955 with an
+AMD 790X/SB750 board, a Fresco FL1100 card on a shared level interrupt,
+xHCI98 3.4.0.0): a Conexant CX31993 DAC (`3302:12C3`, High Speed,
+`bInterval` 1) on `uac2` pops often under heavy CPU load (a game). The
+same card in a Xeon 5080 system, and a Phenom II X6 on another board with
+a VL805, are fine. xHCI98's snapshot shows 7743 Ring Underrun (completion
+code 14) and 3 Missed Service (23) completions on the isochronous OUT
+endpoint, and a longest completion pass of about 16 ms on the bulk path
+(a busy UAS drive on the same controller).
+
+### 19.2 What the queue covers
+
+Each data URB carries about 4 ms (section 4.4: 32 packets at High Speed
+`bInterval` 1, 16 at 2, 8 at 3, 4 at Full Speed; 8 ms at High Speed
+`bInterval` 4), and four were kept queued: 16 ms (32 ms at `bInterval`
+4). A URB is refilled and resubmitted by the stream's worker thread after
+its completion. If, from one completion on, the next submissions reach
+the controller more than about 12 ms late (16 ms less the URB that just
+completed), at any layer - the host controller driver's completion
+processing, a DPC, the worker waiting for a processor - the endpoint has
+nothing scheduled: xHCI reports Ring Underrun (xHCI 4.10.3.1), and the
+device gets no packets for that time, a gap that is heard.
+
+The worker is a system thread (`PsCreateSystemThread`) at the priority
+it is created with, the system process's normal priority; the completion
+routine wakes it with `IO_NO_INCREMENT`. Under a load of threads at
+normal priority and above (a game) it waits for a processor like them.
+
+
+### 19.3 The value
+
+- **`Uac2QueueMs`** in the device's driver key (`HKR` of the INF;
+  `IoOpenDeviceRegistryKey` with `PLUGPLAY_REGKEY_DRIVER`, where the
+  driver already records its diagnostics): the milliseconds of data each
+  stream keeps queued to the USB stack. Default **32**; range **16 to
+  128**, a value outside it is clamped to the nearer end; absent, or of
+  another type or size, means the default. Read as a `REG_DWORD`, or a
+  4-byte little-endian `REG_BINARY` (what a 9x INF writes).
+- One value for playback and capture, for every endpoint of the device.
+- Read once when a stream is created (`NewStream`, PASSIVE) and kept with
+  the stream: that one reading sizes the stream's ring (19.5) and, at
+  `RUN`, its transport (19.4). A change takes effect at the next stream a
+  client opens; a running or created stream keeps its reading.
+- Written at the default by every install section, never over a value
+  already there (no-clobber, `0x2`), so the setting is visible and an
+  update keeps a user's choice: the NT sections (`[UAC2.NT]`,
+  `[UAC2XP.NT]`, `[UAC2.NTamd64]`, both INFs) with
+  `HKR,,Uac2QueueMs,0x00010003,32` (`REG_DWORD`); 98 SE / ME's `[UAC2]`
+  with `HKR,,Uac2QueueMs,0x00000003,20,00,00,00` (binary, the four bytes
+  of 32), since 9x does not expand a number into a `DWORD`'s bytes.
+- The values in force are recorded: `Uac2UsbStats` / `Uac2UsbStatsIn`
+  (written when a stream stops) gain `QueueRead` (the raw value read,
+  `0xFFFFFFFF` when none was usable), `QueueMs` (in force),
+  `DataTransfers` and `TransferUs` (one data URB's span in
+  microseconds), appended after the existing fields.
+
+### 19.4 Transfers from milliseconds
+
+The size of one data URB is unchanged (section 4.4): `DataPackets` is 32
+>> (`bInterval` - 1), at least 8, at High Speed, and 4 at Full Speed. Its
+span `T` is `DataPackets` x 2^(`bInterval` - 1) x 125 us at High Speed
+and `DataPackets` x 2^(`bInterval` - 1) x 1 ms at Full Speed. The number
+of data URBs kept queued is `ceil(QueueMs x 1000 / T)`, at least 2 (one
+refilled while one is on the bus) and at most 32. The feedback URBs (two
+of 8 packets) are unchanged.
+
+| Speed, `bInterval` | `T` | 16 ms | 32 ms (default) | 128 ms |
+|---|---|---|---|---|
+| High, 1-3 | 4 ms | 4 | 8 | 32 |
+| High, 4 | 8 ms | 2 | 4 (as before) | 16 |
+| High, 5 | 16 ms | 2 | 2 | 8 |
+| Full, 1 | 4 ms | 4 | 8 | 32 |
+
+**Bounded by the ring.** At `RUN`, the count is then lowered so that the
+queue's bytes stay below the ring PortCls uses (`used`, after any
+`SetBufferSize`) by at least one URB: at most `floor((used - B) / B)`
+URBs, where `B` is the most one URB can take: the stream's nominal bytes
+for `T` (rounded up), plus an eighth (the fastest feedback `uacrate.c`
+accepts is the nominal rate + 12.5%) and one PCM frame per packet (the
+cadence), but no more than the endpoint's packet capacity times the
+packets. The floor of 2 stays: a ring under three URBs (12 ms at
+`bInterval` 1) is the "not guarded" case of 17.4 item 5, as before.
+Examples: a 4096-byte ring of 16-bit stereo at 48 kHz (`B` = 768 + 96 +
+128 = 992 bytes) allows 3 URBs, 12 ms (16 ms before this change: this is
+the one case the change shortens); the default ring (62 ms, here the 16
+KiB minimum, 85 ms) allows 15, so 8 at 32 ms.
+
+For capture the queue takes nothing from the ring ahead of time (each
+completion writes what it received), so the bound only keeps the two
+directions alike.
+
+The computation is `UacPlanQueue` in `uacplan.c` (host-tested); a span
+above 32 ms (`bInterval` 6 and up at High Speed) gives the minimum of 2.
+
+### 19.5 The ring
+
+The cyclic buffer must be larger than the queue (17.4 item 5: the first
+`RUN` takes the whole queue at once). It stays about 62 ms of the format
+(16 KiB to 1 MiB) up to a 32 ms queue, and grows by 1.25 times the
+queue above 32 ms: 62 ms + 1.25 x (`QueueMs` - 32) ms, so 182 ms at 128.
+The quarter is the room 19.4's bound needs (one URB spare and `B`'s
+margins): with the queue alone (158 ms at 128), 48 kHz 16-bit stereo got
+29 URBs, 116 ms, in the first legs; with the quarter it gets all 32.
+Every default (32 ms) ring is the size it was. Where the 1 MiB cap keeps the ring
+shorter (above about 5.7 MB/s, for example 384 kHz, 8 channels, 32-bit
+at 12.3 MB/s, 85 ms), 19.4's bound lowers the queue (to 17 URBs, 68 ms,
+at 128 ms there, `B` = 56320 bytes) instead of letting the first `RUN`
+lap the ring.
+
+The queue is fixed when the pin's first `RUN` creates its transport; a
+`SetBufferSize` after that is not followed (17.4 item 5, unchanged)
+until the pin is closed and a new one opened.
+
+### 19.6 The worker's wake (a separate step)
+
+The completion routine wakes the worker with `IO_SOUND_INCREMENT`
+instead of `IO_NO_INCREMENT` in `KeSetEvent` (the documented priority
+increment for a sound driver's waits; `KeSetEvent` is imported on every
+system already, 98 SE and ME included). On NT the woken worker runs at
+its base priority plus the increment, at most 15 (the top of the dynamic
+range), the boost decaying by one at each quantum it uses up; so a refill
+after a completion is ahead of normal-priority threads (a game's) but
+never above a real-time thread, and a worker that keeps running falls
+back to its base priority. On 98 SE and ME the increment is accepted;
+its effect there is not measured. No new import, the same binary for
+every system.
+
+**The real-time worker, `Uac2Realtime`** (owner, 2026-11-04, build 20).
+The user who reported the pops found that lowering the game's priority
+cured them: the increment lifts the worker to at most 15, which a game
+running at High priority class (base 13, boosted to 15) only ties. So the
+worker, as it starts, sets itself to `LOW_REALTIME_PRIORITY` (16) with
+`KeSetPriorityThread(KeGetCurrentThread(), ...)`, above every
+normal-class thread whatever a game's class; the increment on the wake
+then changes nothing (a real-time thread takes none). The work per wake is
+bounded - the completed slots retired, the free ones refilled and
+submitted, then a wait - so the worker never holds a processor. It is
+the lowest real-time level; Vista's own audio engine runs its threads in
+that range (MMCSS).
+
+- The value: `Uac2Realtime` in the driver key, `1` on (the default), `0`
+  off; read at each RUN (`UacUsbSetRealtime`, `UacPlanRealtime`), so a
+  change takes effect at the next open. Anything but `0` is on; nothing
+  usable read is the default. The INFs write `1` no-clobber in the same
+  sections as `Uac2QueueMs`, the 9x binary form in `[Queue9x]`.
+- The import: `KeSetPriorityThread` joins both import lists. xHCI98's
+  import records find the name among 98 SE's `NTKERN` exports
+  (xHCI98 record 13, the import table's row 114, graded "ntkern-name
+  only", the weakest evidence), so the one x86 binary is expected to load
+  on 98 SE and ME; the 98 SE and ME legs prove the load and read whether
+  it has any effect there.
+- The stats (build 20): `RealtimeRead`, `Realtime` and `WorkerPriority`
+  (16, or 0 when the worker set none) appended to `Uac2UsbStats`.
+- The fairness rule (build 24; builds 21 and 22 slept the worker after a
+  count of passes, which a wake racing the wait could reset without the
+  worker ever blocking, and whose 10 ms sleep could itself drain a queue
+  a small client ring holds to 8 or 12 ms; build 23 measured in
+  interrupt time, whose 10 to 15.6 ms ticks before Windows 8 can miss a
+  loop's time inside waits that return at once, and let a later RUN turn
+  the rule off under a real-time worker; Codex's reviews of builds 21 to
+  23). A stack that completes URBs inline again and again with nothing
+  delivered (capture with zero-length packets, no `Fail`) leaves `Wake`
+  signalled, so a real-time worker would hold a single processor, the
+  thread that asks Stop included. So the worker:
+  - keeps its own copy of `Uac2Realtime` from its start: a later RUN's
+    value applies to the next worker only;
+  - measures with `KeQueryPerformanceCounter` (HAL; stock 98 SE drivers
+    import it, xHCI98 record 13, the import table's row 102) the time it
+    runs between waits, and counts as busy a wait shorter than 50 us (a
+    return at once, not a block);
+  - in windows of at least 200 ms (`UacPlanDuty`), a window busy for 60 %
+    or more demotes it to the priority it was created at (the value
+    `KeSetPriorityThread` returned) for the next window, where the normal
+    threads share the processor with it; a demoted window always ends in
+    real time again, so a runaway loop holds real time for at most every
+    other window, and a recovered stream is never held down by time it
+    spent preempted while demoted;
+  - never sleeps, so a working stream keeps refilling.
+  A normal stream (a pass well under a millisecond, at most about 1.25 a
+  millisecond) is far below 60 %. `WorkerThrottles` counts the demotions
+  (0 in normal running); while demoted, `WorkerPriority` reads the
+  created priority. The x64 build links `hal.lib` for the counter.
+- Read at every RUN (build 21): a stream kept across a pause or stop
+  (`Drain` without destroy) takes the value again at its next RUN, so
+  `Uac2Realtime` 0 applies at the next start of playback.
+
+A test build of this (2026-11-04, XP x64 under CPU load) gave 13 Ring
+Underruns against the increment's 62, and 32 against 34 under CPU and
+disk load.
+
+### 19.7 Consequences
+
+- The position a client reads runs ahead of what the device received by
+  up to the queue (17.4): 32 ms by default instead of 16 ms; a pause and
+  resume skips up to the queue. Start-up is unchanged (the first URB goes
+  out at once).
+- Non-paged memory: one buffer of `DataPackets` x the endpoint's packet
+  capacity per data URB, 8 instead of 4 by default (for example 8 x 32 x
+  294 bytes for 24-bit stereo at 48 kHz), up to 32 at 128 ms.
+- Under xHCI98 each pipe has four transfer records (xHCI98 `src/hcd.h`,
+  `HCD_PIPE_XFERS`); a URB beyond them waits on the pipe and is handed a
+  record by xHCI98's own completion processing as one retires
+  (`src/hcd_io.c`, the done path's `hcdRecordRelease` and `hcdLaunch`).
+  There the deeper queue does not lengthen what is on the controller's
+  ring (at most 4 URBs, 16 ms at `bInterval` 1); it takes `uac2`'s
+  worker out of the refill for the URBs queued behind them. A completion
+  pass of xHCI98's that is itself late by more than the ring holds still
+  underruns. Microsoft's stacks schedule every queued URB.
+- What is not changed: the URB size, the feedback stream, the transport,
+  `ASAP` scheduling.
+
+### 19.8 Tests
+
+- `desctest` (host), `UacPlanQueue`: 19.4's table; clamping of 0, 15, 16,
+  17, 33, 127, 128, 129 and `0xFFFFFFFF`; never fewer than 2 or more than
+  32; the ring bound at its boundary (a ring of exactly `(n + 1) x B`
+  bytes allows `n`), the 4096-byte ring, the 1 MiB cap with 384 kHz 8
+  channels 32-bit, Full Speed and `bInterval` 4 and 5.
+- `streamtest` (host): the ring is the old size at 16 and 32 ms and grows
+  by the queue above 32 ms, whole frames, within the cap.
+- An INF check (host, in `test.cmd`): both INFs write `Uac2QueueMs` in
+  every install section, no-clobber, at 32 (the NT `DWORD` form in the NT
+  sections, the 9x binary form in `[UAC2]`), and the driver's default is
+  32.
+- VM legs, XP x64 under xHCI98 with the CX31993 simulator: the old
+  driver, the queue alone, the queue and the wake increment, and the
+  test-only real-time build, under disk load, CPU load, both and neither
+  (xHCI98's Ring Underrun and Missed Service counts, the simulator's gaps
+  between OUT packets, each 60 s play's elapsed time); `Uac2QueueMs` 16,
+  32 and 128 read back from the stats; then play, record, ramp and seek
+  on XP x64 (and under Windows' EHCI there) and on a 32-bit system.
+
+## 20. No gain above 0 dB: the top of the volume range (build 25, 2026-11-05)
+
+### 20.1 The report
+
+A user on Windows XP x64 SP2, xHCI98 3.4.0.0 on a Fresco FL1100, `uac2`
+build 24: a headphone dongle with a CX31993 DAC and a MAX97220 headphone
+amplifier (`3302:12C3`, "USB Audio") sounds distorted, even at a low
+volume, and badly at the maximum. A plain CX31993 dongle on the same
+system is fine. XHCITR's report holds the dongle's descriptors
+(`src/audio/uac2/testdata/cx31993m`): Feature Unit `0x10` has volume on
+each channel and nothing on the master (no mute), an Extension Unit
+(`wExtensionCode` `0x0BDA`) sits between it and the headphones, and the
+one playback interface is ADAPTIVE at 16, 24 and 32 bits. The volume
+RANGE is a control answer, not a descriptor, and the report does not
+have it.
+
+### 20.2 What the driver did
+
+Up to build 24 the volume node's KS range was the device's RANGE as
+read (section 5.3, times 256), up to the highest step the device
+reaches. A device that lists gain above 0 dB (a RANGE MAX above 0) was
+offered that gain and set to it.
+
+What Windows XP does with that range was measured on the emulator (XP
+x64, `uacemu.py --profile cx31993m`, a 440 Hz tone at -1 dBFS from
+`UACWAV`, the mixer set through the mixer API as the Volume Control
+sets it). The mixer's slider maps to the KS range from its top:
+level = MAX + 20 log10(v / 65535) x W dB, snapped to a step, with W
+= 1 for the ranges of 60 and 66 dB measured and (MAX - MIN) / 96 for
+those of 127 and 139 dB. With -96..0 dB, 32768
+gave -6 dB. With -127..+12 dB, 32768 gave +3 dB, 6554 gave -17 dB, and
+the device's own 0 dB read back as 25240 (38 %). So on such a device
+the top 62 % of the slider is gain:
+
+| Range (simulated) | Build | Slider 100 % | 50 % | 10 % | Tone samples past full scale (100 % / 50 % / 10 %) |
+|---|---|---|---|---|---|
+| -127..+12 dB, 1 dB | 24 | +12 dB | +3 dB | -17 dB | 82 % / 42 % / 0 |
+| -60..+6 dB, 0.5 dB | 24 | +6 dB | 0 dB | -14 dB | 62 % / 0 / 0 |
+| -127..0 dB, 1 dB | 24 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+| -127..+12 dB | 25 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+| -60..+6 dB | 25 | 0 dB | -6 dB | -20 dB | 0 / 0 / 0 |
+| -127..0 dB | 25 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+
+The PCM the driver sent was clean in every row: THD+N -90.5 dB at -1
+dBFS, alternate 1 (16-bit), 48 kHz, 24-byte packets in every
+microframe: the payload the driver builds (sample values, packing,
+frames a packet) is clean at that format. The simulator does not play
+packets against a DAC clock, and the emulated controller is not the
+user's FL1100, so packet timing on that controller is not measured
+here. "Past full scale" counts the samples that the
+volume in force takes over full scale, which a DAC that clips
+digitally cuts off. With the tone at +12 dB, THD+N after the cut is
+-9.4 dB; at +3 dB it is -20.7 dB. A gain above 0 dB on a full-scale
+signal distorts however low the analog volume after it is. This is a
+hypothesis for the user's unit, not a finding. It holds only if that
+unit's RANGE goes above 0 dB, which the next report shows (20.5).
+Packet timing on the user's controller is a separate candidate that
+these legs do not measure. Build 25's change is safe either way: for
+a device whose range tops out at 0 dB it changes nothing.
+
+### 20.3 The change
+
+- **The top offered is 0 dB.** `UacVolRange` keeps the device's
+  highest step as `KsTop`, and sets `KsMax`, the top the KS node
+  reports and the driver writes, to the highest step at or below 0 dB
+  across the subranges. Where no step is at or below 0 dB (a range
+  that starts above it), `KsMax` stays `KsTop`. Every level is clamped
+  to `KsMax` (`UacVolFromKs`), so a SET, a restored `Uac2Level` or the
+  0 dB a master-mode extra channel is normalized to never writes gain.
+  For a device whose range tops out at or below 0 dB nothing changes.
+- **A device left above it is lowered at start.** At start, each
+  volume control the driver writes (the master, the channels, or a
+  master-mode extra with a RANGE) whose CUR reads above `KsMax` is set
+  to `KsMax`. Only that control is set. Nothing is taken over (the
+  driver does not own the volume until a SET, section 5.3), and no
+  other control changes, so a master-mode extra keeps its attenuation:
+  every channel ends at most as loud as before. A CUR that cannot be
+  read is left as it is, because writing a target computed without it
+  could raise the level. The device keeps its own setting wherever
+  that setting is inside the range offered.
+- **The unknown is assumed at the device's top.** Where a CUR is not
+  known, the software gain takes the device to be at `KsTop`, not
+  `KsMax`, so it is never louder than asked (`Assumed`).
+- **`Uac2VolAboveZero`** in the driver key (`REG_DWORD`, or 4-byte
+  `REG_BINARY` on 9x, read as `Uac2QueueMs` is). 1 offers the whole
+  range again (`KsMax` = `KsTop`), gain included; anything else, 0 by
+  default, tops it at 0 dB. It is read when the device starts. Every
+  install section writes 0 no-clobber, next to `Uac2QueueMs` and
+  `Uac2Realtime` (`[Queue9x]`, `[QueueNT]`), so the setting is visible
+  and an update keeps a user's 1.
+
+Linux's PulseAudio is commonly configured to treat a mixer's 0 dB as
+100 % and the steps above it as over-amplification. That is the same
+policy, but it is not a source for this change; the change rests on the
+measurements above.
+
+### 20.4 What is not changed
+
+The RANGE requests, the channel/master choice (sections 5.3 and 15),
+software volume, mute and the streaming path. The Extension Unit stays
+a pass-through node (section 4.1). Its one control on this device
+(enable) is read-only, so there is nothing to set.
+
+### 20.5 What the driver records
+
+- `Uac2VolMap` (written at each level change) gains `KsTop`, then
+  `AboveZero` (the option in force) and `Lowered` (1 when the start
+  lowered a control), after the existing fields.
+  `KsMax` there is now the top offered.
+- `Uac2UsbStats` / `Uac2UsbStatsIn` (written at each stream stop) grow
+  from 65 to 94 words, append-only. Word 65, `VolLayout`, is 25 when
+  the words after it are filled. Then come `VolUnit`, `VolMode` (0
+  software, 1 master, 2 per channel), `VolChannels`, `VolAboveZero`,
+  `VolLowered`, `VolRangeRead` and `VolStartKnown` (bit n: slot n's
+  RANGE was read / its CUR was read at start; slot 0 is the master, 1
+  and 2 the logical channels). Then seven arrays of three words (slots
+  0, 1 and 2), words 73 to 93, in this order: `VolCount` (subranges), `VolMin` (first MIN, silence read as
+  the next step), `VolMax` (last MAX), `VolRes` (smallest RES),
+  `VolTop`, `VolOffered`, and `VolStartCur` (CUR at start), all in
+  1/256 dB, signed. `VolStartCur` is the CUR as read, before any
+  lowering. So the next report from a device shows its RANGE and its
+  level at plug-in.
+
+### 20.6 Tests
+
+- `voltest` (host): ranges of -127..+12, -60..+6, -16.5..+5.5 (no step
+  at 0 dB: the top is -0.5 dB), +1..+6 dB (nothing at or below 0: the
+  whole range) and two subranges either side of 0 dB. `KsTop` and
+  `KsMax` for each. A sweep over every level checks that the answer is
+  never above `KsMax` and is the brute-force nearest step. The same
+  sweep with `KsMax` = `KsTop` (the `Uac2VolAboveZero` case) reproduces
+  build 24. Existing vectors whose range reached above 0 dB now expect
+  0 dB at the top.
+- `infchk` (host): `Uac2VolAboveZero` is written once, no-clobber, at
+  0, in every install section of both INFs. Six more mutations are
+  refused per INF.
+- `uacsimtest` (host): the `cx31993m` profile through the driver's
+  parser (three adaptive alternates, 248/372/496 bytes), its volume
+  map (per channel on unit `0x10`, no mute, output `0x0F` across the
+  Extension Unit, headphones), and the simulator's rendering and
+  over-full-scale count through that unit.
+- Emulator legs on XP x64 under xHCI98 (20.2's table; the plug-in
+  lowering, `Uac2VolAboveZero` = 1 and devices whose range tops at
+  0 dB unchanged: `docs/testing/2026-11-05-uac2-gain.md`).
+
+## 21. The device's name: its USB product string (build 26, 2026-11-05)
+
+### 21.1 The problem
+
+Up to build 25, every `uac2` device appeared under the INF's one name,
+"UAC2 USB audio (experiment)" ("... 2" and so on for a later endpoint
+pair, section 15.3). That name showed in Sounds and Audio Devices, in
+the Vista+ sound panel, in `waveOutGetDevCaps` and in the device menus
+of applications such as VLC. Devices on Windows' own USB Audio 1.0
+driver show their product names.
+
+### 21.2 Where each system takes the name
+
+Measured on the emulator (21.5):
+
+- **98 SE and XP x64** show the `FriendlyName` of the filter's
+  `KSCATEGORY_AUDIO` device interface key. That is where the INF writes
+  its name (`AddInterface=%Audio%,Wave,...` with
+  `HKR,,FriendlyName,,%Device%`; `HKR` of an `AddInterface` section is
+  the key `IoOpenDeviceInterfaceRegistryKey` opens). Writing it there
+  before the interface arrives changed `szPname` and the control
+  panel's list on both systems. 98 SE, 2000 and XP share this WDMAud
+  path; 2000 and XP x86 were not run.
+- **7 x86** ignores that value. The endpoint is named "Headphones
+  (<devnode FriendlyName>)", read at each arrival. With the interface
+  keys renamed, the panel kept "4- UAC2 USB audio (experiment)". With
+  the devnode's `FriendlyName` set by hand (as SYSTEM) and the device
+  replugged, the panel and `szPname` showed "Headphones (Devnode Named
+  DAC)". Vista, 8 and 8.1 have the same audio endpoint builder but
+  were not run.
+
+Not used:
+- `KSPROPERTY_GENERAL_COMPONENTID` with a `MediaCategories` Name GUID,
+  which needs a registry entry per name.
+- `IoSetDevicePropertyData`, which exists from Vista only and would
+  need `MmGetSystemRoutineAddress`. The one x86 binary cannot import
+  that, because 98 SE's NTKERN lacks it (98 DDK `wdm.lib`).
+
+### 21.3 The change
+
+- **The string.** At each start (`ReadName`, before the first pair
+  registers), the device descriptor is read for `iProduct`, then string
+  descriptor 0 for the languages: 0x0409 when it is listed, else the
+  first, and 0x0409 when the list cannot be read. Then the product
+  string is read. Each read goes through `UacUsbDescriptor`, the
+  transport's request path: cancelled after 5 s and drained, as every
+  request of the driver.
+- **The name** (`UacName`, uacdesc.c, host-tested):
+  - The UTF-16 string is cleaned: control characters (below U+0020,
+    U+007F to U+009F) become spaces; surrogates, U+FEFF, U+FFFE and
+    U+FFFF are dropped; runs of spaces collapse to one and the ends are
+    trimmed.
+  - It is then cut to fit 31 characters, the most `szPname` holds
+    (`MAXPNAMELEN` 32). A later pair's " 2" to " 4" stays inside those
+    31, cut from the name before it.
+  - A malformed descriptor, or one with nothing printable left, gives
+    no name.
+- **The interfaces.** The name is written as `FriendlyName` on the
+  pair's two `KSCATEGORY_AUDIO` interfaces (reference strings
+  `Wave`/`Topology`, `Wave2`/`Topology2` and so on), before
+  `PcRegisterSubdevice` enables them. `IoRegisterDeviceInterface`
+  returns the link PortCls registers next, and
+  `IoOpenDeviceInterfaceRegistryKey` opens it.
+- **The devnode, Vista and later.** When `IoIsWdmVersionAvailable(6,
+  0)`, pair 0's name is also written as `FriendlyName` in the devnode's
+  instance key (`NameDevnode`). The key's path comes from the devnode's
+  `Device Parameters` key (`PLUGPLAY_REGKEY_DEVICE`, `ZwQueryKey`
+  `KeyNameInformation`) less its last component, and is opened with
+  `ZwOpenKey`. Device Manager reads the same value; that was not
+  checked here. Earlier systems are left alone.
+- **Fallback.** Without a usable string (no `iProduct`, a read that
+  fails, nothing printable), the INF's own name is written in both
+  places, replacing a name from an earlier start. Like every write
+  here, this is best effort: a failed interface write is not recorded,
+  and the start goes on. The driver's copy of that name is checked
+  against both INFs' `Device` string by `infchk.ps1`.
+- **Recorded** in the driver key:
+  - `Uac2Name`: the name chosen for pair 0, recorded before it is
+    written (not proof that the writes succeeded).
+  - `Uac2NameStatus`: 0 the product string, 1 no `iProduct`, 2 device
+    descriptor unread, 3 string unread, 4 nothing printable.
+  - `Uac2NameDevnode`: the devnode write's status, `STATUS_NOT_SUPPORTED`
+    (0xC00000BB) before Vista.
+- **Imports.** `IoRegisterDeviceInterface`,
+  `IoOpenDeviceInterfaceRegistryKey`, `ZwQueryKey` and `ZwOpenKey` are
+  all in the 98 DDK's `wdm.lib`, the NTKERN export set. Build 26 loaded
+  and named its devices on 98 SE.
+- **Test tools.** UACWAV and UACSEEK found their device by "UAC2" in
+  the name. That still holds for the built profiles, `x1` and `x4`, but
+  not for `alc4080cap` ("ALC4080 capture - SIMULATED"), a `--product`
+  without "UAC2" or a real device. For those, `UACWAV_NAME=<part of
+  the shown name>` names the device to use.
+  `uacemu.py --product TEXT` / `--no-product` set the simulated
+  `iProduct`.
+
+### 21.4 Not covered
+
+- Vista, 8 and 8.1, 2000, XP x86 and ME were not run. Each shares a
+  measured system's path (21.2).
+- An endpoint the Vista+ endpoint builder already holds keeps its
+  cached properties until it arrives again; the next plug or start
+  shows the new name (seen on 7).
+- Real devices.
+
+### 21.5 Tests
+
+- `desctest` (host), `UacNameLanguage` and `UacName`:
+  - lists with 0x0409 first, later or absent;
+  - malformed lists and strings (type, odd or short `bLength`, past the
+    buffer, empty);
+  - control characters, collapsing and trimming;
+  - non-ASCII kept and surrogates dropped;
+  - the 31-character cut with and without " 2", " 10";
+  - a sweep of every `bLength` checking the length cap, the NUL and
+    that no control character or end space survives.
+- `infchk`: the driver's fallback equals both INFs' `Device` string.
+- `uacsimtest`: `--product` / `--no-product` and the string over
+  `GET_DESCRIPTOR`.
+- Emulator legs (`docs/testing/2026-11-05-uac2-names.md`): XP x64, 7
+  x86 and 98 SE, with distinct product strings, no product, an empty
+  product, a long one, and a rename on the same instance.

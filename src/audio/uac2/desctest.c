@@ -69,6 +69,178 @@ static void CheckControlStructure(const UAC_BYTE *bytes, unsigned int size)
     CHECK(Parse(bytes, size) == UAC_OK);
 }
 
+/* docs/design/uac2.md section 19.4: queue depth from milliseconds. */
+static void QueueTests(void)
+{
+    unsigned int packets, i;
+    unsigned long span;
+    static const unsigned long raw[] = { 0, 15, 16, 17, 33, 127, 128, 129, 0xFFFFFFFEUL };
+    static const unsigned int ms[] = { 16, 16, 16, 17, 33, 127, 128, 128, 128 };
+    for (i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) CHECK(UacPlanQueueMs(raw[i]) == ms[i]);
+    CHECK(UacPlanQueueMs(UAC_QUEUE_NONE) == UAC_QUEUE_DEFAULT_MS && UAC_QUEUE_DEFAULT_MS == 32);
+    /* Uac2Realtime (19.6): on by default, off only for 0. */
+    CHECK(UacPlanRealtime(UAC_QUEUE_NONE) == 1 && UAC_REALTIME_DEFAULT == 1);
+    CHECK(UacPlanRealtime(0) == 0);
+    CHECK(UacPlanRealtime(1) == 1 && UacPlanRealtime(2) == 1 && UacPlanRealtime(0x80000000UL) == 1);
+    /* The worker's fairness rule (19.6, build 24): busy time per window,
+     * in performance-counter units; one window demoted at most. */
+    {
+        unsigned int closed;
+        const unsigned __int64 hz = 3579545;    /* the ACPI PM timer */
+        const unsigned __int64 w = UacPlanCounts(hz, UAC_DUTY_WINDOW_MS, 1000UL);
+        CHECK(w == hz / 5);
+        CHECK(UacPlanCounts(hz, UAC_DUTY_SHORT_WAIT_US, 1000000UL) == 178);
+        CHECK(UacPlanCounts(1, 1, 1000000UL) == 1);
+        /* Within a window the state holds, whatever the busy time. */
+        CHECK(UacPlanDuty(w - 1, w - 1, w, 0, &closed) == 0 && closed == 0);
+        CHECK(UacPlanDuty(w - 1, 0, w, 1, &closed) == 1 && closed == 0);
+        /* A window busy past 60 %: demoted; below: not. */
+        CHECK(UacPlanDuty(w, w, w, 0, &closed) == 1 && closed == 1);
+        CHECK(UacPlanDuty(w, (w * 60 + 99) / 100, w, 0, &closed) == 1);
+        CHECK(UacPlanDuty(w, w * 60 / 100 - 1, w, 0, &closed) == 0);
+        /* A demoted window always ends in real time, busy or not. */
+        CHECK(UacPlanDuty(w, w, w, 1, &closed) == 0 && closed == 1);
+        CHECK(UacPlanDuty(w, 0, w, 1, &closed) == 0 && closed == 1);
+        /* Normal running: a pass of 50 us every 0.8 ms is about 6 %. */
+        CHECK(UacPlanDuty(w, w * 6 / 100, w, 0, &closed) == 0);
+        /* Busy counted above the window (a long pass): clamped, demoted. */
+        CHECK(UacPlanDuty(w, w * 3, w, 0, &closed) == 1);
+        CHECK(UAC_DUTY_PERCENT == 60 && UAC_DUTY_WINDOW_MS == 200 && UAC_DUTY_SHORT_WAIT_US == 50);
+    }
+    /* The table, no ring bound. */
+    for (i = 1; i <= 3; i++) {
+        CHECK(UacPlanQueue(1, i, 16, 0, 0, 0, 0, &packets, &span) == 4 && span == 4000 && packets == (32U >> (i - 1)));
+        CHECK(UacPlanQueue(1, i, 32, 0, 0, 0, 0, &packets, &span) == 8);
+        CHECK(UacPlanQueue(1, i, 128, 0, 0, 0, 0, &packets, &span) == 32);
+    }
+    CHECK(UacPlanQueue(1, 4, 16, 0, 0, 0, 0, &packets, &span) == 2 && packets == 8 && span == 8000);
+    CHECK(UacPlanQueue(1, 4, 32, 0, 0, 0, 0, &packets, &span) == 4);
+    CHECK(UacPlanQueue(1, 4, 128, 0, 0, 0, 0, &packets, &span) == 16);
+    CHECK(UacPlanQueue(1, 5, 32, 0, 0, 0, 0, &packets, &span) == 2 && span == 16000);
+    CHECK(UacPlanQueue(1, 5, 128, 0, 0, 0, 0, &packets, &span) == 8);
+    CHECK(UacPlanQueue(1, 16, 128, 0, 0, 0, 0, &packets, &span) == 2 && packets == 8 && span == 32768000UL);
+    CHECK(UacPlanQueue(1, 0, 32, 0, 0, 0, 0, &packets, &span) == 8 && span == 4000);
+    CHECK(UacPlanQueue(0, 1, 16, 0, 0, 0, 0, &packets, &span) == 4 && packets == 4 && span == 4000);
+    CHECK(UacPlanQueue(0, 1, 32, 0, 0, 0, 0, &packets, &span) == 8);
+    CHECK(UacPlanQueue(0, 1, 128, 0, 0, 0, 0, &packets, &span) == 32);
+    /* Rounding up to whole URBs; clamped inputs. */
+    CHECK(UacPlanQueue(1, 1, 17, 0, 0, 0, 0, NULL, NULL) == 5);
+    CHECK(UacPlanQueue(1, 1, 33, 0, 0, 0, 0, NULL, NULL) == 9);
+    CHECK(UacPlanQueue(1, 1, 127, 0, 0, 0, 0, NULL, NULL) == 32);
+    CHECK(UacPlanQueue(1, 1, 0, 0, 0, 0, 0, NULL, NULL) == 4);
+    CHECK(UacPlanQueue(1, 1, 1000, 0, 0, 0, 0, NULL, NULL) == 32);
+    CHECK(UacPlanQueue(1, 4, 17, 0, 0, 0, 0, NULL, NULL) == 3);
+    /* The ring bound: 16-bit stereo 48 kHz, one URB 768 + 96 + 32 x 4 = 992. */
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 4096, NULL, NULL) == 3);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 16384, NULL, NULL) == 8);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 16384, NULL, NULL) == 15);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 9 * 992, NULL, NULL) == 8);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 9 * 992 - 1, NULL, NULL) == 7);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 992, NULL, NULL) == 2 &&
+          UacPlanQueue(1, 1, 32, 192000, 4, 0, 2 * 992, NULL, NULL) == 2 &&
+          UacPlanQueue(1, 1, 32, 192000, 4, 0, 3 * 992, NULL, NULL) == 2);
+    CHECK(UacPlanQueue(1, 1, 32, 192000, 4, 0, 100, NULL, NULL) == 2);
+    /* 44.1 kHz rounds up: 176400 B/s over 4 ms is 705.6, so 706 + 89 + 128. */
+    CHECK(UacPlanQueue(1, 1, 128, 176400, 4, 0, 6 * 923, NULL, NULL) == 5);
+    CHECK(UacPlanQueue(1, 1, 128, 176400, 4, 0, 6 * 923 - 1, NULL, NULL) == 4);
+    /* 384 kHz, 8 channels, 32-bit under the 1 MiB cap: 49152 + 6144 + 1024,
+     * or the endpoint's capacity when smaller (1600 x 32 = 51200). */
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 0, 1048576UL, NULL, NULL) == 17);
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 1600, 1048576UL, NULL, NULL) == 19);
+    CHECK(UacPlanQueue(1, 1, 128, 12288000UL, 32, 3072, 1048576UL, NULL, NULL) == 17);
+    /* 19.5's ring at 48 kHz 16-bit stereo holds the whole queue: 64 ms in
+     * 19680 bytes, 128 ms in 35040. */
+    CHECK(UacPlanQueue(1, 1, 64, 192000, 4, 0, 19680, NULL, NULL) == 16);
+    CHECK(UacPlanQueue(1, 1, 128, 192000, 4, 0, 35040, NULL, NULL) == 32);
+    /* Full Speed and bInterval 4 under a ring. */
+    CHECK(UacPlanQueue(0, 1, 128, 192000, 4, 0, 16384, NULL, NULL) == 17);
+    CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);
+}
+
+/* A string descriptor from ASCII text with \x01-style bytes allowed, or
+ * from UTF-16 units (units != NULL). */
+static unsigned int Str(UAC_BYTE *d, const char *text, const unsigned short *units, unsigned int n)
+{
+    unsigned int i;
+    if (!units) n = (unsigned int)strlen(text);
+    d[0] = (UAC_BYTE)(2 + 2 * n); d[1] = 3;
+    for (i = 0; i < n; i++) {
+        unsigned int c = units ? units[i] : (unsigned char)text[i];
+        d[2 + 2 * i] = (UAC_BYTE)c; d[3 + 2 * i] = (UAC_BYTE)(c >> 8);
+    }
+    return d[0];
+}
+
+static int Same(const UAC_WORD *w, const char *text)
+{
+    unsigned int i;
+    for (i = 0; text[i]; i++) if (w[i] != (unsigned char)text[i]) return 0;
+    return w[i] == 0;
+}
+
+/* The device's name (docs/design/uac2.md section 21). */
+static void Names(void)
+{
+    UAC_BYTE d[256];
+    UAC_WORD w[UAC_NAME_MAX + 1];
+    static const UAC_BYTE en[4] = { 4, 3, 0x09, 0x04 }, two[6] = { 6, 3, 0x07, 0x04, 0x09, 0x04 };
+    static const UAC_BYTE ja[4] = { 4, 3, 0x11, 0x04 }, list3[8] = { 8, 3, 0x07, 0x04, 0x11, 0x04, 0x0c, 0x04 };
+    static const unsigned short odd[6] = { 'D', 0xd83d, 0xde00, 0x00e9, 0xfeff, 'X' };
+    unsigned int n, k;
+    UAC_BYTE bad[4];
+    CHECK(UacNameLanguage(en, 4) == 0x0409);
+    CHECK(UacNameLanguage(two, 6) == 0x0409);
+    CHECK(UacNameLanguage(ja, 4) == 0x0411);
+    CHECK(UacNameLanguage(list3, 8) == 0x0407);
+    CHECK(UacNameLanguage(en, 3) == 0);                 /* shorter than bLength */
+    memcpy(bad, en, 4); bad[1] = 2; CHECK(UacNameLanguage(bad, 4) == 0);
+    memcpy(bad, en, 4); bad[0] = 3; CHECK(UacNameLanguage(bad, 4) == 0);
+    memcpy(bad, en, 4); bad[0] = 2; CHECK(UacNameLanguage(bad, 4) == 0);   /* empty list */
+    CHECK(UacNameLanguage(NULL, 4) == 0);
+    n = Str(d, "Sound Blaster X1", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 16 && Same(w, "Sound Blaster X1"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 18 && Same(w, "Sound Blaster X1 2"));
+    CHECK(UacName(d, n, 9, w, UAC_NAME_MAX) == 19 && Same(w, "Sound Blaster X1 10"));
+    CHECK(UacName(d, n + 10, 0, w, UAC_NAME_MAX) == 16);            /* a longer buffer */
+    CHECK(UacName(d, n - 1, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0); /* cut short */
+    CHECK(UacName(d, n, 0, w, 0) == 0 && UacName(d, n, 0, NULL, 8) == 0 && UacName(NULL, n, 0, w, 8) == 0);
+    n = Str(d, "  USB\tAudio \x01\x7f  ", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 9 && Same(w, "USB Audio"));
+    n = Str(d, "", NULL, 0);
+    CHECK(n == 2 && UacName(d, n, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0);
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 0);                  /* no name: no " 2" alone */
+    n = Str(d, " \t\r\n\x01 ", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0);
+    n = Str(d, "", odd, 6);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 3 && w[0] == 'D' && w[1] == 0x00e9 && w[2] == 'X' && w[3] == 0);
+    /* 40 characters: cut to 31; with a suffix, to 29 plus " 2", a space
+     * at the cut trimmed. */
+    n = Str(d, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC DEFGHIJKLMN", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC D"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC 2"));
+    CHECK(UacName(d, n, 0, w, 64) == 31);                           /* max capped */
+    CHECK(UacName(d, n, 0, w, 5) == 5 && Same(w, "ABCDE"));
+    CHECK(UacName(d, n, 1, w, 2) == 0);                             /* no room for the name */
+    /* Malformed: type, odd bLength, bLength past the buffer, bLength 0. */
+    n = Str(d, "Name", NULL, 0);
+    d[1] = 2; CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0); d[1] = 3;
+    d[0] = 9; CHECK(UacName(d, n + 1, 0, w, UAC_NAME_MAX) == 0); d[0] = (UAC_BYTE)n;
+    CHECK(UacName(d, 1, 0, w, UAC_NAME_MAX) == 0);
+    d[0] = 0; CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0);
+    /* Every bLength/byte for one descriptor: never past max, always
+     * NUL-terminated, never a control character or a space at either end. */
+    for (k = 0; k < 256; k++) {
+        unsigned int i, got;
+        for (i = 0; i < sizeof(d); i++) d[i] = (UAC_BYTE)(i * 37 + k * 11);
+        d[0] = (UAC_BYTE)k; d[1] = 3;
+        got = UacName(d, sizeof(d), k % 3, w, UAC_NAME_MAX);
+        CHECK(got <= UAC_NAME_MAX && w[got] == 0);
+        for (i = 0; i < got; i++) CHECK(w[i] >= 0x20 && !(w[i] >= 0x7f && w[i] <= 0x9f) &&
+                                         !(w[i] >= 0xd800 && w[i] <= 0xdfff));
+        CHECK(!got || (w[0] != ' ' && w[got - 1] != ' '));
+    }
+}
+
 int main(int argc, char **argv)
 {
     FILE *f;
@@ -298,6 +470,8 @@ int main(int argc, char **argv)
                 (void)UacClock(&parsed, parsed.Alt[j].Terminal, NULL, &source);
         }
     }
-    printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks\n", checks, n);
+    QueueTests();
+    Names();
+    printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks; names\n", checks, n);
     return 0;
 }

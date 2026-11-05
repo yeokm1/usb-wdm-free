@@ -4,6 +4,93 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
+
+`uac2` 0.1.8.26 (build 26). `STAGE.TXT` also stages these on more
+systems: `uac2`, `cdcnet` and `usbflop` on XP x64, as on XP x86, and
+`ax88179` on 2000, after their legs. Every other file is 0.1.7's,
+but for `NOTICE.md`'s entry for the `ax88179` simulator.
+
+- **uac2, popping under heavy CPU load**:
+  - `uac2` kept 16 ms of sound queued to Windows' USB drivers. When
+    Windows was busy with other programs (a game, say), `uac2`
+    sometimes did not send the next part in time. The device then got
+    no sound for a moment and played a pop.
+  - `uac2` now keeps 32 ms queued. Its worker is woken with a priority
+    boost when the device needs the next part, and runs at real-time
+    priority.
+  - A host controller driver can hold less of that queue on the
+    controller itself. xHCI98 holds 16 ms of it, so a delay in xHCI98
+    longer than that still interrupts the sound.
+  - [uac2 design, section 19](design/uac2.md).
+- **uac2, the queue setting**: the registry value `Uac2QueueMs` in the
+  device's driver key sets how many milliseconds of sound are kept
+  queued, 16 to 128. The default is 32; the install writes it and does
+  not change a value that is already there.
+  - A longer queue survives longer delays before `uac2` gets its turn
+    on the processor.
+  - The playback position Windows shows runs ahead of the device by
+    the queue, and a pause and resume skips that much.
+  - A changed value takes effect when a program next opens the device.
+- **uac2, the real-time worker and its fairness**: the worker that
+  feeds the device runs at real-time priority.
+  - When it keeps a processor busy for 60 % or more of a 200 ms window,
+    it runs at normal priority for the next window, then returns to
+    real time, so a busy stream leaves other programs their turn.
+  - `Uac2Realtime` = 0 in the driver key turns real time off. The
+    default is 1.
+- **uac2, volume above 0 dB**: some devices offer volume above 0 dB
+  (gain), and `uac2` used to offer that gain too. XP's volume slider is
+  measured from the top of the range, so on such a device most of the
+  slider is gain. In the simulator, a loud signal then went past full
+  scale (where a device clips).
+  - This is a likely cause of the distorted sound one user reported on
+    a CX31993 dongle. It is not confirmed: that device's volume range
+    has not been read yet, and USB timing on that system is a separate
+    open question.
+  - The volume now tops out at 0 dB. A device found above 0 dB when it
+    starts is set to 0 dB.
+  - `Uac2VolAboveZero` = 1 in the driver key offers the whole range
+    again. The default is 0.
+  - [uac2 design, section 20](design/uac2.md).
+- **uac2, device names**: each device is shown by its USB product name
+  (for example "Sound Blaster X1") instead of "UAC2 USB audio
+  (experiment)". The name is cut at 31 characters.
+  - It shows in Sounds and Audio Devices, the sound panel and
+    programs' device lists.
+  - A device without a product name keeps the old name.
+  - [uac2 design, section 21](design/uac2.md).
+- **Updating from an earlier `uac2`**: the search for a better driver
+  can keep the installed one ("The best driver ... is already
+  installed"). Choose the folder by hand:
+  - **98 SE and ME**: Device Manager > the device > Driver > Update
+    Driver > Display a list > Have Disk > the `w98se-me` folder. When
+    Windows asks for its own streaming files (`ks.sys`, `ksproxy.ax`),
+    point it at your Windows CD or `C:\WINDOWS\SYSTEM32\DRIVERS`. When
+    it offers to replace newer files, keep yours. Then shut down and
+    start the computer again: on ME the updated device came up only
+    after that, although its driver version already read 0.1.8.26.
+  - **2000**: the same route, Have Disk > `w2k-xp`. Answer Yes to
+    "Digital Signature Not Found". Restart when asked.
+  - **XP**: Update Driver > Install from a list > Don't search, I will
+    choose > Have Disk > `w2k-xp` (`wxp-x64` on XP x64).
+  - **Vista and 7**: Update Driver > Browse my computer > Let me pick
+    from a list > Have Disk (or the 0.1.8.26 entry), or from an
+    elevated command prompt `pnputil -i -a <folder>\uac2wdm.inf`.
+  - **8 and 8.1**: Update Driver > Browse my computer > the folder.
+- **Known issue, VLC on XP**: VLC follows a change of the default sound
+  device only at its next file, loop or restart. Windows' USB Audio 1.0
+  devices behave the same.
+- **What to send with a report about the sound**: export the device's
+  driver key (the `MEDIA` class key whose `Driver` is `uac2wdm.sys`)
+  after a play. Its `Uac2UsbStats` value now carries the device's
+  volume range and its volume at plug-in (design 20.5). `Uac2VolMap`
+  and `Uac2Name` / `Uac2NameStatus` say what the driver chose.
+- **Signing**: the new x64 `uac2wdm.sys` is signed with the project's
+  test certificate, as 0.1.4 to 0.1.7 (`usb-wdm-free-test.cer`,
+  `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`, no timestamp). The x86
+  files are unsigned, as before. No other x64 file changed.
+
 ## Release 0.1.7 (2026-11-01): `usbprn`, USB printing on 98 SE and ME
 
 Release 0.1.6 plus `usbprn` 0.1.0.0. Every other file is 0.1.6's.

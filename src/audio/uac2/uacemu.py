@@ -15,6 +15,11 @@ Profiles (--profile):
   x4full    the same captured layout with every alternate functional:
             playback 2/6/8 channels at 16 and 24 bits (IF4, IF6), capture
             (IF5), feature-unit SET.
+  x1        the captured Creative Sound Blaster X1 layout (testdata/sbx1),
+            every alternate functional: HID, CDC ACM and a UAC 2 function
+            (playback 2/6/8 channels 16/24-bit, async with explicit
+            feedback; 1-channel capture 16/24-bit); strings replaced by
+            SIMULATED labels, serial index zero.
   hs24      High Speed, one programmable clock (44.1 to 192 kHz), playback
             2 channels 16/24/32-bit (subslots 2, 3, 4), capture 2 channels
             16/24-bit; async playback with explicit feedback.
@@ -37,6 +42,17 @@ Profiles (--profile):
             (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
             not in that listing: 44.1 to 384 kHz, both families, assumed.
             Its HID interface is not modelled.
+  cx31993m  a user's CX31993 with a MAX97220 headphone amplifier
+            (3302:12C3, testdata/cx31993m) replayed: its device and
+            configuration descriptors as XHCITR printed them, strings
+            replaced by SIMULATED labels, serial index zero. Feature Unit
+            0x10 has per-channel volume only (no master, no mute) and an
+            Extension Unit (0x04) sits between it and the headphones; one
+            ADAPTIVE playback interface, 16/24/32-bit stereo. The device's
+            volume RANGE and rate list are not in the report: --vol-range
+            and --vol-cur (--vol-cur-at, --vol-cur-stall) set the one,
+            the rates are cx31993's, assumed.
+            The HID interface answers nothing.
   alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
             (docs/design/uac2.md section 15.4), not a capture: one
             programmable clock, three playback endpoints - 8-channel
@@ -73,7 +89,10 @@ only), 'channels' (each channel only), 'readonly' (master and channels
 readable, not writable) or 'none' (no feature unit: each output terminal
 takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
 signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
-(1/256 dB, default 0) shape the volume control. Playback is "rendered"
+(1/256 dB, default 0) shape the volume control; --vol-cur-at CH=V sets
+one logical channel's CUR at plug-in (0 the master), --vol-cur-stall N
+stalls the first N volume GET CURs. --product TEXT sets iProduct's string
+('' an empty descriptor), --no-product sets iProduct to 0. Playback is "rendered"
 through the feature units on its path: every 0.25 s the log carries the
 received peak per channel (dBFS) and the rendered peak (each packet with
 the units' volume in force when it arrived; none while muted or at the
@@ -190,6 +209,9 @@ def audio_function(config):
                                                 for i in range(n)])
             elif sub in (0x04, 0x05) and size >= 5 and size >= 5 + d[4]:
                 entities[d[3]] = dict(kind='mx', inputs=list(d[5:5 + d[4]]))
+            elif sub in (0x08, 0x09) and size >= 7 and size >= 7 + d[6]:
+                # Processing and Extension Units: pass-through on a path.
+                entities[d[3]] = dict(kind='xu', inputs=list(d[7:7 + d[6]]))
         elif kind == 0x24 and current and current[2:] == (1, 2) and current[1] and size >= 4:
             a = alts[(current[0], current[1])]
             if d[2] == 1 and size >= 16:
@@ -210,6 +232,9 @@ def audio_function(config):
 # (4.7 AudioControl, 4.9 AudioStreaming, 4.10 endpoints) and the Audio 2.0
 # Formats document (Type I).
 
+# OUT packet gaps counted (milliseconds; at High Speed bInterval 1 a running
+# stream's packets are 0.125 ms apart, at Full Speed 1 ms).
+GAP_MS = (2, 5, 10, 20, 50)
 CHANNEL_CONFIG = {1: 0x4, 2: 0x3, 6: 0x3f, 8: 0x63f}
 
 
@@ -387,8 +412,10 @@ def build(name, fu='full'):
 
 
 PROFILE_NAMES = ('x4', 'x4full', 'hs24', 'multi', 'mic', 'fs', 'clocks', 'adaptive', 'cx31993', 'alc4080',
-                 'uac3dual', 'alc4080cap')
+                 'uac3dual', 'alc4080cap', 'x1', 'cx31993m')
 ALC_FIXTURE = Path(__file__).resolve().parent / 'testdata/alc4080'
+X1_FIXTURE = Path(__file__).resolve().parent / 'testdata/sbx1'
+CXM_FIXTURE = Path(__file__).resolve().parent / 'testdata/cx31993m'
 
 # Configuration 2 of uac3dual: a USB Audio 3.0 function by its standard
 # descriptors (ADC 3.0 4.1: IAD, the AudioControl interface first, then the
@@ -409,6 +436,7 @@ class Profile:
         if not -32768 <= lo <= hi <= 32767 or res < 0 or not -32768 <= vol_cur <= 32767:
             raise ValueError('volume range')
         self.name, self.fu, self.vol_range, self.vol_cur = name, fu, (lo, hi, res), vol_cur
+        self.vol_at = {}        # logical channel: volume CUR at plug-in instead of vol_cur
         if name == 'alc4080cap':
             self.speed, self.config = 'high', (ALC_FIXTURE / 'config0.bin').read_bytes()
             base = (ALC_FIXTURE / 'device.bin').read_bytes()
@@ -420,6 +448,27 @@ class Profile:
                             3: usb_string('usb-wdm-free SIMULATED')}
             all44 = sorted(FAMILY_44 + FAMILY_48)
             self.rates = {1: all44, 3: all44, 4: all44, 5: all44, 6: all44 + [352800, 384000], 8: all44}
+            self.allowed, self.fu_settable = None, True
+        elif name == 'x1':
+            self.speed, self.config, self.rates = 'high', (X1_FIXTURE / 'config0.bin').read_bytes(), {}
+            base = bytearray((X1_FIXTURE / 'device.bin').read_bytes())
+            base[14:17] = bytes((1, 2, 0))
+            self.vid, self.pid = vid or 0x041e, pid or 0x3286
+            self.device = bytes(base[:8]) + struct.pack('<HH', self.vid, self.pid) + bytes(base[12:])
+            self.qualifier = (X1_FIXTURE / 'qualifier.bin').read_bytes()
+            self.strings = {0: b'	',
+                            **{i: usb_string('UAC2 X1 layout - SIMULATED') for i in range(1, 9)}}
+            self.allowed, self.fu_settable = None, True
+        elif name == 'cx31993m':
+            self.speed, self.config = 'high', (CXM_FIXTURE / 'config0.bin').read_bytes()
+            base = bytearray((CXM_FIXTURE / 'device.bin').read_bytes())
+            base[14:17] = bytes((1, 2, 0))
+            self.vid, self.pid = vid or 0x3302, pid or 0x12c3
+            self.device = bytes(base[:8]) + struct.pack('<HH', self.vid, self.pid) + bytes(base[12:])
+            self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0xef, 2, 1, 64, 1, 0)
+            self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
+                            2: usb_string('UAC2 CX31993+MAX97220 layout - SIMULATED')}
+            self.rates = {0x1e: sorted(FAMILY_44 + FAMILY_48 + [352800, 384000])}
             self.allowed, self.fu_settable = None, True
         elif name in ('x4', 'x4full'):
             self.speed, self.config, self.rates = 'high', CONFIG, {}
@@ -450,6 +499,19 @@ class Profile:
                 self.rates.setdefault(cid, [48000])
         self.interfaces = sorted({i for i, _ in self.layout})
 
+    def set_product(self, text):
+        """iProduct's string: text (an empty string gives an empty
+        descriptor), or None for no iProduct at all (index 0)."""
+        device = bytearray(self.device)
+        self.strings = dict(self.strings)   # never the module's shared table
+        if text is None:
+            device[15] = 0
+        else:
+            if not device[15]:
+                device[15] = 2
+            self.strings[device[15]] = usb_string(text)
+        self.device = bytes(device)
+
     def stream_alt(self, interface, alternate):
         """The streaming facts of one alternate, or None."""
         a = self.alts.get((interface, alternate))
@@ -468,7 +530,7 @@ class Profile:
 
 class Model:
     def __init__(self, connection, trace, now=time.monotonic, pcm=None, profile=None,
-                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4):
+                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4, vol_stall=0):
         self.connection, self.trace, self.now = connection, trace, now
         self.p = profile or Profile('x4')
         self.fb_ppm, self.fb_zero_every, self.fb_stop_after = fb_ppm, fb_zero_every, fb_stop_after
@@ -485,14 +547,23 @@ class Model:
         self.lengths = collections.Counter()
         self.digest = hashlib.sha256()
         self.first_out = self.last_out = None
+        # Gaps between successive OUT packets of one endpoint's running
+        # stream (its start or stop, or a reset, begins a new count): a host
+        # that left the endpoint with nothing scheduled shows as a gap above
+        # the service period. Counted over every OUT endpoint; GAP_MS are the
+        # thresholds (gap_ms keys).
+        self.gap_prev, self.gap_max = {}, 0.0
+        self.gaps = {t: 0 for t in GAP_MS}
         self.next_report = self.now() + 0.25
         self.pcm, self.pcm_bytes, self.pcm_max = pcm, 0, pcm_max * 1024 * 1024
+        self.vol_stall = vol_stall
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
         self.mute, self.volume = {}, {}
         self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
         self.rpeak = {}         # the same after the units in force at each packet
         self.ep_peak = {}       # (endpoint, channel): received, rendered - several outputs
+        self.clipped = {}       # channel: rendered samples past full scale, since plug-in
 
     @property
     def clock(self):
@@ -546,6 +617,7 @@ class Model:
                  first_out=self.first_out, last_out=self.last_out, span_seconds=elapsed,
                  feedback_packets=self.feedback_packets, zero_feedback=self.zero_feedback,
                  in_packets=self.in_packets, in_bytes=self.in_bytes, sha256=self.digest.hexdigest(),
+                 gap_max_ms=round(self.gap_max * 1000, 3), gap_ms={str(t): n for t, n in self.gaps.items()},
                  **self.levels())
         self.peak, self.rpeak, self.ep_peak = {}, {}, {}
 
@@ -563,7 +635,7 @@ class Model:
                     return []
             for uid, e in sorted(entities.items()):
                 feeds = (e['kind'] == 'fu' and e['source'] == eid) or \
-                    (e['kind'] == 'mx' and eid in e['inputs'])
+                    (e['kind'] in ('mx', 'xu') and eid in e['inputs'])
                 if feeds:
                     rest = walk(uid, seen | {eid})
                     if rest is not None:
@@ -581,7 +653,7 @@ class Model:
                     continue
                 muted = muted or bool(self.mute.get((uid, ch), 0))
                 if self.p.entities[uid]['controls'][ch] >> 2 & 1:
-                    value = self.volume.get((uid, ch), self.p.vol_cur)
+                    value = self.volume.get((uid, ch), self.p.vol_at.get(ch, self.p.vol_cur))
                     if value == -32768:
                         muted = True
                     else:
@@ -612,7 +684,8 @@ class Model:
             rendered.append(dbfs(self.rpeak.get(ch, 0.0)))
             gains.append(None if muted else round(db, 2))
         result = dict(received_peak_dbfs=received, rendered_peak_dbfs=rendered,
-                      unit_gain_db=gains, units=units)
+                      unit_gain_db=gains, units=units,
+                      rendered_clipped=[self.clipped.get(ch, 0) for ch in sorted(self.peak)])
         if len({ep for ep, _ in self.ep_peak}) > 1:
             result['endpoint_peaks_dbfs'] = {
                 '%02x' % ep: [[dbfs(self.ep_peak[(e, ch)][0]), dbfs(self.ep_peak[(e, ch)][1])]
@@ -638,6 +711,10 @@ class Model:
                 top = max(max(column), -min(column)) / full
                 db, muted = self.channel_gain(units, ch + 1)
                 out = 0.0 if muted else top * 10 ** (db / 20)
+                if out > 1.0:
+                    # Samples the units' gain (above 0 dB) takes past full scale.
+                    limit = full / 10 ** (db / 20)
+                    self.clipped[ch] = self.clipped.get(ch, 0) + sum(abs(s) > limit for s in column)
                 self.peak[ch] = max(self.peak.get(ch, 0.0), top)
                 self.rpeak[ch] = max(self.rpeak.get(ch, 0.0), out)
                 if ep is not None:
@@ -646,6 +723,7 @@ class Model:
 
     def reset_streams(self):
         self.streams.clear()
+        self.gap_prev.clear()
         self.fb.clear()
         self.in_streams.clear()
         self.next_feedback = None
@@ -745,8 +823,14 @@ class Model:
             if not access & 1:
                 return 4, b''
             if get and request == 1:
+                if selector == 2 and self.vol_stall > 0:
+                    # --vol-cur-stall: this many volume GET CURs stall first.
+                    self.vol_stall -= 1
+                    self.log('feature_stalled', entity=entity, channel=channel)
+                    return 4, b''
                 return 0, struct.pack('<B' if selector == 1 else '<h',
-                                      store.get(key, 0 if selector == 1 else self.p.vol_cur))
+                                      store.get(key, 0 if selector == 1 else
+                                                self.p.vol_at.get(channel, self.p.vol_cur)))
             if get and request == 2 and selector == 2:
                 return 0, struct.pack('<Hhhh', 1, lo, hi, res)
             if not get and request == 1 and len(payload) == selector and self.p.fu_settable:
@@ -852,6 +936,7 @@ class Model:
     def start(self, ep, own):
         interface, alternate, info = own
         self.streams.add(ep)
+        self.gap_prev.pop(ep, None)
         now = self.now()
         if info['feedback'] and info['feedback']['address'] == ep:
             self.fb[ep] = dict(info=info, next=now, start=now, period=self.period(info['feedback']), count=0)
@@ -862,10 +947,11 @@ class Model:
                                        ident=0, acc=0.0, phase=0)
         self.log('stream_start', endpoint=ep, interface=interface, alternate=alternate,
                  channels=info['channels'], subslot=info['subslot'], bits=info['bits'],
-                 rate=self.rate(info['clock']))
+                 rate=self.rate(info['clock']), pcm_offset=self.pcm_bytes)
 
     def stop(self, ep):
         self.streams.discard(ep)
+        self.gap_prev.pop(ep, None)
         self.in_streams.pop(ep, None)
         if self.fb.pop(ep, None) is not None and not self.fb:
             self.next_feedback = None
@@ -885,6 +971,13 @@ class Model:
         if self.first_out is None:
             self.first_out = stamp
         self.last_out = stamp
+        if ep in self.gap_prev:
+            gap = stamp - self.gap_prev[ep]
+            self.gap_max = max(self.gap_max, gap)
+            for t in GAP_MS:
+                if gap * 1000 >= t:
+                    self.gaps[t] += 1
+        self.gap_prev[ep] = stamp
         self.out_packets += 1
         self.out_bytes += length
         self.nonzero += sum(byte != 0 for byte in payload)
@@ -1037,6 +1130,12 @@ def main():
     ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
                     help='volume RANGE MIN:MAX:RES in 1/256 dB')
     ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
+    ap.add_argument('--product', help="iProduct's string instead of the profile's ('' an empty one)")
+    ap.add_argument('--no-product', action='store_true', help='iProduct 0: no product string')
+    ap.add_argument('--vol-cur-at', action='append', default=[], metavar='CH=V',
+                    help='volume CUR at plug-in of logical channel CH (0 master) of every feature unit')
+    ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N',
+                    help='the first N volume GET CUR requests stall')
     args = ap.parse_args()
     if args.fu != 'full' and args.profile in ('x4', 'x4full', 'cx31993'):
         ap.error('--fu applies to the built profiles other than cx31993')
@@ -1044,6 +1143,18 @@ def main():
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
     profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
+    if args.no_product:
+        profile.set_product(None)
+    elif args.product is not None:
+        profile.set_product(args.product)
+    for item in args.vol_cur_at:
+        try:
+            ch, value = (int(v) for v in item.split('='))
+        except ValueError:
+            ap.error('--vol-cur-at CH=V')
+        if not 0 <= ch <= 255 or not -32768 <= value <= 32767:
+            ap.error('--vol-cur-at CH=V')
+        profile.vol_at[ch] = value
     if args.rates:
         try:
             only = [int(r) for r in args.rates.split(',')]
@@ -1068,7 +1179,7 @@ def main():
             pcm = args.pcm.open('xb') if args.pcm else None
             model = Model(connection, trace, pcm=pcm, profile=profile, fb_ppm=args.fb_ppm,
                           fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after,
-                          pcm_max=args.pcm_max)
+                          pcm_max=args.pcm_max, vol_stall=args.vol_cur_stall)
             try:
                 try:
                     model.run()

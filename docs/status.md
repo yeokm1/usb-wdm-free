@@ -55,6 +55,12 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+Release 0.1.8 (prepared 2026-11-05; awaiting the owner's x64 signature
+and the tag): `uac2` 0.1.8.26 (the queue, the real-time worker, the volume
+topped at 0 dB, the device names) and the STAGE.TXT lines owner-approved on
+2026-11-04 (`uac2`, `cdcnet`, `usbflop` on XP x64, `ax88179` on 2000);
+`free/` is still 0.1.7's until the release operation runs
+([release 0.1.8](testing/2026-11-05-release-0.1.8.md)).
 Release 0.1.7 (owner, 2026-11-01): 0.1.6 plus `usbprn` 0.1.0.0, USB
 printing on 98 SE (`USBPRN.SYS` and the port monitor `USBPRNMN.DLL`) and
 on ME (`USBPRNME.INF` over ME's own `usbprint.sys`); every other file is
@@ -206,6 +212,28 @@ What helps (0.1.5, and Disable/Enable in any version):
 
 Read in QEMU only ([uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md)).
 
+### Open (fix prepared for 0.1.8): `uac2` pops under heavy CPU load (XP x64, Conexant CX31993)
+
+Reported 2026-11-04 by a user on Windows XP x64 with a Conexant CX31993
+USB DAC under xHCI98 3.4.0.0 (a Fresco FL1100 card): the sound pops often
+while a game loads the processor. xHCI98's snapshot showed thousands of
+Ring Underrun completions on the DAC's endpoint: the controller had
+nothing left to send. `uac2` 0.1.6.0 kept 16 ms of sound queued, and the
+thread that refills it waited for a processor behind the game's.
+
+Read in QEMU with the simulator under xHCI98 on XP x64: with a busy loop
+on every processor, 0.1.6.0 got about half the sound out in time (4093
+packets a second of 8000; 11204 Ring Underruns over five 60-second plays,
+none of which finished in 70 s); disk load alone did not matter. Prepared for 0.1.8 (`161320d`, `502a8a7`,
+`9f30c79`): 32 ms queued (the registry value `Uac2QueueMs`, 16 to 128),
+and the refill thread is woken with the priority boost Windows gives a
+sound driver's waits; with both, the same load gave 62 Ring Underruns
+over five plays (301 s) at 7986 packets a second. xHCI98 still holds 16
+ms of the queue on the controller (four transfers a pipe), so a delay in
+xHCI98 itself longer than that is not covered. Not yet read on the user's PC.
+The design is [design record 19](design/uac2.md), the legs are
+[uac2-queue](testing/2026-11-04-uac2-queue.md).
+
 ### Fixed in 0.1.6: `uac2` playback garbled after seeking (XP, Conexant CX31993)
 
 Reported 2026-10-31 by a user on Windows XP with a Conexant CX31993 USB
@@ -351,6 +379,7 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | 2000 SP4 | Windows' EHCI | emulated: `cx31993`; 0.1.5.0, the fix and a port-0xE9 trace build | the STOP 0x1E in `usbhub20.sys` read: Update Driver from `usbaudio` (3 of 3) and Disable then Enable of a working `uac2` (1 of 1) stop inside `PcAddAdapterDevice`, in the hub driver's answer to PortCls's `IRP_MN_QUERY_INTERFACE`; not `uac2`'s code. Uninstalling `usbaudio` and a no-driver INF do not stop; an INF `Reboot` directive avoided the stop on Update Driver | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
 | 2000 SP4, XP SP3 x86, 7 SP1 x64 | Windows' EHCI | emulated: `cx31993`; the 2000 restart INF (`76b09bd`) | 2000: Update Driver from `usbaudio` asks for a restart, no stop, plays after it; XP and 7 x64: install at the first plug with no restart prompt and play | [uac2-2000-stop](testing/2026-10-31-uac2-2000-stop.md) |
 | 7 SP1 x86 | Windows' EHCI | emulated: `cx31993`, the seek legs, the fix | plays; none in 4 legs | [uac2-seek](testing/2026-10-31-uac2-seek.md) |
+| XP x64 | xHCI98 3.4.0.0, Windows' EHCI | emulated: `hs24` (first plug), `cx31993` (the seek legs); the released 0.1.6.0 x64 files, `uac2wdm.inf` staged by `SetupCopyOEMInf` with `UACCI.INF` | first plug: the wizard chose `uac2` from the staged INF with no restart prompt; play, rec and ramp PASS; the seek legs: none in 5 legs on each controller | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 2000: the seek legs only (2026-10-31); ME under xHCI98 only; the seek legs on 98 SE are owed. Real PC: none yet - owner's bench session.
 
@@ -437,6 +466,8 @@ Real PC: none yet - owner's bench session.
 | XP SP3 x86 | Windows' UHCI | emulated: QEMU `usb-net`, Full Speed | the released `CDCNET.INF` (0.1.0 re-cut, gadget id): install, DHCP and ping PASS | [release 0.1.0](testing/2026-10-24-release-0.1.0.md) |
 | XP SP3 x86 | Windows' EHCI | emulated: QEMU `usb-net`, High Speed (test patch) | ECM: NETTEST, removal under traffic, replug and NETTEST PASS | [sweep-legs](testing/2026-10-23-sweep-legs.md) |
 | 2000 SP4 | Windows' EHCI (SP4 `usbehci`) | emulated: QEMU `usb-net`, High Speed (test patch) | ECM: install, NETTEST twice, idle removal, removal under traffic, replug and NETTEST PASS | [sweep-legs](testing/2026-10-23-sweep-legs.md) |
+| XP x64 | Windows' UHCI, xHCI98 3.4.0.0 | emulated: QEMU `usb-net`, Full Speed; the released `wxp-x64` files, `CDCNET.INF` staged by `SetupCopyOEMInf` | first plug installs from the staged INF; DHCP, NETTEST 21/21 ICMP and 2 x 1 MiB TFTP PASS on each controller | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
+| XP x64 | Windows' EHCI | emulated, simulator: `ncmemu.py`, an unlisted id (`FFFF:0303`), High Speed | the NCM class line binds; DHCP and ping PASS | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 The other rows ran the test INFs (`CDCT98.INF`, `CDCTEST.INF`), which bind
 the same device with the same install sections; until the 0.1.0 re-cut the
@@ -452,6 +483,8 @@ bench session.
 | 98 SE | xHCI98 3.1.0.0 | real device via VM: the owner's AX88179 (`0B95:1790`), passthrough on `qemu-xhci`, SuperSpeed | install, DHCP, ping 0-4000 bytes and removal under traffic PASS after `d6f514e`; a `ping -t` running across a replug recovers | [ax88179-9x](testing/2026-10-22-ax88179-9x.md), [ax88179-fcs](testing/2026-10-22-ax88179-fcs.md) |
 | ME | xHCI98 3.1.0.0 | real device via VM: the same AX88179, passthrough on `qemu-xhci` | install, DHCP, ping and removal under traffic PASS (same open point) | [ax88179-9x](testing/2026-10-22-ax88179-9x.md) |
 | 98 SE | NUSB 3.3 EHCI | real device via VM: the same AX88179 behind a USB 2.0 hub, passthrough on `usb-ehci`, High Speed | install, DHCP, ping 0-4000 bytes and removal under traffic PASS; the FCS safety net fired in the first session after plug-in; with the settle cycle 0 FCS frames in 3 sessions and a `ping -t` across a replug recovers (first-after-plug case not reproducible in QEMU) | [ax88179-9x](testing/2026-10-22-ax88179-9x.md), [ax88179-fcs](testing/2026-10-22-ax88179-fcs.md) |
+| 98 SE | xHCI98 3.4.0.0 | emulated, simulator: `axemu.py` (`0B95:1790`, SuperSpeed), the released `w98se-me` files on `DevicePath` | install at the first plug, DHCP, ping 32, 1472 and 4000 bytes, removal under traffic, `ping -t` across a replug recovers within 15 s: the real adapter's results | [ax88179-sim](testing/2026-11-04-ax88179-sim.md) |
+| 2000 SP4 | xHCI98 3.4.0.0, Windows' EHCI | emulated, simulator: the same, SuperSpeed and High Speed; `AX179F.INF` staged by `SetupCopyOEMInf` | xHCI98: first plug installs from the staged INF; DHCP, ping 32 to 4000 bytes, removal under traffic, `ping -t` across a replug PASS. EHCI (the same device instance): DHCP, ping 32 and 1472 bytes, removal under traffic PASS | [ax88179-sim](testing/2026-11-04-ax88179-sim.md) |
 
 ME under an EHCI driver: later, on an ME image with SweetLow's USB 2.0
 stack.
@@ -501,6 +534,7 @@ No real board (Uno R3, Pico) yet; real PC: none yet - owner's bench session.
 | 2000 SP4 | Windows' UHCI | emulated, simulator: the UFI floppy simulator `ufiemu.py` over `usb-redir`, an unlisted drive (`FFFF:0020` CBI, `FFFF:0021` CB), Full Speed, FAT12 medium | class match binds through the wizard; read PASS for CBI and CB (three files, CRC-32s match); Windows writes the root directory's access dates during the read | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
 | XP SP3 x86 | Windows' UHCI | emulated, simulator: the same | read PASS for CBI and CB, the same | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
 | 7 SP1 x64 | Windows' UHCI | emulated, simulator: the same | INF staged with `pnputil`, then the plug installs it without a prompt; read PASS for CBI and CB | [usbflop-nt-xpad-x64](testing/2026-10-24-usbflop-nt-xpad-x64.md) |
+| XP x64 | Windows' UHCI, xHCI98 3.4.0.0 | emulated, simulator: the same; `USBFLOP.INF` staged by `SetupCopyOEMInf` | first plug installs from the staged INF; read PASS for CBI and CB under UHCI and for CBI under xHCI98 | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 EHCI legs: REAL CHECK NEEDED (a Full Speed floppy is not carried by
 QEMU's EHCI). Real PC: none yet - owner's bench session.

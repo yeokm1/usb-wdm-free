@@ -94,6 +94,69 @@ unsigned int UacPlanQuirks(unsigned int vid, unsigned int pid);
 /* wMaxPacketSize as payload capacity: bits 10..0 times 1 + bits 12..11. */
 unsigned int UacPlanCapacity(unsigned int maxPacket);
 
+/* The stream queue (docs/design/uac2.md section 19): Uac2QueueMs's
+ * default and range, the most data URBs kept queued, and the raw value
+ * that stands for "nothing usable was read". */
+#define UAC_QUEUE_DEFAULT_MS 32U
+#define UAC_QUEUE_MIN_MS 16U
+#define UAC_QUEUE_MAX_MS 128U
+#define UAC_QUEUE_MAX_URBS 32U
+#define UAC_QUEUE_NONE 0xFFFFFFFFUL
+
+/* Uac2QueueMs in force for a raw reading: UAC_QUEUE_NONE gives the
+ * default, anything else is clamped to the range (19.3). */
+unsigned int UacPlanQueueMs(unsigned long raw);
+
+/* Uac2Realtime (docs/design/uac2.md 19.6): 1 runs the stream's worker at
+ * LOW_REALTIME_PRIORITY, 0 leaves it at the system thread's priority (the
+ * wake's IO_SOUND_INCREMENT still applies). UAC_QUEUE_NONE (nothing usable
+ * read) gives the default, 1; any other value is 0 for 0, else 1. */
+#define UAC_REALTIME_DEFAULT 1U
+unsigned int UacPlanRealtime(unsigned long raw);
+
+/* The worker's fairness rule (19.6, build 23). The worker measures, in
+ * interrupt time, how long it runs between its waits (busy) in windows of
+ * at least UAC_DUTY_WINDOW_100NS. A window busy for UAC_DUTY_PERCENT or
+ * more of its length demotes a real-time worker to the priority it was
+ * created at for the next window; a window below it restores real time.
+ * It never sleeps, so a working stream keeps refilling; demoted, it shares
+ * the processor with the normal threads, the one that asks Stop among
+ * them. Busy time is measured, not inferred from whether a wait blocked,
+ * so no wake racing a wait can hide a loop. At tick granularity (10 to
+ * 15.6 ms before Windows 8) a short pass is counted only when a tick falls
+ * inside it, which samples the busy fraction; a normal stream (a pass well
+ * under a millisecond, at most about 1.25 a millisecond) stays far below
+ * the threshold. UacPlanDuty: the window's length and busy time so far;
+ * returns the new demoted state (0 or 1) once the window is long enough,
+ * else the current one; *closed 1 when the window ends now. */
+#define UAC_DUTY_WINDOW_MS 200U
+#define UAC_DUTY_PERCENT 60U
+#define UAC_DUTY_SHORT_WAIT_US 50U
+unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
+                         unsigned __int64 window, unsigned int demoted,
+                         unsigned int *closed);
+/* Build 24: a demoted window always ends in real time again (one window
+ * demoted at most, then measured afresh), and every interval is in
+ * performance-counter units: window is UAC_DUTY_WINDOW_MS of them, and a
+ * wait shorter than UAC_DUTY_SHORT_WAIT_US counts as busy (an immediate
+ * return, not a block). UacPlanCounts: n microseconds or milliseconds in
+ * counter units at frequency hz (at least 1). */
+unsigned __int64 UacPlanCounts(unsigned __int64 hz, unsigned long n,
+                               unsigned long perSecond);
+
+/* Data URBs kept queued for a stream (19.4): *packets per URB (unchanged,
+ * section 4.4) and *spanUs, one URB's span; ceil(queueMs / span), lowered
+ * so the queue stays at least one URB below ringBytes (0: no ring bound).
+ * One URB's bytes: bytesPerSecond over the span, rounded up, plus an
+ * eighth (the fastest feedback uacrate.c accepts) and one frameBytes per
+ * packet, at most capacity bytes a packet (0: no such cap). Never below 2
+ * or above UAC_QUEUE_MAX_URBS. queueMs is clamped as UacPlanQueueMs;
+ * interval is bInterval (0 taken as 1). */
+unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int queueMs,
+                          unsigned long bytesPerSecond, unsigned int frameBytes,
+                          unsigned int capacity, unsigned long ringBytes,
+                          unsigned int *packets, unsigned long *spanUs);
+
 /* Sync type of an alternate's data endpoint: 1 async, 2 adaptive,
  * 3 synchronous, 0 none. */
 #define UacPlanSync(alt) (((alt)->Attributes >> 2) & 3)

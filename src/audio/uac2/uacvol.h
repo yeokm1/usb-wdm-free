@@ -63,12 +63,18 @@ int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channel
 
 /* A volume RANGE answer (2-byte signed MIN/MAX/RES triples, section
  * 5.2.5.7.2) in KS units. The silence value -32768 is not a level: a MIN
- * of -32768 reads as its next step (MIN + RES; none without a RES). KsMax
- * is the highest value the steps reach. */
+ * of -32768 reads as its next step (MIN + RES; none without a RES). KsTop
+ * is the highest value the steps reach; KsMax, the top the driver offers
+ * and writes, is the highest step at or below 0 dB (docs/design/uac2.md
+ * section 20: a device whose range goes above 0 dB is not set to gain by
+ * default), or KsTop where no step is at or below 0 dB. UacVolFromKs
+ * clamps to KsMax, so a caller that sets KsMax = KsTop offers the whole
+ * range. */
 typedef struct UAC_VOL_RANGE {
     unsigned int Count;
     int Min[UAC_VOL_RANGES], Max[UAC_VOL_RANGES], Res[UAC_VOL_RANGES]; /* 1/256 dB */
     long KsMin, KsMax, KsStep;      /* KS: 1/65536 dB */
+    long KsTop;
 } UAC_VOL_RANGE;
 
 /* 1 on a valid complete answer (UacCtlRange rules, at most UAC_VOL_RANGES

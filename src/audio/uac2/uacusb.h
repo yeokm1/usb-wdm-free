@@ -39,6 +39,31 @@ typedef struct UAC_USB_STATS {
     /* Build 10: the stream's format and route. */
     ULONG Capture, Channels, Bits, Subslot, Interface, Alternate, Sync, ClockId;
     ULONG CapturedBytes;
+    /* Build 19 (docs/design/uac2.md 19.3): Uac2QueueMs as read
+     * (UAC_QUEUE_NONE when nothing usable was), the milliseconds in force,
+     * the data URBs kept queued and one data URB's span. */
+    ULONG QueueRead, QueueMs, DataTransfers, TransferUs;
+    /* Build 20 (19.6): Uac2Realtime as read (UAC_QUEUE_NONE when nothing
+     * usable was), whether it is on, and the priority the worker set (0
+     * when it set none; KeSetPriorityThread's own answer is not kept). */
+    ULONG RealtimeRead, Realtime, WorkerPriority;
+    /* The worker's demotions from real time for a window busy past
+     * UAC_DUTY_PERCENT (19.6, build 23): 0 in normal running. While
+     * demoted, WorkerPriority reads the priority it was created at. */
+    ULONG WorkerThrottles;
+    /* Build 25 (docs/design/uac2.md 20.5), words 65 to 93, written by
+     * uac2wdm.cpp (the transport leaves them 0): the render line's
+     * volume as the driver found it at start. VolLayout is 25 when they
+     * are filled. Slots 0 master, 1 and 2 logical channels 1 and 2; bit
+     * n of VolRangeRead / VolStartKnown: slot n's RANGE was read / its
+     * CUR was read at start. VolMin is the first subrange's MIN (the
+     * silence value read as its next step), VolMax the last's MAX, VolRes
+     * the smallest RES, VolTop the highest step, VolOffered the top the
+     * driver offers, all 1/256 dB. */
+    ULONG VolLayout, VolUnit, VolMode, VolChannels, VolAboveZero, VolLowered;
+    ULONG VolRangeRead, VolStartKnown;
+    ULONG VolCount[3];
+    LONG VolMin[3], VolMax[3], VolRes[3], VolTop[3], VolOffered[3], VolStartCur[3];
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16
@@ -58,9 +83,16 @@ void UacUsbClose(UAC_DEV *dev);
  * UacCtlSetup made (interface recipient only; wLength is the buffer).
  * *length in: wLength; out: the bytes moved. */
 NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG *length);
+/* PASSIVE, before UacUsbOpen too: GET_DESCRIPTOR from the device below
+ * lower (type, index, language), at most 5 s, then cancelled and drained
+ * as every request here; *got the bytes moved (0 on failure). */
+NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
+                          PVOID buffer, USHORT size, ULONG *got);
 
 /* Stream: one direction, one format, one rate. Create plans the alternate
- * (UacPlanPick) and changes nothing on the device. Start sets the clock
+ * (UacPlanPick) and the queue (UacPlanQueue: queueMs as UacPlanQueueMs
+ * gave it for queueRead, bounded by the client's ring of ringBytes) and
+ * changes nothing on the device. Start sets the clock
  * path (selector inputs, frequency; a running stream on the same clock
  * keeps its rate: a different rate is STATUS_DEVICE_BUSY), selects the
  * alternate and runs the worker. Stop closes repost, cancels every owned
@@ -72,7 +104,10 @@ NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG
 NTSTATUS UacUsbCreate(UAC_DEV *dev, int capture, UAC_BYTE terminal, ULONG channels,
     ULONG subslot, ULONG bits, ULONG config, ULONG rate,
     UAC_USB_FILL fill, UAC_USB_CAPTURE captured, UAC_USB_PROGRESS progress,
-    PVOID context, UAC_USB **out);
+    PVOID context, ULONG queueRead, ULONG queueMs, ULONG ringBytes, UAC_USB **out);
+/* PASSIVE, before Start: Uac2Realtime's raw reading for this stream
+ * (UacPlanRealtime decides); the worker applies it as it starts. */
+void UacUsbSetRealtime(UAC_USB *state, ULONG raw);
 NTSTATUS UacUsbStart(UAC_USB *state);
 void UacUsbStop(UAC_USB *state);
 void UacUsbDestroy(UAC_USB *state);

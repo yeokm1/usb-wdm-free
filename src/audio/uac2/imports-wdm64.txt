@@ -43,3 +43,13 @@ NTOSKRNL.EXE!IoIsWdmVersionAvailable
 NTOSKRNL.EXE!KeDelayExecutionThread
 # Volume and mute: the saved levels (uac2wdm.cpp, GetValue)
 NTOSKRNL.EXE!ZwQueryValueKey
+# Uac2Realtime (docs/design/uac2.md 19.6): the worker at LOW_REALTIME_PRIORITY
+NTOSKRNL.EXE!KeSetPriorityThread
+# The worker's fairness rule (docs/design/uac2.md 19.6, build 24)
+HAL.DLL!KeQueryPerformanceCounter
+# The device name (docs/design/uac2.md section 21): the interfaces' FriendlyName
+NTOSKRNL.EXE!IoRegisterDeviceInterface
+NTOSKRNL.EXE!IoOpenDeviceInterfaceRegistryKey
+# Vista+: the devnode FriendlyName (docs/design/uac2.md section 21)
+NTOSKRNL.EXE!ZwQueryKey
+NTOSKRNL.EXE!ZwOpenKey

@@ -71,6 +71,9 @@ static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN captur
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
+static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value);
+static ULONG GetQueueRaw(PDEVICE_OBJECT fdo);
+static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo);
 #ifndef _WIN64
 /* Windows 98 SE's NTKERN exports no IoAllocateWorkItem/IoQueueWorkItem/
  * IoFreeWorkItem (link probe against the 98 DDK wdm.lib, 2026-10-22). The
@@ -122,6 +125,7 @@ struct UAC_DIR {
     UAC_USB *Usb;
     UacStream *Stream;          /* the stream Usb serves */
     ULONG Channels, Subslot;    /* its device format */
+    ULONG QueueRead, QueueMs;   /* Uac2QueueMs as the open pin read it (19.3) */
     UAC_DIR_FORMATS Formats;
 };
 
@@ -149,6 +153,10 @@ struct UAC_LEVEL {
     BOOLEAN Known[UAC_VOL_SLOTS], MuteKnown[UAC_VOL_SLOTS];
     BOOLEAN VolumeNormal, MuteNormal; /* the extra channel controls set (VolumeExtra, MuteExtra) */
     unsigned int NoRange;       /* extras without a usable RANGE: read and counted, not written */
+    BOOLEAN AboveZero;          /* Uac2VolAboveZero: the whole range offered (section 20) */
+    BOOLEAN Lowered;            /* a control was above the top offered at start: set to it */
+    unsigned int RangeRead, StartKnown;  /* bit n: slot n's RANGE read, CUR read at start */
+    int StartActual[UAC_VOL_SLOTS];      /* volume CUR at start, where StartKnown */
     LONG Gain[UAC_VOL_CHANNELS];  /* Q16 per stream channel, read by the USB worker */
     PIO_WORKITEM Item;          /* preallocated: applies SETs made at raised IRQL */
     LONG Pending, Queued, Work; /* a SET to apply; Item queued; work items not finished */
@@ -173,6 +181,11 @@ struct UAC_LEVEL_DIAG {
     NTSTATUS LastStatus;
     LONG Mute, Level[UAC_VOL_CHANNELS], Gain[UAC_VOL_CHANNELS];
     LONG Actual[UAC_VOL_SLOTS], ActualMute[UAC_VOL_SLOTS];
+    /* Build 25 (section 20), after the fields above: the top the device's
+     * range reaches (KsMax is the top offered), Uac2VolAboveZero in force,
+     * and whether the start lowered a control. */
+    LONG KsTop;
+    ULONG AboveZero, Lowered;
 };
 
 class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
@@ -246,6 +259,11 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
      * refuses it is asked for one subrange, the wLength Linux uses
      * ([linux] sound/usb/mixer.c), and its first subrange is the range. */
     BOOLEAN ReadRange(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
+        if (!ReadRangeOnce(unit, channel, range)) return FALSE;
+        if (channel < UAC_VOL_SLOTS) level.RangeRead |= 1u << channel;
+        return TRUE;
+    }
+    BOOLEAN ReadRangeOnce(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
         UCHAR b[2 + 6 * UAC_VOL_RANGES];
         ULONG got = 0, n;
         RtlZeroMemory(b, sizeof(b));
@@ -322,12 +340,13 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             }
         }
     }
-    /* What an unknown volume is taken as: the top of its range; an extra
-     * channel volume without a RANGE, the most a CUR can say (+128 dB).
-     * Gains also silences that channel while the volume is owned. */
+    /* What an unknown volume is taken as: the top the device's range
+     * reaches (KsTop, above the 0 dB the driver offers, section 20); an
+     * extra channel volume without a RANGE, the most a CUR can say (+128
+     * dB). Gains also silences that channel while the volume is owned. */
     int Assumed(ULONG n) const {
         if (n && (level.NoRange & (1u << (n - 1)))) return 0x7FFF;
-        return (int)(level.Range[n].KsMax / 256);
+        return (int)(level.Range[n].KsTop / 256);
     }
     /* The gains for the device's state: an unknown volume as Assumed, an
      * unknown mute as off. With next (the values about to
@@ -410,7 +429,27 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             m->VolumeUnit = 0; m->VolumeChannels = 0; m->VolumeExtra = 0;
             UacVolSoftRange(&v->Range[0]);
         }
+        /* Uac2VolAboveZero, REG_DWORD 1: the device's whole range is
+         * offered, gain above 0 dB included (build 24 and before); else
+         * the top offered is the highest step at or below 0 dB (section 20). */
+        v->AboveZero = GetDwordRaw(device, L"Uac2VolAboveZero") == 1;
+        if (v->AboveZero)
+            for (n = 0; n < UAC_VOL_SLOTS; n++) v->Range[n].KsMax = v->Range[n].KsTop;
         ReadState();
+        for (n = 0; n < UAC_VOL_SLOTS; n++)
+            if (v->Known[n]) { v->StartKnown |= 1u << n; v->StartActual[n] = v->Actual[n]; }
+        /* A written control whose CUR, read now, is above the top offered
+         * is set to that top, that control alone: a lowering only, nothing
+         * taken over, no other control (a master-mode extra's attenuation
+         * included) touched. A CUR not read is left as it is (section 20). */
+        if (m->VolumeMode != UAC_VOL_NONE && DeviceReady())
+            for (n = 0; n < UAC_VOL_SLOTS; n++)
+                if (VolumeSlot(n, &extra) && !(extra && (v->NoRange & (1u << (n - 1)))) && v->Known[n] &&
+                    v->Actual[n] != UAC_VOL_SILENCE && UacVolToKs(v->Actual[n]) > v->Range[n].KsMax) {
+                    int top = (int)(v->Range[n].KsMax / 256);
+                    if (WriteCur(m->VolumeUnit, 2, n, top)) { v->Actual[n] = top; v->Lowered = TRUE; }
+                    else v->Known[n] = FALSE;   /* may or may not have taken it: Assumed */
+                }
         /* The levels: restored, else the device's own (0 dB in software). */
         for (c = 0; c < v->Channels; c++) {
             n = m->VolumeMode == UAC_VOL_MASTER ? 0 : c + 1;
@@ -568,6 +607,26 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             RecordLevel(levels, mute);
         }
     }
+    /* The render line's volume as found at start, in the stats words
+     * after build 24's (uacusb.h, design 20.5). */
+    void VolumeStats(UAC_USB_STATS *s) const {
+        const UAC_LEVEL *v = &level;
+        s->VolLayout = 25;
+        s->VolUnit = v->Map.VolumeUnit; s->VolMode = v->Map.VolumeMode;
+        s->VolChannels = v->Map.VolumeChannels; s->VolAboveZero = v->AboveZero;
+        s->VolLowered = v->Lowered; s->VolRangeRead = v->RangeRead; s->VolStartKnown = v->StartKnown;
+        for (ULONG n = 0; n < 3; n++) {
+            const UAC_VOL_RANGE *r = &v->Range[n];
+            BOOLEAN read = (v->RangeRead & (1u << n)) != 0;
+            s->VolCount[n] = read ? r->Count : 0;
+            s->VolMin[n] = read ? r->Min[0] : 0;
+            s->VolMax[n] = read && r->Count ? r->Max[r->Count - 1] : 0;
+            s->VolRes[n] = read ? (LONG)(r->KsStep / 256) : 0;
+            s->VolTop[n] = read ? (LONG)(r->KsTop / 256) : 0;
+            s->VolOffered[n] = read ? (LONG)(r->KsMax / 256) : 0;
+            s->VolStartCur[n] = (v->StartKnown & (1u << n)) ? v->StartActual[n] : 0;
+        }
+    }
     void RecordLevel(const LONG *levels, LONG mute) {
         UAC_LEVEL *v = &level;
         UAC_LEVEL_DIAG g;
@@ -580,6 +639,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         g.MuteChannels = v->Map.MuteChannels; g.MuteExtra = v->Map.MuteExtra;
         g.Owned = (v->VolumeOwned ? UAC_LEVEL_VOLUME : 0) | (v->MuteOwned ? UAC_LEVEL_MUTE : 0);
         g.KsMin = KsRange(0)->KsMin; g.KsMax = KsRange(0)->KsMax; g.KsStep = KsRange(0)->KsStep;
+        g.KsTop = KsRange(0)->KsTop; g.AboveZero = v->AboveZero; g.Lowered = v->Lowered;
         g.Change = v->Change; g.Writes = v->Writes; g.Failures = v->Failures; g.LastStatus = v->LastStatus;
         g.Mute = mute;
         for (c = 0; c < v->Channels; c++) g.Level[c] = levels[c];
@@ -772,8 +832,12 @@ private:
                 d->Subslot = d->Formats.Format[i].Subslot;
                 status = UacUsbCreate(w->dev, d->Capture, d->Formats.Format[i].Terminal,
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
-                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d, &d->Usb);
+                    d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d,
+                    d->QueueRead, d->QueueMs, stream->BufferSize(), &d->Usb);
             }
+            /* 19.6: at every RUN, a stream kept from a pause or stop
+             * (Drain without destroy) included. */
+            if (NT_SUCCESS(status) && d->Usb) UacUsbSetRealtime(d->Usb, GetRealtimeRaw(w->device));
             /* The device may have lost its levels in D3 or a stop. */
             if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
             if (NT_SUCCESS(status)) status = UacUsbStart(d->Usb);
@@ -787,6 +851,7 @@ private:
             UacUsbStop(d->Usb);
             UAC_USB_STATS stats;
             UacUsbGetStats(d->Usb, &stats);
+            VolumeStats(&stats);
             if (!removed) RecordStats(device, &stats, d->Capture);
             if (destroy) { UacUsbDestroy(d->Usb); d->Usb = NULL; d->Stream = NULL; }
         }
@@ -1182,9 +1247,14 @@ public:
         KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
         UAC_STREAM_HOOKS hooks = { d, Run, Halt, Close, Notify, Accept };
         d->Attempts++;
+        /* One reading sizes this pin's ring and, at RUN, its queue (19.3).
+         * The gate admits one stream a direction, so nothing else uses
+         * d->Queue* while this one is open. */
+        ULONG queueRead = GetQueueRaw(device), queueMs = UacPlanQueueMs(queueRead);
         NTSTATUS status = removed || pnpBlocked || powerBlocked ? STATUS_DEVICE_NOT_READY :
             UacStream::Create((PMINIPORTWAVECYCLIC)this, &d->Active, format,
-                stream, dma, service, &hooks, device, capture);
+                stream, dma, service, &hooks, device, capture, queueMs);
+        if (NT_SUCCESS(status)) { d->QueueRead = queueRead; d->QueueMs = queueMs; }
         if (NT_SUCCESS(status)) d->Created++;
         if (!removed) {
             Record(device, 30, status);
@@ -1342,7 +1412,10 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
     return ((Topology *)(PMINIPORTTOPOLOGY)r->MajorTarget)->Level(r);
 }
 
-struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1]; };
+/* Name: the product string descriptor as read at start, NameLength 0
+ * when there is none to use (docs/design/uac2.md section 21). */
+struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
+             ULONG NameLength; UCHAR Name[256]; };
 static PDRIVER_DISPATCH PortClsPnp;
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
@@ -1358,7 +1431,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 18;
+    ULONG build = 26;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1450,6 +1523,32 @@ static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size)
     return ok;
 }
 
+/* Uac2QueueMs (docs/design/uac2.md 19.3): a REG_DWORD, or the 4-byte
+ * little-endian REG_BINARY a 9x INF writes; UAC_QUEUE_NONE otherwise. */
+static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value)
+{
+    HANDLE key;
+    UNICODE_STRING u;
+    UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 16];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+    ULONG got = 0, raw = UAC_QUEUE_NONE;
+    Name(&u, value);
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
+            PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &key))) {
+        if (NT_SUCCESS(ZwQueryValueKey(key, &u, KeyValuePartialInformation, info, sizeof(buffer), &got)) &&
+            (info->Type == REG_DWORD || info->Type == REG_BINARY) && info->DataLength == 4)
+            raw = info->Data[0] | ((ULONG)info->Data[1] << 8) | ((ULONG)info->Data[2] << 16) |
+                  ((ULONG)info->Data[3] << 24);
+        ZwClose(key);
+    }
+    return raw;
+}
+
+static ULONG GetQueueRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2QueueMs"); }
+
+/* Uac2Realtime (docs/design/uac2.md 19.6): read the same way, at each RUN. */
+static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Realtime"); }
+
 static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
 {
     struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
@@ -1474,6 +1573,136 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
     if (NT_SUCCESS(s) && (!USBD_SUCCESS(urb.Hdr.Status) || urb.TransferBufferLength != size))
         s = STATUS_DEVICE_DATA_ERROR;
     return s;
+}
+
+/* The INF's name (its Device string; infchk.ps1 checks they agree): what a
+ * device without a usable product string is named, a later pair " N". */
+static const char NameFallback[] = "UAC2 USB audio (experiment)";
+
+/* Windows Vista and later (WDM 6.00) name the audio endpoints after the
+ * devnode's FriendlyName, read when an endpoint arrives (section 21.2):
+ * the name is written there too, the instance key being the parent of
+ * the devnode's Device Parameters key (PLUGPLAY_REGKEY_DEVICE). Earlier
+ * systems take the interfaces' FriendlyName and are left alone here.
+ * Returns the status recorded as Uac2NameDevnode (STATUS_NOT_SUPPORTED
+ * before Vista). */
+static NTSTATUS NameDevnode(PDEVICE_OBJECT fdo, const UAC_WORD *name, ULONG n)
+{
+    EXT *ext = Extension(fdo);
+    HANDLE device, instance;
+    /* KEY_NAME_INFORMATION (ntddk.h; this build's wdm.h has only the class). */
+    struct KeyName { ULONG NameLength; WCHAR Name[1]; };
+    UCHAR buffer[sizeof(KeyName) + 512 * sizeof(WCHAR)];
+    KeyName *info = (KeyName *)buffer;
+    static const WCHAR tail[] = L"\\Device Parameters";
+    const ULONG tailChars = sizeof(tail) / sizeof(WCHAR) - 1;
+    ULONG got = 0, chars, i;
+    NTSTATUS s;
+    if (!IoIsWdmVersionAvailable(6, 0)) return STATUS_NOT_SUPPORTED;
+    s = IoOpenDeviceRegistryKey(ext->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_READ, &device);
+    if (!NT_SUCCESS(s)) return s;
+    s = ZwQueryKey(device, (KEY_INFORMATION_CLASS)3 /* KeyNameInformation, WDK 7.1 wdm.h */, info, sizeof(buffer) - sizeof(WCHAR), &got);
+    ZwClose(device);
+    if (!NT_SUCCESS(s)) return s;
+    chars = info->NameLength / sizeof(WCHAR);
+    if (info->NameLength > sizeof(buffer) - sizeof(KeyName) || chars <= tailChars)
+        return STATUS_OBJECT_NAME_INVALID;
+    for (i = 0; i < tailChars; i++) {
+        WCHAR a = info->Name[chars - tailChars + i], b = tail[i];
+        if (a >= L'a' && a <= L'z') a = (WCHAR)(a - L'a' + L'A');
+        if (b >= L'a' && b <= L'z') b = (WCHAR)(b - L'a' + L'A');
+        if (a != b) return STATUS_OBJECT_NAME_INVALID;
+    }
+    UNICODE_STRING path, value;
+    OBJECT_ATTRIBUTES oa;
+    path.Buffer = info->Name;
+    path.Length = path.MaximumLength = (USHORT)((chars - tailChars) * sizeof(WCHAR));
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    s = ZwOpenKey(&instance, KEY_SET_VALUE, &oa);
+    if (!NT_SUCCESS(s)) return s;
+    Name(&value, L"FriendlyName");
+    s = ZwSetValueKey(instance, &value, 0, REG_SZ, (PVOID)name, (n + 1) * sizeof(WCHAR));
+    ZwClose(instance);
+    return s;
+}
+
+/* The product string (section 21): the device descriptor's iProduct, in
+ * 0x0409 when string descriptor 0 lists it, else its first language (0x0409
+ * when that list cannot be read); each read at most 5 s (UacUsbDescriptor).
+ * Without a usable one, the INF's name, so a name written at an earlier
+ * start does not stay. Uac2NameStatus records the outcome: 0 named, 1 no
+ * iProduct, 2 device descriptor unread, 3 string unread, 4 no printable
+ * name; Uac2Name the name of pair 0. Nothing here fails a start. */
+static void ReadName(PDEVICE_OBJECT fdo)
+{
+    EXT *ext = Extension(fdo);
+    UCHAR device[18], list[64];
+    ULONG got = 0, status = 0, language = 0x0409;
+    UAC_WORD name[UAC_NAME_MAX + 1];
+    ext->NameLength = 0;
+    if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
+        got != sizeof(device) || device[0] != 18 || device[1] != 1) status = 2;
+    else if (!device[15]) status = 1;
+    else {
+        if (NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
+            unsigned int l = UacNameLanguage(list, got);
+            if (l) language = l;
+        }
+        if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
+                                         ext->Name, sizeof(ext->Name), &got))) status = 3;
+        else if (!UacName(ext->Name, got, 0, name, UAC_NAME_MAX)) status = 4;
+        else ext->NameLength = got;
+    }
+    if (!ext->NameLength) {
+        /* The INF's name as a string descriptor, for UacName. */
+        ULONG i, n = sizeof(NameFallback) - 1;
+        ext->Name[0] = (UCHAR)(2 + 2 * n); ext->Name[1] = 3;
+        for (i = 0; i < n; i++) { ext->Name[2 + 2 * i] = (UCHAR)NameFallback[i]; ext->Name[3 + 2 * i] = 0; }
+        ext->NameLength = 2 + 2 * n;
+    }
+    HANDLE key;
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(ext->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
+        UNICODE_STRING u;
+        Name(&u, L"Uac2NameStatus");
+        ZwSetValueKey(key, &u, 0, REG_DWORD, &status, sizeof(status));
+        Name(&u, L"Uac2Name");
+        ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
+        ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
+        NTSTATUS devnode = n ? NameDevnode(fdo, name, n) : STATUS_UNSUCCESSFUL;
+        Name(&u, L"Uac2NameDevnode");
+        ZwSetValueKey(key, &u, 0, REG_DWORD, &devnode, sizeof(devnode));
+        ZwClose(key);
+    }
+}
+
+/* Before PcRegisterSubdevice: the pair's KSCATEGORY_AUDIO interfaces
+ * (Wave and Topology reference strings, as the INF's AddInterface lines)
+ * get the device's name (ReadName's, the INF's when there is none) as
+ * FriendlyName, where the INF wrote its own; the registration is the one
+ * PortCls makes next (IoRegisterDeviceInterface returns the same link). */
+static void NameInterfaces(PDEVICE_OBJECT fdo, ULONG k, PWSTR wave, PWSTR topo)
+{
+    EXT *ext = Extension(fdo);
+    UAC_WORD name[UAC_NAME_MAX + 1];
+    ULONG n;
+    PWSTR refs[2];
+    if (!ext->NameLength) return;
+    n = UacName(ext->Name, ext->NameLength, k, name, UAC_NAME_MAX);
+    if (!n) return;
+    refs[0] = wave; refs[1] = topo;
+    for (ULONG i = 0; i < 2; i++) {
+        UNICODE_STRING ref, link, value;
+        HANDLE key;
+        Name(&ref, refs[i]);
+        link.Buffer = NULL;
+        if (!NT_SUCCESS(IoRegisterDeviceInterface(ext->Pdo, &KSCATEGORY_AUDIO, &ref, &link))) continue;
+        if (NT_SUCCESS(IoOpenDeviceInterfaceRegistryKey(&link, KEY_SET_VALUE, &key))) {
+            Name(&value, L"FriendlyName");
+            ZwSetValueKey(key, &value, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
+            ZwClose(key);
+        }
+        if (link.Buffer) ExFreePool(link.Buffer);
+    }
 }
 
 static int Hex(WCHAR c) {
@@ -1570,6 +1799,7 @@ static NTSTATUS StartPair(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources,
     if (NT_SUCCESS(s)) { s = wave->Init(fdo, irp, (PMINIPORTWAVECYCLIC)w, NULL, resources); Record(fdo, 6, s); }
     if (NT_SUCCESS(s)) { s = PcNewPort(&topo, CLSID_PortTopology); Record(fdo, 7, s); }
     if (NT_SUCCESS(s)) { s = topo->Init(fdo, irp, t, NULL, resources); Record(fdo, 8, s); }
+    if (NT_SUCCESS(s)) NameInterfaces(fdo, k, waveName[k], topoName[k]);
     if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, waveName[k], wave); Record(fdo, 9, s); }
     if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, topoName[k], topo); Record(fdo, 10, s); }
     if (NT_SUCCESS(s) && g->RenderBridge >= 0) {
@@ -1597,6 +1827,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     }
     Wave *w = new(wm) Wave(fdo, ext->Lower, model);
     ext->Miniport = w; /* the adapter/PnP reference: the construction's */
+    ReadName(fdo);
     s = w->Prepare();
     Record(fdo, 13, s);
     if (NT_SUCCESS(s)) s = StartPair(fdo, irp, resources, w, 0);

@@ -86,4 +86,21 @@ typedef struct UAC_CLOCK_PATH {
 } UAC_CLOCK_PATH;
 int UacClockPath(const UAC_DESC *desc, UAC_BYTE terminal,
                  const UAC_BYTE *selections, UAC_CLOCK_PATH *path);
+
+/* The device's name (docs/design/uac2.md section 21). UacNameLanguage:
+ * the language of string descriptor 0's list (USB 2.0 9.6.7) to read the
+ * product string in: 0x0409 when listed, else the first; 0 when the
+ * answer is not a valid list. UacName: a product string descriptor
+ * (bLength, type 3, UTF-16LE) as a display name of at most max characters
+ * (1..UAC_NAME_MAX) in out (room for max + 1, NUL-terminated): control
+ * characters (below U+0020, U+007F to U+009F) read as spaces, surrogates,
+ * U+FEFF, U+FFFE and U+FFFF are left out, runs of spaces become one and
+ * the ends are trimmed; for pair > 0, " <pair + 1>" is appended, the name
+ * cut before it to fit (trailing spaces trimmed again). Returns the
+ * characters written, 0 (out empty) when the descriptor is malformed or
+ * nothing printable is left: the INF's name stands. */
+#define UAC_NAME_MAX 31
+unsigned int UacNameLanguage(const UAC_BYTE *d, unsigned int length);
+unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
+                     UAC_WORD *out, unsigned int max);
 #endif

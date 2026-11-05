@@ -24,6 +24,80 @@ unsigned int UacPlanCapacity(unsigned int maxPacket)
     return (maxPacket & 0x7ff) * (1 + ((maxPacket >> 11) & 3));
 }
 
+unsigned int UacPlanRealtime(unsigned long raw)
+{
+    if (raw == UAC_QUEUE_NONE) return UAC_REALTIME_DEFAULT;
+    return raw != 0 ? 1U : 0U;
+}
+
+unsigned int UacPlanDuty(unsigned __int64 elapsed, unsigned __int64 busy,
+                         unsigned __int64 window, unsigned int demoted,
+                         unsigned int *closed)
+{
+    *closed = 0;
+    if (elapsed < window) {
+        return demoted;
+    }
+    *closed = 1;
+    if (demoted) {
+        return 0;   /* one window demoted at most, then real time again */
+    }
+    if (busy > elapsed) {
+        busy = elapsed;
+    }
+    return busy * 100U >= elapsed * UAC_DUTY_PERCENT ? 1U : 0U;
+}
+
+unsigned __int64 UacPlanCounts(unsigned __int64 hz, unsigned long n,
+                               unsigned long perSecond)
+{
+    unsigned __int64 c = hz * n / perSecond;
+    return c != 0 ? c : 1;
+}
+
+unsigned int UacPlanQueueMs(unsigned long raw)
+{
+    if (raw == UAC_QUEUE_NONE) return UAC_QUEUE_DEFAULT_MS;
+    if (raw < UAC_QUEUE_MIN_MS) return UAC_QUEUE_MIN_MS;
+    if (raw > UAC_QUEUE_MAX_MS) return UAC_QUEUE_MAX_MS;
+    return (unsigned int)raw;
+}
+
+unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int queueMs,
+                          unsigned long bytesPerSecond, unsigned int frameBytes,
+                          unsigned int capacity, unsigned long ringBytes,
+                          unsigned int *packets, unsigned long *spanUs)
+{
+    unsigned int n, shift, ms;
+    unsigned long span, urb, limit;
+    shift = interval ? interval - 1 : 0;
+    if (shift > 15) shift = 15;
+    if (highSpeed) {
+        n = shift < 6 ? 32U >> shift : 0;
+        if (n < 8) n = 8;
+        span = (125UL * n) << shift;
+    } else {
+        n = 4;
+        span = 1000UL * n << shift;
+    }
+    if (packets) *packets = n;
+    if (spanUs) *spanUs = span;
+    queueMs = UacPlanQueueMs(queueMs);
+    limit = ((unsigned long)queueMs * 1000UL + span - 1) / span;
+    if (ringBytes) {
+        /* span at most 32768 ms (bInterval 16): no product below wraps. */
+        ms = (unsigned int)((span + 999) / 1000);
+        urb = bytesPerSecond / 1000 * ms + (bytesPerSecond % 1000 * ms + 999) / 1000;
+        urb += (urb + 7) / 8 + (unsigned long)frameBytes * n;
+        if (capacity && urb > (unsigned long)capacity * n) urb = (unsigned long)capacity * n;
+        if (!urb || urb >= ringBytes) limit = 0;  /* a ring under two URBs */
+        else if ((ringBytes - urb) / urb < limit) limit = (ringBytes - urb) / urb;
+    }
+    if (limit < 2) limit = 2;
+    if (limit > UAC_QUEUE_MAX_URBS) limit = UAC_QUEUE_MAX_URBS;
+    return (unsigned int)limit;
+}
+
 static int Runnable(const UAC_ALT *a, int highSpeed)
 {
     unsigned int sync = UacPlanSync(a);

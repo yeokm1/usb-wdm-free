@@ -53,14 +53,21 @@ class UacStream : public IMiniportWaveCyclicStream, public IDmaChannel {
     PDEVICE_OBJECT cleanupDevice;
     BOOLEAN published;
 
-    UacStream(PUNKNOWN parent, LONG *gate, const UAC_PCM *format, BOOLEAN input)
+    UacStream(PUNKNOWN parent, LONG *gate, const UAC_PCM *format, BOOLEAN input, ULONG queueMs)
         : Capacity(MinCapacity), BlockAlign(format->BlockAlign), BytesPerSecond(format->BytesPerSecond),
           pcm(*format), capture(input),
           refs(1), owner(parent), active(gate), group(NULL), buffer(NULL),
           used(MinCapacity), state(KSSTATE_STOP), filled(0), completed(0), packetErrors(0),
           notifyBytes(format->BytesPerSecond / 100), pendingNotify(0), cleanupWork(NULL), cleanupDevice(NULL), published(FALSE) {
-        /* About 62 ms of the format, whole frames, 16 KiB to 1 MiB. */
+        /* About 62 ms of the format, plus 1.25 times the queue's
+         * milliseconds above 32 (docs/design/uac2.md 19.5: the quarter is
+         * the room UacPlanQueue's bound needs), whole frames, 16 KiB to
+         * 1 MiB. */
         ULONG want = BytesPerSecond / 16;
+        if (queueMs > 32) {
+            ULONG extra = ((queueMs > 128 ? 128 : queueMs) - 32) * 5 / 4; /* at most 120 */
+            want += BytesPerSecond / 1000 * extra + (BytesPerSecond % 1000 * extra + 999) / 1000;
+        }
         if (want < MinCapacity) want = MinCapacity;
         if (want > MaxCapacity) want = MaxCapacity;
         Capacity = want - want % BlockAlign;
@@ -148,7 +155,7 @@ public:
     static NTSTATUS Create(PUNKNOWN parent, LONG *gate, PKSDATAFORMAT format,
         PMINIPORTWAVECYCLICSTREAM *stream, PDMACHANNEL *dma,
         PSERVICEGROUP *service, const UAC_STREAM_HOOKS *callbacks = NULL,
-        PDEVICE_OBJECT cleanupDevice = NULL, BOOLEAN input = FALSE) {
+        PDEVICE_OBJECT cleanupDevice = NULL, BOOLEAN input = FALSE, ULONG queueMs = 32) {
         UAC_PCM pcm;
         if (!stream || !dma || !service) return STATUS_INVALID_PARAMETER;
         *stream = NULL; *dma = NULL; *service = NULL;
@@ -166,7 +173,7 @@ public:
             InterlockedExchange(gate, 0);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        UacStream *s = new(memory) UacStream(parent, gate, &pcm, input);
+        UacStream *s = new(memory) UacStream(parent, gate, &pcm, input, queueMs);
         if (cleanupDevice) {
             s->cleanupWork = IoAllocateWorkItem(cleanupDevice);
             if (!s->cleanupWork) { s->Release(); return STATUS_INSUFFICIENT_RESOURCES; }
@@ -334,7 +341,8 @@ public:
     }
     /* Render: the bytes URBs have taken (PortCls writes from here on, and
      * a URB takes the next bytes when it is submitted, up to the queue's
-     * 16-32 ms before they play). Capture: the bytes written. */
+     * Uac2QueueMs, 32 ms by default, before they play). Capture: the bytes
+     * written. */
     STDMETHODIMP GetPosition(PULONG position) {
         if (!position) return STATUS_INVALID_PARAMETER;
         KIRQL oldIrql; KeAcquireSpinLock(&ringLock, &oldIrql);

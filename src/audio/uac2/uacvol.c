@@ -215,7 +215,20 @@ int UacVolRange(const unsigned char *answer, unsigned int length, UAC_VOL_RANGE 
         if (v.Res[i] > 0 && (!step || v.Res[i] < step)) step = v.Res[i];
     }
     v.KsMin = UacVolToKs(v.Min[0]);
-    v.KsMax = UacVolToKs((int)Top(v.Min[v.Count - 1], v.Max[v.Count - 1], v.Res[v.Count - 1]));
+    v.KsTop = UacVolToKs((int)Top(v.Min[v.Count - 1], v.Max[v.Count - 1], v.Res[v.Count - 1]));
+    v.KsMax = v.KsTop;
+    if (v.KsTop > 0 && v.KsMin <= 0) {
+        /* The highest step at or below 0 dB over the subranges (ascending
+         * and apart, UacCtlRange). A subrange that crosses 0 dB has a RES
+         * (its top is above its MIN). */
+        long best = v.Min[0];
+        for (i = 0; i < v.Count && v.Min[i] <= 0; i++) {
+            long lo = v.Min[i], top = Top(lo, v.Max[i], v.Res[i]);
+            long c = top <= 0 ? top : lo + ((0 - lo) / v.Res[i]) * v.Res[i];
+            if (c > best) best = c;
+        }
+        v.KsMax = best * 256L;
+    }
     v.KsStep = (step ? step : 1) * 256L;
     *out = v;
     return 1;
@@ -228,7 +241,7 @@ void UacVolSoftRange(UAC_VOL_RANGE *out)
     for (i = 0; i < UAC_VOL_RANGES; i++) out->Min[i] = out->Max[i] = out->Res[i] = 0;
     out->Count = 1;
     out->Min[0] = -96 * 256; out->Max[0] = 0; out->Res[0] = 128;
-    out->KsMin = UAC_VOL_SW_MIN; out->KsMax = UAC_VOL_SW_MAX; out->KsStep = UAC_VOL_SW_STEP;
+    out->KsMin = UAC_VOL_SW_MIN; out->KsMax = out->KsTop = UAC_VOL_SW_MAX; out->KsStep = UAC_VOL_SW_STEP;
 }
 
 long UacVolToKs(int value)

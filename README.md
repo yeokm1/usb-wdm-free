@@ -114,14 +114,14 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.7` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.8` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.7). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.8). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.7 is signed with the test certificate 0.1.4 introduced. Trust the
+0.1.8 is signed with the test certificate 0.1.4 introduced. Trust the
 `usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
 thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
 
@@ -163,6 +163,9 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.8** (2026-11-05):
+  - `uac2` 0.1.8.26 pops far less under heavy CPU load (a delay of more than 16 ms in the USB host controller's driver still interrupts the sound): more sound is queued (`Uac2QueueMs`, 32 ms by default) and its worker runs at real-time priority (`Uac2Realtime`). The volume tops out at 0 dB, a likely cause of distortion on some devices (`Uac2VolAboveZero` 1 offers the whole range again). Each device is named by its own USB product name.
+  - `uac2`, `cdcnet` and `usbflop` are also staged on XP x64, and `ax88179` on 2000.
 - **v0.1.7** (2026-11-01):
   - `usbprn` 0.1.0.0, new: USB printers and USB-to-parallel printer cables on 98 SE and ME, as printer ports USB001, USB002 and so on.
 - **v0.1.6** (2026-10-31):

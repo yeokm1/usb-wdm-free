@@ -19,7 +19,9 @@
 #include "uacrate.h"
 #include "uacwatch.h"
 
-#define DATA_SLOTS 4
+/* At most UAC_QUEUE_MAX_URBS data URBs (docs/design/uac2.md 19.4); a
+ * stream uses DataSlots of them. */
+#define DATA_SLOTS UAC_QUEUE_MAX_URBS
 #define FEEDBACK_SLOTS 2
 #define SLOTS (DATA_SLOTS + FEEDBACK_SLOTS)
 #define FEEDBACK_PACKETS 8
@@ -58,6 +60,8 @@ struct UAC_USB {
     UAC_DEV *Dev;
     UAC_ALT Alt;
     ULONG Capture, Rate, FrameBytes, Capacity, FeedbackBytes, SlotBytes, DataPackets;
+    ULONG DataSlots, TransferUs, QueueRead, QueueMs; /* 19.4, fixed at Create */
+    ULONG RealtimeRead, Realtime;   /* 19.6, set before Start */
     UAC_CLOCK_PATH Path;    /* the claimed clock path while ClockHeld */
     BOOLEAN Feedback, ClockHeld;
     USBD_PIPE_HANDLE DataPipe, FeedbackPipe;
@@ -438,6 +442,25 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
 
 int UacUsbHighSpeed(UAC_DEV *d) { return d && d->HighSpeed; }
 
+NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
+                          PVOID buffer, USHORT size, ULONG *got)
+{
+    struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
+    NTSTATUS status;
+    *got = 0;
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
+    urb.TransferBufferLength = size;
+    urb.TransferBuffer = buffer;
+    urb.DescriptorType = type;
+    urb.Index = index;
+    urb.LanguageId = language;
+    status = UsbRequest(lower, (PURB)&urb);
+    if (NT_SUCCESS(status)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
+    return status;
+}
+
 NTSTATUS UacUsbClassRequest(UAC_DEV *d, const UCHAR *setup, PVOID bytes, ULONG *length)
 {
     struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST urb;
@@ -729,7 +752,10 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     KeAcquireSpinLock(&s->Lock, &old);
     slot->Status = irp->IoStatus.Status;
     slot->Phase = 2;
-    KeSetEvent(&s->Wake, IO_NO_INCREMENT, FALSE);
+    /* The sound driver's wait increment: on NT the woken worker runs
+     * boosted (at most 15, decaying) ahead of normal-priority threads
+     * (docs/design/uac2.md 19.6). */
+    KeSetEvent(&s->Wake, IO_SOUND_INCREMENT, FALSE);
     KeReleaseSpinLock(&s->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
@@ -973,12 +999,35 @@ static VOID Worker(PVOID context)
     LONG phase;
     NTSTATUS status;
     LARGE_INTEGER timeout;
+    KPRIORITY basePriority = 0;
+    LARGE_INTEGER hz;
+    ULONGLONG windowStart, busy, runStart, waitStart, now, window, shortWait;
+    unsigned int demoted = 0, closed, next;
+    BOOLEAN realtime;
     /* 98 SE: waiting on a thread object faulted there (usbmidi's stop path,
      * 2026-10-22), so the stop waits for Exited; 2000 and later also wait
      * the thread object so the image cannot unload under it. */
     s->Thread = PsGetCurrentThread();
     if (s->WaitThread) ObReferenceObject(s->Thread);
+    /* 19.6: the refill and resubmit run ahead of every normal-class thread
+     * (a game's included, whatever its priority class), as the user report
+     * of 2026-11-04 asked: lowering the game's priority cured the pops. The
+     * work per wake is bounded (the slots, then a wait), so the worker
+     * never holds the processor. LOW_REALTIME_PRIORITY is the lowest of the
+     * real-time range; 98 SE's NTKERN exports the name (xHCI98 record 13,
+     * row 114), its effect there is read by the legs. */
+    /* The worker's own copy: a RUN that changes s->Realtime later applies
+     * to the next worker, never to this one's priority or fairness. */
+    realtime = s->Realtime ? TRUE : FALSE;
+    if (realtime) {
+        basePriority = KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
+        s->Stats.WorkerPriority = LOW_REALTIME_PRIORITY;
+    }
     KeSetEvent(&s->Ready, IO_NO_INCREMENT, FALSE);
+    windowStart = runStart = (ULONGLONG)KeQueryPerformanceCounter(&hz).QuadPart;
+    window = UacPlanCounts((ULONGLONG)hz.QuadPart, UAC_DUTY_WINDOW_MS, 1000UL);
+    shortWait = UacPlanCounts((ULONGLONG)hz.QuadPart, UAC_DUTY_SHORT_WAIT_US, 1000000UL);
+    busy = 0;
     for (;;) {
         KeClearEvent(&s->Wake);
         /* Feedback first so newly prepared data uses the newest valid rate.
@@ -1017,8 +1066,37 @@ static VOID Worker(PVOID context)
         if (!stop && s->Feedback && UacFeedbackLate(KeQueryInterruptTime(), s->LastFeedbackPacket,
                                                     s->Rate_.FeedbackActive))
             Fail(s, STATUS_IO_TIMEOUT); /* no usable rate for 1 s at start, 200 ms after */
+        /* 19.6's fairness rule (build 23): a stack that completes URBs
+         * inline over and over (nothing delivered, no Fail) leaves Wake
+         * signalled, so the wait below returns at once and a real-time
+         * worker would hold the processor. The time run since the last
+         * wait is counted; a window busy past UAC_DUTY_PERCENT demotes the
+         * worker to its created priority for the next window, where the
+         * normal threads - the one that asks Stop among them - share the
+         * processor with it. It never sleeps: a working stream keeps
+         * refilling. Measured, so no wake racing the wait can hide it. */
+        if (realtime) {
+            now = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
+            busy += now - runStart;
+            next = UacPlanDuty(now - windowStart, busy, window, demoted, &closed);
+            if (closed) { windowStart = now; busy = 0; }
+            if (next != demoted) {
+                (VOID)KeSetPriorityThread(KeGetCurrentThread(),
+                                          next ? basePriority : LOW_REALTIME_PRIORITY);
+                s->Stats.WorkerPriority = next ? (ULONG)basePriority : LOW_REALTIME_PRIORITY;
+                if (next) s->Stats.WorkerThrottles++;
+                demoted = next;
+            }
+        }
         timeout.QuadPart = -1000000; /* watchdog only; events drive PCM */
+        if (realtime) waitStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
         KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &timeout);
+        if (realtime) {
+            runStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
+            /* A wait that returned at once is not idle time (Codex, build
+             * 23): shorter than UAC_DUTY_SHORT_WAIT_US, it counts as busy. */
+            if (runStart - waitStart < shortWait) busy += runStart - waitStart;
+        }
     }
     KeAcquireSpinLock(&s->Lock, &old); s->Stats.Running = 0; KeReleaseSpinLock(&s->Lock, old);
     KeSetEvent(&s->Exited, IO_NO_INCREMENT, FALSE); /* last access to s */
@@ -1080,8 +1158,10 @@ void UacUsbClose(UAC_DEV *d)
 NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels,
     ULONG subslot, ULONG bits, ULONG config, ULONG rate,
     UAC_USB_FILL fill, UAC_USB_CAPTURE captured, UAC_USB_PROGRESS progress,
-    PVOID context, UAC_USB **out)
+    PVOID context, ULONG queueRead, ULONG queueMs, ULONG ringBytes, UAC_USB **out)
 {
+    unsigned int packets;
+    unsigned long span;
     UAC_USB *s;
     unsigned int index;
     const UAC_ALT *a;
@@ -1101,15 +1181,16 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     s->Feedback = !capture && UacPlanSync(a) == 1;
     s->FeedbackBytes = d->HighSpeed ? 4 : 3;
     /* About 4 ms per data URB at High Speed bInterval 1-3 and at Full
-     * Speed (16 ms queued in DATA_SLOTS); 8 ms at bInterval 4 (32 ms), as
-     * High Speed packet counts stay a multiple of 8 (one frame) for the
-     * older stacks. Inside the cyclic buffer uacstream.h allocates (at
-     * least 62 ms); a client shrinking it with SetBufferSize to the queue
-     * or below is not guarded (docs/design/uac2.md 17.4, item 5). */
-    if (d->HighSpeed) {
-        s->DataPackets = 32 >> (a->Interval - 1);
-        if (s->DataPackets < 8) s->DataPackets = 8;
-    } else s->DataPackets = 4;
+     * Speed; 8 ms at bInterval 4, as High Speed packet counts stay a
+     * multiple of 8 (one frame) for the older stacks. As many URBs as
+     * cover Uac2QueueMs, below the client's ring by at least one URB
+     * (docs/design/uac2.md 19.4); a ring shrunk after RUN is not
+     * followed (17.4 item 5). */
+    s->DataSlots = UacPlanQueue(d->HighSpeed, a->Interval, queueMs,
+        (unsigned long)rate * s->FrameBytes, (unsigned int)s->FrameBytes,
+        (unsigned int)s->Capacity, ringBytes, &packets, &span);
+    s->DataPackets = packets; s->TransferUs = span;
+    s->QueueRead = queueRead; s->QueueMs = UacPlanQueueMs(queueMs);
     s->SlotBytes = s->DataPackets * s->Capacity;
     s->Fill = fill; s->Captured = captured; s->Progress = progress; s->CallbackContext = context;
     KeInitializeSpinLock(&s->Lock); KeInitializeMutex(&s->Operation, 0);
@@ -1117,6 +1198,7 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     KeInitializeEvent(&s->Ready, NotificationEvent, FALSE);
     KeInitializeEvent(&s->Exited, NotificationEvent, FALSE);
     s->WaitThread = IoIsWdmVersionAvailable(1, 0x10);
+    s->RealtimeRead = UAC_QUEUE_NONE; s->Realtime = UacPlanRealtime(UAC_QUEUE_NONE);
     KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
     d->Streams++;
     KeReleaseMutex(&d->Lock, FALSE);
@@ -1181,6 +1263,12 @@ static VOID CreateWorker(PVOID context)
     KeSetEvent(&job->Done, IO_NO_INCREMENT, FALSE);
 }
 
+void UacUsbSetRealtime(UAC_USB *s, ULONG raw)
+{
+    if (!s) return;
+    s->RealtimeRead = raw; s->Realtime = UacPlanRealtime(raw);
+}
+
 NTSTATUS UacUsbStart(UAC_USB *s)
 {
     NTSTATUS status;
@@ -1201,6 +1289,9 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     s->Stats.Bits = s->Alt.Bits; s->Stats.Subslot = s->Alt.Subslot;
     s->Stats.Interface = s->Alt.Interface; s->Stats.Alternate = s->Alt.Alternate;
     s->Stats.Sync = UacPlanSync(&s->Alt);
+    s->Stats.QueueRead = s->QueueRead; s->Stats.QueueMs = s->QueueMs;
+    s->Stats.DataTransfers = s->DataSlots; s->Stats.TransferUs = s->TransferUs;
+    s->Stats.RealtimeRead = s->RealtimeRead; s->Stats.Realtime = s->Realtime;
     status = SetClock(s);
     if (!NT_SUCCESS(status)) goto done;
     ReadFeature(s);
@@ -1224,7 +1315,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         slot->Owner = s;
         /* First slots are feedback, hence processed/submitted first. */
         slot->Feedback = i < FEEDBACK_SLOTS;
-        slot->Used = slot->Feedback ? s->Feedback : TRUE;
+        slot->Used = slot->Feedback ? s->Feedback : i < FEEDBACK_SLOTS + s->DataSlots;
         if (!slot->Used) continue;
         slot->Packets = slot->Feedback ? FEEDBACK_PACKETS : s->DataPackets;
         size = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) +

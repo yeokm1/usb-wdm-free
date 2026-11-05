@@ -1916,10 +1916,12 @@ here. "Past full scale" counts the samples that the
 volume in force takes over full scale, which a DAC that clips
 digitally cuts off. With the tone at +12 dB, THD+N after the cut is
 -9.4 dB; at +3 dB it is -20.7 dB. A gain above 0 dB on a full-scale
-signal is distortion at any loudness the amplifier then makes, and
-this device's amplifier stage makes a lot. The cause is not proven on
-the user's unit until its RANGE is read (20.5); it is the one cause
-the descriptors, the symptom and these numbers agree on.
+signal distorts however low the analog volume after it is. This is a
+hypothesis for the user's unit, not a finding. It holds only if that
+unit's RANGE goes above 0 dB, which the next report shows (20.5).
+Packet timing on the user's controller is a separate candidate that
+these legs do not measure. Build 25's change is safe either way: for
+a device whose range tops out at 0 dB it changes nothing.
 
 ### 20.3 The change
 

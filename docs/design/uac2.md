@@ -570,7 +570,8 @@ without a 16-bit stereo alternate is offered its own formats only.
   5.2.5.7). KS `KSPROPERTY_AUDIO_VOLUMELEVEL` is a `LONG` in 1/65536 dB
   with stepping reported by basic support (`ksmedia.h`, `KSPROPSETID_Audio`).
   Conversion is times 256, per channel; the first subrange is used, as
-  `usbaudio2.sys` does.
+  `usbaudio2.sys` does. The top offered is the highest step at or below
+  0 dB (section 20, build 25).
 - **Mute**: Feature Unit Mute Control, one byte, to `KSPROPERTY_AUDIO_MUTE`.
 - Per-channel controls take precedence over the master control where both
   exist (as `usbaudio2.sys`).
@@ -1861,3 +1862,139 @@ disk load.
   between OUT packets, each 60 s play's elapsed time); `Uac2QueueMs` 16,
   32 and 128 read back from the stats; then play, record, ramp and seek
   on XP x64 (and under Windows' EHCI there) and on a 32-bit system.
+
+## 20. No gain above 0 dB: the top of the volume range (build 25, 2026-11-05)
+
+### 20.1 The report
+
+A user on Windows XP x64 SP2, xHCI98 3.4.0.0 on a Fresco FL1100, `uac2`
+build 24: a headphone dongle with a CX31993 DAC and a MAX97220 headphone
+amplifier (`3302:12C3`, "USB Audio") sounds distorted, even at a low
+volume, and badly at the maximum. A plain CX31993 dongle on the same
+system is fine. XHCITR's report holds the dongle's descriptors
+(`src/audio/uac2/testdata/cx31993m`): Feature Unit `0x10` has volume on
+each channel and nothing on the master (no mute), an Extension Unit
+(`wExtensionCode` `0x0BDA`) sits between it and the headphones, and the
+one playback interface is ADAPTIVE at 16, 24 and 32 bits. The volume
+RANGE is a control answer, not a descriptor, and the report does not
+have it.
+
+### 20.2 What the driver did
+
+Up to build 24 the volume node's KS range was the device's RANGE as
+read (section 5.3, times 256), up to the highest step the device
+reaches. A device that lists gain above 0 dB (a RANGE MAX above 0) was
+offered that gain and set to it.
+
+What Windows XP does with that range was measured on the emulator (XP
+x64, `uacemu.py --profile cx31993m`, a 440 Hz tone at -1 dBFS from
+`UACWAV`, the mixer set through the mixer API as the Volume Control
+sets it). The mixer's slider maps to the KS range from its top:
+level = MAX + 20 log10(v / 65535) x W dB, snapped to a step, with W
+= 1 for the ranges of 60 and 66 dB measured and (MAX - MIN) / 96 for
+those of 127 and 139 dB. With -96..0 dB, 32768
+gave -6 dB. With -127..+12 dB, 32768 gave +3 dB, 6554 gave -17 dB, and
+the device's own 0 dB read back as 25240 (38 %). So on such a device
+the top 62 % of the slider is gain:
+
+| Range (simulated) | Build | Slider 100 % | 50 % | 10 % | Tone samples past full scale (100 % / 50 % / 10 %) |
+|---|---|---|---|---|---|
+| -127..+12 dB, 1 dB | 24 | +12 dB | +3 dB | -17 dB | 82 % / 42 % / 0 |
+| -60..+6 dB, 0.5 dB | 24 | +6 dB | 0 dB | -14 dB | 62 % / 0 / 0 |
+| -127..0 dB, 1 dB | 24 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+| -127..+12 dB | 25 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+| -60..+6 dB | 25 | 0 dB | -6 dB | -20 dB | 0 / 0 / 0 |
+| -127..0 dB | 25 | 0 dB | -8 dB | -26 dB | 0 / 0 / 0 |
+
+The PCM the driver sent was clean in every row: THD+N -90.5 dB at -1
+dBFS, alternate 1 (16-bit), 48 kHz, 24-byte packets in every
+microframe. That rules out the adaptive packet sizes and the sample
+packing at that format. "Past full scale" counts the samples that the
+volume in force takes over full scale, which a DAC that clips
+digitally cuts off. With the tone at +12 dB, THD+N after the cut is
+-9.4 dB; at +3 dB it is -20.7 dB. A gain above 0 dB on a full-scale
+signal is distortion at any loudness the amplifier then makes, and
+this device's amplifier stage makes a lot. The cause is not proven on
+the user's unit until its RANGE is read (20.5); it is the one cause
+the descriptors, the symptom and these numbers agree on.
+
+### 20.3 The change
+
+- **The top offered is 0 dB.** `UacVolRange` keeps the device's
+  highest step as `KsTop`, and sets `KsMax`, the top the KS node
+  reports and the driver writes, to the highest step at or below 0 dB
+  across the subranges. Where no step is at or below 0 dB (a range
+  that starts above it), `KsMax` stays `KsTop`. Every level is clamped
+  to `KsMax` (`UacVolFromKs`), so a SET, a restored `Uac2Level` or the
+  0 dB a master-mode extra channel is normalized to never writes gain.
+  For a device whose range tops out at or below 0 dB nothing changes.
+- **A device left above it is lowered at start.** If a controlled
+  channel's CUR at start is above `KsMax`, or cannot be read while its
+  range reaches above `KsMax`, the driver takes the volume over and
+  writes the level in force: the device's own, clamped to `KsMax`.
+  Until build 24 the device kept its own setting until the first SET
+  (section 5.3). It still does wherever that setting is inside the
+  range offered.
+- **The unknown is assumed at the device's top.** Where a CUR is not
+  known, the software gain takes the device to be at `KsTop`, not
+  `KsMax`, so it is never louder than asked (`Assumed`).
+- **`Uac2VolAboveZero`** in the driver key (`REG_DWORD`, or 4-byte
+  `REG_BINARY` on 9x, read as `Uac2QueueMs` is). 1 offers the whole
+  range again (`KsMax` = `KsTop`), gain included; anything else, 0 by
+  default, tops it at 0 dB. It is read when the device starts. Every
+  install section writes 0 no-clobber, next to `Uac2QueueMs` and
+  `Uac2Realtime` (`[Queue9x]`, `[QueueNT]`), so the setting is visible
+  and an update keeps a user's 1.
+
+Linux's PulseAudio is commonly configured to treat a mixer's 0 dB as
+100 % and the steps above it as over-amplification. That is the same
+policy, but it is not a source for this change; the change rests on the
+measurements above.
+
+### 20.4 What is not changed
+
+The RANGE requests, the channel/master choice (sections 5.3 and 15),
+software volume, mute and the streaming path. The Extension Unit stays
+a pass-through node (section 4.1). Its one control on this device
+(enable) is read-only, so there is nothing to set.
+
+### 20.5 What the driver records
+
+- `Uac2VolMap` (written at each level change) gains `KsTop`, then
+  `AboveZero` (the option in force) and `Lowered` (1 when the start
+  took the volume over to lower it), after the existing fields.
+  `KsMax` there is now the top offered.
+- `Uac2UsbStats` / `Uac2UsbStatsIn` (written at each stream stop) grow
+  from 65 to 88 words, append-only. Word 65, `VolLayout`, is 25 when
+  the words after it are filled. Then come `VolUnit`, `VolMode` (0
+  software, 1 master, 2 per channel), `VolChannels`, `VolAboveZero`,
+  `VolLowered`, `VolRangeRead` and `VolStartKnown` (bit n: slot n's
+  RANGE was read / its CUR was read at start; slot 0 is the master, 1
+  and 2 the logical channels). Then, three words each for slots 0, 1
+  and 2: `VolCount` (subranges), `VolMin` (first MIN, silence read as
+  the next step), `VolMax` (last MAX), `VolRes` (smallest RES),
+  `VolTop`, `VolOffered`, and `VolStartCur` (CUR at start), all in
+  1/256 dB, signed. So the next report from a device shows its RANGE
+  and its level at plug-in.
+
+### 20.6 Tests
+
+- `voltest` (host): ranges of -127..+12, -60..+6, -16.5..+5.5 (no step
+  at 0 dB: the top is -0.5 dB), +1..+6 dB (nothing at or below 0: the
+  whole range) and two subranges either side of 0 dB. `KsTop` and
+  `KsMax` for each. A sweep over every level checks that the answer is
+  never above `KsMax` and is the brute-force nearest step. The same
+  sweep with `KsMax` = `KsTop` (the `Uac2VolAboveZero` case) reproduces
+  build 24. Existing vectors whose range reached above 0 dB now expect
+  0 dB at the top.
+- `infchk` (host): `Uac2VolAboveZero` is written once, no-clobber, at
+  0, in every install section of both INFs. Six more mutations are
+  refused per INF.
+- `uacsimtest` (host): the `cx31993m` profile through the driver's
+  parser (three adaptive alternates, 248/372/496 bytes), its volume
+  map (per channel on unit `0x10`, no mute, output `0x0F` across the
+  Extension Unit, headphones), and the simulator's rendering and
+  over-full-scale count through that unit.
+- Emulator legs on XP x64 under xHCI98 (20.2's table; the plug-in
+  lowering, `Uac2VolAboveZero` = 1 and devices whose range tops at
+  0 dB unchanged: `docs/testing/2026-11-05-uac2-gain.md`).

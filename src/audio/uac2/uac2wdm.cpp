@@ -71,6 +71,7 @@ static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN captur
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
+static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value);
 static ULONG GetQueueRaw(PDEVICE_OBJECT fdo);
 static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo);
 #ifndef _WIN64
@@ -152,6 +153,10 @@ struct UAC_LEVEL {
     BOOLEAN Known[UAC_VOL_SLOTS], MuteKnown[UAC_VOL_SLOTS];
     BOOLEAN VolumeNormal, MuteNormal; /* the extra channel controls set (VolumeExtra, MuteExtra) */
     unsigned int NoRange;       /* extras without a usable RANGE: read and counted, not written */
+    BOOLEAN AboveZero;          /* Uac2VolAboveZero: the whole range offered (section 20) */
+    BOOLEAN Lowered;            /* taken over at start: the device was above the top offered */
+    unsigned int RangeRead, StartKnown;  /* bit n: slot n's RANGE read, CUR read at start */
+    int StartActual[UAC_VOL_SLOTS];      /* volume CUR at start, where StartKnown */
     LONG Gain[UAC_VOL_CHANNELS];  /* Q16 per stream channel, read by the USB worker */
     PIO_WORKITEM Item;          /* preallocated: applies SETs made at raised IRQL */
     LONG Pending, Queued, Work; /* a SET to apply; Item queued; work items not finished */
@@ -176,6 +181,11 @@ struct UAC_LEVEL_DIAG {
     NTSTATUS LastStatus;
     LONG Mute, Level[UAC_VOL_CHANNELS], Gain[UAC_VOL_CHANNELS];
     LONG Actual[UAC_VOL_SLOTS], ActualMute[UAC_VOL_SLOTS];
+    /* Build 25 (section 20), after the fields above: the top the device's
+     * range reaches (KsMax is the top offered), Uac2VolAboveZero in force,
+     * and whether the start took the volume over to lower it. */
+    LONG KsTop;
+    ULONG AboveZero, Lowered;
 };
 
 class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
@@ -249,6 +259,11 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
      * refuses it is asked for one subrange, the wLength Linux uses
      * ([linux] sound/usb/mixer.c), and its first subrange is the range. */
     BOOLEAN ReadRange(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
+        if (!ReadRangeOnce(unit, channel, range)) return FALSE;
+        if (channel < UAC_VOL_SLOTS) level.RangeRead |= 1u << channel;
+        return TRUE;
+    }
+    BOOLEAN ReadRangeOnce(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
         UCHAR b[2 + 6 * UAC_VOL_RANGES];
         ULONG got = 0, n;
         RtlZeroMemory(b, sizeof(b));
@@ -325,12 +340,13 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             }
         }
     }
-    /* What an unknown volume is taken as: the top of its range; an extra
-     * channel volume without a RANGE, the most a CUR can say (+128 dB).
-     * Gains also silences that channel while the volume is owned. */
+    /* What an unknown volume is taken as: the top the device's range
+     * reaches (KsTop, above the 0 dB the driver offers, section 20); an
+     * extra channel volume without a RANGE, the most a CUR can say (+128
+     * dB). Gains also silences that channel while the volume is owned. */
     int Assumed(ULONG n) const {
         if (n && (level.NoRange & (1u << (n - 1)))) return 0x7FFF;
-        return (int)(level.Range[n].KsMax / 256);
+        return (int)(level.Range[n].KsTop / 256);
     }
     /* The gains for the device's state: an unknown volume as Assumed, an
      * unknown mute as off. With next (the values about to
@@ -413,7 +429,15 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             m->VolumeUnit = 0; m->VolumeChannels = 0; m->VolumeExtra = 0;
             UacVolSoftRange(&v->Range[0]);
         }
+        /* Uac2VolAboveZero, REG_DWORD 1: the device's whole range is
+         * offered, gain above 0 dB included (build 24 and before); else
+         * the top offered is the highest step at or below 0 dB (section 20). */
+        v->AboveZero = GetDwordRaw(device, L"Uac2VolAboveZero") == 1;
+        if (v->AboveZero)
+            for (n = 0; n < UAC_VOL_SLOTS; n++) v->Range[n].KsMax = v->Range[n].KsTop;
         ReadState();
+        for (n = 0; n < UAC_VOL_SLOTS; n++)
+            if (v->Known[n]) { v->StartKnown |= 1u << n; v->StartActual[n] = v->Actual[n]; }
         /* The levels: restored, else the device's own (0 dB in software). */
         for (c = 0; c < v->Channels; c++) {
             n = m->VolumeMode == UAC_VOL_MASTER ? 0 : c + 1;
@@ -436,6 +460,19 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         }
         for (c = 0; c < v->Channels; c++)
             v->Level[c] = UacVolToKs(UacVolFromKs(v->Level[c], KsRange(c)));
+        /* A volume CUR above the top offered, or unknown under a range that
+         * reaches above it: the driver takes the volume over, and Prepare's
+         * ApplyLocked writes the levels above (the device's own, clamped to
+         * that top), so the device never stays at a gain the KS range
+         * cannot show (section 20). */
+        if (m->VolumeMode != UAC_VOL_NONE && !v->VolumeOwned)
+            for (n = 0; n < UAC_VOL_SLOTS; n++)
+                if (VolumeSlot(n, &extra) && !(extra && (v->NoRange & (1u << (n - 1)))) &&
+                    (v->Known[n] ? UacVolToKs(v->Actual[n]) > v->Range[n].KsMax
+                                 : v->Range[n].KsTop > v->Range[n].KsMax)) {
+                    v->VolumeOwned = v->VolumeDirty = TRUE;
+                    v->Lowered = TRUE;
+                }
         v->Present = TRUE;
     }
     BOOLEAN DeviceReady() const { return dev && !removed && !pnpBlocked && !powerBlocked; }
@@ -571,6 +608,26 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
             RecordLevel(levels, mute);
         }
     }
+    /* The render line's volume as found at start, in the stats words
+     * after build 24's (uacusb.h, design 20.5). */
+    void VolumeStats(UAC_USB_STATS *s) const {
+        const UAC_LEVEL *v = &level;
+        s->VolLayout = 25;
+        s->VolUnit = v->Map.VolumeUnit; s->VolMode = v->Map.VolumeMode;
+        s->VolChannels = v->Map.VolumeChannels; s->VolAboveZero = v->AboveZero;
+        s->VolLowered = v->Lowered; s->VolRangeRead = v->RangeRead; s->VolStartKnown = v->StartKnown;
+        for (ULONG n = 0; n < 3; n++) {
+            const UAC_VOL_RANGE *r = &v->Range[n];
+            BOOLEAN read = (v->RangeRead & (1u << n)) != 0;
+            s->VolCount[n] = read ? r->Count : 0;
+            s->VolMin[n] = read ? r->Min[0] : 0;
+            s->VolMax[n] = read && r->Count ? r->Max[r->Count - 1] : 0;
+            s->VolRes[n] = read ? (LONG)(r->KsStep / 256) : 0;
+            s->VolTop[n] = read ? (LONG)(r->KsTop / 256) : 0;
+            s->VolOffered[n] = read ? (LONG)(r->KsMax / 256) : 0;
+            s->VolStartCur[n] = (v->StartKnown & (1u << n)) ? v->StartActual[n] : 0;
+        }
+    }
     void RecordLevel(const LONG *levels, LONG mute) {
         UAC_LEVEL *v = &level;
         UAC_LEVEL_DIAG g;
@@ -583,6 +640,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         g.MuteChannels = v->Map.MuteChannels; g.MuteExtra = v->Map.MuteExtra;
         g.Owned = (v->VolumeOwned ? UAC_LEVEL_VOLUME : 0) | (v->MuteOwned ? UAC_LEVEL_MUTE : 0);
         g.KsMin = KsRange(0)->KsMin; g.KsMax = KsRange(0)->KsMax; g.KsStep = KsRange(0)->KsStep;
+        g.KsTop = KsRange(0)->KsTop; g.AboveZero = v->AboveZero; g.Lowered = v->Lowered;
         g.Change = v->Change; g.Writes = v->Writes; g.Failures = v->Failures; g.LastStatus = v->LastStatus;
         g.Mute = mute;
         for (c = 0; c < v->Channels; c++) g.Level[c] = levels[c];
@@ -794,6 +852,7 @@ private:
             UacUsbStop(d->Usb);
             UAC_USB_STATS stats;
             UacUsbGetStats(d->Usb, &stats);
+            VolumeStats(&stats);
             if (!removed) RecordStats(device, &stats, d->Capture);
             if (destroy) { UacUsbDestroy(d->Usb); d->Usb = NULL; d->Stream = NULL; }
         }
@@ -1370,7 +1429,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 24;
+    ULONG build = 25;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));

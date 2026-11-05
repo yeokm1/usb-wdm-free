@@ -38,6 +38,13 @@ function AddRegOf($map, [string]$section) {
 }
 
 function Assert-Queue([string]$Text) {
+    Assert-Value $Text 'uac2queuems' "$default" $bytes
+    Assert-Value $Text 'uac2volabovezero' '0' '00,00,00,00'
+}
+
+# One value, written once in every install section: REG_DWORD no-clobber
+# $dword in the NT sections, binary no-clobber $binary in [UAC2].
+function Assert-Value([string]$Text, [string]$value, [string]$dword, [string]$binary) {
     $map = Sections $Text
     $want = @{ 'uac2' = 'binary'; 'uac2.nt' = 'dword'; 'uac2xp.nt' = 'dword'; 'uac2.ntamd64' = 'dword' }
     foreach ($section in $want.Keys) {
@@ -45,17 +52,17 @@ function Assert-Queue([string]$Text) {
         foreach ($reg in (AddRegOf $map $section)) {
             $r = $map[$reg]
             if (-not $r) { throw "[$section] names a missing AddReg section [$reg]" }
-            $lines += @($r | Where-Object { $_ -match '^hkr\s*,\s*,\s*uac2queuems\s*,' })
+            $lines += @($r | Where-Object { $_ -match "^hkr\s*,\s*,\s*$value\s*," })
         }
-        if ($lines.Count -ne 1) { throw "[$section] writes Uac2QueueMs $($lines.Count) times" }
+        if ($lines.Count -ne 1) { throw "[$section] writes $value $($lines.Count) times" }
         $f = ($lines[0] -split ',' | ForEach-Object { $_.Trim() })
         if ($want[$section] -eq 'dword') {
-            if ($f.Count -ne 5 -or $f[3] -ne '0x00010003' -or $f[4] -ne "$default") {
-                throw "[$section]: Uac2QueueMs is not REG_DWORD no-clobber $default ($($lines[0]))"
+            if ($f.Count -ne 5 -or $f[3] -ne '0x00010003' -or $f[4] -ne $dword) {
+                throw "[$section]: $value is not REG_DWORD no-clobber $dword ($($lines[0]))"
             }
         } else {
-            if ($f.Count -ne 8 -or $f[3] -ne '0x00000003' -or (($f[4..7] -join ',').ToLowerInvariant()) -ne $bytes) {
-                throw "[$section]: Uac2QueueMs is not binary no-clobber $bytes ($($lines[0]))"
+            if ($f.Count -ne 8 -or $f[3] -ne '0x00000003' -or (($f[4..7] -join ',').ToLowerInvariant()) -ne $binary) {
+                throw "[$section]: $value is not binary no-clobber $binary ($($lines[0]))"
             }
         }
     }
@@ -73,6 +80,12 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
         '9x missing'      = $t.Replace('AddReg=Loader,AudioSupport,Queue9x', 'AddReg=Loader,AudioSupport')
         'XP missing'      = $t.Replace("[UAC2XP.NT]`r`nInclude=ks.inf,wdmaudio.inf`r`nNeeds=KS.Registration,WDMAUDIO.Registration.NT`r`nCopyFiles=Driver.Copy.NT`r`nAddReg=AudioSupport,QueueNT", "[UAC2XP.NT]`r`nInclude=ks.inf,wdmaudio.inf`r`nNeeds=KS.Registration,WDMAUDIO.Registration.NT`r`nCopyFiles=Driver.Copy.NT`r`nAddReg=AudioSupport")
         'twice'           = $t.Replace('[QueueNT]', "[QueueNT]`r`nHKR,,Uac2QueueMs,0x00010003,32")
+        'AZ NT clobbers'  = $t.Replace('HKR,,Uac2VolAboveZero,0x00010003,0', 'HKR,,Uac2VolAboveZero,0x00010001,0')
+        'AZ NT on'        = $t.Replace('HKR,,Uac2VolAboveZero,0x00010003,0', 'HKR,,Uac2VolAboveZero,0x00010003,1')
+        'AZ 9x clobbers'  = $t.Replace('HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00', 'HKR,,Uac2VolAboveZero,0x00000001,00,00,00,00')
+        'AZ 9x on'        = $t.Replace('HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00', 'HKR,,Uac2VolAboveZero,0x00000003,01,00,00,00')
+        'AZ NT missing'   = $t.Replace("HKR,,Uac2VolAboveZero,0x00010003,0`r`n", '')
+        'AZ twice'        = $t.Replace('[Queue9x]', "[Queue9x]`r`nHKR,,Uac2VolAboveZero,0x00000003,00,00,00,00")
     }
     foreach ($k in $bad.Keys) {
         if ($bad[$k] -ceq $t) { throw "${inf}: mutation did not change the text: $k" }
@@ -82,4 +95,4 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
         $n++
     }
 }
-Write-Output "PASS infchk: Uac2QueueMs at $default in every install section of both INFs; $n mutations refused"
+Write-Output "PASS infchk: Uac2QueueMs at $default and Uac2VolAboveZero at 0 in every install section of both INFs; $n mutations refused"

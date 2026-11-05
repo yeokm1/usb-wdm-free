@@ -192,6 +192,50 @@ static int Nearest(long level, const UAC_VOL_RANGE *r)
     return best;
 }
 
+/* Ranges reaching above 0 dB (docs/design/uac2.md section 20): the top
+ * offered is the highest step at or below 0 dB, KsTop the device's own. */
+static void AboveZero(void)
+{
+    unsigned char b[64];
+    UAC_VOL_RANGE r;
+    static const int plus12[3] = { -0x7f00, 0x0c00, 0x100 };     /* -127..+12 dB, 1 dB */
+    static const int plus6[3] = { -0x3c00, 0x0600, 0x80 };       /* -60..+6 dB, 0.5 dB */
+    static const int offGrid[3] = { -0x1080, 0x0580, 0x100 };    /* -16.5..+5.5 dB: no 0 dB step */
+    static const int above[3] = { 0x0100, 0x0600, 0x100 };       /* +1..+6 dB: no step at or below 0 */
+    static const int split[6] = { -0x2000, -0x1000, 0x100, 0x0100, 0x0600, 0x100 };
+    static const int *all[5] = { plus12, plus6, offGrid, above, split };
+    static const unsigned int counts[5] = { 1, 1, 1, 1, 2 };
+    long level;
+    unsigned int n, k;
+    n = Answer(b, 1, plus12);
+    CHECK(UacVolRange(b, n, &r) && r.KsMin == -127L * 65536L && r.KsTop == 12L * 65536L && r.KsMax == 0);
+    CHECK(UacVolFromKs(12L * 65536L, &r) == 0 && UacVolFromKs(-6L * 65536L, &r) == -0x600);
+    n = Answer(b, 1, plus6);
+    CHECK(UacVolRange(b, n, &r) && r.KsTop == 6L * 65536L && r.KsMax == 0);
+    n = Answer(b, 1, offGrid);
+    CHECK(UacVolRange(b, n, &r) && r.KsTop == 0x580L * 256L && r.KsMax == -0x80L * 256L);
+    CHECK(UacVolFromKs(0, &r) == -0x80 && UacVolFromKs(0x580L * 256L, &r) == -0x80);
+    n = Answer(b, 1, above);
+    CHECK(UacVolRange(b, n, &r) && r.KsMin == 0x100L * 256L && r.KsMax == r.KsTop &&
+          r.KsTop == 0x600L * 256L);
+    n = Answer(b, 2, split);
+    CHECK(UacVolRange(b, n, &r) && r.KsTop == 0x600L * 256L && r.KsMax == -0x1000L * 256L);
+    CHECK(UacVolFromKs(0, &r) == -0x1000 && UacVolFromKs(0x300L * 256L, &r) == -0x1000);
+    /* Never above the top offered, and the nearest step at or below it. */
+    for (k = 0; k < 5; k++) {
+        n = Answer(b, counts[k], all[k]);
+        CHECK(UacVolRange(b, n, &r));
+        for (level = -0x8000L * 256L; level <= 0x0d00L * 256L; level += 5003L) {
+            int got = UacVolFromKs(level, &r);
+            CHECK(got * 256L <= r.KsMax && got == Nearest(level, &r));
+        }
+        r.KsMax = r.KsTop;                         /* the whole range, as Uac2VolAboveZero */
+        for (level = -0x8000L * 256L; level <= 0x0d00L * 256L; level += 5003L)
+            CHECK(UacVolFromKs(level, &r) == Nearest(level, &r));
+        CHECK(UacVolFromKs(0x7fffL * 256L, &r) * 256L == r.KsTop);
+    }
+}
+
 static void Ranges(void)
 {
     unsigned char b[64];
@@ -208,7 +252,7 @@ static void Ranges(void)
 
     n = Answer(b, 1, x);
     CHECK(UacVolRange(b, n, &r) && r.Count == 1 && r.KsMin == -96L * 65536L && r.KsMax == 0 &&
-          r.KsStep == 65536L);
+          r.KsTop == 0 && r.KsStep == 65536L);
     CHECK(UacVolFromKs(-10L * 65536L, &r) == -0x0a00);
     CHECK(UacVolFromKs(-10L * 65536L - 32767L, &r) == -0x0a00);   /* -10.49998 dB: -10 */
     CHECK(UacVolFromKs(-10L * 65536L - 32768L, &r) == -0x0b00);   /* -10.5 dB, a tie: the lower */
@@ -227,8 +271,10 @@ static void Ranges(void)
         CHECK(!UacVolRange(b, n, &r));                     /* the next step is past MAX */
     }
     n = Answer(b, 2, two);
+    /* The second subrange reaches +6 dB: offered up to 0 dB (section 20). */
     CHECK(UacVolRange(b, n, &r) && r.Count == 2 && r.KsMin == -0x4000L * 256L &&
-          r.KsMax == 0x600L * 256L && r.KsStep == 0x80L * 256L);
+          r.KsTop == 0x600L * 256L && r.KsMax == 0 && r.KsStep == 0x80L * 256L);
+    CHECK(UacVolFromKs(0x600L * 256L, &r) == 0 && UacVolFromKs(1, &r) == 0);
     CHECK(UacVolFromKs(-0x1900L * 256L, &r) == -0x2000);  /* in the gap, nearer the first */
     CHECK(UacVolFromKs(-0x1700L * 256L, &r) == -0x1000);  /* nearer the second */
     CHECK(UacVolFromKs(-0x1800L * 256L, &r) == -0x2000);  /* gap middle: the lower */
@@ -236,7 +282,10 @@ static void Ranges(void)
     {
         static const int odd[3] = { 0, 10, 6 };
         n = Answer(b, 1, odd);
-        CHECK(UacVolRange(b, n, &r) && r.KsMax == 6 * 256L);
+        CHECK(UacVolRange(b, n, &r) && r.KsTop == 6 * 256L && r.KsMax == 0);
+        CHECK(UacVolFromKs(10 * 256L, &r) == 0 && UacVolFromKs(100 * 256L, &r) == 0);
+        CHECK(UacVolFromKs(2 * 256L, &r) == 0 && UacVolFromKs(4 * 256L, &r) == 0);
+        r.KsMax = r.KsTop;                             /* Uac2VolAboveZero: the whole range */
         CHECK(UacVolFromKs(10 * 256L, &r) == 6 && UacVolFromKs(100 * 256L, &r) == 6);
         CHECK(UacVolFromKs(2 * 256L, &r) == 0 && UacVolFromKs(4 * 256L, &r) == 6);
         for (level = -256L; level <= 12 * 256L; level += 17L)
@@ -264,8 +313,9 @@ static void Ranges(void)
     CHECK(UacVolRange(b, n, &r));
     for (v = -32767; v <= 32767; v++) {
         CHECK(UacVolToKs(v) == (long)v * 256L);
-        CHECK(UacVolFromKs(UacVolToKs(v), &r) == v);
+        CHECK(UacVolFromKs(UacVolToKs(v), &r) == (v > 0 ? 0 : v));
     }
+    CHECK(r.KsTop == 32767L * 256L && r.KsMax == 0);
     CHECK(UacVolToKs(-32768) == -32767L * 256L);
     /* Against brute force on stepped and split ranges. */
     n = Answer(b, 2, two);
@@ -276,8 +326,9 @@ static void Ranges(void)
     CHECK(UacVolRange(b, n, &r));
     for (level = -0x6100L * 256L; level <= 0x100L * 256L; level += 4093L)
         CHECK(UacVolFromKs(level, &r) == Nearest(level, &r));
+    AboveZero();
     UacVolSoftRange(&r);
-    CHECK(r.KsMin == UAC_VOL_SW_MIN && r.KsMax == 0 && r.KsStep == UAC_VOL_SW_STEP);
+    CHECK(r.KsMin == UAC_VOL_SW_MIN && r.KsMax == 0 && r.KsTop == 0 && r.KsStep == UAC_VOL_SW_STEP);
     CHECK(UacVolFromKs(-3L * 65536L - 1, &r) == -3 * 256);
     CHECK(UacVolFromKs(-3L * 65536L - 16384L, &r) == -3 * 256 - 128);
     for (level = -97L * 65536L; level <= 65536L; level += 2111L)

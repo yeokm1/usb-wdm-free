@@ -51,6 +51,19 @@ typedef struct UAC_USB_STATS {
      * UAC_DUTY_PERCENT (19.6, build 23): 0 in normal running. While
      * demoted, WorkerPriority reads the priority it was created at. */
     ULONG WorkerThrottles;
+    /* Build 25 (docs/design/uac2.md 20.5), words 65 to 87, written by
+     * uac2wdm.cpp (the transport leaves them 0): the render line's
+     * volume as the driver found it at start. VolLayout is 25 when they
+     * are filled. Slots 0 master, 1 and 2 logical channels 1 and 2; bit
+     * n of VolRangeRead / VolStartKnown: slot n's RANGE was read / its
+     * CUR was read at start. VolMin is the first subrange's MIN (the
+     * silence value read as its next step), VolMax the last's MAX, VolRes
+     * the smallest RES, VolTop the highest step, VolOffered the top the
+     * driver offers, all 1/256 dB. */
+    ULONG VolLayout, VolUnit, VolMode, VolChannels, VolAboveZero, VolLowered;
+    ULONG VolRangeRead, VolStartKnown;
+    ULONG VolCount[3];
+    LONG VolMin[3], VolMax[3], VolRes[3], VolTop[3], VolOffered[3], VolStartCur[3];
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16

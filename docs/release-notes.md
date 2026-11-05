@@ -38,11 +38,15 @@ systems: `uac2`, `cdcnet` and `usbflop` on XP x64, as on XP x86, and
     real time, so a busy stream leaves other programs their turn.
   - `Uac2Realtime` = 0 in the driver key turns real time off. The
     default is 1.
-- **uac2, distorted sound on some DACs**: some devices offer volume
-  above 0 dB (gain), and `uac2` used to offer that gain too. The
-  Windows volume slider is measured from the top of the range, so most
-  of the slider was gain, and normal music was clipped inside the
-  device.
+- **uac2, volume above 0 dB**: some devices offer volume above 0 dB
+  (gain), and `uac2` used to offer that gain too. XP's volume slider is
+  measured from the top of the range, so on such a device most of the
+  slider is gain. In the simulator, a loud signal then went past full
+  scale (where a device clips).
+  - This is a likely cause of the distorted sound one user reported on
+    a CX31993 dongle. It is not confirmed: that device's volume range
+    has not been read yet, and USB timing on that system is a separate
+    open question.
   - The volume now tops out at 0 dB. A device found above 0 dB when it
     starts is set to 0 dB.
   - `Uac2VolAboveZero` = 1 in the driver key offers the whole range
@@ -62,7 +66,9 @@ systems: `uac2`, `cdcnet` and `usbflop` on XP x64, as on XP x86, and
     Driver > Display a list > Have Disk > the `w98se-me` folder. When
     Windows asks for its own streaming files (`ks.sys`, `ksproxy.ax`),
     point it at your Windows CD or `C:\WINDOWS\SYSTEM32\DRIVERS`. When
-    it offers to replace newer files, keep yours.
+    it offers to replace newer files, keep yours. Then shut down and
+    start the computer again: on ME the updated device came up only
+    after that, although its driver version already read 0.1.8.26.
   - **2000**: the same route, Have Disk > `w2k-xp`. Answer Yes to
     "Digital Signature Not Found". Restart when asked.
   - **XP**: Update Driver > Install from a list > Don't search, I will

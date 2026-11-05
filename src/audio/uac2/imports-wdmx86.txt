@@ -50,3 +50,6 @@ NTOSKRNL.EXE!ZwQueryValueKey
 NTOSKRNL.EXE!KeSetPriorityThread
 # The worker's fairness rule (docs/design/uac2.md 19.6, build 24)
 HAL.DLL!KeQueryPerformanceCounter
+# The device name (docs/design/uac2.md section 21): the interfaces' FriendlyName
+NTOSKRNL.EXE!IoRegisterDeviceInterface
+NTOSKRNL.EXE!IoOpenDeviceInterfaceRegistryKey

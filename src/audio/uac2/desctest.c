@@ -157,6 +157,90 @@ static void QueueTests(void)
     CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);
 }
 
+/* A string descriptor from ASCII text with \x01-style bytes allowed, or
+ * from UTF-16 units (units != NULL). */
+static unsigned int Str(UAC_BYTE *d, const char *text, const unsigned short *units, unsigned int n)
+{
+    unsigned int i;
+    if (!units) n = (unsigned int)strlen(text);
+    d[0] = (UAC_BYTE)(2 + 2 * n); d[1] = 3;
+    for (i = 0; i < n; i++) {
+        unsigned int c = units ? units[i] : (unsigned char)text[i];
+        d[2 + 2 * i] = (UAC_BYTE)c; d[3 + 2 * i] = (UAC_BYTE)(c >> 8);
+    }
+    return d[0];
+}
+
+static int Same(const UAC_WORD *w, const char *text)
+{
+    unsigned int i;
+    for (i = 0; text[i]; i++) if (w[i] != (unsigned char)text[i]) return 0;
+    return w[i] == 0;
+}
+
+/* The device's name (docs/design/uac2.md section 21). */
+static void Names(void)
+{
+    UAC_BYTE d[256];
+    UAC_WORD w[UAC_NAME_MAX + 1];
+    static const UAC_BYTE en[4] = { 4, 3, 0x09, 0x04 }, two[6] = { 6, 3, 0x07, 0x04, 0x09, 0x04 };
+    static const UAC_BYTE ja[4] = { 4, 3, 0x11, 0x04 }, list3[8] = { 8, 3, 0x07, 0x04, 0x11, 0x04, 0x0c, 0x04 };
+    static const unsigned short odd[6] = { 'D', 0xd83d, 0xde00, 0x00e9, 0xfeff, 'X' };
+    unsigned int n, k;
+    UAC_BYTE bad[4];
+    CHECK(UacNameLanguage(en, 4) == 0x0409);
+    CHECK(UacNameLanguage(two, 6) == 0x0409);
+    CHECK(UacNameLanguage(ja, 4) == 0x0411);
+    CHECK(UacNameLanguage(list3, 8) == 0x0407);
+    CHECK(UacNameLanguage(en, 3) == 0);                 /* shorter than bLength */
+    memcpy(bad, en, 4); bad[1] = 2; CHECK(UacNameLanguage(bad, 4) == 0);
+    memcpy(bad, en, 4); bad[0] = 3; CHECK(UacNameLanguage(bad, 4) == 0);
+    memcpy(bad, en, 4); bad[0] = 2; CHECK(UacNameLanguage(bad, 4) == 0);   /* empty list */
+    CHECK(UacNameLanguage(NULL, 4) == 0);
+    n = Str(d, "Sound Blaster X1", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 16 && Same(w, "Sound Blaster X1"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 18 && Same(w, "Sound Blaster X1 2"));
+    CHECK(UacName(d, n, 9, w, UAC_NAME_MAX) == 19 && Same(w, "Sound Blaster X1 10"));
+    CHECK(UacName(d, n + 10, 0, w, UAC_NAME_MAX) == 16);            /* a longer buffer */
+    CHECK(UacName(d, n - 1, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0); /* cut short */
+    CHECK(UacName(d, n, 0, w, 0) == 0 && UacName(d, n, 0, NULL, 8) == 0 && UacName(NULL, n, 0, w, 8) == 0);
+    n = Str(d, "  USB\tAudio \x01\x7f  ", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 9 && Same(w, "USB Audio"));
+    n = Str(d, "", NULL, 0);
+    CHECK(n == 2 && UacName(d, n, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0);
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 0);                  /* no name: no " 2" alone */
+    n = Str(d, " \t\r\n\x01 ", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0);
+    n = Str(d, "", odd, 6);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 3 && w[0] == 'D' && w[1] == 0x00e9 && w[2] == 'X' && w[3] == 0);
+    /* 40 characters: cut to 31; with a suffix, to 29 plus " 2", a space
+     * at the cut trimmed. */
+    n = Str(d, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC DEFGHIJKLMN", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC D"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC 2"));
+    CHECK(UacName(d, n, 0, w, 64) == 31);                           /* max capped */
+    CHECK(UacName(d, n, 0, w, 5) == 5 && Same(w, "ABCDE"));
+    CHECK(UacName(d, n, 1, w, 2) == 0);                             /* no room for the name */
+    /* Malformed: type, odd bLength, bLength past the buffer, bLength 0. */
+    n = Str(d, "Name", NULL, 0);
+    d[1] = 2; CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0); d[1] = 3;
+    d[0] = 9; CHECK(UacName(d, n + 1, 0, w, UAC_NAME_MAX) == 0); d[0] = (UAC_BYTE)n;
+    CHECK(UacName(d, 1, 0, w, UAC_NAME_MAX) == 0);
+    d[0] = 0; CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0);
+    /* Every bLength/byte for one descriptor: never past max, always
+     * NUL-terminated, never a control character or a space at either end. */
+    for (k = 0; k < 256; k++) {
+        unsigned int i, got;
+        for (i = 0; i < sizeof(d); i++) d[i] = (UAC_BYTE)(i * 37 + k * 11);
+        d[0] = (UAC_BYTE)k; d[1] = 3;
+        got = UacName(d, sizeof(d), k % 3, w, UAC_NAME_MAX);
+        CHECK(got <= UAC_NAME_MAX && w[got] == 0);
+        for (i = 0; i < got; i++) CHECK(w[i] >= 0x20 && !(w[i] >= 0x7f && w[i] <= 0x9f) &&
+                                         !(w[i] >= 0xd800 && w[i] <= 0xdfff));
+        CHECK(!got || (w[0] != ' ' && w[got - 1] != ' '));
+    }
+}
+
 int main(int argc, char **argv)
 {
     FILE *f;
@@ -387,6 +471,7 @@ int main(int argc, char **argv)
         }
     }
     QueueTests();
-    printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks\n", checks, n);
+    Names();
+    printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks; names\n", checks, n);
     return 0;
 }

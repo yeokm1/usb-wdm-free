@@ -1412,7 +1412,10 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
     return ((Topology *)(PMINIPORTTOPOLOGY)r->MajorTarget)->Level(r);
 }
 
-struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1]; };
+/* Name: the product string descriptor as read at start, NameLength 0
+ * when there is none to use (docs/design/uac2.md section 21). */
+struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
+             ULONG NameLength; UCHAR Name[256]; };
 static PDRIVER_DISPATCH PortClsPnp;
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
@@ -1428,7 +1431,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
-    ULONG build = 25;
+    ULONG build = 26;
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1546,17 +1549,23 @@ static ULONG GetQueueRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Que
 /* Uac2Realtime (docs/design/uac2.md 19.6): read the same way, at each RUN. */
 static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo) { return GetDwordRaw(fdo, L"Uac2Realtime"); }
 
-static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
+/* GET_DESCRIPTOR from the device: type, index, language; *got the bytes
+ * the bus driver moved. */
+static NTSTATUS DescriptorOf(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
+                             PVOID buffer, USHORT size, ULONG *got)
 {
     struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
     KEVENT event;
     IO_STATUS_BLOCK ios;
+    *got = 0;
     RtlZeroMemory(&urb, sizeof(urb));
     urb.Hdr.Length = sizeof(urb);
     urb.Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
     urb.TransferBufferLength = size;
     urb.TransferBuffer = buffer;
-    urb.DescriptorType = USB_CONFIGURATION_DESCRIPTOR_TYPE;
+    urb.DescriptorType = type;
+    urb.Index = index;
+    urb.LanguageId = language;
     KeInitializeEvent(&event, NotificationEvent, FALSE);
     PIRP irp = IoBuildDeviceIoControlRequest(IOCTL_INTERNAL_USB_SUBMIT_URB,
         lower, NULL, 0, NULL, 0, TRUE, &event, &ios);
@@ -1567,9 +1576,89 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
         KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
         s = ios.Status;
     }
-    if (NT_SUCCESS(s) && (!USBD_SUCCESS(urb.Hdr.Status) || urb.TransferBufferLength != size))
-        s = STATUS_DEVICE_DATA_ERROR;
+    if (NT_SUCCESS(s) && !USBD_SUCCESS(urb.Hdr.Status)) s = STATUS_DEVICE_DATA_ERROR;
+    if (NT_SUCCESS(s)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
     return s;
+}
+
+static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
+{
+    ULONG got;
+    NTSTATUS s = DescriptorOf(lower, USB_CONFIGURATION_DESCRIPTOR_TYPE, 0, 0, buffer, size, &got);
+    if (NT_SUCCESS(s) && got != size) s = STATUS_DEVICE_DATA_ERROR;
+    return s;
+}
+
+/* The product string (section 21): the device descriptor's iProduct, in
+ * 0x0409 when string descriptor 0 lists it, else its first language (0x0409
+ * when that list cannot be read). Uac2NameStatus records the outcome: 0
+ * named, 1 no iProduct, 2 device descriptor unread, 3 string unread, 4 no
+ * printable name; Uac2Name the name of pair 0. Nothing here fails a start. */
+static void ReadName(PDEVICE_OBJECT fdo)
+{
+    EXT *ext = Extension(fdo);
+    UCHAR device[18], list[64];
+    ULONG got = 0, status = 0, language = 0x0409;
+    UAC_WORD name[UAC_NAME_MAX + 1];
+    ext->NameLength = 0;
+    if (!NT_SUCCESS(DescriptorOf(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
+        got != sizeof(device) || device[0] != 18 || device[1] != 1) status = 2;
+    else if (!device[15]) status = 1;
+    else {
+        if (NT_SUCCESS(DescriptorOf(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
+            unsigned int l = UacNameLanguage(list, got);
+            if (l) language = l;
+        }
+        if (!NT_SUCCESS(DescriptorOf(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
+                                     ext->Name, sizeof(ext->Name), &got))) status = 3;
+        else if (!UacName(ext->Name, got, 0, name, UAC_NAME_MAX)) status = 4;
+        else ext->NameLength = got;
+    }
+    HANDLE key;
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(ext->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
+        UNICODE_STRING u;
+        Name(&u, L"Uac2NameStatus");
+        ZwSetValueKey(key, &u, 0, REG_DWORD, &status, sizeof(status));
+        Name(&u, L"Uac2Name");
+        if (ext->NameLength) {
+            ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
+            ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
+        } else {
+            WCHAR none = 0;
+            ZwSetValueKey(key, &u, 0, REG_SZ, &none, sizeof(none));
+        }
+        ZwClose(key);
+    }
+}
+
+/* Before PcRegisterSubdevice: the pair's KSCATEGORY_AUDIO interfaces
+ * (Wave and Topology reference strings, as the INF's AddInterface lines)
+ * get the device's name as FriendlyName, where the INF wrote its own; the
+ * registration is the one PortCls makes next (IoRegisterDeviceInterface
+ * returns the same link). Without a name the INF's stands. */
+static void NameInterfaces(PDEVICE_OBJECT fdo, ULONG k, PWSTR wave, PWSTR topo)
+{
+    EXT *ext = Extension(fdo);
+    UAC_WORD name[UAC_NAME_MAX + 1];
+    ULONG n;
+    PWSTR refs[2];
+    if (!ext->NameLength) return;
+    n = UacName(ext->Name, ext->NameLength, k, name, UAC_NAME_MAX);
+    if (!n) return;
+    refs[0] = wave; refs[1] = topo;
+    for (ULONG i = 0; i < 2; i++) {
+        UNICODE_STRING ref, link, value;
+        HANDLE key;
+        Name(&ref, refs[i]);
+        link.Buffer = NULL;
+        if (!NT_SUCCESS(IoRegisterDeviceInterface(ext->Pdo, &KSCATEGORY_AUDIO, &ref, &link))) continue;
+        if (NT_SUCCESS(IoOpenDeviceInterfaceRegistryKey(&link, KEY_SET_VALUE, &key))) {
+            Name(&value, L"FriendlyName");
+            ZwSetValueKey(key, &value, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
+            ZwClose(key);
+        }
+        if (link.Buffer) ExFreePool(link.Buffer);
+    }
 }
 
 static int Hex(WCHAR c) {
@@ -1666,6 +1755,7 @@ static NTSTATUS StartPair(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources,
     if (NT_SUCCESS(s)) { s = wave->Init(fdo, irp, (PMINIPORTWAVECYCLIC)w, NULL, resources); Record(fdo, 6, s); }
     if (NT_SUCCESS(s)) { s = PcNewPort(&topo, CLSID_PortTopology); Record(fdo, 7, s); }
     if (NT_SUCCESS(s)) { s = topo->Init(fdo, irp, t, NULL, resources); Record(fdo, 8, s); }
+    if (NT_SUCCESS(s)) NameInterfaces(fdo, k, waveName[k], topoName[k]);
     if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, waveName[k], wave); Record(fdo, 9, s); }
     if (NT_SUCCESS(s)) { s = PcRegisterSubdevice(fdo, topoName[k], topo); Record(fdo, 10, s); }
     if (NT_SUCCESS(s) && g->RenderBridge >= 0) {
@@ -1693,6 +1783,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     }
     Wave *w = new(wm) Wave(fdo, ext->Lower, model);
     ext->Miniport = w; /* the adapter/PnP reference: the construction's */
+    ReadName(fdo);
     s = w->Prepare();
     Record(fdo, 13, s);
     if (NT_SUCCESS(s)) s = StartPair(fdo, irp, resources, w, 0);

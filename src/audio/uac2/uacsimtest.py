@@ -388,6 +388,23 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(levels['unit_gain_db'], [6.0, 6.0])
         self.assertEqual(levels['rendered_clipped'], [6, 0])
 
+    def test_product_string(self):
+        # --product / --no-product: iProduct's string, through GET_DESCRIPTOR.
+        for name in ('cx31993m', 'hs24', 'x1', 'x4'):
+            p = uacemu.Profile(name)
+            p.set_product('Test DAC 1')
+            index = p.device[15]
+            self.assertTrue(index)
+            self.assertEqual(p.strings[index], uacemu.usb_string('Test DAC 1'))
+            p.set_product('')
+            self.assertEqual(p.strings[index], b'\x02\x03')
+            p.set_product(None)
+            self.assertEqual(p.device[15], 0)
+        m, wire, _ = self.model('hs24')
+        m.p.set_product('Name Two')
+        m.handle(100, 7, struct.pack('<BBBBHHH', 0, 6, 0x80, 0, 0x300 | m.p.device[15], 0x409, 255))
+        self.assertEqual(wire.messages[-1][2][10:], uacemu.usb_string('Name Two'))
+
     def test_built_shapes(self):
         shape = {}
         for name in BUILT:

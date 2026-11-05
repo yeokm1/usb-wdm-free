@@ -346,3 +346,47 @@ int UacClockPath(const UAC_DESC *d, UAC_BYTE terminal,
     }
     return UAC_CLOCK_INVALID;
 }
+
+/* String descriptor 0: the language list. */
+unsigned int UacNameLanguage(const UAC_BYTE *d, unsigned int length)
+{
+    unsigned int n, i, first;
+    if (!d || length < 4 || d[1] != 3 || d[0] < 4 || d[0] > length || (d[0] & 1)) return 0;
+    n = (d[0] - 2) / 2;
+    first = d[2] | ((unsigned int)d[3] << 8);
+    for (i = 0; i < n; i++)
+        if ((d[2 + 2 * i] | ((unsigned int)d[3 + 2 * i] << 8)) == 0x0409) return 0x0409;
+    return first;
+}
+
+unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
+                     UAC_WORD *out, unsigned int max)
+{
+    unsigned int n, i, used = 0, room, digits = 0, value;
+    UAC_WORD suffix[8];
+    if (!out || !max) return 0;
+    out[0] = 0;
+    if (max > UAC_NAME_MAX) max = UAC_NAME_MAX;
+    if (!d || length < 2 || d[1] != 3 || d[0] < 2 || d[0] > length || (d[0] & 1)) return 0;
+    if (pair) {
+        /* " <pair + 1>", as the INF names a later pair ("... 2"). */
+        value = pair + 1;
+        do { suffix[7 - digits++] = (UAC_WORD)('0' + value % 10); value /= 10; } while (value && digits < 6);
+        suffix[7 - digits++] = ' ';
+    }
+    if (digits >= max) return 0;
+    room = max - digits;
+    n = (d[0] - 2) / 2;
+    for (i = 0; i < n && used < room; i++) {
+        unsigned int c = d[2 + 2 * i] | ((unsigned int)d[3 + 2 * i] << 8);
+        if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) c = ' ';
+        if ((c >= 0xd800 && c <= 0xdfff) || c == 0xfeff || c == 0xfffe || c == 0xffff) continue;
+        if (c == ' ' && (!used || out[used - 1] == ' ')) continue;
+        out[used++] = (UAC_WORD)c;
+    }
+    while (used && out[used - 1] == ' ') used--;
+    if (!used) { out[0] = 0; return 0; }
+    for (i = 0; i < digits; i++) out[used++] = suffix[8 - digits + i];
+    out[used] = 0;
+    return used;
+}

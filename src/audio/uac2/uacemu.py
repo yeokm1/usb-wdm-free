@@ -91,7 +91,8 @@ takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
 signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
 (1/256 dB, default 0) shape the volume control; --vol-cur-at CH=V sets
 one logical channel's CUR at plug-in (0 the master), --vol-cur-stall N
-stalls the first N volume GET CURs. Playback is "rendered"
+stalls the first N volume GET CURs. --product TEXT sets iProduct's string
+('' an empty descriptor), --no-product sets iProduct to 0. Playback is "rendered"
 through the feature units on its path: every 0.25 s the log carries the
 received peak per channel (dBFS) and the rendered peak (each packet with
 the units' volume in force when it arrived; none while muted or at the
@@ -497,6 +498,19 @@ class Profile:
             if e['kind'] == 'cs':
                 self.rates.setdefault(cid, [48000])
         self.interfaces = sorted({i for i, _ in self.layout})
+
+    def set_product(self, text):
+        """iProduct's string: text (an empty string gives an empty
+        descriptor), or None for no iProduct at all (index 0)."""
+        device = bytearray(self.device)
+        self.strings = dict(self.strings)   # never the module's shared table
+        if text is None:
+            device[15] = 0
+        else:
+            if not device[15]:
+                device[15] = 2
+            self.strings[device[15]] = usb_string(text)
+        self.device = bytes(device)
 
     def stream_alt(self, interface, alternate):
         """The streaming facts of one alternate, or None."""
@@ -1116,6 +1130,8 @@ def main():
     ap.add_argument('--vol-range', default='%d:%d:%d' % VOLUME_RANGE,
                     help='volume RANGE MIN:MAX:RES in 1/256 dB')
     ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
+    ap.add_argument('--product', help="iProduct's string instead of the profile's ('' an empty one)")
+    ap.add_argument('--no-product', action='store_true', help='iProduct 0: no product string')
     ap.add_argument('--vol-cur-at', action='append', default=[], metavar='CH=V',
                     help='volume CUR at plug-in of logical channel CH (0 master) of every feature unit')
     ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N',
@@ -1127,6 +1143,10 @@ def main():
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
     profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
+    if args.no_product:
+        profile.set_product(None)
+    elif args.product is not None:
+        profile.set_product(args.product)
     for item in args.vol_cur_at:
         try:
             ch, value = (int(v) for v in item.split('='))

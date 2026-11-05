@@ -2080,11 +2080,13 @@ Not used:
   checked here. Earlier systems are left alone.
 - **Fallback.** Without a usable string (no `iProduct`, a read that
   fails, nothing printable), the INF's own name is written in both
-  places, so a name from an earlier start never stays. The driver's
-  copy of that name is checked against both INFs' `Device` string by
-  `infchk.ps1`.
+  places, replacing a name from an earlier start. Like every write
+  here, this is best effort: a failed interface write is not recorded,
+  and the start goes on. The driver's copy of that name is checked
+  against both INFs' `Device` string by `infchk.ps1`.
 - **Recorded** in the driver key:
-  - `Uac2Name`: pair 0's name as written.
+  - `Uac2Name`: the name chosen for pair 0, recorded before it is
+    written (not proof that the writes succeeded).
   - `Uac2NameStatus`: 0 the product string, 1 no `iProduct`, 2 device
     descriptor unread, 3 string unread, 4 nothing printable.
   - `Uac2NameDevnode`: the devnode write's status, `STATUS_NOT_SUPPORTED`
@@ -2094,8 +2096,10 @@ Not used:
   all in the 98 DDK's `wdm.lib`, the NTKERN export set. Build 26 loaded
   and named its devices on 98 SE.
 - **Test tools.** UACWAV and UACSEEK found their device by "UAC2" in
-  the name. Every simulator profile's product string still holds it.
-  For a real device, `UACWAV_NAME=<text>` names the device to use.
+  the name. That still holds for the built profiles, `x1` and `x4`, but
+  not for `alc4080cap` ("ALC4080 capture - SIMULATED"), a `--product`
+  without "UAC2" or a real device. For those, `UACWAV_NAME=<part of
+  the shown name>` names the device to use.
   `uacemu.py --product TEXT` / `--no-product` set the simulated
   `iProduct`.
 

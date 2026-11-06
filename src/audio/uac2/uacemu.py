@@ -28,12 +28,12 @@ Profiles (--profile):
   mic       High Speed capture only: 1 channel 16/24-bit, 16/48/96 kHz.
   fs        Full Speed UAC 2.0: playback 2 channels 16-bit 44.1/48 kHz with
             explicit feedback, capture 1 channel 16-bit. The feedback
-            endpoint is 4 bytes and carries 16.16 samples per frame:
-            Windows 10's own UAC 2.0 driver (usbaudio2.sys) refuses a
-            3-byte one (Code 10, "could not find a feedback endpoint") and
-            reads 4 bytes as 16.16 (docs/testing/2026-11-06-inbox-
-            reference.md). --fs-feedback 3 gives USB 2.0's 3-byte 10.14
-            form (5.12.4.2) instead.
+            endpoint is USB 2.0's 3-byte 10.14 form (5.12.4.2).
+            --fs-feedback 4 makes it 4 bytes carrying 16.16 samples per
+            frame, the form Windows 10's own UAC 2.0 driver
+            (usbaudio2.sys) takes: it refuses the 3-byte one (Code 10,
+            "could not find a feedback endpoint") and reads 4 bytes as
+            16.16 (docs/testing/2026-11-06-inbox-reference.md).
   clocks    High Speed, two clock sources (44.1 kHz family, 48 kHz family)
             behind a two-input clock selector for playback; capture on a
             clock multiplier (1/1) of the 48 kHz source.
@@ -258,10 +258,10 @@ class Builder:
     """One UAC2 function behind an IAD: AC interface 0, then one streaming
     interface per stream() call."""
 
-    def __init__(self, speed, fs_feedback=4):
+    def __init__(self, speed, fs_feedback=3):
         self.speed = speed
-        # Full Speed feedback endpoint size: 4 (16.16, what Windows 10's own
-        # UAC 2.0 driver takes) or 3 (10.14, USB 2.0 5.12.4.2).
+        # Full Speed feedback endpoint size: 3 (10.14, USB 2.0 5.12.4.2) or
+        # 4 (16.16, what Windows 10's own UAC 2.0 driver takes).
         self.fs_feedback = fs_feedback
         self.ac = b''
         self.streams = []
@@ -343,7 +343,7 @@ FAMILY_44 = [44100, 88200, 176400]
 FAMILY_48 = [48000, 96000, 192000]
 
 
-def build(name, fu='full', fs_feedback=4):
+def build(name, fu='full', fs_feedback=3):
     """(speed, configuration, {clock source id: rates}, product id). fu: the
     playback feature units' controls (Builder.feature_unit)."""
     if name == 'hs24':
@@ -449,7 +449,7 @@ VOLUME_RANGE = (-0x6000, 0, 0x100)
 
 class Profile:
     def __init__(self, name='x4', vid=None, pid=None, fu='full', vol_range=VOLUME_RANGE, vol_cur=0,
-                 fs_feedback=4):
+                 fs_feedback=3):
         if name not in PROFILE_NAMES or fu not in FU_MODES or fs_feedback not in (3, 4):
             raise ValueError('profile')
         lo, hi, res = vol_range
@@ -873,7 +873,7 @@ class Model:
                 return 0, struct.pack('<h', self.mix.get((entity, channel), 0))
             if get and request == 2:
                 return 0, struct.pack('<Hhhh', 1, -15360 if settable else 0, 0, 256 if settable else 0)
-            if settable and len(payload) == 2:
+            if not get and request == 1 and settable and len(payload) == 2:
                 value = struct.unpack('<h', payload)[0]
                 if -15360 <= value <= 0 and value % 256 == 0 or value == -32768:
                     self.mix[(entity, channel)] = value
@@ -1184,8 +1184,8 @@ def main():
     ap.add_argument('--vid', type=lambda s: int(s, 16))
     ap.add_argument('--pid', type=lambda s: int(s, 16))
     ap.add_argument('--fb-ppm', type=float, default=0.0, help='feedback offset from the clock, ppm')
-    ap.add_argument('--fs-feedback', type=int, choices=(3, 4), default=4,
-                    help='fs profile: feedback endpoint bytes, 4 (16.16) or 3 (10.14)')
+    ap.add_argument('--fs-feedback', type=int, choices=(3, 4), default=3,
+                    help='fs profile: feedback endpoint bytes, 3 (10.14) or 4 (16.16, as Windows 10 takes)')
     ap.add_argument('--fb-zero-every', type=int, default=0,
                     help='every Nth feedback packet is zero-length (lost)')
     ap.add_argument('--fb-stop-after', type=float,
@@ -1213,7 +1213,7 @@ def main():
     vol_range = tuple(int(v) for v in args.vol_range.split(':'))
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
-    if args.fs_feedback != 4 and args.profile != 'fs':
+    if args.fs_feedback != 3 and args.profile != 'fs':
         ap.error('--fs-feedback applies to the fs profile')
     profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur,
                       fs_feedback=args.fs_feedback)

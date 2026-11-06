@@ -433,8 +433,8 @@ class ProfileTest(unittest.TestCase):
         # Adaptive playback has no feedback endpoint; async playback has one.
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)
-        self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 4)
-        self.assertEqual(uacemu.Profile('fs', fs_feedback=3).stream_alt(1, 1)['feedback']['max'], 3)
+        self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 3)
+        self.assertEqual(uacemu.Profile('fs', fs_feedback=4).stream_alt(1, 1)['feedback']['max'], 4)
         # Full Speed feedback values: 16.16 in a 4-byte endpoint, 10.14 in 3.
         for fb, value in ((4, struct.pack('<I', 48 << 16)), (3, struct.pack('<I', 48 << 14)[:3])):
             m = uacemu.Model(Wire(), io.StringIO(), lambda: self.time,
@@ -868,7 +868,7 @@ class ProfileTest(unittest.TestCase):
 
     def test_playback_formats_and_feedback(self):
         for name, alt, frame, value in (('hs24', 2, 6, struct.pack('<I', 6 << 16)),
-                                         ('fs', 1, 4, struct.pack('<I', 48 << 16))):
+                                         ('fs', 1, 4, struct.pack('<I', 48 << 14)[:3])):
             m, wire, _ = self.model(name)
             self.configure(m, (1, alt))
             m.handle(12, 1, bytes((1, 8, 4)))

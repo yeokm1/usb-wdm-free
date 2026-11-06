@@ -1276,8 +1276,9 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   4. A bring-up must not run beside the data path, since it resets the
      chip state the stream lives in. netusb.c's resume runs the
      bring-up only on a D0 that follows a D3 (a D0 while in D0 is
-     ignored), after draining the data path; and when the chip's own
-     three tries fail it leaves the data path closed and reports the
+     ignored), after draining the data path; it tries the chip's Resume
+     three times (the AX88772B's and SR9700's retry inside too); and when
+     every try fails it leaves the data path closed and reports the
      device gone, as recovery does when it gives up, rather than
      reopening traffic on a half-reset chip. Only the chip's bring-up failing counts as that: a failure to
      write the address or the filter after it is logged, and a filter

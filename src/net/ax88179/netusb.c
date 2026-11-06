@@ -808,12 +808,20 @@ static long Power(NET_DEV *d, BOOLEAN on)
      * filter and the link. */
     {
         NET_PARAMS p;
-        r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
+        int i;
+        /* Up to three tries, a transient failure not carried from one
+         * to the next (Io resets the status); a chip's Resume may retry
+         * on its own too. */
+        for (i = 0; i < 3; i++) {
+            r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
+            if (r >= 0 || d->Gone) break;
+            Sleep(100);
+        }
         NetTrace("resume: %d", r);
         if (r < 0) {
-            /* The chip did not come back (its Resume has its own
-             * retries): the data path stays closed and NDIS is told it
-             * is gone, as Recover does when it gives up. */
+            /* The chip did not come back: the data path stays closed and
+             * NDIS is told it is gone, as Recover does when it gives
+             * up. */
             KeAcquireSpinLock(&d->Lock, &old);
             d->Gone = TRUE;
             KeReleaseSpinLock(&d->Lock, old);

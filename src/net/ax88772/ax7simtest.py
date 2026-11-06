@@ -470,12 +470,25 @@ class Tests(CoreCase):
         self.m.transmit(recs)
         self.assertEqual(self.m.totals['tx_records_asix_form'], 3)
         self.assertEqual(self.m.totals['tx_frames'], 3)
-        udp = a.ipv4(bytes((192, 168, 77, 2)), a.HOST_IP, 17, struct.pack('!HHHH', 68, 67, 12, 0x1234) + b'abcd')
+        # A flagged IPv4 UDP record through the parser: the frame handed on carries
+        # a correct UDP checksum over UDP's own length, not the trailing bytes.
+        udp = a.ipv4(bytes((192, 168, 77, 2)), a.HOST_IP, 17,
+                     struct.pack('!HHHH', 68, 67, 12, 0x1234) + b'abcd' + b'zz')
         frame = a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + udp
-        filled = self.m.fill_checksums(frame)
-        seg = filled[34:]
-        pseudo = filled[26:34] + struct.pack('!BBH', 0, 17, len(seg))
+        n = len(frame)
+        sent = []
+        self.m.transmit_frame, keep = (lambda f, p: sent.append(f) or f), self.m.transmit_frame
+        try:
+            self.m.transmit(struct.pack('<I', ((n ^ 0x7ff) << 16) | 0x4000 | n) + frame + (b'\0' if n & 1 else b''))
+        finally:
+            self.m.transmit_frame = keep
+        seg = sent[0][34:34 + 12]
+        pseudo = sent[0][26:34] + struct.pack('!BBH', 0, 17, 12)
         self.assertEqual(a.checksum(pseudo + seg), 0)
+        self.assertEqual(a.checksum(sent[0][14:34]), 0)               # the IPv4 header too
+        # Truncated or non-IPv4 headers are left as sent.
+        bad = frame[:14] + bytes((0x4f,)) + frame[15:34]
+        self.assertEqual(self.m.fill_checksums(bad), bad)
         with self.assertRaises(ValueError):                          # a broken complement
             self.m.transmit(struct.pack('<I', (0x123 << 16) | 60) + arp)
 

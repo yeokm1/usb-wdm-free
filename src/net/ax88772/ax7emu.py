@@ -34,14 +34,16 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   READ_MEDIUM_STATUS 1A, WRITE_MEDIUM_MODE 1B, WRITE_GPIOS 1F, SW_RESET
   20, SW_PHY_SELECT 22, QCTCTRL 2A. INFERRED: requests outside that set,
   and wrong lengths, STALL. Vendor requests are answered whether or not
-  the device is configured: ASIX's XP driver 5.4.3.0 (on XP SP3 against
-  this model, docs/testing/2026-11-06-reference-drivers.md) sets
-  configuration 0 and then sends its whole bring-up on endpoint 0, so the
-  chip must answer them in the Address state. READ_IPG012 11 (asix.h;
+  the device is configured (INFERRED): ASIX's XP driver 5.4.3.0 (on XP SP3
+  against this model, docs/testing/2026-11-06-reference-drivers.md) sets
+  configuration 0 and then sends its whole bring-up on endpoint 0, which
+  suggests the chip answers them in the Address state; that run still
+  failed, so this is not shown. READ_IPG012 11 (asix.h;
   three bytes, IPG0, IPG1, IPG2 as WRITE_IPG0 last set them, Linux's
   defaults 15 0C 12 at power-up, INFERRED) is answered: ASIX's 7 driver
   5.12.12.0 reads it right after writing them and stops when it STALLs.
-  SW_PHY_STATUS 21 (asix.h, one byte) answers the last SW_PHY_SELECT.
+  SW_PHY_STATUS 21 (asix.h, one byte) answers the last SW_PHY_SELECT
+  value (INFERRED: asix.h gives the request, not its answer).
   ASIX's drivers also send requests Linux does not name: writes 26, 2C
   and 2E with no data and 24 with four bytes, and a four-byte read 2D;
   they are accepted with no modelled effect and 2D reads zeros (INFERRED;
@@ -493,14 +495,19 @@ class Model:
         f = bytearray(frame)
         ihl = (f[14] & 15) * 4
         total = struct.unpack_from('!H', f, 16)[0]
-        if ihl < 20 or 14 + total > len(f) or struct.unpack_from('!H', f, 20)[0] & 0x3fff:
-            return frame                                 # short, or a fragment: left as sent
+        if f[14] >> 4 != 4 or ihl < 20 or ihl > total or 14 + total > len(f) or \
+                struct.unpack_from('!H', f, 20)[0] & 0x3fff:
+            return frame                                 # not IPv4, short, or a fragment: left as sent
         f[24:26] = b'\0\0'
         f[24:26] = struct.pack('!H', checksum(bytes(f[14:14 + ihl])))
         proto, l4 = f[23], 14 + ihl
         at = {17: 6, 6: 16}.get(proto)
-        if at is not None and 14 + total >= l4 + at + 2:
-            seg = bytes(f[l4:14 + total])
+        end = 14 + total
+        if proto == 17 and end >= l4 + 8:
+            udp_len = struct.unpack_from('!H', f, l4 + 4)[0]
+            end = l4 + udp_len if 8 <= udp_len <= total - ihl else 0    # UDP's own length
+        if at is not None and end >= l4 + at + 2:
+            seg = bytes(f[l4:end])
             seg = seg[:at] + b'\0\0' + seg[at + 2:]
             pseudo = bytes(f[26:34]) + struct.pack('!BBH', 0, proto, len(seg))
             value = checksum(pseudo + seg) or (0xffff if proto == 17 else 0)

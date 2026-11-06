@@ -81,7 +81,7 @@ What A1 showed, and what changed:
   trailer, and every size answered. Linux and `ax179f` read the headers'
   offset from the trailer, so the padding does not affect them: `ax179f`
   answered 4000 and 8000 bytes in both retests.
-- Host tests: `axsimtest.py` 19 (4 new: the bring-up reads, the transmit
+- Host tests: `axsimtest.py` 20 (5 new: the bring-up reads, an exact-fit request, the transmit
   form, IPE, the padded header array), with `ax179f`'s own cores.
 
 ### `ax7emu.py` (ASIX AX88772B/C, and SR9800)
@@ -98,8 +98,9 @@ What A2 and A3 showed, and what changed:
   200 ms, on every plug and with KMDF 1.7 or 1.9 installed. After that it
   sends its whole bring-up on endpoint 0, with no interrupt or bulk
   transfer. The model STALLed vendor requests while unconfigured, and now
-  answers them in any state, as the chip must, since this driver runs real
-  adapters. Even so, nothing moves without a configuration. ASIX's
+  answers them in any state (INFERRED: a driver made for real adapters
+  sends them that way, but this run still failed, so it is not shown).
+  Even so, nothing moves without a configuration. ASIX's
   AX88179 driver (A1), on the same guest and stack, did not deconfigure.
   Why this driver does is not known; the cause may lie in what the model
   presents, but nothing in the traffic shows what.
@@ -199,10 +200,12 @@ What A2 and A3 showed, and what changed:
   traffic under A3 would settle them.
 - Realtek R3 with the RTL8156B: the Code 10 cause.
 - Our drivers against the changed models under xHCI98, on ME, and on 2000
-  were not rerun. The model changes touch only behaviour our drivers do
-  not use: the forms of the makers' drivers, requests our drivers do not
-  send, and PHY byte-lane writes. The host tests run our drivers' own
-  cores against the changed models.
+  were not rerun. Most of the model changes are paths our drivers do not
+  take: the makers' transmit forms and requests our drivers do not send.
+  Three touch paths they do take: the AX88179 receive aggregate (the
+  padded header array and its size check), and every PHY window write in
+  `rtlemu.py`. Those ran in the 98 SE and XP retests above and in the host
+  tests, which run our drivers' own cores against the changed models.
 - Under bulk TCP load, no aggregation numbers were taken; only ping and
   DHCP ran.
 

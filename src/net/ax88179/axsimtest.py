@@ -542,6 +542,20 @@ class Tests(CoreCase):
                 self.assertEqual(len(data) % 8, 0)
                 self.assertEqual(len(data), offset + 4 * n + 4 + (4 if n % 2 == 0 else 0))
 
+    def test_exact_fit_request_is_answered(self):
+        """A request exactly the size of the next aggregate gets it, for odd
+        and even record counts (the pad is reserved only when it is sent)."""
+        self.up()
+        frame = a.MODEL_MAC + a.HOST_MAC + b'\x08\x00' + bytes(46)
+        for n, size in ((1, 64 + 4 + 4), (2, 2 * 64 + 8 + 4 + 4)):
+            with self.subTest(records=n):
+                for _ in range(n):
+                    self.m.deliver(frame)
+                self.m.handle(101, 9, struct.pack('<BBHIH', a.EP_IN, 0, size, 0, 0))
+                data = self.wire.take(101)[-1][2][10:]
+                self.assertEqual(len(data), size)
+                self.assertFalse(self.m.rx)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -623,7 +623,8 @@ class Model:
             frame = self.rx[0]
             body = lead + frame + (struct.pack('<I', zlib.crc32(frame)) if self.fcs else b'')
             padded = (len(body) + 7) & ~7
-            if len(records) + padded + 4 * (len(headers) + 1) + 8 > length:
+            n = len(headers) + 1
+            if len(records) + padded + 4 * n + (4 if n % 2 == 0 else 0) + 4 > length:
                 break
             self.rx.popleft()
             records += body + bytes(padded - len(body))

@@ -107,6 +107,20 @@ static VOID FillRead(AP_DEV *dev, PIRP irp)
         dev->LastButtons = dev->Q[dev->QHead].Buttons;
         dev->QHead = (dev->QHead + 1) % AP_QLEN;
         dev->QCount--;
+        if (!dev->Reported) {
+            /* The first report after a start: 98 SE now and then loses a
+             * button change that follows it at once (a touch's press after
+             * its move), so the next report waits (design 6). The timer
+             * counts as outstanding I/O, so stop waits for its DPC. */
+            LARGE_INTEGER due;
+            dev->Reported = TRUE;
+            if (!dev->Stopping) {
+                dev->Gated = TRUE;
+                InterlockedIncrement(&dev->Outstanding);
+                due.QuadPart = -(LONGLONG)AP_FIRST_GAP_MS * 10000;
+                KeSetTimer(&dev->GapTimer, due, &dev->GapDpc);
+            }
+        }
     }
 #if defined(AP_TRACE_E9)
     if (TraceReads < 40) {
@@ -123,7 +137,7 @@ PIRP ApTakeReadyReadLocked(AP_DEV *dev)
     PLIST_ENTRY e;
     PIRP irp;
     /* RemoveHeadList is a statement macro in the 2000 DDK. */
-    while (dev->QCount && !IsListEmpty(&dev->Reads)) {
+    while (dev->QCount && !dev->Gated && !IsListEmpty(&dev->Reads)) {
         e = RemoveHeadList(&dev->Reads);
         irp = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
         if (IoSetCancelRoutine(irp, NULL) == NULL) {
@@ -165,6 +179,33 @@ VOID ApFailReads(AP_DEV *dev, NTSTATUS status)
     }
 }
 
+static VOID GapDone(PKDPC dpc, PVOID context, PVOID a1, PVOID a2)
+{
+    AP_DEV *dev = context;
+    KIRQL irql;
+    PIRP irp;
+    UNREFERENCED_PARAMETER(dpc);
+    UNREFERENCED_PARAMETER(a1);
+    UNREFERENCED_PARAMETER(a2);
+    KeAcquireSpinLock(&dev->Lock, &irql);
+    dev->Gated = FALSE;
+    irp = ApTakeReadyReadLocked(dev);
+    KeReleaseSpinLock(&dev->Lock, irql);
+    if (irp)
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+    if (InterlockedDecrement(&dev->Outstanding) == 0)
+        KeSetEvent(&dev->IoIdle, IO_NO_INCREMENT, FALSE);
+}
+
+/* PASSIVE_LEVEL, stop: a gap timer still waiting will not fire; drop its
+ * count (a DPC already queued or running drops its own). */
+VOID ApCancelGap(AP_DEV *dev)
+{
+    if (KeCancelTimer(&dev->GapTimer) &&
+        InterlockedDecrement(&dev->Outstanding) == 0)
+        KeSetEvent(&dev->IoIdle, IO_NO_INCREMENT, FALSE);
+}
+
 static VOID CancelRead(PDEVICE_OBJECT fdo, PIRP irp)
 {
     AP_DEV *dev = AP_DEV_OF(fdo);
@@ -189,7 +230,7 @@ static NTSTATUS ReadReport(AP_DEV *dev, PIRP irp)
         IoCompleteRequest(irp, IO_NO_INCREMENT);
         return STATUS_DEVICE_NOT_CONNECTED;
     }
-    if (dev->QCount) {
+    if (dev->QCount && !dev->Gated) {
         NTSTATUS status;
         FillRead(dev, irp);
         status = irp->IoStatus.Status;
@@ -391,6 +432,26 @@ static NTSTATUS ApPnp(PDEVICE_OBJECT fdo, PIRP irp)
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 
+    case IRP_MN_QUERY_PNP_DEVICE_STATE:
+        /* A resume left the device unusable (design 7). */
+        if (dev->Failed) {
+            irp->IoStatus.Information |= PNP_DEVICE_FAILED;
+            irp->IoStatus.Status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IRP_MN_QUERY_CAPABILITIES:
+        /* On the way up: the device may be unplugged at any time, and
+         * with SurpriseRemovalOK set 2000 does not show its "Unsafe
+         * Removal of Device" dialog for it (98 SE and ME read no such
+         * field). */
+        status = ForwardSync(dev, irp);
+        if (NT_SUCCESS(status) && s->Parameters.DeviceCapabilities.Capabilities)
+            s->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = TRUE;
+        irp->IoStatus.Status = status;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        return status;
+
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_CANCEL_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:
@@ -401,6 +462,15 @@ static NTSTATUS ApPnp(PDEVICE_OBJECT fdo, PIRP irp)
     default:
         break;
     }
+    IoSkipCurrentIrpStackLocation(irp);
+    return IoCallDriver(dev->Lower, irp);
+}
+
+/* ---- WMI: not used; passed down (HID minidriver contract) ---- */
+
+static NTSTATUS ApSystemControl(PDEVICE_OBJECT fdo, PIRP irp)
+{
+    AP_DEV *dev = AP_DEV_OF(fdo);
     IoSkipCurrentIrpStackLocation(irp);
     return IoCallDriver(dev->Lower, irp);
 }
@@ -456,6 +526,8 @@ static NTSTATUS ApAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT fdo)
     KeInitializeEvent(&dev->IoIdle, NotificationEvent, FALSE);
     KeInitializeEvent(&dev->SubmitIdle, NotificationEvent, TRUE);
     KeInitializeEvent(&dev->SetupIdle, NotificationEvent, TRUE);
+    KeInitializeTimer(&dev->GapTimer);
+    KeInitializeDpc(&dev->GapDpc, GapDone, dev);
     InitializeListHead(&dev->Reads);
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;
     return STATUS_SUCCESS;
@@ -473,6 +545,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registryPath)
     driver->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = ApIoctl;
     driver->MajorFunction[IRP_MJ_PNP] = ApPnp;
     driver->MajorFunction[IRP_MJ_POWER] = ApPower;
+    driver->MajorFunction[IRP_MJ_SYSTEM_CONTROL] = ApSystemControl;
     driver->DriverExtension->AddDevice = ApAddDevice;
     driver->DriverUnload = ApUnload;
 

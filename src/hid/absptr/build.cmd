@@ -1,12 +1,13 @@
 @echo off
 rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
-rem build.cmd wdmx86 <free|checked|trace>
+rem build.cmd <wdmx86|wdm64> <free|checked|trace>
 rem   trace: wdmx86 only, a free build that also writes a trace to QEMU's
 rem   debug console port 0xE9: test-only, never released.
 rem
-rem Builds absptr.sys (docs/design/absptr.md; x86 only in v1, design Q6) into
-rem out\hid\absptr\<profile>\<flavour>\, with the two INFs (CRLF) and the
+rem Builds absptr.sys (docs/design/absptr.md; wdmx86 for 98 SE to XP x86,
+rem wdm64 for XP x64, Vista x64 and 7 x64) into
+rem out\hid\absptr\<profile>\<flavour>\, with the three INFs (CRLF) and the
 rem PE/import gate (chkimp.ps1). Every path is rooted in this repository;
 rem a missing kit is reported, never searched for. PASS.TXT is written
 rem last, only when every gate has passed.
@@ -20,7 +21,7 @@ set SRC=%~dp0
 for %%I in ("%~dp0..\..\..") do set ROOT=%%~fI
 set TOOLS=%ROOT%\tools
 set SOURCES=absptr usbio apcore
-set INFS=absptr absptr2k
+set INFS=absptr absptr2k absptr64
 
 set HEAD=unknown
 for /f %%H in ('git -C "%ROOT%" rev-parse HEAD 2^>nul') do set HEAD=%%H
@@ -34,6 +35,7 @@ if "%FLAVOUR%"=="" goto usage
 if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" if /I not "%FLAVOUR%"=="trace" goto usage
 if /I "%FLAVOUR%"=="trace" if /I not "%PROFILE%"=="wdmx86" goto usage
 if /I "%PROFILE%"=="wdmx86" goto profile_ok
+if /I "%PROFILE%"=="wdm64" goto profile_ok
 goto usage
 
 :profile_ok
@@ -185,7 +187,7 @@ exit /b 1
 exit /b 0
 
 :usage
-echo usage: build.cmd wdmx86 ^<free^|checked^|trace^>
+echo usage: build.cmd ^<wdmx86^|wdm64^> ^<free^|checked^|trace^>  (trace: wdmx86 only)
 endlocal
 exit /b 2
 

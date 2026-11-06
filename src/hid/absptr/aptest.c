@@ -29,8 +29,28 @@
  *   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  *   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  *   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * D_PENPARTNER is QEMU's hw/usb/dev-wacom.c descriptor, through absemu.py,
- * under that file's notice (absemu.py carries it in full).
+ * The D_PENPARTNER bytes are QEMU's Wacom PenPartner report descriptor
+ * (hw/usb/dev-wacom.c, QEMU v11.1.0, as absemu.py carries it), under that
+ * file's notice:
+ *   Copyright (c) 2006 Openedhand Ltd.
+ *   Author: Andrzej Zaborowski <balrog@zabor.org>
+ *   Based on hw/usb-hid.c: Copyright (c) 2005 Fabrice Bellard
+ *   Permission is hereby granted, free of charge, to any person obtaining a
+ *   copy of this software and associated documentation files (the
+ *   "Software"), to deal in the Software without restriction, including
+ *   without limitation the rights to use, copy, modify, merge, publish,
+ *   distribute, sublicense, and/or sell copies of the Software, and to
+ *   permit persons to whom the Software is furnished to do so, subject to
+ *   the following conditions:
+ *   The above copyright notice and this permission notice shall be included
+ *   in all copies or substantial portions of the Software.
+ *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ *   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ *   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ *   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ *   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ *   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ *   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #pragma warning(disable:4127)  /* the CHECK macro's while (0) */
 #include <stdio.h>
@@ -319,6 +339,28 @@ static void TestTouch(void)
     m[0] = 2;
     n = 1 + MouseRep(m + 1, 15, 0.1, 0.1, 0);
     CHECK(ApTranslate(&s, m, n, &st) == 0 && Near(st.X, 0.6));
+
+    /* Report framing (HID 1.11 8.4): every input report's length is
+     * known, the longest sizes the reads, and a transfer holding the
+     * unchosen report and then the chosen one splits at the boundary. */
+    CHECK(s.InBytes[1] == 6 && s.InBytes[2] == 7 && s.InBytes[3] == 0 && s.MaxInBytes == 7);
+    {
+        AU8 two[16];
+        unsigned off = 0, k, got = 0;
+        memcpy(two, m, 7);
+        two[7] = 1;
+        (void)Finger(two + 8, 1, 1, 0.2, 0.7);
+        CHECK(ApReportLength(&s, two, 13) == 7);
+        CHECK(ApReportLength(&s, two + 7, 6) == 6);
+        CHECK(ApReportLength(&s, two + 7, 4) == 6);    /* longer than what is left */
+        while (off < 13 && (k = ApReportLength(&s, two + off, 13 - off)) != 0 && k <= 13 - off) {
+            got += ApTranslate(&s, two + off, k, &st);
+            off += k;
+        }
+        CHECK(off == 13 && got == 1 && Near(st.X, 0.2) && Near(st.Y, 0.7) && st.Buttons == 1);
+        two[0] = 3;
+        CHECK(ApReportLength(&s, two, 13) == 0);
+    }
 
     /* Two contacts: the first one moves the pointer. */
     CHECK(Parse(D_MTOUCH, sizeof(D_MTOUCH), &s) == AP_OK);

@@ -303,14 +303,17 @@ static VOID XferSend(AP_XFER *x, PIO_COMPLETION_ROUTINE done)
 }
 
 /* One wMaxPacketSize, so a report that fills its packet ends the
- * transfer (HID devices send no zero-length packet); a source report
- * longer than a packet is read in as many whole packets as it needs (a
- * read is a multiple of wMaxPacketSize, as the USB stacks require). */
+ * transfer (HID devices send no zero-length packet); when the longest
+ * input report of the descriptor, chosen or not, is longer than a packet,
+ * as many whole packets as it needs, so no report is split across two
+ * transfers (a read is a multiple of wMaxPacketSize, as the USB stacks
+ * require; HID 1.11 8.4). */
 static ULONG InLength(const AP_DEV *dev)
 {
     ULONG mps = dev->InMax ? dev->InMax : 64, len = mps;
-    if (dev->Src.ReportBytes > len)
-        len = (dev->Src.ReportBytes + mps - 1) / mps * mps;
+    ULONG need = dev->Src.MaxInBytes > dev->Src.ReportBytes ? dev->Src.MaxInBytes : dev->Src.ReportBytes;
+    if (need > len)
+        len = (need + mps - 1) / mps * mps;
     while (len > AP_PKT_MAX && len > mps)
         len -= mps;
     return len;
@@ -355,9 +358,25 @@ static NTSTATUS InComplete(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
         if (len > AP_PKT_MAX)
             len = AP_PKT_MAX;
         x->Errors = 0;
-        prev = dev->State;
-        if (ApTranslate(&dev->Src, x->Buf, len, &dev->State))
-            ApQueueStateLocked(dev, &prev);
+        /* A transfer may hold more than one report (a report that fills
+         * whole packets does not end it): each is translated on its own.
+         * The first may be short (the device sent fewer bytes); a later
+         * one that does not fit is the start of a report cut off at the
+         * end of the transfer and is dropped, not read as a report. */
+        {
+            unsigned off = 0, n;
+            while (off < len && (n = ApReportLength(&dev->Src, x->Buf + off, len - off)) != 0) {
+                if (n > len - off) {
+                    if (off)
+                        break;
+                    n = len - off;
+                }
+                prev = dev->State;
+                if (ApTranslate(&dev->Src, x->Buf + off, n, &dev->State))
+                    ApQueueStateLocked(dev, &prev);
+                off += n;
+            }
+        }
     } else if (status != STATUS_CANCELLED) {
         APT("in-error", status, x->Urb.Int.Hdr.Status, x->Errors);
         x->Errors++;
@@ -582,12 +601,15 @@ NTSTATUS ApUsbStart(AP_DEV *dev)
 
     ApStateReset(&dev->State);
     dev->LastButtons = 0;
+    dev->Reported = FALSE;
+    dev->Gated = FALSE;
     KeClearEvent(&dev->IoIdle);
     dev->Outstanding = 1;               /* the bias, dropped by stop */
     dev->Submitting = 0;
     KeSetEvent(&dev->SubmitIdle, IO_NO_INCREMENT, FALSE);
     dev->Stopping = FALSE;
     dev->PoweredDown = FALSE;
+    dev->Failed = FALSE;
     dev->ResumeQueued = FALSE;
     {
         KIRQL irql;
@@ -641,6 +663,7 @@ VOID ApUsbStop(AP_DEV *dev, BOOLEAN present)
     KeWaitForSingleObject(&dev->SubmitIdle, Executive, KernelMode, FALSE, NULL);
 
     AbortPipe(dev, dev->InPipe);
+    ApCancelGap(dev);
     Drop(dev);      /* the bias */
     timeout.QuadPart = -20000000;       /* 2 s */
     if (KeWaitForSingleObject(&dev->IoIdle, Executive, KernelMode, FALSE, &timeout) == STATUS_TIMEOUT) {
@@ -696,7 +719,7 @@ static VOID ResumeWorker(PVOID context)
 {
     AP_DEV *dev = context;
     KIRQL irql;
-    BOOLEAN go;
+    BOOLEAN go, failed = FALSE;
     ULONG gen;
     for (;;) {
         KeAcquireSpinLock(&dev->Lock, &irql);
@@ -716,13 +739,38 @@ static VOID ResumeWorker(PVOID context)
         if (!go)
             break;
         {
+            /* Only the PenPartner's mode switch can fail (no write went
+             * through): a tablet left in its mouse mode sends nothing the
+             * driver reads. Tried again a few times; if it still fails the
+             * device is reported failed to PnP, as a failed start is, so
+             * Windows stops it instead of leaving a pointer that never
+             * moves (design 7). */
             NTSTATUS st = DeviceSetup(dev);
-            APT("resume-setup", st, dev->Src.Kind, gen);
+            unsigned tries;
+            for (tries = 1; !NT_SUCCESS(st) && tries < AP_RESUME_TRIES; tries++) {
+                Sleep(AP_RESUME_GAP_MS);
+                if (dev->Stopping || dev->PowerGen != gen)
+                    break;
+                st = DeviceSetup(dev);
+            }
+            APT("resume-setup", st, dev->Src.Kind, tries);
+            failed = (BOOLEAN)!NT_SUCCESS(st);
         }
         KeAcquireSpinLock(&dev->Lock, &irql);
         dev->InSetup = FALSE;
         KeSetEvent(&dev->SetupIdle, IO_NO_INCREMENT, FALSE);
+        if (failed && dev->Started && !dev->Stopping && dev->PowerGen == gen)
+            dev->Failed = TRUE;
+        else
+            failed = FALSE;
         KeReleaseSpinLock(&dev->Lock, irql);
+        if (failed) {
+            IoInvalidateDeviceState(dev->Pdo);
+            KeAcquireSpinLock(&dev->Lock, &irql);
+            dev->ResumeQueued = FALSE;
+            KeReleaseSpinLock(&dev->Lock, irql);
+            break;
+        }
         ApUsbResume(dev, gen);
         KeAcquireSpinLock(&dev->Lock, &irql);
         /* A newer D0 while this one ran: run again for it. */

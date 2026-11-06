@@ -80,6 +80,10 @@ typedef struct AP_SOURCE {
     AP_FIELD DevMode;
     AU8 DevModeId;
     AU16 DevModeBytes;          /* the feature report's length, id included */
+    /* Every input report of the descriptor, chosen or not, so a transfer
+     * can be split at report boundaries and read in whole (HID 1.11 8.4). */
+    AU16 MaxInBytes;            /* the longest input report, id included */
+    AU16 InBytes[256];          /* each input report's length by id, 0 if none */
 } AP_SOURCE;
 
 /* The pointer state presented to Windows, and (multi-touch) the contact
@@ -101,6 +105,13 @@ int ApParse(const AU8 *desc, unsigned len, void *work, AP_SOURCE *src);
 
 /* The PenPartner source (design 5.2): no descriptor parse. */
 void ApPenPartnerSource(AP_SOURCE *src);
+
+/* The length of the report that starts at rep (avail bytes left in the
+ * transfer): its descriptor length, which may be more than avail (a
+ * short report, or one cut off at the end of the transfer: the caller
+ * decides); avail when the source has no descriptor (the PenPartner); 0
+ * when it is not an input report of the descriptor. */
+unsigned ApReportLength(const AP_SOURCE *src, const AU8 *rep, unsigned avail);
 
 /* Translates one input report into *st. Returns 1 when *st changed, 0
  * when it did not or the report is not the source's. */

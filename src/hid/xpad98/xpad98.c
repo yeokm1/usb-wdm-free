@@ -438,6 +438,18 @@ static NTSTATUS XpPnp(PDEVICE_OBJECT fdo, PIRP irp)
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 
+    case IRP_MN_QUERY_CAPABILITIES:
+        /* On the way up: the device may be unplugged at any time, and
+         * with SurpriseRemovalOK set 2000 does not show its "Unsafe
+         * Removal of Device" dialog for it (98 SE and ME read no such
+         * field). */
+        status = ForwardSync(dev, irp);
+        if (NT_SUCCESS(status) && s->Parameters.DeviceCapabilities.Capabilities)
+            s->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = TRUE;
+        irp->IoStatus.Status = status;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        return status;
+
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_CANCEL_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:

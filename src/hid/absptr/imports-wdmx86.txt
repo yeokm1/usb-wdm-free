@@ -15,6 +15,7 @@ NTOSKRNL.EXE!IoAllocateIrp
 NTOSKRNL.EXE!IoCancelIrp
 NTOSKRNL.EXE!IoFreeIrp
 NTOSKRNL.EXE!IoInitializeIrp
+NTOSKRNL.EXE!IoInvalidateDeviceState
 NTOSKRNL.EXE!IoIsWdmVersionAvailable
 NTOSKRNL.EXE!IoOpenDeviceRegistryKey
 NTOSKRNL.EXE!IoReleaseCancelSpinLock
@@ -22,9 +23,13 @@ NTOSKRNL.EXE!IofCallDriver
 NTOSKRNL.EXE!IofCompleteRequest
 NTOSKRNL.EXE!KeClearEvent
 NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeCancelTimer
+NTOSKRNL.EXE!KeInitializeDpc
 NTOSKRNL.EXE!KeInitializeEvent
 NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeInitializeTimer
 NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeSetTimer
 NTOSKRNL.EXE!KeWaitForSingleObject
 NTOSKRNL.EXE!PoCallDriver
 NTOSKRNL.EXE!PoStartNextPowerIrp

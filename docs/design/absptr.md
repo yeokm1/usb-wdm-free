@@ -1,9 +1,13 @@
-# Absolute pointing devices on Windows 98 SE and ME (absptr)
+# Absolute pointing devices on Windows 98 SE to 7 x64 (absptr)
 
 Status: design of 2026-11-06, from the readings of section 3 (QEMU guests,
 simulated and QEMU-modelled devices), reviewed and revised; first build
 in `src/hid/absptr/` (sections 5 to 9); its legs of section 12 are in the
-record (section 14), with two open points (section 13, Q8).
+record (section 14). Owner, 2026-11-06: the two points the first legs
+found are fixed (sections 6 and 7), the INFs list known touch screens
+(section 8), on 2000 and later absptr covers only what Windows' own HID
+driver cannot use (section 8), and an x64 build serves XP x64, Vista x64
+and 7 x64 (section 3.1).
 
 ## 1. Purpose and devices served
 
@@ -22,14 +26,15 @@ leaves without a working pointer, on the systems no maker's driver covers
   5.2). QEMU models it as `usb-wacom-tablet`.
 - **USB HID touch screens and pen digitizers** that report on the HID
   Digitizer usage page (Touch Screen, Pen) with no Generic Desktop mouse
-  collection beside it, which 98 SE and ME do not map to the pointer
-  (section 3; 2000 and XP Home and Professional are read in section 3
-  too; XP Tablet PC Edition, which has pen support of its own, is not a
-  target).
+  collection beside it, which 98 SE, 2000 and XP did not map to the
+  pointer in the readings (section 3; ME was not read with them and is
+  expected to behave as 98 SE, whose HID files it shares; XP Tablet PC
+  Edition, which has pen support of its own, is not a target).
 - **Absolute mice whose report shape Windows' mapper misreads**: a
-  Generic Desktop absolute X/Y in fields of other than 16 bits on 98 SE
-  and XP (section 3: 12-bit fields land at a sixteenth of the screen), and
-  on XP a 16-bit X/Y with Logical 0..65535 (values above 32767 land at 0).
+  Generic Desktop absolute X/Y in 12-bit fields on 98 SE and 2000 (read:
+  they land at a sixteenth of the screen; XP not read), and on 2000 and
+  later a 16-bit X/Y with Logical 0..65535 (read on 2000, XP, Vista x64
+  and 7 x64: values above 32767 land at 0).
 
 Not served (left to Windows, which already handles them, section 3):
 absolute Generic Desktop mice with 16-bit X/Y and Logical Maximum 32767
@@ -47,16 +52,16 @@ run.
 
 | Maker, devices | What the maker offered for old Windows | Can it be carried in usb-wdm-nonfree? |
 |---|---|---|
-| Wacom: PenPartner and the tablets of its time (Graphire, Intuos 1 and 2, ArtPad, UltraPad, Cintiq of the period) | Driver 4.78-6 (2004/2005) for 95, 98, ME, NT4, 2000 and XP (`pc478-6-X_en.exe`, USB tablets on 98, ME, 2000 and XP); drivers 5.x from 2000 on | No: Wacom's own URLs for 4.78-6 (`downloadeu.wacom.com/pub/WINDOWS/`) and the 4.9x drivers (`cdn.wacom.com/U/drivers/IBMPC/...`) answer HTTP 403 and 404, and Wacom's driver page lists Windows 10 and 11 only; copies exist only on third-party sites, which the policy excludes |
+| Wacom: PenPartner and the tablets of its time (Graphire, Intuos 1 and 2, ArtPad, UltraPad, Cintiq of the period) | Driver 4.78-6 (2004/2005) for 95, 98, ME, NT4, 2000 and XP (`pc478-6-X_en.exe`, USB tablets on 98, ME, 2000 and XP); drivers 5.x from 2000 on | No, by the owner's decision on its licence ("Unauthorized copying of the Software is expressly forbidden."; usb-wdm-nonfree, "Not shipped", has the wording). Wacom's own URLs for 4.78-6 (`downloadeu.wacom.com/pub/WINDOWS/`) and the 4.9x drivers (`cdn.wacom.com/U/drivers/IBMPC/...`) answered HTTP 403 and 404 to this project's requests; whether Wacom still offers them was not established (Wacom points to a search for older drivers, not tried) |
 | Elo Touch Solutions (Elo USB touch screens, `04E7:xxxx`) | USB driver SW500917 for 98 and ME (also 2000), sw500756 for 2000 and XP, per Elo's driver archive pages | Not read: Elo's support pages answer HTTP 403 to this host's non-browser client, so neither the files nor their terms were read (owner question Q1) |
 | EETI (eGalaxTouch) | eGalaxTouch 5.14 for 2000 to 11, 5.12 (PS/2) for 2000, XP, Vista; nothing for 98 or ME on EETI's driver page; no licence or terms on that page | Terms not stated (owner question Q1) |
 | 3M Touch Systems (MicroTouch) | TouchWare 5.x for 95 to XP, MT 7 for 2000 and XP, per 3M's manuals | Not read: `3m.com/touch` answers HTTP 403 to this host's client |
 
 Who covers what, then:
 
-- **Wacom PenPartner**: no maker driver available for any system (Wacom
-  no longer offers its 4.x drivers). absptr serves it on 98 SE, ME, 2000
-  and XP.
+- **Wacom PenPartner**: Wacom's 4.78-6 covers 98 to XP, but it cannot
+  be carried here and could not be fetched from Wacom (above). absptr
+  serves the PenPartner on every system it targets.
 - **EETI (eGalax) touch screens**: EETI's own driver, still offered, on
   2000 and XP (EETI's controllers only; its redistribution terms are not
   stated, so it is not carried, Q1). Nothing from EETI for 98 SE and ME.
@@ -71,8 +76,8 @@ support. It builds the same binary for 2000 and XP: there it serves the
 PenPartner and digitizers no maker driver covers; for an EETI or Elo
 screen whose maker's driver the user has, that driver is the one to use,
 and absptr's legs on those systems are lower priority (owner policy of
-2026-11-06). Whether absptr's INFs should leave such screens alone on 2000
-and XP is owner question Q7.
+2026-11-06). absptr's 2000-and-later INFs leave EETI's and 3M's screens
+to their makers' drivers (owner, Q7; section 8).
 
 QEMU's `usb-tablet` has no maker driver; section 3 shows it needs none on
 98 SE and ME.
@@ -130,12 +135,35 @@ What follows from it:
 2. **The 16-bit field with Logical 0..32767 is the safe shape.** 98 SE
    maps 0..65535 too, 2000 and XP do not (they put values above 32767
    at 0); a 12-bit field fails on 98 SE and 2000 (XP not read).
-3. **Nothing on 98 SE or ME takes the HID Digitizer page.** A touch screen
-   or pen whose only collection is a Digitizer one is no pointer.
+3. **Nothing on 98 SE, 2000 or XP takes the HID Digitizer page** (read):
+   a touch screen or pen whose only collection is a Digitizer one is no
+   pointer. ME was not read with those devices; it shares 98 SE's HID
+   mouse path (point 1), so the same is expected.
 4. **The PenPartner needs its tablet mode**, which only a driver of its
    own sets (section 5.2).
 5. Found with absptr's first build (section 6): on 98 SE a report that
    changes a button and the position together does not move the pointer.
+
+### 3.1 Vista x64 and 7 x64 (readings, 2026-11-06)
+
+Read under Windows' own EHCI driver (QEMU `usb-ehci`, simulator at High
+Speed), no absptr:
+
+| Device | Vista SP2 x64 | 7 SP1 x64 |
+|---|---|---|
+| `tablet` (16-bit 0..32767) | 6/6, buttons | 6/6, buttons |
+| `kvm16` (0..65535) | 1/6: values above 32767 land at 0 | the same |
+| `kvm12` (12-bit fields) | 1/6 (point (0.9, 0.2) landed at x = 0) | the same |
+| `penpartner` (HID mode) | no movement | no movement |
+| `pen` | 6/6 hovering; no button (Vista's pen support) | 6/6 hovering, no button, after 7 had installed its digitizer support (it asked for a restart) |
+| `touch`, `mtouch` | no movement | after that restart: the pointer follows the touch (within 2 pixels), no press seen as a mouse button (7's touch support) |
+
+What follows: on Vista x64 absptr serves the PenPartner, the odd
+absolute mice and touch screens; on 7 x64 the PenPartner and the odd
+absolute mice, and 7's own pen and touch support is left alone. On XP x64
+(no reading of its own: its HID files are those of XP's code base, and
+the q35 base has no EHCI driver) absptr serves what it serves on 32-bit
+XP.
 
 ## 4. The decision on the OS-facing model
 
@@ -143,12 +171,11 @@ What follows from it:
 registered with `HidRegisterMinidriver`, the function driver of the USB
 device, presenting a report descriptor of its own: a Generic Desktop
 Mouse with three buttons and absolute X/Y, Logical 0..32767 in 16-bit
-fields, the shape section 3 shows 98 SE, ME and XP map.** The device's
-own reports are translated into that one report, and Windows' own HID
-class driver and mouse mapper do the rest. The same binary is built for
-2000 and XP; for 2000 the reading of section 3 is owed, and if 2000's
-mouse mapper does not take this shape as absolute, the `w2k-xp` folder
-stays XP-only until the NT side has a route of its own (option 3).
+fields, the shape section 3 shows 98 SE, ME, 2000, XP, Vista x64 and 7
+x64 map.** The device's own reports are translated into that one report,
+and Windows' own HID class driver and mouse mapper do the rest. The same
+x86 binary serves 98 SE to XP; an x64 build serves XP x64, Vista x64 and
+7 x64.
 
 Options considered:
 
@@ -341,11 +368,53 @@ the move is queued first with the old buttons, then the button change:
 98 SE's mapper does not move the pointer on a report that also changes a
 button (found with the first build: taps landed where the pointer was).
 
+After the first report hidclass reads from absptr since a start, no
+report is read for 100 ms (`AP_FIRST_GAP_MS`); later reports are not
+held. Found in the legs: on 98 SE the press of the first touch after a
+plug was lost in all 7 leg runs, while every later press was seen. The
+trace build showed absptr completing both reports, the move and then the
+press, to hidclass reads one after the other, so the press is lost above
+absptr, in Windows' own HID mouse path (closed, not read). With the
+pause, every fresh-plug run passed (record). The pause is a KTIMER and a
+DPC counted with the transfers, so a stop waits for it or cancels it.
+
 `IOCTL_HID_GET_DEVICE_ATTRIBUTES` returns the device's own VID, PID and
 bcdDevice; `IOCTL_HID_GET_STRING` the product string read from the device,
 or "absptr pointer".
 
 ## 7. USB side
+
+PnP: `IRP_MN_QUERY_CAPABILITIES` goes down first and, when the lower
+driver answers it successfully, comes back with `SurpriseRemovalOK` set
+(its other capabilities and a failure status are kept), so 2000 does not
+show "Unsafe Removal of Device" when the device is unplugged (found in
+the first legs; `xpad98` had the same gap and has the same fix).
+`IRP_MJ_SYSTEM_CONTROL` is passed down unchanged (absptr has no WMI).
+
+Reads: the interrupt IN transfer is sized by the longest input report
+of the descriptor, chosen or not, rounded up to whole packets, so a
+report that starts a transfer is read whole. A transfer can still hold
+more than one report (a report that fills its packets does not end the
+transfer): it is split at report boundaries, each report's length known
+from the descriptor, and each translated on its own (HID 1.11 section
+8.4). The first report may be short (the device sent fewer bytes); a
+later one that does not fit in what is left is the start of a report cut
+off at the end of the transfer and is dropped, not read; its rest, which
+starts the next transfer, is not a report of the descriptor and is
+dropped too unless its first byte happens to be a listed id (then at
+worst one wrong report). A report whose id the descriptor does not list
+ends the walk. The cost of sizing by the longest report: a device whose
+chosen report fills whole packets and that also declares a longer input
+report holds a read open until its next packet; accepted, since a read
+shorter than a report the device declares would split that report.
+
+Resume: the device's setup (report protocol, SET_IDLE, the PenPartner's
+tablet mode, Device Mode) is sent again after every D0. Only the
+PenPartner's mode switch can fail (no write went through); it is tried
+again up to three times 250 ms apart, and if it still fails the driver
+reports the device failed to PnP (`IoInvalidateDeviceState`, then
+`PNP_DEVICE_FAILED`), as a failed start is, so Windows stops it instead
+of leaving a pointer that never moves; a replug starts it again.
 
 From `xpad98`'s `usbio.c` (this repository, GPL-2.0-or-later), cut down:
 
@@ -390,13 +459,46 @@ NUSB's, xHCI98).
   `hiddev.inf`'s class match, so the listed devices get absptr and nothing
   else changes (read on 98 SE: the wizard offers "The updated driver
   (Recommended) Wacom PenPartner tablet (absptr)").
+- **XP x64, Vista x64 and 7 x64** (`ABSPTR64.INF`, the x64 build):
+  `[Models.NTamd64.5.2]` (XP x64) as the 2000/XP INF;
+  `[Models.NTamd64.6.0]` (Vista x64) the PenPartner and the touch
+  screens; `[Models.NTamd64.6.1]` (7 x64 and later) the PenPartner only
+  (section 3.1). Its "Have Disk" entries read "HID touch screen, pen, or
+  12-bit or 0-65535 absolute mouse (absptr)" (XP x64), "HID touch screen,
+  or 12-bit or 0-65535 absolute mouse (absptr)" (Vista x64) and "12-bit
+  or 0-65535 absolute mouse (absptr)" (7 x64). The x64 binary is
+  unsigned as built; Vista x64 and 7 x64 load it only with a signature
+  (the owner's test signature, build.md) or with driver signature
+  enforcement disabled at boot.
 - **2000 and XP** (`ABSPTR2K.INF`, `w2k-xp`): `Include=input.inf`,
   `Needs=HID_Inst.NT`, a demand-start kernel service (as `xpad98`'s
-  2000 INF).
-- **Which ids** (Q2): the PenPartner `USB\VID_056A&PID_0000`, and a
-  "Generic" model with an id no device has (`USB\VID_FFFF&PID_FFFF&
+  2000 INF). It covers only what Windows' own HID driver cannot use
+  (owner, 2026-11-06): the PenPartner, HID touch screens and pens, and
+  absolute mice with 12-bit fields or a 0..65535 range (section 3). An
+  absolute mouse with a 16-bit 0..32767 range (QEMU's tablet and the
+  like) is left to Windows: the INF lists none, and its "Have Disk"
+  entry reads "HID touch screen, pen, or 12-bit or 0-65535 absolute
+  mouse (absptr)".
+- **Which ids** (owner, 2026-11-06: known devices by id, each with its
+  source): the PenPartner `USB\VID_056A&PID_0000`; 72 HID multi-touch
+  screens from Linux v6.12 `drivers/hid/hid-multitouch.c`, `mt_devices[]`
+  (the screens and panels only: its touchpads, keyboard docks and
+  receivers are left out), in every INF but for the 22 eGalax and 3M
+  ids, which the 2000-and-later INFs leave to EETI's and 3M's own drivers
+  (section 2, Q7); 15 more HID touch screens from
+  `drivers/hid/hid-quirks.c`, `hid_quirks[]`, in the 98 SE and ME INF
+  only, as whether they send the Digitizer page or an ordinary absolute
+  mouse report is not known; the values from `hid-ids.h` (all
+  GPL-2.0-or-later; ids only, as facts). Not listed: the vendor-protocol
+  screens of `usbtouchscreen.c` (absptr does not speak their protocols,
+  section 13), pens (no public list of HID pens' ids was found; Genius's
+  in `hid-quirks.c` need report descriptor fixes), and KVM absolute mice
+  (no public source says which send 12-bit fields or 0..65535). A device
+  listed by id but built as a composite device (several interfaces)
+  fails to start under absptr, which serves one HID interface (Q5). And
+  a "Generic" model with an id no device has (`USB\VID_FFFF&PID_FFFF&
   REV_FFFF`), the entry Update Driver's "Have Disk" offers for any other
-  HID touch screen or pen. `testinf.ps1` writes test copies of both INFs
+  device. `testinf.ps1` writes test copies of both INFs
   with the simulator's ids (`FFFF:0031`, `0032`, `0034`, `0036`, `0037`) for the
   legs; they are never released.
 - **hidclass.sys and hidparse.sys on 98 SE** are Microsoft's and are not
@@ -437,8 +539,10 @@ parser, the front ends, the report), `absptr.h`, `absptr.rc`,
 core), `testinf.ps1` (the test INF copies), `ptrtest.c` and `ptrtest.cmd`
 (the guest reading tool), `absemu.py` (the simulator).
 
-Released folders: `free/hid/absptr/w98se-me/` (98 SE, ME) and
-`free/hid/absptr/w2k-xp/` (2000, XP 32-bit). No x64 build in v1 (Q6).
+Planned release folders (none released yet): `free/hid/absptr/w98se-me/`
+(98 SE, ME), `free/hid/absptr/w2k-xp/` (2000, XP 32-bit) and an x64
+folder for XP x64, Vista x64 and 7 x64 (`absptr64.inf`, the wdm64
+build), named by the owner at the release.
 
 ## 10. What is adapted, and the NOTICE.md rows
 
@@ -493,18 +597,12 @@ controller driver whose leg is missing.
 - Calibration and axis swap/inversion (Q4), multi-monitor.
 - Later Wacom tablets (Graphire, Intuos), each with its own protocol in
   `wacom_wac.c`.
-- On 98 SE, now and then the first touch after the device starts moves
-  the pointer but its press is not seen; every later touch is right
-  (record, "Open points"). Not seen on ME, 2000 or XP. To be traced
-  before touch screen support is called ready on 98 SE (Q8).
-- 2000 shows "Unsafe Removal of Device" when an absptr device is
-  unplugged: the driver does not report the device as safe to remove by
-  surprise (`SurpriseRemovalOK` in its `IRP_MN_QUERY_CAPABILITIES`
-  answer). XP does not show the dialog (Q8).
+- Ids of HID pens and of KVM absolute mice with 12-bit fields or a
+  0..65535 range, when a public source or the owner's bench names them
+  (section 8).
 - XP's child device keeping its earlier driver (section 8): absptr's own
   product id in `IOCTL_HID_GET_DEVICE_ATTRIBUTES` would give the child a
   new device id, and so a fresh install as a mouse; not tried.
-- x64 builds for XP x64 (Q6).
 
 ## 14. Records
 
@@ -518,10 +616,8 @@ legs of section 12.
   their terms from a browser and decide? Recommended: leave them out of
   usb-wdm-nonfree for now, listed as "Not shipped" with their makers'
   pages.
-- **Q2. Which ids the release INFs list**: (a) the PenPartner and the
-  "Have Disk" Generic entry; (b) also HID touch screens and pens by
-  VID/PID from public lists (Linux `hid-multitouch.c`'s table, facts
-  only), none of them tried. Recommended: (a).
+- **Q2. Which ids the release INFs list**: answered by the owner,
+  2026-11-06: known devices by id, each with its source (section 8).
 - **Q3. Pen buttons**: barrel switch as the right button and the eraser
   as a pen tip (default above), or another mapping? Recommended: as above.
 - **Q4. Calibration**: none in v1 (the full logical range is the whole
@@ -530,18 +626,76 @@ legs of section 12.
 - **Q5. Composite touch screens** (a HID touch interface next to other
   functions): refused in v1, or bound per interface (`&MI_xx`)?
   Recommended: refused in v1.
-- **Q6. x64**: none in v1, or an XP x64 build? Recommended: none in v1.
-- **Q7. Screens a maker's driver covers on 2000 and XP** (EETI, Elo):
-  absptr's INFs list no such ids, so they are bound only by "Have Disk";
-  leave it so, or say in the release notes which maker covers which
-  screen? Recommended: leave the INFs so and name the makers in the
-  release notes.
-- **Q8. The two open points of section 13** (98 SE's first touch after a
-  start, 2000's "Unsafe Removal" dialog): (a) fix both before the first
-  release (a trace of the first reports after a start; the capability in
-  the driver's PnP path), with the 98 SE and 2000 legs run again; (b)
-  release with them listed as known issues. Recommended: (a); the
-  PenPartner and absolute mouse legs are unaffected either way.
-- **Q9. XP's install steps** (section 8): only in the release notes, or
-  also a small tool that does the Update Driver and the child's
-  reinstall? Recommended: the release notes in v1.
+- **Q6. x64**: answered by the owner, 2026-11-06: an x64 build, XP x64
+  in full, Vista x64 and 7 x64 for the gaps their own support leaves
+  (sections 3.1 and 8).
+- **Q7. Screens a maker's driver covers on 2000 and later** (EETI, 3M,
+  Elo): answered by the owner, 2026-11-06: the makers named in the
+  release notes. The 2000-and-later INFs list none of their ids (the
+  eGalax and 3M groups are in the 98 SE and ME INF only; no Elo id is
+  in the lists), so on those systems such a screen is bound only by
+  "Have Disk".
+- **Q8** (the first legs' two points): answered by the owner,
+  2026-11-06: fixed before the first release (sections 6 and 7).
+- **Q9** (XP's install steps): answered by the owner, 2026-11-06: in the
+  release notes draft only (section 16), no tool.
+
+Owner, 2026-11-06: Q3 barrel switch as the right button and the eraser
+as the tip; Q4 no calibration in v1; Q5 composite touch screens refused
+in v1; Q7 the makers named in the release notes.
+
+## 16. Release notes draft
+
+For the owner's release notes when absptr is first released (not in
+`docs/release-notes.md` until then).
+
+- **absptr, absolute pointing devices** (`hid/absptr/w98se-me/`, 98 SE
+  and ME; `hid/absptr/w2k-xp/`, 2000 and XP, 32-bit; the x64 folder, XP
+  x64, Vista x64 and 7 x64):
+  - On 98 SE and ME: the Wacom PenPartner, HID touch screens and pens,
+    and absolute mice that Windows does not place right (12-bit
+    positions). The touch screens of section 8 are found by their ids;
+    for another touch screen or pen, use Update Driver and "Have Disk"
+    with this folder and pick "HID touch screen or pen tablet (absptr)".
+  - On 2000 and XP: only what Windows' own driver cannot use: the
+    PenPartner, HID touch screens and pens, and absolute mice with
+    12-bit positions or a 0..65535 range (KVM switches' and remote
+    consoles' mice, some of them). Absolute mice that already work, such
+    as a virtual machine's tablet, are left to Windows.
+  - On XP x64: as on 32-bit XP. On Vista x64: the PenPartner, HID touch
+    screens and the same absolute mice; Vista's own pen support is left
+    alone. On 7 x64: the PenPartner and the same absolute mice; 7's own
+    pen and touch support is left alone.
+  - A touch is the left button; a pen's tip is the left button, its
+    barrel switch the right button and its eraser the tip.
+  - Installing on ME: ME first installs its own HID driver without
+    asking. In Device Manager, open the device under Human Interface
+    Devices, Properties, Update Driver, and let it search: it finds
+    `ABSPTR.INF` on the disk.
+  - Installing on 2000: when the device is new to Windows it is found at
+    the first plug (Windows asks about the missing digital signature:
+    Yes). A device that Windows already set up with its own HID driver:
+    uninstall it in Device Manager, then "Scan for hardware changes".
+  - Installing on XP: XP prefers its own signed HID driver. In Device
+    Manager, open "USB Human Interface Device", Update Driver, "No, not
+    this time", "Install from a list or specific location", "Don't
+    search. I will choose the driver to install", pick the absptr entry
+    (Have Disk and this folder if it is not listed), "Continue Anyway".
+    For a touch screen or pen, then uninstall the "HID-compliant device"
+    under it (View, Devices by connection) and "Scan for hardware
+    changes": it comes back as "HID-compliant mouse".
+  - Installing on XP x64: as on XP, from the x64 folder.
+  - Installing on Vista x64 and 7 x64: the driver needs a signature
+    Windows accepts (see the x64 notes of this release). Stage the INF
+    from an elevated prompt (`pnputil -a absptr64.inf`), then in Device
+    Manager open the "USB Input Device" under Human Interface Devices,
+    Update Driver Software, "Browse my computer", "Let me pick from a
+    list", and the absptr entry. On Vista x64, for a touch screen, then
+    uninstall the "HID-compliant device" under it and "Scan for hardware
+    changes", as on XP.
+  - Makers' own drivers: Wacom's 4.78-6 (98 to XP) for its tablets of
+    that time, Elo, EETI (eGalax) and 3M for their touch screens, where
+    the user has them (usb-wdm-nonfree, "Not shipped").
+  - Not served: touch screens with a maker's own USB protocol (not HID),
+    composite touch screens, calibration, 64-bit Windows after 7.
+

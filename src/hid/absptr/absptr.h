@@ -90,6 +90,9 @@ NTSTATUS HidRegisterMinidriver(PHID_MINIDRIVER_REGISTRATION MinidriverRegistrati
 #define AP_QLEN 16              /* pointer states waiting for a read */
 #define AP_NAME_MAX 64          /* product string characters kept */
 #define AP_MODE_TRIES 3         /* PenPartner mode switch attempts (5.2) */
+#define AP_FIRST_GAP_MS 100     /* pause after the first report of a start (design 6) */
+#define AP_RESUME_TRIES 3       /* device setup attempts after a resume (design 7) */
+#define AP_RESUME_GAP_MS 250    /* between them */
 
 #define AP_PENPARTNER_VID 0x056A
 #define AP_PENPARTNER_PID 0x0000
@@ -126,6 +129,7 @@ typedef struct AP_DEV {
     ULONG PowerGen;             /* moves on at every D0 and every power-down */
     ULONG ResumeGen;            /* PowerGen of the latest D0 */
     BOOLEAN InSetup;            /* the D0 work item is sending its setup requests */
+    BOOLEAN Failed;             /* setup failed after a resume: reported to PnP */
     KEVENT SetupIdle;           /* signalled when InSetup is FALSE */
     WORK_QUEUE_ITEM ResumeWork;
 
@@ -142,6 +146,10 @@ typedef struct AP_DEV {
     AP_STATE Q[AP_QLEN];        /* states not yet read by hidclass */
     ULONG QHead, QCount;
     AU8 LastButtons;            /* the buttons of the last report read */
+    BOOLEAN Reported;           /* a report was read since the start */
+    BOOLEAN Gated;              /* no report is read until GapTimer fires */
+    KTIMER GapTimer;
+    KDPC GapDpc;
 
     AP_XFER In[AP_IN_COUNT];
 
@@ -168,6 +176,7 @@ VOID ApUsbQueueResume(AP_DEV *dev);
 VOID ApQueueStateLocked(AP_DEV *dev, const AP_STATE *prev);
 PIRP ApTakeReadyReadLocked(AP_DEV *dev);
 VOID ApFailReads(AP_DEV *dev, NTSTATUS status);
+VOID ApCancelGap(AP_DEV *dev);
 
 /* The trace flavour (build.cmd wdmx86 trace, test-only, never released):
  * one line per event to QEMU's debug console port 0xE9, "ap: tag a b c". */

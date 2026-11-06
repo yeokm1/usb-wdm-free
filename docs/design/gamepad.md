@@ -398,6 +398,9 @@ through a small queue, one in flight, as Linux does (`xpad_try_sending_next_out_
 - PnP: on `IRP_MN_START_DEVICE`, forward first, then read descriptors,
   select the configuration, run the family's init (5.2-5.4) and arm the
   interrupt IN. On stop/remove, abort pipes and drain.
+  `IRP_MN_QUERY_CAPABILITIES` goes down first and comes back with
+  `SurpriseRemovalOK` set, so 2000 does not show "Unsafe Removal of
+  Device" when a pad is unplugged (added 2026-11-06, with `absptr`).
 - `IOCTL_HID_GET_DEVICE_DESCRIPTOR` / `_GET_REPORT_DESCRIPTOR` return the
   synthesized descriptors (6.2); `_GET_DEVICE_ATTRIBUTES` returns the pad's
   real VID/PID/bcdDevice; `_GET_STRING` the product string (or the

@@ -493,6 +493,15 @@ int ApParse(const AU8 *desc, unsigned len, void *work, AP_SOURCE *src)
         return AP_E_NOSOURCE;
     src->UsesIds = w->UsesIds;
     src->ReportBytes = ReportBytes(w, 0, src->ReportId);
+    {
+        unsigned id;
+        for (id = 0; id < 256; id++)
+            if (w->Bits[0][id]) {
+                src->InBytes[id] = ReportBytes(w, 0, (AU8)id);
+                if (src->InBytes[id] > src->MaxInBytes)
+                    src->MaxInBytes = src->InBytes[id];
+            }
+    }
     if (w->HaveDevMode) {
         src->DevMode = w->DevMode;
         src->DevModeId = w->DevMode.ReportId;
@@ -702,6 +711,17 @@ static int MultiTouch(const AP_SOURCE *src, const AU8 *body, unsigned bytes, AP_
     st->Remaining = t.Remaining;
     st->TrackId = t.TrackId;
     return (int)i;
+}
+
+unsigned ApReportLength(const AP_SOURCE *src, const AU8 *rep, unsigned avail)
+{
+    unsigned n;
+    if (avail == 0)
+        return 0;
+    if (src->Kind == AP_KIND_PENPARTNER || src->MaxInBytes == 0)
+        return avail;
+    n = src->InBytes[src->UsesIds ? rep[0] : 0];
+    return n;
 }
 
 int ApTranslate(const AP_SOURCE *src, const AU8 *rep, unsigned len, AP_STATE *st)

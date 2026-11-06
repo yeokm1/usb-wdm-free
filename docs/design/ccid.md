@@ -64,7 +64,7 @@ downloaded):
 | HID Global (OMNIKEY 3x21) | its driver list has 2000/XP entries (workbench tools), current CCID drivers for 7 and later; no 98/ME entry found | terms not read |
 | Gemalto / Thales (GemPC, IDBridge) | not searched | - |
 | ACS (ACR38 and family) | ACS's product documentation names CCID drivers for 98, ME, 2000 and XP | packages and terms not read |
-| Microsoft | "USB Smart Card reader" (catalog update `8a9785ae-b679-4da9-a627-1c84424d556d`, 2005-05-17, for 2000, XP and Server 2003): `usbccid.sys` 5.2.3790.2444, a kernel driver matching `USB\Class_0B&SubClass_00`; the cab `10373903_41f8f3383ea94733495ae519f7cf458edb85de77.cab`, 25,886 bytes, SHA-256 `3cf8d69b185f909a6012c34cbd7b3c84d3fd6cb676785fc270a235c011517f0d`, from `catalog.s.download.windowsupdate.com/msdownload/update/v3-19990518/cabpool/`. Also "Microsoft Usbccid Smartcard Reader (WUDF)" 6.0.6001.18176 for XP (update `1ae5fdcc-7718-4991-a1bd-bc1c47d2f624`, 2,808,885 bytes, SHA-256 `7a3af6572cf6ab953039f97e4960d87c7467178b2958c13261689dfc932a243d`, a user-mode driver with Microsoft's framework co-installers) | the cabs hold no licence text; the catalog's FAQ says "Software updates you receive through the Microsoft Update Catalog are governed by any license terms that come with them. If no license terms come with them, they may be governed by the original license agreement." (an owner question whether usb-wdm-nonfree may carry them) |
+| Microsoft | "USB Smart Card reader" (catalog update `8a9785ae-b679-4da9-a627-1c84424d556d`, 2005-05-17, for 2000, XP and Server 2003): `usbccid.sys` 5.2.3790.2444, a kernel driver matching `USB\Class_0B&SubClass_00`; the cab `10373903_41f8f3383ea94733495ae519f7cf458edb85de77.cab`, 25,886 bytes, SHA-256 `3cf8d69b185f909a6012c34cbd7b3c84d3fd6cb676785fc270a235c011517f0d`, from `catalog.s.download.windowsupdate.com/msdownload/update/v3-19990518/cabpool/`. Also "Microsoft Usbccid Smartcard Reader (WUDF)" 6.0.6001.18176 for XP (update `1ae5fdcc-7718-4991-a1bd-bc1c47d2f624`, 2,808,885 bytes, SHA-256 `7a3af6572cf6ab953039f97e4960d87c7467178b2958c13261689dfc932a243d`, a user-mode driver with Microsoft's framework co-installers) | the cabs hold no licence text; the catalog's FAQ says "Software updates you receive through the Microsoft Update Catalog are governed by any license terms that come with them. If no license terms come with them, they may be governed by the original license agreement for the software to which they apply." usb-wdm-nonfree carries both, unpacked (owner, 2026-11-06) |
 
 The survey is incomplete (no maker's terms are recorded, Gemalto not
 searched): finishing it, with exact packages, the systems each covers and
@@ -212,8 +212,12 @@ and XP and estimate a Base Components replacement for 98 SE and ME
 `usbccid.sys` can still be downloaded for 2000 and XP, and drop the free
 reader if it can; 98 SE and ME: option A of section 7.7. The catalog
 offers it for both (section 2), so: **dropped (owner, 2026-11-06):
-Microsoft's `usbccid.sys` covers 2000 and XP.** Whether usb-wdm-nonfree
-may carry Microsoft's cab (its terms, section 2) is left to the owner.
+Microsoft's `usbccid.sys` covers 2000 and XP.** usb-wdm-nonfree carries
+both catalog cabinets, unpacked, in `non-free/smartcard/usbccid/` (owner,
+2026-11-06; the terms are in section 2). The XP user-mode build there
+matches ICCD tokens only (`USB\Class_0B&SubClass_00&Prot_01` and
+`&Prot_02`, read in its INF); the kernel driver matches every CCID
+reader.
 
 ## 7. 98 SE and ME: a free replacement for the Smart Card Base Components (estimate)
 

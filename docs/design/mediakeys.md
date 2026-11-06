@@ -1,7 +1,8 @@
 # Keyboard volume and media keys on Windows 98 SE and ME (mediakeys)
 
-Status: readings and design of 2026-11-06 (xHCI98 task 47.28); options
-put to the owner (section 7). No driver code: the
+Status: readings and design of 2026-11-06 (xHCI98 task 47.28). Owner,
+2026-11-06: option A, documentation only (section 7); B, C and D are
+kept as designs and are not built. No driver code: the
 simulator (`src/hid/mediakeys/kbdemu.py`) and the guest reading tool
 (`src/hid/mediakeys/keytest.c`, `KEYTEST.EXE`) only.
 
@@ -317,10 +318,17 @@ If the owner wants the gap closed, the smallest piece that does it:
 
 ## 7. Options for the owner
 
-- **A. No code: document it.** Release notes (and the free set's README),
-  a draft for the owner's wording: "Windows 98 SE: a keyboard's volume and
-  mute keys work after a restart; its other media keys need the keyboard
-  maker's software (Logitech: iTouch). ME, 2000 and XP support them."
+**Decision (owner, 2026-11-06): A.** B, C and D below stay as designs; none
+is built. The release-notes sentence, a draft for the owner's wording,
+for usb-wdm-free's release notes (and xHCI98's):
+
+> On Windows 98 SE, a keyboard's volume and mute keys work after a
+> restart; its other media keys need the keyboard maker's software. ME,
+> 2000 and XP handle them.
+
+The options as put:
+
+- **A. No code: document it.** The sentence above in the release notes.
   Cost: text only.
 - **B. A plus the helper with direct actions only** (Calculator, My
   Computer, browser home, Search, Mail, media player). Small; the launch
@@ -342,6 +350,9 @@ keys), C is the general one, using the message Windows defines for them,
 and it is user-mode code outside the keyboard's driver stack.
 
 ## 8. Owner questions
+
+Answered 2026-11-06: Q1 A (so Q2 and Q4 do not arise); Q3 yes, iTouch is
+in usb-wdm-nonfree's "Not shipped" list.
 
 - **Q1.** A, B, C or D? Recommended: A, then C.
 - **Q2.** (B/C) The launch targets of section 6, and whether AC Home

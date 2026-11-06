@@ -98,10 +98,11 @@ What stays different, and why it is not a simulator gap:
   that mode (design 6.3 takes the part to drive RTS itself then), so the
   test plug keeps CTS up and the bytes come back. `usbcom` holds the write itself; `COMTEST`'s expectation is
   `usbcom`'s.
-- FTDI's 98 SE drivers (FT232BM and FT2232C alike): a 65536-byte write and a
-  30000-byte write time out after 8192 bytes, `EV_RXCHAR` and `EV_TXEMPTY`
-  are not signalled, a looped-back break is not reported, and 6N1 is passed
-  to the part (which takes 7 or 8 data bits; the simulator stalls it). The
+- FTDI's 98 SE drivers (FT232BM and FT2232C alike): a 65536-byte write
+  times out with nothing written, a 30000-byte write times out after 8192
+  bytes, `EV_RXCHAR` and `EV_TXEMPTY` are not signalled, a looped-back
+  break raises `EV_BREAK` but sets no `CE_BREAK`, and 6N1 is passed to the
+  part (which takes 7 or 8 data bits; the simulator stalls it). The
   same simulator passes the large writes with CDM 2.12.36.20 on Windows 10,
   so the write stop is not shown to be the simulator's; its cause was not
   found.

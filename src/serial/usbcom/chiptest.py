@@ -244,16 +244,18 @@ class ChipTests(unittest.TestCase):
         b.handle(100, 1, struct.pack('<BBBBHHH', 0x80, 0x90, 0xC0, 0, 0, 1, 2))
         reply = [x for x in b.connection.messages() if x[0] == 100][-1][2]
         self.assertEqual((reply[3], reply[10:]), (0, b'\xff\xff'))
-        x = self.model('ftx')                                                # the latency timer
-        port = x.fns[0]
-        self.bulk_in(x, port.inp, 64, ident=29)                          # the first status, at once
-        x.handle(101, 30, struct.pack('<BBHI', port.inp, 0, 64, 0))      # then nothing to say: waits
-        self.assertEqual([r for r in x.connection.messages() if r[0] == 101], [])
-        port.last_in -= 1
-        x.latency_tick()
+        port = m.fns[0]                                                  # the 2 ms timer set above
+        self.bulk_in(m, port.inp, 64, ident=29)                          # the first status, at once
+        m.handle(101, 30, struct.pack('<BBHI', port.inp, 0, 64, 0))      # then nothing to say: waits
+        m.latency_tick()
+        self.assertEqual([r for r in m.connection.messages() if r[0] == 101], [])
+        port.last_in -= 0.0021                                          # 2.1 ms later
+        m.latency_tick()
         replies = [r for r in self.connection.messages() if r[0] == 101 and r[1] == 30]
         self.assertEqual(replies[-1][2][8:], bytes([0x01, 0x60]))
-        self.assertEqual(x.status_packets, 1)
+        self.assertEqual(m.status_packets, 1)
+        a = self.model('ft232am')                                        # no latency timer on the AM
+        self.assertEqual(self.control(a, 0xC0, 0x0A, 0, 0, 1)[0], 4)
         c = self.model('cp2102')
         status, props = self.control(c, 0xC1, 0x0F, 0, 0, 164)              # before IFC_ENABLE
         self.assertEqual((status, len(props), props[:2]), (0, 66, b'B\x00'))
@@ -264,8 +266,21 @@ class ChipTests(unittest.TestCase):
         self.control(c, 0x41, 0x00, 1, 0)
         status, comm = self.control(c, 0xC0, 0x10, 0, 0, 19)                # to the device
         self.assertEqual((status, len(comm)), (0, 19))
-        self.assertEqual(self.control(c, 0x41, 0x06, 0x5A, 0)[0], 0)        # IMM_CHAR comes back
+        self.assertEqual(self.control(c, 0x41, 0x06, 0x15A, 0)[0], 4)       # IMM_CHAR: a byte only
+        self.control(c, 0x41, 0x07, 0x0200, 0)                           # RTS low: CTS holds
+        block = struct.pack('<IIII', 0x09, 0x40, 128, 128)
+        self.control(c, 0x41, 0x13, 0, 0, 16, block)                     # CTS handshake, RTS low
+        self.control(c, 0x41, 0x07, 0x0200, 0)
+        self.bulk_out(c, c.fns[0].out, b'ABC')
+        comm = self.control(c, 0xC1, 0x10, 0, 0, 19)[1]
+        self.assertEqual(struct.unpack_from('<II', comm, 8), (0, 3))     # waiting to go out
+        self.assertEqual(self.control(c, 0x41, 0x06, 0x5A, 0)[0], 0)        # IMM_CHAR goes first
+        self.control(c, 0x41, 0x07, 0x0202, 0)                           # CTS back
         self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=31), b'Z')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=32), b'ABC')
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0801, 0)[0], 4)      # 8 bits, 1.5 stop
+        one = self.model('cp2101')
+        self.assertEqual(self.control(one, 0x41, 0x03, 0x0700, 0)[0], 4)    # the CP2101: 8 bits only
 
 
 if __name__ == '__main__':

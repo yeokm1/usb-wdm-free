@@ -438,6 +438,8 @@ class ChipModel(acmemu.Model):
             return 0, b'', None
         if request == 5:
             return 0, bytes([self.ftdi_status(f), FT_IDLE1]), None
+        if request in (9, 0x0A) and self.part == 'ft232am':
+            return 4, b'', None                           # the AM has no latency timer (Linux)
         if request == 9:
             f.latency = max(1, value & 0xFF)
             self.log('latency', ms=f.latency, function=f.index)
@@ -579,17 +581,23 @@ class ChipModel(acmemu.Model):
         if request == 0x0E:
             return 0, f.chars, None
         if request == 0x06:
-            # IMM_CHAR: the character goes out at once, so the plug brings it back.
-            self.log('imm_char', char=value & 0xFF, function=f.index)
+            # IMM_CHAR: a byte (a larger wValue is refused) that goes out ahead
+            # of what waits, so the plug brings it back first.
+            if value > 0xFF:
+                return 4, b'', None
+            self.log('imm_char', char=value, function=f.index)
             if f.enabled:
-                f.echo.append(bytes([value & 0xFF]))
+                f.echo.appendleft(bytes([value]))
                 f.queued += 1
                 self.drain_fn(f)
             return 0, b'', None
         if request == 0x10:
-            # GET_COMM_STATUS (cp210x_comm_status): no errors or holds, the
-            # bytes waiting for the host, nothing waiting to go out.
-            return 0, struct.pack('<IIIIBBB', 0, 0, f.queued, 0, 0, 0, 0), None
+            # GET_COMM_STATUS (cp210x_comm_status): no errors; the looped-back
+            # bytes wait for the host, or, while CTS holds them, to go out. The
+            # hold-reason bits are not modelled (0).
+            held = f.flow and not f.rts
+            return 0, struct.pack('<IIIIBBB', 0, 0, 0 if held else f.queued,
+                                  f.queued if held else 0, 0, 0, 0), None
         if request == 0x1E and length == 4:
             f.rate = struct.unpack('<I', payload)[0]
             self.log('rate', rate=f.rate, function=f.index)
@@ -598,10 +606,13 @@ class ChipModel(acmemu.Model):
             return 0, struct.pack('<I', f.rate), None
         if request == 0x03:
             bits, parity, stop = (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F
-            if bits not in (5, 6, 7, 8) or parity > 4 or stop > 2:  # stop 1: 1.5 (cp210x.c)
+            if bits not in (5, 6, 7, 8) or parity > 4 or stop > 2:  # stop 1: 1.5
                 return 4, b'', None
-            if self.extra['partnum'] == 5 and f.index == 1 and (bits != 8 or parity > 2 or stop != 0):
-                return 4, b'', None                       # the CP2105's second interface
+            if stop == 1 and bits != 5:
+                return 4, b'', None                       # 1.5 stop bits: 5 data bits only
+            narrow = self.extra['partnum'] == 1 or (self.extra['partnum'] == 5 and f.index == 1)
+            if narrow and (bits != 8 or parity > 2 or stop != 0):
+                return 4, b'', None                       # the CP2101, the CP2105's second interface
             f.framing = (bits, parity, stop)
             self.log('framing', bits=bits, parity=parity, stop=stop, function=f.index)
             return 0, b'', None
@@ -682,7 +693,8 @@ class ChipModel(acmemu.Model):
         while True:
             if self.family == 'ftdi':
                 self.latency_tick()
-                if not select.select([self.connection], [], [], 0.004)[0]:
+                wait = min(f.latency for f in self.fns) / 2000
+                if not select.select([self.connection], [], [], wait)[0]:
                     continue
             if self.ids64:
                 kind, length, ident = struct.unpack('<IIQ', self.exact(16))

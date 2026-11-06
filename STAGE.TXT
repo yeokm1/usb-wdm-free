@@ -91,11 +91,11 @@ COPY  | WVISTA64 W7X64 | free/net/cdcnet/wv-7-x64/CDCRNDIS.INF | binds Windows R
 
 # ---- net/rtl815x
 PACKAGE  | net/rtl815x | DEVICE | USB Ethernet (rtl815x): Realtek RTL8152, 8153, 8156, 8157 and 8159 adapters
-COPY  | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | copy only (owner, 2026-10-24): simulator legs only, no device; chip core rewritten in 0.1.2
-COPY  | W2K | free/net/rtl815x/w2k/RTL815X.INF | copy only (owner, 2026-10-24): no leg
-COPY  | WXP | free/net/rtl815x/wxp/RTLXP7.INF | copy only: simulator legs only, no device
+STAGE | W98SE WME | free/net/rtl815x/w98se-me/RTL81598.INF | staged on simulator legs (owner, 2026-11-06)
+STAGE | W2K | free/net/rtl815x/w2k/RTL815X.INF | staged on simulator legs (owner, 2026-11-06)
+STAGE | WXP | free/net/rtl815x/wxp/RTLXP7.INF | staged on simulator legs (owner, 2026-11-06)
 COPY  | WVISTA W7 | free/net/rtl815x/wv-7-x86/RTLXP7.INF | copy only: simulator legs only, no device
-COPY  | WXP64 | free/net/rtl815x/wxp-x64/RTLXP7.INF | copy only: simulator legs only, no device
+STAGE | WXP64 | free/net/rtl815x/wxp-x64/RTLXP7.INF | staged on simulator legs (owner, 2026-11-06)
 COPY  | WVISTA64 W7X64 | free/net/rtl815x/wv-7-x64/RTLXP7.INF | copy only: simulator legs only, no device; test-signed
 
 # ---- net/ax88179

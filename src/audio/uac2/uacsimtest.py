@@ -433,7 +433,13 @@ class ProfileTest(unittest.TestCase):
         # Adaptive playback has no feedback endpoint; async playback has one.
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)
-        self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 3)
+        self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 4)
+        self.assertEqual(uacemu.Profile('fs', fs_feedback=3).stream_alt(1, 1)['feedback']['max'], 3)
+        # Full Speed feedback values: 16.16 in a 4-byte endpoint, 10.14 in 3.
+        for fb, value in ((4, struct.pack('<I', 48 << 16)), (3, struct.pack('<I', 48 << 14)[:3])):
+            m = uacemu.Model(Wire(), io.StringIO(), lambda: self.time,
+                             profile=uacemu.Profile('fs', fs_feedback=fb))
+            self.assertEqual(m.feedback_value(m.p.stream_alt(1, 1)), value)
 
     def test_alc4080_endpoints(self):
         # The assumed ALC4080 layout (uac2.md section 15.4): the planner
@@ -634,6 +640,27 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8),
                          (0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x100)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x100))[0], 4)
+
+    def test_mixer_and_selector_units(self):
+        # The X4 layout's Mixer Unit 7 and Selector Unit 26 (AC interface 3):
+        # Windows' own UAC 2.0 driver reads both with GET CUR and stops the
+        # function (Code 10) when either stalls.
+        m, _, _ = self.model('x4full')
+        self.configure(m)
+        e = m.p.entities[7]
+        self.assertEqual(e['unit'], 'mixer')
+        n = sum(m.cluster(i) for i in e['inputs']) * e['channels']
+        self.assertTrue(0 < n < 256)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0703, 2), (0, b'\0\0'))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100 | (n - 1), 0x0703, 2), (0, b'\0\0'))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100 | n, 0x0703, 2)[0], 4)
+        self.assertEqual(self.control(m, 2, 0xa1, 0x100, 0x0703, 8), (0, struct.pack('<Hhhh', 1, 0, 0, 0)))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0703, 2, b'\0\0')[0], 4)   # none programmable
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x1a03, 1), (0, b'\1'))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\2')[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x1a03, 1), (0, b'\2'))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\5')[0], 4)   # 4 inputs
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x1a03, 1)[0], 4)
 
     def test_feature_unit_modes_and_access(self):
         # The descriptor's bmaControls decide what answers: SET only where
@@ -841,7 +868,7 @@ class ProfileTest(unittest.TestCase):
 
     def test_playback_formats_and_feedback(self):
         for name, alt, frame, value in (('hs24', 2, 6, struct.pack('<I', 6 << 16)),
-                                         ('fs', 1, 4, struct.pack('<I', 48 << 14)[:3])):
+                                         ('fs', 1, 4, struct.pack('<I', 48 << 16))):
             m, wire, _ = self.model(name)
             self.configure(m, (1, alt))
             m.handle(12, 1, bytes((1, 8, 4)))

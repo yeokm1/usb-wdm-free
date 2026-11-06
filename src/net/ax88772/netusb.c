@@ -1157,6 +1157,13 @@ void NetUsbStop(void *device)
         if (d->ThreadObject) {
             KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode, FALSE, NULL);
             ObDereferenceObject(d->ThreadObject);
+        } else {
+            /* Windows 98 and ME: no thread object to wait on. The worker
+             * has only PsTerminateSystemThread left after the event; give
+             * it time to get there before this image can be unloaded. A
+             * delay narrows the window and does not close it (the other
+             * packages' copies have no delay at all). */
+            Sleep(100);
         }
     }
     Quiesce(d);

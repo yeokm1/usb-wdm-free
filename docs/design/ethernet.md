@@ -1230,7 +1230,7 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   (the counters, not the frame bytes), and only if the whole transfer
   is well formed walks it again and emits. A malformed transfer clears
   the live position, so a carried frame is dropped with it, and emits
-  nothing. Five changes, all kept out of the other packages' builds:
+  nothing. Six changes, all kept out of the other packages' builds:
   1. The carry state (the partial frame, up to 1518 bytes, its length
      and the half header) lives in the chip state, which this package
      enlarges: netchip.h's `NET_CHIP_STATE` becomes overridable
@@ -1285,6 +1285,11 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      while allocations keep failing); the worker's next tick and the
      next completion pump again. The other packages' copies have the
      same loop.
+  6. On 98 SE and ME the worker thread cannot be joined (a wait on a
+     thread object faults there; section 4.7.1), so halt waits for its
+     exit event and then 100 ms more before the image may be unloaded.
+     This narrows the gap between the event and the thread's end; it
+     does not close it. The other packages' copies have no delay.
 
 **INF.** `AX772F98.INF`, one `$CHICAGO$` INF for 98 SE and ME (section
 7.1), listing the four ids above. No NT INF: on 2000 and later ASIX's

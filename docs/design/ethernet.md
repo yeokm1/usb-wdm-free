@@ -441,6 +441,23 @@ NDIS 5 completion routine, including on stop or removal.
   outstanding receive owner is tracked so halt cannot return while any
   can still access the adapter (section 4.7.1). Draining canceled requests
   does not mean waiting for a response from the removed device.
+  Owner, 2026-11-07 (a real RTL8157 under xHCI98 on XP): a host
+  controller driver may hold a departed device's transfers instead of
+  failing them (xHCI98 parks them on the device until the pipe is aborted
+  or the device removed), while TCP/IP does not unbind - so `MiniportHalt`
+  never comes - before every send it made has completed. Unplugged under
+  traffic, the adapter stayed in Device Manager with 40 sends held in the
+  transmit slots, a replug never loaded and shutdown hung. The core now
+  reports a departure, whichever way it is found (a failed transfer, the
+  2 s link poll's control read, an abort answering device-gone), before
+  it waits for any transfer: the gate closes, the pump is let finish,
+  every frame a transmit slot holds is completed failed at once (its data
+  was copied into the slot, which stays busy until its IRP ends),
+  `Link(-1)` flushes the queue, and the pipes are aborted (`ReleaseGone`,
+  `AbortGone`, the check at the top of each `Quiesce` pass and between its
+  aborts; `Quiesce` repeats the aborts while transfers remain). A
+  synchronous abort that never completes is still waited for: no lower
+  driver seen does that.
 - **Reset** (`MiniportReset`): reset the pipes (`RESET_PIPE` after
   `ABORT_PIPE`) and re-run the package's `Start` without reconfiguring.
   USB recovery runs asynchronously at passive level; the callback returns
@@ -949,7 +966,7 @@ independently, gave the same requests as the shared tables
   RTL8159 [linux] lines 9887, 9909; this core uses 32 KiB for both, the
   lower edge's largest (`RX_BUFFER_MAX`), with the early receive size set
   from it, so no transfer is longer than the buffer. Transmit 16 KiB as for
-  the others [linux] line 1275.
+  the others [linux] line 1275 (32 KiB was tried, section 6.4.2).
 - **Link speed**: `0xe908` bits 10, 12 and 14 give 2500, 5000 and 10000
   Mb/s [linux] lines 746-748; NDIS gets them in 100 b/s units
   (`OID_GEN_LINK_SPEED`: 100,000,000 at 10 Gb/s, which fits a `ULONG`).
@@ -960,6 +977,62 @@ independently, gave the same requests as the shared tables
   chip, so none of them is known to be an RTL8157 or RTL8159; the core
   takes the chip from its id register behind whatever USB id the INF
   lists.
+
+#### 6.4.2 The RTL8157 on real hardware (2026-11-07)
+
+A real RTL8157 (chip `1030`, USB `0BDA:8157` rev 3000) was passed through
+to QEMU guests and cabled to a 10GbE port; record
+`docs/testing/2026-11-07-rtl8157-hardware.md`. Owner's decisions of
+2026-11-06/07 after it:
+
+- **Removal under traffic** (section 4.7): fixed in the shared core.
+- **98 SE send status**: 98 SE's NDIS reads the `Status` member of a
+  packet a deserialized miniport accepts and hands a packet left at
+  another value back to its protocol while the miniport still holds it.
+  The send queue (linked through `MiniportReserved`) was then corrupted:
+  sends stalled and the 98 TCP/IP took fatal exceptions 0E. Every packet
+  is now set to `NDIS_STATUS_PENDING` in `MiniportSendPackets`, which the
+  2000 DDK's page on that handler allows for a deserialized driver.
+- **The core's lock**: on 98 SE `NdisAcquireSpinLock` did not keep the
+  lower edge's USB completions out of the core's queues; the core takes
+  the kernel spin lock inside its `NDIS_SPIN_LOCK` directly (on NT what
+  `NdisAcquireSpinLock` does).
+- **Receive**: frames of one bulk-IN transfer are indicated in arrays of
+  up to 16 (`NET_RX_GATHER` on the completion's stack); a pool-low frame
+  goes alone with `NDIS_STATUS_RESOURCES` after what is gathered.
+- **Bulk-IN depth**: 8 transfers outstanding on every chip (4 before;
+  Linux 10, Realtek's Windows 10 driver 5 were seen).
+- **Transmit queue**: a valid send is never failed because the core's
+  queue is long. The queue is the packets themselves, linked through
+  `MiniportReserved`, so it needs no allocation and has no limit, as the
+  NDIS 5 rules for a deserialized miniport require. The pump is kicked
+  every 8 packets of a long array. Before, a 64-frame limit failed sends
+  under load: 3191 in an 11-minute run on XP, each a loss for TCP.
+- **Transmit size**: 32 KiB, at most 20 frames, on the RTL8157 and
+  RTL8159 (Realtek's size: its Windows 10 driver sent bulk-OUT transfers
+  of up to 32848 bytes) was measured with no outbound gain and is held
+  for the owner, off this line of commits. Every chip keeps 16 KiB.
+- **PHY power-down** at halt, disable and suspend: MII control bit 11 set
+  after the sleep steps; every setup table clears it. Realtek's Windows 10
+  driver does this on disable (a capture of it on the RTL8157); Linux
+  leaves the PHY up, so an rtl815x adapter that was disabled kept a
+  5 Gb/s link before.
+- **Kept as Linux sets them**: EEE (100M to 5G advertised), ALDPS, EEE and
+  10M clock division, MAC clock slow-down. Realtek's Windows 10 driver
+  leaves all of these off by default (`*EEE` 0, `EnableGreenEthernet` 0,
+  `AdvancedEEE` 0, `EnableExtraPowerSaving` 0 in its INF; the captured
+  register writes agree). Both leave the chip's U1/U2 off while the link
+  is up, as Linux does for the 8157, and its UPS and power-cut features
+  off.
+- **Kept**: the 2 s link poll, the one detector of an unplug while the
+  host controller driver holds the transfers.
+- **Not done**: checksum offload (later); a larger receive pool for the
+  fast chips on NT (an experiment, adopted only if it clearly helps).
+
+Still open on 98 SE: sustained TCP in either direction stalls after
+10-100 MB, once with a corrupted 17512-byte region of the stream, and the
+98 TCP/IP (`MSTCP`) faults with exceptions 0E; the receive pool stays
+whole when it happens. XP never showed it (1.4 GB both ways).
 
 ### 6.5 Interaction with the RTL8153's ECM mode
 

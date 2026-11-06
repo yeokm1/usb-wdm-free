@@ -59,7 +59,7 @@ section 2.6 stand as far as free drivers go.
 | Realtek RTL8153C | free `rtl815x` (chip id `6400`) | same | same | nonfree INF matches (revision-less `0BDA:8153` line; U whether the driver runs it) | same U | same U | nonfree | in box 8.1 |
 | Realtek RTL8153D (`0BDA:8053`) | U (`RTL815X.INF` lists the id; its chip id is not among `rtl815x`'s, which refuses unknown ids) | U | U | gap (no `8053` line) | gap | gap | nonfree | Realtek 8+ |
 | Realtek RTL8155 | gap (`rtl815x` leaves `8155` out) | gap | gap | gap | gap | gap | nonfree | Realtek 8+ |
-| Realtek RTL8156, RTL8156B (`0BDA:8156`; `0BDA:8056` in section 6) | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | nonfree | Realtek 8/10 |
+| Realtek RTL8156, RTL8156B (`0BDA:8156`, `0BDA:8056`) | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | nonfree | Realtek 8/10 |
 | Realtek RTL8157, RTL8159 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | Realtek 10+ |
 | Realtek RTL8150 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | candidate (Vista INF would install, owner question 8) | - |
 | Davicom DM9601 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
@@ -267,8 +267,8 @@ drivers in 44.68).
 | AX88172 | XP x64, Vista, 7 | no build found. Stays uncovered |
 | AX88172A | 98 SE, ME | no build found. Stays uncovered |
 | AX88772E, AX88279A | 98 SE to 7 | ASIX lists 8 or 10 and later; id not settled (U); `cdcnet` if they present NCM (U). Stays uncovered |
-| RTL8156, RTL8156B on `0BDA:8156` | none (closed; update of 2026-11-06) | No maker's driver covers 98 SE to Vista: Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`, and Realtek offers nothing older than XP. `rtl815x` serves them there: chip ids `7020` to `7410` since task 44.70; `RTL81598.INF`, `RTL815X.INF`, and `RTLXP7.INF` for XP, XP x64 and Vista. Simulated legs only ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)). No `rtl815x` INF lists `0BDA:8056`, which is in Realtek's 7 INF and not in Linux |
-| RTL8156B on `0BDA:8056` | 98 SE to Vista | the id is in Realtek's 7 INF only, not in Linux's table, and no `rtl815x` INF lists it (owner question, 2026-11-06). Stays uncovered |
+| RTL8156, RTL8156B on `0BDA:8156` | none (closed; update of 2026-11-06) | No maker's driver covers 98 SE to Vista: Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`, and Realtek offers nothing older than XP. `rtl815x` serves them there: chip ids `7020` to `7410` since task 44.70; `RTL81598.INF`, `RTL815X.INF`, and `RTLXP7.INF` for XP, XP x64 and Vista. Simulated legs only ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)). `0BDA:8056`: the next row |
+| RTL8156B on `0BDA:8056` | none (closed, 2026-11-06) | listed from the maker's INF, no device seen: the id is in Realtek's 7 INF only (its RTL8156B sections), not in Linux's table. Owner, 2026-11-06: `rtl815x` lists it on 98 SE to Vista; the chip is read from its id register. One simulator leg (XP) |
 | RTL8157, RTL8159 | 98 SE to 7 | Realtek: Windows 10 and later; the 7 INF's lines are commented out. Stays uncovered |
 | DM9601 | XP x64, Vista, 7 | Davicom's XP x64/Vista/7 INFs omit `0A46:9601`. Stays uncovered |
 | SR9700, SR9800 | 98 SE to 7 | no maker's driver found. Stays uncovered |

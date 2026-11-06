@@ -22,6 +22,7 @@ These drivers are experimental. They may not work with every device and can make
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
 | `rtl815x` | Realtek RTL8152, 8153, 8156, 8157 and 8159 USB Ethernet | 98 SE, ME, 2000. Newer chips also XP to 7, x64 too (6) |
 | `ax88179` | ASIX AX88179 and AX88178A USB Gigabit Ethernet | 98 SE, ME, 2000 |
+| `ax88772` | ASIX AX88772B and AX88772C USB Fast Ethernet | 98 SE, ME (7) |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
@@ -39,6 +40,8 @@ These drivers are experimental. They may not work with every device and can make
    current inkjets and host-based printers have no Windows 98 or ME driver.
 6. XP and Vista: the RTL8153D, 8156 and 8156B. XP, Vista and 7: the
    RTL8157 and 8159. Realtek's own drivers serve the other chips there.
+7. 2000 and later: ASIX's own driver, in usb-wdm-nonfree. The AX88772 and
+   AX88772A: ASIX's driver on every Windows.
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 

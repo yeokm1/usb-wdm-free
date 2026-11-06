@@ -77,12 +77,15 @@ static int HostEnable(NET_IO *io)
 static nc_u16 MiiRead(A7_STATE *s, NET_IO *io, nc_u8 reg)
 {
     nc_u8 b[2] = { 0, 0 };
+    s->MiiReadOk = 0;
     if (!HostEnable(io)) {
         /* Linux returns the error; the sticky status ends the stage. */
         if (io->Status >= 0) io->Status = NC_E_DEVICE;
         return 0;
     }
-    NcIoRead(io, AX_CMD_READ_MII_REG, s->PhyAddr, reg, b, 2);
+    /* MiiReadOk: the value was read, even if handing the MII back fails
+     * (a latched BMSR bit is consumed by the read itself). */
+    s->MiiReadOk = (nc_u8)(NcIoRead(io, AX_CMD_READ_MII_REG, s->PhyAddr, reg, b, 2) >= 0);
     Cmd(io, AX_CMD_SET_HW_MII, 0, 0);
     return R16(b);
 }
@@ -327,8 +330,8 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
      * AX88772A/B PHY is reset after every drop (Poll keeps the same
      * evidence). */
     bmsr = MiiRead(s, io, MII_BMSR);
+    if (s->MiiReadOk && s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
     if (io->Status < 0) return io->Status;
-    if (s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
     if (s->DownPending) {
         long r = LinkDown(s, io);
         if (r < 0) return r;
@@ -392,9 +395,10 @@ int A7Poll(void *chip, NET_IO *io)
 {
     A7_STATE *s = chip;
     nc_u16 bmsr = MiiRead(s, io, MII_BMSR);
-    if (io->Status < 0) return 0;
-    /* A drop seen here, even one already over, is kept for Link. */
-    if (s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
+    /* A drop seen here, even one already over, is kept for Link, also
+     * when handing the MII back then failed. */
+    if (s->MiiReadOk && s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
+    if (io->Status < 0) return s->DownPending;
     /* A receive stream out of step is restarted by Link (above); a
      * link-down step or a filter that failed is done again (the core
      * applies the filter after Link when the link is up). */

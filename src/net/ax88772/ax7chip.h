@@ -115,6 +115,7 @@ typedef struct A7_STATE {
     nc_u8 DownPending;           /* the link-down work (medium 0, PHY reset) is not done yet */
     nc_u8 LinkPending;           /* a Link has not finished: Poll asks for it again */
     nc_u8 MacPending;            /* SetMac failed: Link writes WantMac */
+    nc_u8 MiiReadOk;             /* the last MII read's own transfer succeeded */
     nc_u8 WantMac[6];            /* the address SetMac was asked for */
     nc_u8 FilterPending;         /* the last SetFilter failed: Link's caller applies it again */
     nc_u8 Mbps100, Full, Pause;  /* the link Link last applied */

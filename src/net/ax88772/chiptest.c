@@ -390,6 +390,22 @@ static void TestStart(void)
         CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && m.PhyResets == resets + 2);
         CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && A7Poll(State.Bytes, &io) == 0);
     }
+    /* The same drop when handing the MII back fails just after the read. */
+    {
+        int resets = m.PhyResets;
+        m.Latched = 1;
+        m.RefuseAfter = m.Requests + 3;                   /* SET_SW_MII, STATMNGSTS, READ: then refused */
+        CHECK(A7Poll(State.Bytes, &io) == 1 && s->DownPending);
+        m.RefuseAfter = 0; io.Status = NC_OK;
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && m.PhyResets == resets + 1);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+        m.Latched = 1;
+        m.RefuseAfter = m.Requests + 3;
+        CHECK(A7Link(State.Bytes, &io, &link) < 0 && s->DownPending);
+        m.RefuseAfter = 0; io.Status = NC_OK;
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && m.PhyResets == resets + 2);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && A7Poll(State.Bytes, &io) == 0);
+    }
     m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
 
     /* An address write that failed is written again by Link. */

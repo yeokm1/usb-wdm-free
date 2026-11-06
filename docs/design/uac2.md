@@ -2364,3 +2364,13 @@ such a device's feedback was too long for the request.
   3.4.1.0, against the simulator's `fs` profile with 3-byte and with 4-byte
   feedback: playback, recording, a rate change and unplug; the record says
   which.
+
+Read 2026-11-07 ([uac2-fs-feedback](../testing/2026-11-07-uac2-fs-feedback.md)):
+on 98 SE under xHCI98 and under NUSB's stack (on UHCI: QEMU's EHCI takes
+no Full Speed device) and on XP under xHCI98, both endpoint sizes played,
+recorded, survived an unplug and played again, and the packets followed
+the feedback (49 frames in about 71% of the packets at 48 kHz with the
+device 1.5% fast); a device at 44.1 kHz likewise on 98 SE. The released
+0.1.8.26 fails the 4-byte endpoint. On XP's own UHCI playback fails with
+either size, and 0.1.8.26 fails the 3-byte case the same way; the cause
+is not settled.

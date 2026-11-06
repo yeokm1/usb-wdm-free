@@ -205,7 +205,8 @@ class ChipTests(unittest.TestCase):
     def test_cp210x(self):
         m = self.model('cp2105')
         self.assertEqual(self.control(m, 0xC0, 0xFF, 0x370B, 1, 1), (0, b'\x05'))
-        self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 4)   # before enable
+        self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 0)   # before enable
+        self.assertEqual(self.events('before_enable')[-1]['request'], 0x1E)
         self.assertEqual(self.control(m, 0x41, 0x00, 1, 1)[0], 0)
         self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 0)
         self.assertEqual(self.control(m, 0x41, 0x03, 0x0800, 1)[0], 0)
@@ -225,6 +226,46 @@ class ChipTests(unittest.TestCase):
         block = struct.pack('<IIII', 0x09, 0x00, 128, 128)                # through SET_FLOW: low
         self.control(m, 0x41, 0x13, 0, 1, 16, block)
         self.assertFalse(m.fns[1].rts)
+
+    def test_maker_driver_requests(self):
+        # What the makers' own drivers sent in the 2026-11-06 reference runs.
+        for part in ('ft232am', 'ft232bm', 'ft2232c', 'cp2101', 'cp2102', 'cp2103', 'cp2104'):
+            self.assertIn(part, chipemu.PARTS)
+        m = self.model('ft232h')
+        self.assertEqual(self.control(m, 0xC0, 0x90, 0, 0x3F, 2), (0, b'\xff\xff'))  # blank EEPROM
+        self.assertEqual(self.control(m, 0x40, 4, 0x0807, 0)[0], 0)          # channel 0, 7N1.5
+        self.assertEqual(self.events('framing')[-1]['stop'], 1)
+        self.assertEqual(self.control(m, 0x40, 6, 0x011A, 0)[0], 0)          # SET_EVENT_CHAR
+        self.assertEqual(self.control(m, 0x40, 7, 0x0000, 0)[0], 0)          # SET_ERROR_CHAR
+        self.assertEqual(self.control(m, 0x40, 9, 2, 0)[0], 0)               # latency 2 ms
+        self.assertEqual(self.control(m, 0xC0, 0x0A, 0, 0, 1), (0, b'\x02'))
+        b = chipemu.ChipModel(Connection(), io.StringIO(), 'ft232bm')        # unconfigured
+        b.peer_caps = LEGACY
+        b.handle(100, 1, struct.pack('<BBBBHHH', 0x80, 0x90, 0xC0, 0, 0, 1, 2))
+        reply = [x for x in b.connection.messages() if x[0] == 100][-1][2]
+        self.assertEqual((reply[3], reply[10:]), (0, b'\xff\xff'))
+        x = self.model('ftx')                                                # the latency timer
+        port = x.fns[0]
+        self.bulk_in(x, port.inp, 64, ident=29)                          # the first status, at once
+        x.handle(101, 30, struct.pack('<BBHI', port.inp, 0, 64, 0))      # then nothing to say: waits
+        self.assertEqual([r for r in x.connection.messages() if r[0] == 101], [])
+        port.last_in -= 1
+        x.latency_tick()
+        replies = [r for r in self.connection.messages() if r[0] == 101 and r[1] == 30]
+        self.assertEqual(replies[-1][2][8:], bytes([0x01, 0x60]))
+        self.assertEqual(x.status_packets, 1)
+        c = self.model('cp2102')
+        status, props = self.control(c, 0xC1, 0x0F, 0, 0, 164)              # before IFC_ENABLE
+        self.assertEqual((status, len(props), props[:2]), (0, 66, b'B\x00'))
+        self.assertEqual(struct.unpack_from('<I', props, 20)[0], 0x10000000 | 1000000)
+        self.assertEqual(self.control(c, 0x41, 0x19, 0, 0, 6, b'\x00\x00\x00\x00\x11\x13')[0], 0)
+        self.assertEqual(self.control(c, 0xC1, 0x0E, 0, 0, 6)[1], b'\x00\x00\x00\x00\x11\x13')
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0501, 0)[0], 0)      # 5 bits, 1.5 stop
+        self.control(c, 0x41, 0x00, 1, 0)
+        status, comm = self.control(c, 0xC0, 0x10, 0, 0, 19)                # to the device
+        self.assertEqual((status, len(comm)), (0, 19))
+        self.assertEqual(self.control(c, 0x41, 0x06, 0x5A, 0)[0], 0)        # IMM_CHAR comes back
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=31), b'Z')
 
 
 if __name__ == '__main__':

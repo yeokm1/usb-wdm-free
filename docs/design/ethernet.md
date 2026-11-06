@@ -1235,13 +1235,14 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   (the counters, not the frame bytes), and only if the whole transfer
   is well formed walks it again and emits. A malformed transfer clears
   the live position, so a carried frame is dropped with it, and emits
-  nothing. Six changes, all kept out of the other packages' builds:
+  nothing. Six changes to the shared core. Items 1 and 3 change nothing
+  for a package that does not use them; items 4 to 6 fix the core for
+  every package, and on 2026-11-06 (owner) every copy of the core,
+  `ax88179`'s, `rtl815x`'s and `sr9700`'s too, took them:
   1. The carry state (the partial frame, up to 1518 bytes, its length
      and the half header) lives in the chip state, which this package
      enlarges: netchip.h's `NET_CHIP_STATE` becomes overridable
-     (`#ifndef`, default 256), and this package's build sets 2048. The
-     other packages' copies get the same three lines, with no change
-     to their binaries.
+     (`#ifndef`, default 256), and this package's build sets 2048.
   2. Transfers must be parsed one at a time and in order. The core
      parses each bulk-IN transfer in its completion routine, and with
      several outstanding, two completions could run at once on a
@@ -1278,27 +1279,28 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      ignored), after draining the data path; and when the chip's own
      three tries fail it leaves the data path closed and reports the
      device gone, as recovery does when it gives up, rather than
-     reopening traffic on a half-reset chip.
-- **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
-  mode is left as reset leaves it), EEPROM writes, LED settings,
-  jumbo frames.
-     Only the chip's bring-up failing counts as that: a failure to
+     reopening traffic on a half-reset chip. Only the chip's bring-up failing counts as that: a failure to
      write the address or the filter after it is logged, and a filter
      the chip keeps pending is applied again later.
   5. The pump stops after a failed IRP allocation instead of picking
      the slot it just freed again at once (a loop at DISPATCH_LEVEL
      while allocations keep failing); the worker's next tick and the
-     next completion pump again. The other packages' copies have the
-     same loop.
+     next completion pump again.
   6. On 98 SE and ME the worker thread cannot be joined (a wait on a
      thread object faults there; section 4.7.1), so halt waits for its
      exit event and then 100 ms more before the image may be unloaded.
      This narrows the gap between the event and the thread's end; it
-     does not close it. The other packages' copies have no delay.
+     does not close it: a known residual of every package on the
+     shared core, left until a 98 SE/ME-safe join exists.
+- **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
+  mode is left as reset leaves it), EEPROM writes, LED settings,
+  jumbo frames.
 
 **INF.** `AX772F98.INF`, one `$CHICAGO$` INF for 98 SE and ME (section
-7.1), listing the four ids above. No NT INF: on 2000 and later ASIX's
-driver serves these chips. Folder `free/net/ax88772/w98se-me/`.
+7.1), listing the four ids above (and the SR9800's, section 6.9.1).
+`AX772F.INF`, the NT INF, lists only the SR9800: on 2000 and later
+ASIX's driver serves the AX88772B and AX88772C. Folder
+`free/net/ax88772/w98se-me/` and the folders of section 6.9.1.
 
 **Tests.** Host: `chiptest.c` drives the chip core against a model of
 the request set (bring-up order, MII host-enable, link resolution,

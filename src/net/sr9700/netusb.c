@@ -5,11 +5,9 @@
  * 4.7 and 5). Written from the Windows 2000 DDK headers (wdm.h, usbdi.h,
  * usb100.h, usbioctl.h) and the documented URB functions; no DDK sample
  * was read. Derived from cdcnet's cdcusb.c (same author and licence),
- * with the CDC protocols replaced by the netchip.h chip table. A copy of
- * src/net/ax88179/'s and src/net/rtl815x/'s, plus the chip's RxReset
- * (netchip.h), a resume that ignores a D0 while already in D0 and
- * reports a chip that did not come back (Power), and a pump that stops
- * after a failed IRP allocation (Pump).
+ * with the CDC protocols replaced by the netchip.h chip table. Identical
+ * copies in src/net/ax88179/, src/net/rtl815x/, src/net/ax88772/ and
+ * src/net/sr9700/ (see netchip.h).
  *
  * - NetUsbStart reads the device and every configuration descriptor, lets
  *   the chip's Probe choose, selects that configuration and runs the

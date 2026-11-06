@@ -7,18 +7,13 @@
  * else. Nothing here includes an OS header: a chip's code is compiled
  * unchanged into the driver and into the package's host tests.
  *
- * This file, netusb.h, netcore.c and netusb.c are copies in
+ * This file, netusb.h, netcore.c and netusb.c are identical copies in
  * src/net/ax88179/, src/net/rtl815x/, src/net/ax88772/ and
  * src/net/sr9700/. They are written to move to src/net/common/
  * (ethernet.md section 3.2) once that directory's owner agrees; until
- * then a change to one copy is made to all. The src/net/ax88772/ and
- * src/net/sr9700/ copies of this file and netusb.c add what the others
- * take when they are next changed: NET_CHIP_STATE may be set by the
- * package's build, the chip table may name RxReset, netusb.c's resume
- * ignores a D0 while already in D0 and reports a chip that did not come
- * back, its pump stops after a failed IRP allocation instead of retrying
- * it at once, and halt waits a little after the worker's exit event on
- * 98 SE and ME (ethernet.md section 6.8).
+ * then a change to one copy is made to all. A package's build may set
+ * NET_CHIP_STATE (ax88772 does), and a chip table may name RxReset; the
+ * others leave both as they were (ethernet.md section 6.8).
  *
  * Rules for a chip (section 3.3):
  * - Probe is a pure parser of descriptors; it changes nothing.

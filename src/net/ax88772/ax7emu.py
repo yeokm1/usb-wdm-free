@@ -57,6 +57,15 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   pad word 0xffff0000 after it exactly when header and frame end on a
   packet boundary. Anything else is a fatal error in the trace.
 
+--chip sr9800: the CoreChips SR9800 (0FE6:9800 unless --vid/--pid),
+from Linux sr9800.c and sr9800.h (GPL version 2 only: facts, no code):
+the MAC read with READ_NODE_ID, request 0x70 (LED mux) accepted,
+request 0x2A sets the burst (0x8100 4 KiB, 0x8000 2 KiB), and the
+transmit pad word expected exactly where sr_tx_fixup puts it (header and
+frame a multiple of maxpacket - 1) and no terminator otherwise.
+INFERRED: the PHY id (this model answers 0283:BC30; Linux needs only a
+value other than 0 and FFFF) and bcdDevice 0001.
+
 Behind the adapter sits the SIMULATED network of axemu.py (one host,
 192.168.77.1: ARP, ICMP echo, DHCP offering 192.168.77.2). No physical
 USB device is accessed.
@@ -92,6 +101,10 @@ CHIPCODE_772B, HOST_EN = 0x20, 0x01
 EMBD_PHY = 0x10
 MODEL_MAC = bytes.fromhex('000ec6772b01')
 BURST = {0x8000: 2048, 0x8100: 4096, 0x8200: 6144, 0x8300: 8192, 0x8400: 16384}
+LED_MUX = 0x70
+CHIPS = {'772b': (0x003b1861, 0x0001, 0x0b95, 0x772b, 'AX88772B'),
+         '772c': (0x003b1881, 0x0002, 0x0b95, 0x772b, 'AX88772C'),
+         'sr9800': (0x0283bc30, 0x0001, 0x0fe6, 0x9800, 'SR9800')}
 
 
 class Chip:
@@ -199,7 +212,7 @@ class Chip:
         elif request == WRITE_GPIOS and not data:
             if value & 0x80:                            # RSE: reload the EEPROM's MAC
                 self.node_id[:] = MODEL_MAC
-        elif request in (SW_RESET, SW_PHY_SELECT, WRITE_IPG0) and not data:
+        elif request in (SW_RESET, SW_PHY_SELECT, WRITE_IPG0, LED_MUX) and not data:
             pass
         elif request == QCTCTRL and not data:
             self.qct = (value, index)
@@ -229,19 +242,22 @@ def config_descriptor(speed, kind=2):
 class Model:
     def __init__(self, connection, trace, speed='high', now=time.monotonic, link_after=1.0,
                  flap_after=None, flap_for=2.0, mbps=100, half=False, partner_pause=True,
-                 chip='772b', vid=0x0b95, pid=0x772b, cut='burst', seed=1, serial='SIM772'):
+                 chip='772b', vid=None, pid=None, cut='burst', seed=1, serial='SIM772'):
         self.connection, self.trace, self.now = connection, trace, now
         self.speed = speed
-        self.chip = Chip(0x003b1881 if chip == '772c' else 0x003b1861, mbps, half, partner_pause)
+        phy_id, self.release, default_vid, default_pid, self.model_name = CHIPS[chip]
+        vid = default_vid if vid is None else vid
+        pid = default_pid if pid is None else pid
+        self.chip = Chip(phy_id, mbps, half, partner_pause)
+        self.sr9800 = chip == 'sr9800'
         self.net = Network(self.log, now)
         self.vid, self.pid = vid, pid
-        self.release = 0x0002 if chip == '772c' else 0x0001
         self.chip_name = chip
         self.device = device_descriptor(speed, vid, pid, self.release, serial is not None)
         self.config_desc = config_descriptor(speed)
         self.other = config_descriptor('full' if speed == 'high' else 'high', 7)
         self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
-                        2: usb_string('AX88772%s Ethernet - SIMULATED' % chip[-1].upper())}
+                        2: usb_string('%s Ethernet - SIMULATED' % self.model_name)}
         if serial is not None:
             self.strings[3] = usb_string(serial)
         self.bulk_max = 512 if speed == 'high' else 64
@@ -388,7 +404,8 @@ class Model:
         length = word & 0xffff
         if word >> 16 != length ^ 0xffff:
             raise ValueError('transmit header %08x: the complement does not agree' % word)
-        pad = (length + 4) % self.bulk_max == 0
+        unit = self.bulk_max - 1 if self.sr9800 else self.bulk_max
+        pad = (length + 4) % unit == 0
         want = 4 + length + (4 if pad else 0)
         if len(data) != want:
             raise ValueError('transmit transfer %d bytes, expected %d (frame %d)' % (len(data), want, length))
@@ -528,7 +545,7 @@ class Model:
         if self.peer_caps & (1 << CAP_VERSION):
             data += struct.pack('<H', self.release)
         self.send(1, data=data)
-        self.log('connected', model='SIMULATED AX88772' + self.chip_name[-1].upper(), speed=self.speed,
+        self.log('connected', model='SIMULATED ' + self.model_name, speed=self.speed,
                  mbps=self.chip.mbps, half=self.chip.half, cut=self.cut, vid='%04x' % self.vid,
                  pid='%04x' % self.pid, mac=MODEL_MAC.hex(),
                  config_sha256=hashlib.sha256(self.config_desc).hexdigest())
@@ -577,9 +594,9 @@ def main():
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--log', type=Path, required=True, help='new JSONL trace (must not exist)')
     ap.add_argument('--speed', choices=('high', 'full'), default='high')
-    ap.add_argument('--chip', choices=('772b', '772c'), default='772b')
-    ap.add_argument('--vid', type=lambda v: int(v, 16), default=0x0b95)
-    ap.add_argument('--pid', type=lambda v: int(v, 16), default=0x772b)
+    ap.add_argument('--chip', choices=tuple(CHIPS), default='772b')
+    ap.add_argument('--vid', type=lambda v: int(v, 16), help='hex; default the chip\'s')
+    ap.add_argument('--pid', type=lambda v: int(v, 16), help='hex; default the chip\'s')
     ap.add_argument('--mbps', type=int, choices=(10, 100), default=100, help='the Ethernet link speed')
     ap.add_argument('--half', action='store_true', help='the partner offers half duplex only')
     ap.add_argument('--no-partner-pause', action='store_true')

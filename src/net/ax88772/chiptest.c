@@ -38,6 +38,7 @@ typedef struct MODEL {
     nc_u16 Phy[32];
     int ResetPolls;              /* reads of BMCR before RESET clears */
     int PhyResets;               /* BMCR resets written */
+    nc_u16 Led, LedIndex;
     int Link;                    /* the cable */
     nc_u16 Lpa;
     unsigned long Requests, Sleeps, RefuseAfter;
@@ -154,6 +155,7 @@ static long Control(void *context, int in, nc_u8 request, nc_u16 value, nc_u16 i
     case AX_CMD_SW_PHY_SELECT: m->PhySelect = value; break;
     case AX_CMD_WRITE_IPG0: m->Ipg0 = value; m->Ipg2 = index; break;
     case AX_QCTCTRL: m->QctValue = value; m->QctIndex = index; break;
+    case SR_LED_MUX: m->Led = value; m->LedIndex = index; break;
     case AX_CMD_WRITE_NODE_ID:
         if (length != 6) return NC_E_IO;
         memcpy(m->NodeId, b, 6);
@@ -504,6 +506,61 @@ static void TestStart(void)
     }
 }
 
+/* The SR9800: its bring-up, link medium, filter base and pad rule. */
+static void TestSr9800(void)
+{
+    MODEL m;
+    NET_IO io;
+    NET_PARAMS params;
+    NET_LINK link;
+    NET_PROBE p;
+    A7_STATE *s = (A7_STATE *)State.Bytes;
+    nc_u8 buffer[4 + 1514 + 4];
+    nc_u32 total;
+
+    ModelInit(&m);
+    m.Code = 0;                                           /* the SR9800 path never asks */
+    m.HostEnableNever = 1;                                /* nor waits for host enable */
+    CHECK(StartWith(&m, &io, 0x0fe6, 0x9800, &params) == NC_OK);
+    CHECK(s->Kind == A7_KIND_SR9800 && Find(&m, AX_CMD_STATMNGSTS_REG) < 0);
+    CHECK(m.Led == 0x4080 && m.LedIndex == 0x4001);
+    CHECK(Find(&m, SR_LED_MUX) == 0 && Find(&m, AX_CMD_READ_NODE_ID) == 1);
+    CHECK(Find(&m, AX_CMD_READ_EEPROM) < 0);
+    CHECK(params.Mac[4] == 0x09 && params.Mac[5] == 0x09);
+    CHECK(memcmp(m.NodeId, params.Mac, 6) == 0);
+    CHECK(m.QctValue == 0x8100 && m.QctIndex == 0x8147);  /* High Speed: 4 KiB */
+    CHECK(params.RxSize == 4096 && params.RxCount == 1);
+    CHECK(m.Gpio == SR_GPIO_RESET && m.SwReset == (AX_SWRESET_IPRL | SR_SWRESET_PRL));
+    CHECK(m.RxCtl == SR_DEFAULT_RX_CTL && m.Medium == SR_MEDIUM_DEFAULT);
+    CHECK(m.Ipg0 == 0x001d && m.Ipg2 == 0x0012);
+    CHECK(m.Phy[MII_ADVERTISE] == 0x01e1);
+    CHECK(params.Version == (0x9800UL | (0x10UL << 16)));
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && link.Mbps == 100 && link.FullDuplex);
+    CHECK(m.Medium == SR_MEDIUM_DEFAULT && link.RxLength == 4096);
+    m.Lpa = ADVERTISE_10HALF;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Mbps == 10 && !link.FullDuplex);
+    CHECK(m.Medium == (SR_MEDIUM_DEFAULT & ~(AX_MEDIUM_PS | AX_MEDIUM_FD)));
+    CHECK(A7SetFilter(State.Bytes, &io, NC_FILTER_PROMISCUOUS, 0, 0) == NC_OK);
+    CHECK(m.RxCtl == (SR_DEFAULT_RX_CTL | AX_RX_CTL_PRO));
+    /* sr_tx_fixup: the pad word at a multiple of maxpacket - 1. */
+    total = 4 + 507;
+    CHECK(A7TxEnd(State.Bytes, buffer, &total, sizeof(buffer), 512) == 0 && total == 515);
+    total = 4 + 508;
+    CHECK(A7TxEnd(State.Bytes, buffer, &total, sizeof(buffer), 512) == 0 && total == 512);
+    /* Full Speed: the 2 KiB burst. */
+    ModelInit(&m);
+    p = Probe(0x0fe6, 0x9800);
+    p.Speed = NC_SPEED_FULL;
+    IoInit(&io, &m);
+    CHECK(A7Start(State.Bytes, &io, &p, &params) == NC_OK);
+    CHECK(m.QctValue == 0x8000 && m.QctIndex == 0x8001 && params.RxSize == 2048);
+    /* The AX88772B keeps its own pad rule. */
+    ModelInit(&m);
+    CHECK(StartWith(&m, &io, 0x0b95, 0x772b, &params) == NC_OK && s->Kind == A7_KIND_AX772B);
+    total = 4 + 508;
+    CHECK(A7TxEnd(State.Bytes, buffer, &total, sizeof(buffer), 512) == 0 && total == 516);
+}
+
 static void TestFilter(void)
 {
     MODEL m;
@@ -821,6 +878,7 @@ int main(void)
     TestProbe();
     TestStart();
     TestFilter();
+    TestSr9800();
     TestTx();
     TestRxBasic();
     TestRxSpan();

@@ -382,6 +382,31 @@ class Tests(CoreCase):
         self.assertEqual((len(frames), dropped), (100, 0))
         self.assertGreater(transfers, 3)
 
+    def test_sr9800(self):
+        self.assertEqual(self.setup(chip='sr9800'), 0)
+        self.assertEqual((self.probe.Vendor, self.probe.Product), (0x0fe6, 0x9800))
+        self.assertEqual(self.params.RxSize, 4096)
+        self.assertEqual(self.m.chip.qct, (0x8100, 0x8147))
+        self.assertEqual(self.m.chip.rx_ctl, 0x0188)
+        self.assertEqual(self.m.totals['vendor_refused'], 0)
+        self.settle(1.1)
+        link = self.link()
+        self.assertEqual((link.Up, link.Mbps, link.FullDuplex, link.RxLength), (1, 100, 1, 4096))
+        self.assertEqual(self.m.chip.medium, 0x0336)
+        self.chip.SetFilter(self.state, c.byref(self.io), FILTER_DIRECTED | FILTER_BROADCAST, None, 0)
+        self.tx(arp_request(a.MODEL_MAC))
+        frames, dropped, _ = self.rx_all()
+        self.assertEqual(len(frames), 1)
+        for size, replies in ((1472, 1), (4000, 3), (8000, 6)):
+            self.tx_fragmented(a.MODEL_MAC, size)
+            frames, dropped, transfers = self.rx_all()
+            self.assertEqual((len(frames), dropped), (replies, 0), size)
+        # sr_tx_fixup's rule: the pad word at (len + 4) % 511 == 0, nothing at 512.
+        frame = a.HOST_MAC + a.MODEL_MAC + b'\x88\xb5' + bytes(507 - 14)
+        self.assertEqual(len(self.tx(frame)), 515)
+        self.assertEqual(len(self.tx(frame + b'\0')), 512)
+        self.assertEqual(self.m.totals['tx_padded'], 1)
+
     def test_rx_reset(self):
         self.up()
         self.tx_fragmented(a.MODEL_MAC, 1400)

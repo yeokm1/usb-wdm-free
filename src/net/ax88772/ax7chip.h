@@ -9,7 +9,10 @@
  * AX772F chip core: the ASIX AX88772B and AX88772C (ethernet.md section
  * 6.8), behind the netchip.h interface. Request codes, register bits and
  * the bring-up adapted from Linux drivers/net/usb/asix.h, asix_common.c
- * and asix_devices.c at v7.3 (GPL-2.0-or-later).
+ * and asix_devices.c at v7.3 (GPL-2.0-or-later). The CoreChips SR9800
+ * (section 6.9.1) uses the same command set; its own values below are
+ * facts from Linux sr9800.c and sr9800.h (GPL version 2 only: facts, no
+ * code).
  */
 #ifndef AX7CHIP_H
 #define AX7CHIP_H
@@ -92,6 +95,18 @@
 #define   ADVERTISE_PAUSE_ASYM     0x0800
 
 #define A7_RX_TRANSFER   2048UL   /* rx_urb_size: the QCTCTRL 2 KiB burst */
+
+/* SR9800 (ethernet.md section 6.9.1): its own requests and values. */
+#define A7_KIND_AX772B   0
+#define A7_KIND_SR9800   1
+#define SR_LED_MUX       0x70     /* wValue 0x4080, wIndex 0x4001 */
+#define SR_BULKIN_SIZE   0x2a     /* as AX_QCTCTRL: 4 KiB 0x8100/0x8147, 2 KiB 0x8000/0x8001 */
+#define SR_GPIO_RESET    0xb0     /* RSE | GPO_2 | GPO2EN */
+#define SR_SWRESET_PRTE  0x04
+#define SR_SWRESET_PRL   0x08
+#define SR_DEFAULT_RX_CTL 0x0188  /* SO | AB | RH1M */
+#define SR_MEDIUM_DEFAULT 0x0336  /* FD | RFC | TFC | PS | AC | RE */
+#define SR_RX_HIGH       4096UL   /* rx_urb_size at High Speed */
 #define A7_FRAME_MAX     1518U    /* mtu + ETH_HLEN + VLAN_HLEN */
 #define A7_PHY_RESET_POLLS 50     /* 10 ms apart: clause 22's 500 ms */
 #define A7_REALIGN_AFTER 4        /* malformed transfers in a row before the stream is restarted */
@@ -107,6 +122,7 @@ typedef struct A7_RX {
 } A7_RX;
 
 typedef struct A7_STATE {
+    nc_u8 Kind;                  /* A7_KIND_* from the device's id */
     nc_u8 Mac[6];
     nc_u8 PhyAddr;
     nc_u8 Embedded;              /* the PHY is the chip's own (address 0x10) */
@@ -120,6 +136,8 @@ typedef struct A7_STATE {
     nc_u8 FilterPending;         /* the last SetFilter failed: Link's caller applies it again */
     nc_u8 Mbps100, Full, Pause;  /* the link Link last applied */
     nc_u16 RxCtl, RxCtlRead, MediumRead;
+    nc_u16 RxBase;               /* RX_CTL before the filter bits (AX_DEFAULT_RX_CTL or SR_DEFAULT_RX_CTL) */
+    nc_u32 RxTransfer;           /* bulk-IN transfer length: the chip's burst */
     nc_u16 Medium;               /* the medium mode last written */
     nc_u16 PhyId1, PhyId2;
     nc_u32 Resyncs, Malformed;   /* receive stream: synchronisation lost; transfers refused */

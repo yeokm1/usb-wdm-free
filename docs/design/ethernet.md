@@ -6,7 +6,8 @@ x64 builds; `CDCNET.INF`, `CDC98.INF`, `CDCRNDIS.INF`), with the core kept
 inside the package for now rather than in `src/net/common/` (section 3.2).
 Its runs are in `docs/testing/2026-10-22-cdcnet.md`. `rtl815x` has no code;
 `ax88179` is separate work. 2026-11-06: `ax88772`, the ASIX AX88772B and
-AX88772C on 98 SE and ME (section 6.8).
+AX88772C on 98 SE and ME (section 6.8); the CoreChips SR9800 in it and
+`sr9700` for the SR9700, 98 SE to 7 (section 6.9).
 
 Free NDIS miniport drivers for the USB Ethernet adapters and USB network links
 people can buy or use today, which Windows 98 SE has no driver for, and which
@@ -211,7 +212,8 @@ ASIX's driver. The CoreChips SR9700 and SR9800 are xHCI98 roadmap 47.27.
 | `src/net/cdcnet/` | CDC-ECM, CDC-NCM, RNDIS (98 SE, ME, 2000); the ECM configuration of known vendor adapters; the XP to 7 RNDIS INF | `CDCNET.SYS`, `CDCNET.INF`, `CDCRNDIS.INF` |
 | `src/net/rtl815x/` | Realtek RTL8152/8153 (later 8156) vendor mode | `RTL815X.SYS`, `RTL815X.INF` |
 | `src/net/ax88179/` | ASIX AX88179/AX88178A | `AX179F.SYS`, `AX179F.INF` |
-| `src/net/ax88772/` | ASIX AX88772B/AX88772C, 98 SE and ME (section 6.8) | `AX772F.SYS`, `AX772F98.INF` |
+| `src/net/ax88772/` | ASIX AX88772B/AX88772C on 98 SE and ME (section 6.8); CoreChips SR9800 on 98 SE to 7 (section 6.9.1) | `AX772F.SYS`, `AX772F98.INF`, `AX772F.INF` |
+| `src/net/sr9700/` | CoreChips SR9700, 98 SE to 7 (section 6.9.2) | `SR9700F.SYS`, `SR970098.INF`, `SR9700F.INF` |
 
 The `F` suffix keeps the free driver's file name from colliding with the
 vendor's own (ASIX's AX88179 file name was not checked). The core sits in
@@ -1311,6 +1313,175 @@ under xHCI98 and, on 98 SE, NUSB's EHCI. Because the simulator and the
 driver are written from the same Linux facts, a misreading shared by
 both passes; a real AX88772B and AX88772C on the bench stay owed.
 
+### 6.9 CoreChips SR9800 and SR9700
+
+Owner, 2026-11-06 (xHCI98 roadmap 47.27): the CoreChips SR9700 and
+SR9800, which no driver serves on any of this project's systems.
+
+**Whose driver covers what** (searched 2026-11-06; ethernet-coverage.md
+section 3.3): none on any system. CoreChips' site
+(`http://www.corechip-sz.com/`, reachable on 2026-11-06, unlike the
+2026-10-27 survey) lists the SR9700 among its products with no driver,
+does not list the SR9800, and offers downloads, behind a login, for its
+SR9900 family and hubs only. No OEM was found that publishes a driver
+for either chip on its own site; copies of drivers said to be for them
+are on third-party driver sites only, which this project does not take
+drivers from. No Windows has an in-box driver for `0FE6:9700`, `9702`
+or `9800` (section 2 of ethernet-coverage.md). So the free drivers aim
+at every system of this project: 98 SE to 7, x86 and x64.
+
+**Sources.** Linux `drivers/net/usb/sr9800.c`, `sr9800.h`, `sr9700.c`
+and `sr9700.h` at v7.3. `sr9800.c`, `sr9800.h` and `sr9700.c` carry no
+SPDX line and say "version 2" of the GPL; `sr9700.h` is
+GPL-2.0-only. Facts only are taken from them (AGENTS.md, "Sources"):
+ids, request codes, register addresses and values, sequences and frame
+formats, restated here and cited by symbol; no code, names, comments or
+structure. Facts no Linux file gives are marked *inferred*.
+
+#### 6.9.1 SR9800 (in `ax88772`)
+
+Linux drives the SR9800 with the AX88772's command set and framing
+(`sr9800.c` says it is based on `asix_common.c`), so it joins the
+`ax88772` package, `AX772F.SYS`, as a second chip kind chosen at Start
+by the device's id. Its differences from the AX88772B (6.8):
+
+- **Id**: `0FE6:9800` (`products[]`).
+- **MAC**: `READ_NODE_ID` (0x13, 6 bytes) at bring-up (`sr9800_bind`);
+  written back with `WRITE_NODE_ID` (0x14) at the end of the reset.
+- **MII** (`sr_mdio_read`, `sr_mdio_write`): `SET_SW_MII` (06), the read
+  (07) or write (08), `SET_HW_MII` (0A); no host-enable poll.
+- **LEDs** (`sr9800_bind`): request 0x70 (`SR_CMD_LED_MUX`), wValue
+  0x4080, wIndex 0x4001 (link/activity on LED 0 and 1).
+- **PHY address** (`sr_get_phy_addr`): byte 1 of request 0x19;
+  embedded when 0x10.
+- **Bring-up**, Linux's `bind` then `reset` order: `SW_PHY_SELECT`
+  (0x22) wValue embedded; PHY power-up (`sr9800_phy_powerup`):
+  `SW_RESET` (0x20) 0x60 (IPPD|IPRL), 20 ms; 0x20 (IPRL), 600 ms; 0, 20
+  ms; 0x20. `WRITE_RX_CTL` (0x10) 0. The PHY id (registers 2, 3). The
+  default mode (`sr9800_set_default_mode`, below). Bulk-IN size
+  (`SR_CMD_BULKIN_SIZE` 0x2A, `SR9800_BULKIN_SIZE`): at High Speed
+  wValue 0x8100 wIndex 0x8147 (4 KiB), at Full Speed 0x8000 / 0x8001
+  (2 KiB). Then `sr9800_reset`: `WRITE_GPIOS` (0x1F) 0xB0
+  (RSE|GPO_2|GPO2EN), 5 ms; the PHY address again; `SW_PHY_SELECT`;
+  `SW_RESET` 0x48 (IPPD|PRL), 150 ms; 0, 150 ms; 0x20 with the
+  embedded PHY (0x04, PRTE, with an external one), 150 ms;
+  `WRITE_RX_CTL` 0; `SW_RESET` 0x08 (PRL), 150 ms; 0x28 (IPRL|PRL),
+  150 ms; the default mode again; `WRITE_NODE_ID`.
+- **PHY id** (`sr_get_phyid`): register 2 read up to 100 times, 1 ms
+  apart, while it reads 0 or FFFF; then register 3. Read after the PHY
+  power-up, for the log.
+- **Default mode** (`sr9800_set_default_mode`): BMCR reset (0x8000);
+  ADVERTISE 0x01E1 (10/100 half and full, 802.3; no pause bits);
+  autonegotiation restart: Linux's `mii_nway_restart` reads BMCR and sets
+  the restart bit if autonegotiation is on; this core writes BMCR 0x1200
+  (enable and restart), its own choice, since the reset leaves
+  autonegotiation on;
+  `WRITE_MEDIUM_MODE` (0x1B) 0x0336 (`SR9800_MEDIUM_DEFAULT`: FD, RFC,
+  TFC, PS, AC, RE); `WRITE_IPG012` (0x12) wValue 0x001D wIndex 0x0012;
+  `WRITE_RX_CTL` 0x0188 (`SR_DEFAULT_RX_CTL`: SO, AB, RH1M); RX_CTL and
+  the medium read back for the log.
+- **Link** (`sr9800_link_reset`): the medium is the default with PS
+  cleared below 100 Mb/s and FD cleared at half duplex; RFC and TFC
+  stay set, as Linux leaves them. The speed and duplex come from the
+  PHY as in 6.8. The status report is Linux's (`sr_status`,
+  `struct sr9800_int_data`): 8 bytes, byte 2 bit 0 the link.
+- **Filter** (`sr_set_multicast`): `SR_DEFAULT_RX_CTL` plus PRO, AMALL or
+  AM with the 64-bit hash (request 0x16), as 6.8.
+- **Receive** (`sr_rx_fixup`): the AX88772's records (4-byte header,
+  length and complement in 11 bits, padded to even). Linux reads
+  transfers of the burst size (4 KiB, 2 KiB at Full Speed) and refuses a
+  record that does not end inside its transfer. The stream parser of 6.8
+  is used unchanged, with the transfer the burst size: it takes what
+  Linux takes, and also a record that spans, which Linux would drop
+  (this core's choice: the stream parser is shared). One transfer
+  outstanding, as 6.8.
+- **Transmit** (`sr_tx_fixup`): the 4-byte header as 6.8. Linux
+  appends the pad word 0xffff0000 when `(len + 4) % (maxpacket - 1)` is
+  0 (len the frame), and the driver sets `FLAG_MULTI_PACKET`
+  (`DRIVER_FLAG`), so usbnet adds neither a pad byte nor a zero-length
+  packet otherwise: a transfer may end on a packet boundary
+  unterminated. This core does exactly what Linux does, the rule that
+  is known to work with the chip; whether `% maxpacket` was meant is
+  left to the bench.
+- **Stop**: medium 0, `WRITE_RX_CTL` 0, BMCR power-down (as 6.8;
+  Linux's SR9800 driver has no stop: this core's choice). **Suspend,
+  Resume** as 6.8, also this core's choice (Linux's SR9800 driver has
+  no suspend or resume of its own).
+- **Systems**: 98 SE to 7, x86 and x64. The 98 SE/ME INF
+  (`AX772F98.INF`) gains `0FE6:9800`; a new NT INF, `AX772F.INF`, lists
+  only `0FE6:9800` (2000 to 7: ASIX's drivers serve the AX88772B/C
+  there), with the x86 NDIS 5.0 binary for 2000 to 7 x86 and an x64
+  NDIS 5.1 build (`build.cmd ndis51`, as `rtl815x`'s) for XP x64 to 7
+  x64. Folders `free/net/ax88772/w98se-me/`, `w2k/` (2000), `wxp/`,
+  `wv-7-x86/`, `wxp-x64/`, `wv-7-x64/`, as section 7.4 names them for
+  `rtl815x`.
+
+#### 6.9.2 SR9700 (`sr9700`)
+
+The SR9700 is a different chip (`sr9700.c`: based on `dm9601.c`): a
+register file reached by three requests, no MII, 10 Mb/s half duplex
+only, and its own framing. A new package, `src/net/sr9700/`,
+`SR9700F.SYS`, on the shared core (unchanged: no frame spans
+transfers, so neither the larger chip state nor `RxReset` is needed).
+
+- **Ids** (`products[]`): `0FE6:9700`; `0FE6:9702` interface 1 (the
+  same chip with a CD-ROM on interface 0). On 2000 and later Windows'
+  composite parent accepts the function's SELECT_CONFIGURATION, so the
+  NT INF matches `USB\VID_0FE6&PID_9702&MI_01` and the probe takes the
+  vendor interface, whichever its number. On 98 SE and ME whether the
+  composite parent splits it is not shown, so `SR970098.INF` lists only
+  `0FE6:9700`. *Not run*: no composite model of the `9702` is in the
+  simulator.
+- **Requests** (`sr9700.h`): vendor, device recipient. Read registers
+  0x00 (wValue 0, wIndex the first register, length the count); write
+  registers 0x01 (wValue 0, wIndex the first register, the data);
+  write one register 0x03 (wValue the byte, wIndex the register, no
+  data).
+- **Registers** (`sr9700.h`): NCR 0x00 (bit 0 reset), NSR 0x01 (bit 6
+  link), RCR 0x05 (bit 0 receive on, 1 promiscuous, 3 all multicast, 4
+  discard CRC errors, 5 discard long frames), PAR 0x10-0x15 (the MAC),
+  PRR 0x1F (bit 0 PHY reset).
+- **Bring-up** (`sr9700_bind`): NCR = 1 (reset), 20 us (here 1 ms, the
+  smallest sleep); the MAC from PAR (6 bytes; loaded from the EEPROM at
+  power-on, or a default the chip holds); PRR = 1, 20 ms; PRR = 0, 2
+  ms; RCR = 0x31 (receive on, discard CRC errors and long frames).
+- **Link**: NSR bit 6; always 10 Mb/s half duplex
+  (`sr9700_get_link_ksettings`). The status report (`sr9700_status`):
+  8 bytes, byte 0 is NSR, bit 6 the link.
+- **Filter** (`sr9700_set_multicast`): RCR 0x31, plus 0x02
+  (promiscuous), or 0x08 (all multicast) when any multicast is wanted:
+  the chip has no multicast filter.
+- **MAC change** (`sr9700_set_mac_address`): PAR written with request
+  0x01.
+- **Receive** (`sr9700_rx_fixup`): one transfer holds several packets,
+  each 3 bytes (a status byte that must be 0x40, `RSR_MF`, then the
+  length, little-endian, the FCS included), the frame and its 4-byte
+  FCS, with no padding; Linux reads 3 KiB transfers (`rx_urb_size`
+  3072), and Linux refuses a packet that spans two (its parser's
+  contract; whether the chip can split one is not shown).
+  The FCS is dropped (the chip checks it: RCR bit 4). Here the parser
+  checks the whole transfer first (netchip.h), and a status byte other
+  than 0x40, a length below 4 or a packet past the end makes the
+  transfer malformed. Four transfers outstanding.
+- **Transmit** (`sr9700_tx_fixup`, usbnet's padding): one frame per
+  transfer after a 2-byte header holding its length. When header and
+  frame end on a packet boundary the header says one byte more and a
+  zero byte follows (usbnet adds the byte for a driver without
+  `FLAG_SEND_ZLP` or `FLAG_MULTI_PACKET`; the header is raised to
+  match).
+- **Stop**: RCR 0 (receive off). **Suspend**: RCR 0. **Resume**: the
+  bring-up again. All three are this core's choice: Linux's SR9700
+  driver has none of them.
+- **Systems**: 98 SE to 7, x86 and x64, as 6.9.1: `SR970098.INF`
+  (98 SE, ME) and `SR9700F.INF` (2000 to 7 x86 and x64), the same
+  folder names under `free/net/sr9700/`. (`SR970098.INF`: 8.3.)
+
+**Tests.** Host: each chip core against a model of its requests and
+framing. Simulators: `ax7emu.py --chip sr9800` and a new `sremu.py`
+for the SR9700, written from the same Linux facts (so, again, a shared
+misreading passes, and the real chips stay owed to the bench). Guest
+legs against them under xHCI98 and, on 98 SE, NUSB's EHCI.
+
 ## 7. INF and install per system
 
 ### 7.1 Windows 98 SE and ME (section of one `$Chicago$` INF)
@@ -1380,7 +1551,9 @@ two folders, with no `CDCRNDIS.INF`. `rtl815x` has those two and, from
 | `free/net/rtl815x/w2k/`, `free/net/ax88179/w2k/` | the same x86 NDIS 5 binary, the NT INF |
 | `free/net/rtl815x/wxp/`, `free/net/rtl815x/wv-7-x86/` | the same x86 NDIS 5 `RTL815X.SYS`, `RTLXP7.INF` |
 | `free/net/rtl815x/wxp-x64/`, `free/net/rtl815x/wv-7-x64/` | x64 NDIS 5.1 `RTL815X.SYS` with its embedded test signature, `RTLXP7.INF` |
-| `free/net/ax88772/w98se-me/` | x86 NDIS 5 `AX772F.SYS`, `AX772F98.INF` (98 SE and ME only, section 6.8) |
+| `free/net/ax88772/w98se-me/`, `free/net/sr9700/w98se-me/` | x86 NDIS 5 `AX772F.SYS` or `SR9700F.SYS`, `AX772F98.INF` or `SR970098.INF` |
+| `free/net/ax88772/w2k/`, `wxp/`, `wv-7-x86/`; the same under `free/net/sr9700/` | the same x86 binary, `AX772F.INF` or `SR9700F.INF` (section 6.9) |
+| `free/net/ax88772/wxp-x64/`, `wv-7-x64/`; the same under `free/net/sr9700/` | x64 NDIS 5.1 build (`build.cmd ndis51`), the NT INF |
 
 All names 8.3. `cdcnet`'s x64 build is one binary from XP x64 to 7 x64; it
 sits in two folders because 8.3 has no room for one name covering XP x64
@@ -1497,7 +1670,8 @@ Linux copyright lines and SPDX tag:
 | `src/net/common/*.c` (where it follows usbnet's pipeline logic) | Linux `drivers/net/usb/usbnet.c` (Brownell; David Hollis) | GPL-2.0-or-later |
 | `src/net/rtl815x/*.c` | Not adapted: written from the chips' register facts (section 6.4; owner, 2026-10-25) | - |
 | `src/net/ax88179/*.c` | Linux `drivers/net/usb/ax88179_178a.c` (Copyright (C) 2011-2013 ASIX) | GPL-2.0-or-later |
-| `src/net/ax88772/ax7chip.c`, `ax7chip.h`, `ax7emu.py` | Linux `drivers/net/usb/asix_common.c`, `asix_devices.c`, `asix.h` at v7.3 (Copyright (C) 2003-2006 David Hollis, (C) 2005 Phil Chang, (C) 2006 James Painter, (c) 2002-2003 TiVo Inc.); the PHY reset rule from `drivers/net/phy/ax88796b.c` (GPL-2.0+) as a fact | GPL-2.0-or-later |
+| `src/net/ax88772/ax7chip.c`, `ax7chip.h`, `ax7emu.py` | Linux `drivers/net/usb/asix_common.c`, `asix_devices.c`, `asix.h` at v7.3 (Copyright (C) 2003-2006 David Hollis, (C) 2005 Phil Chang, (C) 2006 James Painter, (c) 2002-2003 TiVo Inc.); the PHY reset rule from `drivers/net/phy/ax88796b.c` (GPL-2.0+) as a fact; the SR9800's values from `sr9800.c`/`sr9800.h` as facts only | GPL-2.0-or-later |
+| `src/net/sr9700/*` | Not adapted: written from the facts of Linux `sr9700.c` and `sr9700.h` (section 6.9.2) | - |
 
 The licence column is the source's. `rtl815x` was
 rewritten from the register facts (section 6.4) and no longer follows

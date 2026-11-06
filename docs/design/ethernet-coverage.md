@@ -65,7 +65,7 @@ section 2.6 stand as far as free drivers go.
 | Davicom DM9601 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
 | Davicom DM9620/9621/9621A | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | Davicom 8 |
 | Davicom DM9622 (`0A46:9622`) | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | **gap** | - |
-| CoreChips SR9700, SR9800 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | - |
+| CoreChips SR9700, SR9800 | free `sr9700`, `ax88772` (simulated only; 2026-11-06) | same | same (built, no leg) | same (built, no leg) | same (x64 build, no leg) | same (built, no leg) | same (built, no leg) | - |
 | WCH CH9200 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | gap (U: WCH 7+ driver reported) | U |
 | Microchip LAN9500/9505/9530/9730/9900/EC00 | **gap** | **gap** | **gap** | step 2 (U licence) | step 2 (U) | step 2 (U) | step 2 (U) | in box (11; 10 U) |
 | Microchip LAN7500/7505 | **gap** | **gap** | **gap** | gap (U: package not obtained) | gap (U) | gap (U) | gap (U) | in box (11) |

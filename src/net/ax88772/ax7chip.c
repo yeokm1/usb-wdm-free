@@ -16,6 +16,11 @@
  * ax88772_suspend for Suspend). The PHY's soft reset writes BMCR 0
  * first, as drivers/net/phy/ax88796b.c's asix_soft_reset does.
  *
+ * The CoreChips SR9800 (ethernet.md section 6.9.1) runs on the same code
+ * with its own bring-up (SrStart), MII access without the host-enable
+ * wait, medium and receive defaults, transfer size and transmit pad
+ * rule; those facts are from Linux sr9800.c and sr9800.h (facts only).
+ *
  * Where this core departs from Linux, on purpose:
  * - Linux's phylink drives the PHY; here Start resets it and starts
  *   autonegotiation (IEEE 802.3 clause 22), and Link resolves the result
@@ -78,7 +83,9 @@ static nc_u16 MiiRead(A7_STATE *s, NET_IO *io, nc_u8 reg)
 {
     nc_u8 b[2] = { 0, 0 };
     s->MiiReadOk = 0;
-    if (!HostEnable(io)) {
+    if (s->Kind == A7_KIND_SR9800) {
+        Cmd(io, AX_CMD_SET_SW_MII, 0, 0);         /* sr9800.c: no host-enable wait */
+    } else if (!HostEnable(io)) {
         /* Linux returns the error; the sticky status ends the stage. */
         if (io->Status >= 0) io->Status = NC_E_DEVICE;
         return 0;
@@ -94,7 +101,9 @@ static void MiiWrite(A7_STATE *s, NET_IO *io, nc_u8 reg, nc_u16 value)
 {
     nc_u8 b[2];
     b[0] = (nc_u8)value; b[1] = (nc_u8)(value >> 8);
-    if (!HostEnable(io)) {
+    if (s->Kind == A7_KIND_SR9800) {
+        Cmd(io, AX_CMD_SET_SW_MII, 0, 0);
+    } else if (!HostEnable(io)) {
         /* Linux writes anyway; here a PHY the host cannot reach ends the
          * stage. */
         if (io->Status >= 0) io->Status = NC_E_DEVICE;
@@ -214,15 +223,118 @@ static long PhyReset(A7_STATE *s, NET_IO *io)
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
+static void FillParams(A7_STATE *s, NET_PARAMS *params)
+{
+    nc_u32 i;
+    for (i = 0; i < 6; i++) params->Mac[i] = s->Mac[i];
+    params->RxSize = s->RxTransfer;
+    params->RxCount = 1;          /* one at a time: the stream is parsed in order (6.8) */
+    params->TxHeader = 4;
+    params->TxAlign = 1;
+    params->TxBatch = 1;          /* Linux sends one frame per bulk-OUT transfer */
+    params->TxSlots = 4;
+    params->TxSize = 4 + NC_ETH_MAX + 4;
+    params->RxConfig = s->RxCtl;
+    params->RxConfigRead = s->RxCtlRead;
+}
+
+/* The SR9800's default mode (sr9800_set_default_mode): the PHY reset,
+ * advertisement and autonegotiation, the medium, the gaps and the
+ * receive mode. */
+static void SrDefaultMode(A7_STATE *s, NET_IO *io)
+{
+    MiiWrite(s, io, MII_BMCR, BMCR_RESET);
+    MiiWrite(s, io, MII_ADVERTISE, ADVERTISE_CSMA | ADVERTISE_10HALF | ADVERTISE_10FULL |
+                                   ADVERTISE_100HALF | ADVERTISE_100FULL);
+    MiiWrite(s, io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+    Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, SR_MEDIUM_DEFAULT, 0);
+    Cmd(io, AX_CMD_WRITE_IPG0, AX88772_IPG0_DEFAULT | AX88772_IPG1_DEFAULT, AX88772_IPG2_DEFAULT);
+    Cmd(io, AX_CMD_WRITE_RX_CTL, SR_DEFAULT_RX_CTL, 0);
+    s->RxCtl = SR_DEFAULT_RX_CTL;
+    s->Medium = SR_MEDIUM_DEFAULT;
+    s->RxCtlRead = Read16(io, AX_CMD_READ_RX_CTL);
+    s->MediumRead = Read16(io, AX_CMD_READ_MEDIUM_STATUS);
+}
+
+/* The SR9800: Linux's bind, then its reset (ethernet.md section 6.9.1). */
+static long SrStart(A7_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
+{
+    nc_u8 b[2] = { 0, 0 };
+    int i;
+
+    Cmd(io, SR_LED_MUX, 0x4080, 0x4001);
+    NcIoRead(io, AX_CMD_READ_NODE_ID, 0, 0, s->Mac, 6);
+    NcIoRead(io, AX_CMD_READ_PHY_ID, 0, 0, b, 2);
+    if (io->Status < 0) return io->Status;
+    if (b[1] >= 32) return NC_E_DEVICE;
+    s->PhyAddr = b[1];
+    s->Embedded = (nc_u8)((s->PhyAddr & 0x1f) == AX_EMBD_PHY_ADDR);
+    params->Version = 0x9800UL | ((nc_u32)s->PhyAddr << 16);
+    Cmd(io, AX_CMD_SW_PHY_SELECT, s->Embedded, 0);
+    /* The PHY's power-up (sr9800_phy_powerup). */
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPPD | AX_SWRESET_IPRL, 0);
+    NcIoSleep(io, 20);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPRL, 0);
+    NcIoSleep(io, 600);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_CLEAR, 0);
+    NcIoSleep(io, 20);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPRL, 0);
+    Cmd(io, AX_CMD_WRITE_RX_CTL, 0, 0);
+    for (i = 0; i < 100; i++) {           /* sr_get_phyid */
+        s->PhyId1 = MiiRead(s, io, 0x02);
+        if (io->Status < 0) return io->Status;
+        if (s->PhyId1 != 0 && s->PhyId1 != 0xffff) break;
+        NcIoSleep(io, 1);
+    }
+    if (i == 100) return NC_E_DEVICE;
+    s->PhyId2 = MiiRead(s, io, 0x03);
+    SrDefaultMode(s, io);
+    if (probe->Speed == NC_SPEED_HIGH) {
+        Cmd(io, SR_BULKIN_SIZE, 0x8100, 0x8147);
+        s->RxTransfer = SR_RX_HIGH;
+    } else {
+        Cmd(io, SR_BULKIN_SIZE, 0x8000, 0x8001);
+        s->RxTransfer = A7_RX_TRANSFER;
+    }
+    /* sr9800_reset */
+    Cmd(io, AX_CMD_WRITE_GPIOS, SR_GPIO_RESET, 0);
+    NcIoSleep(io, 5);
+    NcIoRead(io, AX_CMD_READ_PHY_ID, 0, 0, b, 2);
+    Cmd(io, AX_CMD_SW_PHY_SELECT, s->Embedded, 0);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPPD | SR_SWRESET_PRL, 0);
+    NcIoSleep(io, 150);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_CLEAR, 0);
+    NcIoSleep(io, 150);
+    Cmd(io, AX_CMD_SW_RESET, (nc_u16)(s->Embedded ? AX_SWRESET_IPRL : SR_SWRESET_PRTE), 0);
+    NcIoSleep(io, 150);
+    Cmd(io, AX_CMD_WRITE_RX_CTL, 0, 0);
+    Cmd(io, AX_CMD_SW_RESET, SR_SWRESET_PRL, 0);
+    NcIoSleep(io, 150);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPRL | SR_SWRESET_PRL, 0);
+    NcIoSleep(io, 150);
+    SrDefaultMode(s, io);
+    NcIoWrite(io, AX_CMD_WRITE_NODE_ID, 0, 0, s->Mac, 6);
+    if (io->Status < 0) return io->Status;
+    FillParams(s, params);
+    return NC_OK;
+}
+
 long A7Start(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
 {
     A7_STATE *s = chip;
     nc_u8 b[2] = { 0, 0 };
     nc_u8 code = 0;
     long r;
-    nc_u32 i;
 
     Zero(s, sizeof(*s));
+    if (probe->Vendor == 0x0fe6 && probe->Product == 0x9800) {
+        s->Kind = A7_KIND_SR9800;
+        s->RxBase = SR_DEFAULT_RX_CTL;
+        return SrStart(s, io, probe, params);
+    }
+    s->Kind = A7_KIND_AX772B;
+    s->RxBase = AX_DEFAULT_RX_CTL;
+    s->RxTransfer = A7_RX_TRANSFER;
 
     ReadMac(s, io, probe);
     NcIoRead(io, AX_CMD_READ_PHY_ID, 0, 0, b, 2);
@@ -240,17 +352,7 @@ long A7Start(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
     if (io->Status < 0) return io->Status;
     r = PhyStart(s, io);
     if (r < 0) return r;
-
-    for (i = 0; i < 6; i++) params->Mac[i] = s->Mac[i];
-    params->RxSize = A7_RX_TRANSFER;
-    params->RxCount = 1;          /* one at a time: the stream is parsed in order (6.8) */
-    params->TxHeader = 4;
-    params->TxAlign = 1;
-    params->TxBatch = 1;          /* Linux sends one frame per bulk-OUT transfer */
-    params->TxSlots = 4;
-    params->TxSize = 4 + NC_ETH_MAX + 4;
-    params->RxConfig = s->RxCtl;
-    params->RxConfigRead = s->RxCtlRead;
+    FillParams(s, params);
     return NC_OK;
 }
 
@@ -279,7 +381,7 @@ static long LinkDown(A7_STATE *s, NET_IO *io)
     Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
     if (io->Status < 0) return io->Status;
     s->Medium = 0;
-    if (s->PhyId1 == 0x003b && s->PhyId2 == 0x1861) {
+    if (s->Kind == A7_KIND_AX772B && s->PhyId1 == 0x003b && s->PhyId2 == 0x1861) {
         long r = PhyReset(s, io);
         if (r < 0) return r;
     }
@@ -294,7 +396,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     int up, fast, full, txPause, rxPause;
 
     link->Up = 0; link->Mbps = 0; link->FullDuplex = 0;
-    link->RxLength = A7_RX_TRANSFER;
+    link->RxLength = s->RxTransfer;
     /* Until this Link has finished, LinkPending stays set and Poll asks
      * for it again: a Link that fails part way is run again, whatever the
      * PHY then reports (the core treats a failed Link as link down).
@@ -311,7 +413,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     if (s->BadRun >= A7_REALIGN_AFTER) {
         Cmd(io, AX_CMD_WRITE_RX_CTL, 0, 0);
         NcIoSleep(io, 2);
-        Cmd(io, AX_CMD_WRITE_RX_CTL, (nc_u16)(s->RxCtl ? s->RxCtl : AX_DEFAULT_RX_CTL), 0);
+        Cmd(io, AX_CMD_WRITE_RX_CTL, (nc_u16)(s->RxCtl ? s->RxCtl : s->RxBase), 0);
         if (io->Status < 0) return io->Status;
         Zero(&s->Rx, sizeof(s->Rx));
         s->BadRun = 0;
@@ -371,12 +473,21 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
         fast = (bmcr & 0x2000) != 0;
         full = (bmcr & 0x0100) != 0;
     }
-    /* ax88772_mac_link_up: TFC with tx_pause, RFC with rx_pause. */
-    medium = AX_MEDIUM_AC | AX_MEDIUM_RE;
-    if (full) medium |= AX_MEDIUM_FD;
-    if (fast) medium |= AX_MEDIUM_PS;
-    if (txPause) medium |= AX_MEDIUM_TFC;
-    if (rxPause) medium |= AX_MEDIUM_RFC;
+    /* ax88772_mac_link_up: TFC with tx_pause, RFC with rx_pause. The
+     * SR9800 (sr9800_link_reset): its default with PS and FD cleared as
+     * the link needs, RFC and TFC always (it advertises no pause). */
+    if (s->Kind == A7_KIND_SR9800) {
+        medium = SR_MEDIUM_DEFAULT;
+        if (!fast) medium &= (nc_u16)~AX_MEDIUM_PS;
+        if (!full) medium &= (nc_u16)~AX_MEDIUM_FD;
+        txPause = rxPause = 1;
+    } else {
+        medium = AX_MEDIUM_AC | AX_MEDIUM_RE;
+        if (full) medium |= AX_MEDIUM_FD;
+        if (fast) medium |= AX_MEDIUM_PS;
+        if (txPause) medium |= AX_MEDIUM_TFC;
+        if (rxPause) medium |= AX_MEDIUM_RFC;
+    }
     Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, medium, 0);
     if (io->Status < 0) return io->Status;
     s->Medium = medium;
@@ -410,7 +521,7 @@ int A7Poll(void *chip, NET_IO *io)
 long A7SetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *multicast, nc_u32 count)
 {
     A7_STATE *s = chip;
-    nc_u16 rxctl = AX_DEFAULT_RX_CTL;
+    nc_u16 rxctl = s->RxBase;
     nc_u8 hash[8];
     nc_u32 i;
 
@@ -612,10 +723,15 @@ void A7TxHeader(void *chip, nc_u8 *hdr, nc_u32 length, nc_u32 maxPacket, int sin
 
 int A7TxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 maxPacket)
 {
-    (void)chip;
+    A7_STATE *s = chip;
+    nc_u32 unit = maxPacket;
     /* A transfer that ends on a packet boundary gets the pad word
-     * 0xffff0000 (a zero-length record) instead of a zero-length packet. */
-    if (maxPacket && *total % maxPacket == 0 && *total + 4 <= capacity) {
+     * 0xffff0000 (a zero-length record) instead of a zero-length packet.
+     * The SR9800 gets it where Linux's sr_tx_fixup puts it, when header
+     * and frame are a multiple of maxpacket - 1, and no terminator
+     * otherwise (ethernet.md section 6.9.1). */
+    if (s->Kind == A7_KIND_SR9800) unit = maxPacket ? maxPacket - 1 : 0;
+    if (unit && *total % unit == 0 && *total + 4 <= capacity) {
         buffer[*total] = 0; buffer[*total + 1] = 0;
         buffer[*total + 2] = 0xff; buffer[*total + 3] = 0xff;
         *total += 4;
@@ -625,7 +741,7 @@ int A7TxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 ma
 
 const NET_CHIP NetPackageChip = {
     "ax772f",
-    "usb-wdm-free AX772F (ASIX AX88772B/AX88772C USB Fast Ethernet)",
+    "usb-wdm-free AX772F (ASIX AX88772B/AX88772C, CoreChips SR9800 USB Fast Ethernet)",
     0x0001,
     A7Probe, A7Start, A7SetMac, A7Link, A7Poll, A7SetFilter, A7Stop, A7Suspend, A7Resume,
     A7Status, A7RxParse, A7TxHeader, A7TxEnd, A7RxReset

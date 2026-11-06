@@ -7,10 +7,18 @@
  * else. Nothing here includes an OS header: a chip's code is compiled
  * unchanged into the driver and into the package's host tests.
  *
- * This file, netusb.h, netcore.c and netusb.c are identical copies in
- * src/net/ax88179/ and src/net/rtl815x/. They are written to move to
- * src/net/common/ (ethernet.md section 3.2) once that directory's owner
- * agrees; until then a change to one copy is made to both.
+ * This file, netusb.h, netcore.c and netusb.c are copies in
+ * src/net/ax88179/, src/net/rtl815x/, src/net/ax88772/ and
+ * src/net/sr9700/. They are written to move to src/net/common/
+ * (ethernet.md section 3.2) once that directory's owner agrees; until
+ * then a change to one copy is made to all. The src/net/ax88772/ and
+ * src/net/sr9700/ copies of this file and netusb.c add what the others
+ * take when they are next changed: NET_CHIP_STATE may be set by the
+ * package's build, the chip table may name RxReset, netusb.c's resume
+ * ignores a D0 while already in D0 and reports a chip that did not come
+ * back, its pump stops after a failed IRP allocation instead of retrying
+ * it at once, and halt waits a little after the worker's exit event on
+ * 98 SE and ME (ethernet.md section 6.8).
  *
  * Rules for a chip (section 3.3):
  * - Probe is a pure parser of descriptors; it changes nothing.
@@ -20,6 +28,9 @@
  * - Status, RxParse, TxHeader and TxEnd run at IRQL <= DISPATCH_LEVEL from
  *   USB completions; they never call NET_IO, allocate, or block.
  * - RxParse validates a whole transfer before it emits any frame.
+ * - RxReset (optional) runs at IRQL <= DISPATCH_LEVEL. A chip that names
+ *   it asks for one bulk-IN transfer at a time (RxCount 1), so it never
+ *   runs at the same time as RxParse.
  */
 #ifndef NETCHIP_H
 #define NETCHIP_H
@@ -107,7 +118,9 @@ typedef struct NET_RX_STATS {
     nc_u32 FcsStripped;         /* safety net: frames that arrived with an FCS, stripped */
 } NET_RX_STATS;
 
+#ifndef NET_CHIP_STATE
 #define NET_CHIP_STATE 256      /* bytes of chip state the lower edge provides */
+#endif
 
 typedef struct NET_CHIP {
     const char *Name;           /* trace prefix and driver name */
@@ -141,6 +154,11 @@ typedef struct NET_CHIP {
     /* After the last frame: may extend total (padding); returns 1 if the
      * transfer must be followed by a zero-length packet. */
     int (*TxEnd)(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 maxPacket);
+    /* Optional (NULL: none). A bulk-IN transfer completed without its
+     * data reaching RxParse (it failed, was cancelled, or arrived with
+     * the data path closed): a chip whose receive stream runs across
+     * transfers forgets where it was. */
+    void (*RxReset)(void *chip);
 } NET_CHIP;
 
 /* The package's chip table, defined by the package. */

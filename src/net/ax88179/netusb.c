@@ -128,6 +128,7 @@ struct NET_DEV {
     BOOLEAN FilterValid;
     UCHAR Mc[NC_MULTICAST_MAX * 6];
     ULONG Speed;                  /* 100 bps units */
+    BOOLEAN LinkRetry;            /* the last link read failed: read it again at the next tick */
     ULONG Malformed, Dropped, FcsStripped;
     BOOLEAN FcsLogged;            /* the anomaly was reported (under Lock) */
 };
@@ -819,6 +820,7 @@ static void ApplyLink(NET_DEV *d)
     if (d->Gone || d->Suspended) return;
     link.Up = 0; link.Mbps = 0; link.FullDuplex = 0; link.RxLength = d->RxLength;
     r = d->Chip->Link(ChipState(d), Io(d), &link);
+    d->LinkRetry = (BOOLEAN)(r < 0);
     if (r < 0) {
         NetTrace("link: %d", r);
         link.Up = 0;
@@ -840,6 +842,10 @@ static void ApplyLink(NET_DEV *d)
 static void Recover(NET_DEV *d)
 {
     NTSTATUS status;
+    /* Down for the upper edge while the pipes recover: its queue is
+     * failed and no send is taken in, however long the drain waits; the
+     * link is read again before the gate reopens. */
+    d->Cb.Link(d->Cb.Context, 0, d->Speed);
     Quiesce(d);
     if (d->Gone || d->Suspended) { ReportGone(d); return; }
     if (++d->Recoveries > 30) {
@@ -858,6 +864,7 @@ static void Recover(NET_DEV *d)
         ReportGone(d);
         return;
     }
+    ApplyLink(d);
     Reopen(d);
 }
 
@@ -875,6 +882,9 @@ static long Power(NET_DEV *d, BOOLEAN on)
     BOOLEAN was;
     long r;
     if (!on) {
+        /* Down for the upper edge first: its queue is failed and no send
+         * is taken in until D0 reads the link again (ApplyLink). */
+        d->Cb.Link(d->Cb.Context, 0, d->Speed);
         Quiesce(d);
         if (!d->Gone) (void)d->Chip->Suspend(ChipState(d), Io(d));
         KeAcquireSpinLock(&d->Lock, &old);
@@ -1033,7 +1043,7 @@ static void Worker(PVOID context)
         } else if (status == STATUS_TIMEOUT && !d->Gone && !d->Suspended && d->Open &&
                    (++d->Ticks % 2) == 0) {
             /* A missed or absent link interrupt: ask the chip. */
-            if (d->Chip->Poll(ChipState(d), Io(d))) LinkChanged(d);
+            if (d->LinkRetry || d->Chip->Poll(ChipState(d), Io(d))) LinkChanged(d);
         }
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */

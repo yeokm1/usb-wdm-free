@@ -811,7 +811,8 @@ static void SendPath(void)
     for (i = 0; i < 10; i++) CHECK(tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS);
     CHECK(QueryUlong(OID_GEN_XMIT_OK) == 10);
 
-    /* A burst beyond the queue: everything completes exactly once. */
+    /* A burst of 80, more than the 64 the queue once held: every packet
+     * completes exactly once, and none fails for want of room. */
     for (i = 0; i < 80; i++) list[i] = MakePacket(100 + i, 200, peer);
     Fake.Chars.SendPacketsHandler(ctx, list, 80);
     dev.SentCount = 0;
@@ -829,7 +830,7 @@ static void SendPath(void)
             CHECK(tp[100 + i].Completions == 1);
             if (tp[100 + i].Status == NDIS_STATUS_SUCCESS) ok++; else failed++;
         }
-        CHECK(failed > 0 && ok >= 64);                /* the queue holds 64 */
+        CHECK(failed == 0 && ok == 80);               /* no limit on the queue */
     }
 
     /* A failed transfer fails its packets once, and traffic recovers. */

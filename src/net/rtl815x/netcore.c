@@ -9,9 +9,10 @@
  *
  * A deserialized NDIS 5 miniport with a WDM lower edge (netusb.c):
  * - every packet accepted by SendPackets completes once through
- *   NdisMSendComplete, from the transmit path or a flush; the queue is
- *   bounded and an excess packet, or any packet while the link is down,
- *   completes with failure at once;
+ *   NdisMSendComplete, from the transmit path or a flush; the queue has
+ *   no limit (a full queue never fails a send), and a packet while the
+ *   link is down or the adapter gone or halting completes with failure at
+ *   once;
  * - received frames are copied into a preallocated packet pool and
  *   indicated up to NET_RX_BATCH at a time per bulk-IN transfer; a SUCCESS
  *   indication transfers ownership until ReturnPacket, a RESOURCES
@@ -26,7 +27,8 @@
 #include <ndis.h>
 #include "netusb.h"
 
-#define TX_LIMIT 64
+#define TX_LIMIT 64          /* OID_GEN_TRANSMIT_BUFFER_SPACE only: the queue itself is not bounded */
+#define TX_KICK 8            /* frames queued between kicks of the pump within one call */
 #define RX_PACKETS 64
 #define RX_LOW 8
 #define RX_STRIDE 1536
@@ -39,6 +41,7 @@ typedef struct ADAPTER {
     UCHAR Mac[6], PermanentMac[6];
     ULONG Filter, Lookahead, LinkSpeed;
     BOOLEAN Connected, Gone, Halting, Ready;
+    BOOLEAN LinkKnown;             /* the lower edge has called Link */
     UCHAR Multicast[NC_MULTICAST_MAX][6];
     ULONG MulticastCount;
     PNDIS_PACKET TxHead, TxTail;   /* linked through MiniportReserved */
@@ -51,6 +54,8 @@ typedef struct ADAPTER {
     ULONG PowerState;
     ULONG TxOk, TxError, RxOk, RxError, RxNoBuffer;
     ULONG TxBytes, RxBytes;
+    ULONG RxCopied;                /* trace: frames indicated with NDIS_STATUS_RESOURCES */
+    ULONG TxPeak;                  /* trace: the longest the send queue has been */
 } ADAPTER;
 
 /* The core's lock is taken from the lower edge's USB completions, which
@@ -131,8 +136,9 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
             a->RxBytes += length;
 #if defined(NET_TRACE_E9)
             if (!(a->RxOk % 8192))
-                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, tx %u/%u queued %u", a->RxOk, a->RxFreeCount,
-                         a->RxOut, a->RxNoBuffer, a->TxOk, a->TxError, a->TxQueued);
+                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, %u copied; tx %u/%u queued %u peak %u",
+                         a->RxOk, a->RxFreeCount, a->RxOut, a->RxNoBuffer, a->RxCopied, a->TxOk, a->TxError,
+                         a->TxQueued, a->TxPeak);
 #endif
         } else {
             a->RxNoBuffer++;
@@ -154,6 +160,7 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
          * before the call decides ownership, never the status after it
          * (NDIS 5 receive indication contract). */
         ReceiveFlush(a, g);
+        a->RxCopied++;              /* trace only; an unlocked count */
         NDIS_SET_PACKET_STATUS(packet, NDIS_STATUS_RESOURCES);
         NdisMIndicateReceivePacket(a->Handle, &packet, 1);
         CoreLock(a);
@@ -247,6 +254,7 @@ static void Link(void *context, int connected, nc_u32 speed)
     if (connected < 0) a->Gone = TRUE;
     if (speed) a->LinkSpeed = speed;
     changed = a->Connected != (connected > 0);
+    a->LinkKnown = TRUE;
     a->Connected = connected > 0;
     CoreUnlock(a);
     if (connected <= 0) Flush(a);
@@ -428,18 +436,24 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
         NDIS_SET_PACKET_STATUS(p, NDIS_STATUS_PENDING);
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
         CoreLock(a);
-        if (!a->Gone && !a->Halting && a->Connected && size >= NC_ETH_MIN && size <= NC_ETH_MAX &&
-            a->TxQueued < TX_LIMIT) {
+        /* No limit on the queue: a deserialized miniport keeps every valid
+         * send until it can go (NDIS 5 rules); the packets themselves are
+         * the queue (MiniportReserved), so nothing is allocated. Only a
+         * gone, halting or disconnected adapter or a bad length fails one. */
+        if (!a->Gone && !a->Halting && a->Connected && size >= NC_ETH_MIN && size <= NC_ETH_MAX) {
             NEXT(p) = NULL;
             if (a->TxTail) NEXT(a->TxTail) = p; else a->TxHead = p;
             a->TxTail = p;
             a->TxQueued++;
+            if (a->TxQueued > a->TxPeak) a->TxPeak = a->TxQueued;
             queued = TRUE;
         }
         CoreUnlock(a);
         if (!queued) {
             void *one = p;
             TxDone(a, &one, 1, 0);
+        } else if (!((i + 1) % TX_KICK)) {
+            NetUsbKick(a->Usb);   /* a long array starts going out at once */
         }
     }
     NetUsbKick(a->Usb);
@@ -675,7 +689,9 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
     CoreLock(a);
-    a->Connected = connected != 0;
+    /* Link may have been called already (the worker runs from
+     * NetUsbOpen on): the latest state stands over the snapshot. */
+    if (!a->LinkKnown) a->Connected = connected != 0;
     if (speed) a->LinkSpeed = speed;
     a->Ready = TRUE;
     CoreUnlock(a);

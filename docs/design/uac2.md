@@ -913,6 +913,46 @@ Every terminal on its own clock source (playback 5, 6, 8; capture 1, 3,
 this board. Recording and the other outputs wait for the endpoints of
 15.3.
 
+### 15.1b Linux since the capture (2026-11-06, xHCI98 task 47.18)
+
+Read again at Linux commit `f66469d9` (`torvalds/linux` master,
+2026-11-06; `sound/usb/quirks.c`, `usbaudio.h`, `stream.c`,
+`mixer_quirks.c`, `mixer_maps.c` and `card.c`, all GPL-2.0-or-later;
+read for facts, nothing adapted), against `c339f401` of 15.1:
+
+- **One new entry for an ALC4080.** `quirks.c` gives `0DB0:A073` (the
+  MSI MAG X570S Tomahawk and Torpedo Max, "ALC4080")
+  `QUIRK_FLAG_SKIP_IFACE_SETUP`. `usbaudio.h` defines it as skipping the
+  probe-time interface setup (`usb_set_interface`, `init_pitch`,
+  `init_sample_rate`) as redundant with the setup done when a stream
+  opens. Without it, `stream.c` does for each format it finds: alternate
+  0; for a USB Audio 2.0 device (no `QUIRK_FLAG_SET_IFACE_FIRST`) the
+  pitch and the format's highest rate; then the format's alternate, left
+  selected. With it, none of that happens until a stream opens.
+- **No start-up request, no jack or output selection.** No ALC4080 id
+  reaches `mixer_quirks.c`. Its Realtek HD Audio verb requests (62, 72,
+  88, 89) and the jack controls built on them are still the ALC4020's of
+  two docks (`0BDA:4014`, `0BDA:402E`, a USB Audio 1.0 device). `card.c`
+  and `mixer_maps.c` change names only (15.1).
+
+What `uac2` does with it: nothing new is needed for what Linux shows. At
+start `uac2` selects the configuration with every interface at alternate
+0 (`Configure` in `uacusb.c`) and reads the clock entities' ranges; it
+sets a rate and selects a streaming alternate only when a stream starts
+(`UacUsbStart`: `SetClock`, which writes the frequency only when the
+clock's current one differs, then `SelectAlt`), and goes back to
+alternate 0 when the stream stops. So `uac2` never does the probe-time
+setup the quirk skips, on any device. For `0DB0:A073` the files read add
+no vendor initialisation either. Whether that board's topology is the
+captured one is not known: one streaming interface and terminal per jack,
+each on its own clock and with no selector, is what the capture of
+`0B05:1B9B` shows (15.1a), and another board may differ.
+
+Still owed (15.6 step 3): the legs with the replayed capture
+(`uacemu.py --profile alc4080cap`, with `--vid 0db0 --pid a073` for the
+board the quirk names) on 98 SE under NUSB's EHCI and under xHCI98 and on
+7 x64; the real board (xHCI98 45-E.13).
+
 ### 15.2 What `uac2` does with it today
 
 - Binding: if the function is USB Audio 2.0 and its PDO offers

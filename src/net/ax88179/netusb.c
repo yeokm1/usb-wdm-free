@@ -871,8 +871,8 @@ static long Reset(NET_DEV *d)
  * returns straight into PsTerminateSystemThread, both of them NTKERN's
  * code, their addresses read from the import table before the signal.
  * KeSetEvent may still be touching the event after a halt has woken, so
- * the event is a block of its own that is never freed: one KEVENT per
- * worker started on those systems. The host test and the x64 build (NT
+ * the event is a block of its own that is never freed: one KEVENT and
+ * its pool header per worker started on those systems, until restart. The host test and the x64 build (NT
  * only) take the plain calls. */
 #if defined(_M_IX86) && !defined(SHIM_WDM_H)
 static void ExitByKernel(PKEVENT event)

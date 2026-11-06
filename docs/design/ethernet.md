@@ -1298,8 +1298,11 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      `PsTerminateSystemThread`. Both addresses are read from the import
      table before the signal. Because `KeSetEvent` may still touch the
      event after halt has woken, the event is a nonpaged block of its
-     own that is never freed: one `KEVENT` per worker started on those
-     systems. Assumed, not documented for NTKERN: that the two imports
+     own that is never freed: one 16-byte `KEVENT` and its pool header
+     per worker started on those systems (each start, not each resume),
+     kept until restart, about 24 KB per 1000 plugs. Nothing on 98 SE
+     or ME proves that `KeSetEvent` has returned, so nothing can free
+     it soundly. Assumed, not documented for NTKERN: that the two imports
      resolve to its resident code, that `KeSetEvent` takes three
      stack words, and that `PsTerminateSystemThread` neither returns nor
      uses its caller's frame. On NT halt waits for the event and the

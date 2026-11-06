@@ -5,7 +5,8 @@ Status: design draft, 2026-10-20. Implementation, 2026-10-22: `cdcnet`
 x64 builds; `CDCNET.INF`, `CDC98.INF`, `CDCRNDIS.INF`), with the core kept
 inside the package for now rather than in `src/net/common/` (section 3.2).
 Its runs are in `docs/testing/2026-10-22-cdcnet.md`. `rtl815x` has no code;
-`ax88179` is separate work.
+`ax88179` is separate work. 2026-11-06: `ax88772`, the ASIX AX88772B and
+AX88772C on 98 SE and ME (section 6.8).
 
 Free NDIS miniport drivers for the USB Ethernet adapters and USB network links
 people can buy or use today, which Windows 98 SE has no driver for, and which
@@ -61,7 +62,10 @@ the box, from its maker, or here), and the gaps: [ethernet-coverage.md](ethernet
    repository does not depend on); the DM9601/SR9700/CH9200 clones; and
    Android tethering under Microsoft's 98 SE, ME and 2000 USB stacks.
    Tethering is served under xHCI98 and on XP and later. Sections 2.4 and
-   2.6.
+   2.6. Owner, 2026-11-06 (xHCI98 roadmap 47.26 and 47.27): a free driver
+   for the AX88772B and AX88772C on 98 SE and ME, which ASIX's drivers
+   leave out (section 6.8), and for the CoreChips SR9700 and SR9800;
+   the AX88772 and AX88772A stay with ASIX's driver.
 6. **iPhone tethering is not RNDIS.** It is Apple's own vendor class
    (`FF/FD/01`, Linux `ipheth.c`) and needs the phone paired and trusted
    first. Out of scope; section 2.4.
@@ -177,6 +181,10 @@ today, therefore has no driver on 98 SE/ME from this repository; the
 release notes say so. The cheap DM9601/SR9700/CH9200 clones are not planned
 either.
 
+Owner, 2026-11-06: the AX88772B and AX88772C get a free driver on 98 SE
+and ME, `ax88772` (section 6.8); the AX88772 and AX88772A stay with
+ASIX's driver. The CoreChips SR9700 and SR9800 are xHCI98 roadmap 47.27.
+
 ## 3. Package structure
 
 ### 3.1 Options weighed
@@ -203,6 +211,7 @@ either.
 | `src/net/cdcnet/` | CDC-ECM, CDC-NCM, RNDIS (98 SE, ME, 2000); the ECM configuration of known vendor adapters; the XP to 7 RNDIS INF | `CDCNET.SYS`, `CDCNET.INF`, `CDCRNDIS.INF` |
 | `src/net/rtl815x/` | Realtek RTL8152/8153 (later 8156) vendor mode | `RTL815X.SYS`, `RTL815X.INF` |
 | `src/net/ax88179/` | ASIX AX88179/AX88178A | `AX179F.SYS`, `AX179F.INF` |
+| `src/net/ax88772/` | ASIX AX88772B/AX88772C, 98 SE and ME (section 6.8) | `AX772F.SYS`, `AX772F98.INF` |
 
 The `F` suffix keeps the free driver's file name from colliding with the
 vendor's own (ASIX's AX88179 file name was not checked). The core sits in
@@ -1018,6 +1027,258 @@ At SuperSpeed the per-transfer cost in the host controller driver and the
 OS's TCP/IP stack set the limit, which is why aggregation matters and plain
 ECM will fall well short of gigabit on any target.
 
+### 6.8 AX88772B and AX88772C (`ax88772`)
+
+Owner, 2026-11-06 (xHCI98 roadmap 47.26): a free driver for the ASIX
+AX88772B and AX88772C on 98 SE and ME, which ASIX's drivers leave out.
+This reverses section 2.6 for these two chips only. The AX88772 and
+AX88772A stay with ASIX's driver in the non-free pack on every system.
+
+**Whose driver covers what** (read 2026-11-06; ethernet-coverage.md has
+the full survey):
+
+| System | AX88772B, AX88772C |
+|---|---|
+| 98 SE, ME | none from ASIX: its 98/ME driver (3.0.3.12, non-free `ax88772/w98se-me/`) lists only `0B95:7720` and `0B95:772A` (its `Ax88772.inf` read 2026-11-06). **`ax88772` (this package)** |
+| 2000, XP | ASIX 5.4.3.0 (non-free `ax88772b/w2k-xp/`), `0B95:772B` at any revision |
+| XP x64, Vista | ASIX 5.6.3.0, 5.8.2.0, 5.10.2.0 (non-free), `0B95:772B` |
+| 7 | ASIX 5.12.12.0 / 5.14.12.0 (non-free), `0B95:772B` revs `0001` and `0002`, `0B95:7E2B`, `2001:1A02` |
+
+So the package targets 98 SE and ME only and has no NT INF; on 2000 and
+later ASIX's driver serves the chip. `0B95:7E2B` on 2000 to Vista and
+`17EF:7203` on 2000 to 7, which no ASIX INF lists, stay uncovered there
+(a lower-priority gap the owner may later give to this package).
+
+**The package.** A new package, `src/net/ax88772/`, `AX772F.SYS`, on
+the shared core (netcore.c, netusb.c, netchip.c copied in, as the other
+two vendor packages do). Not `ax88179`: the two chips share nothing
+below the core. The AX88179 addresses a register file through one
+request (`ACCESS_MAC`) and frames receive data with a trailer; the
+AX88772 family has one vendor request per register and a 4-byte header
+per frame. A combined driver would only share the core, which each
+package compiles in anyway, and would put the released, bench-run
+`AX179F.SYS` at risk for a chip nobody here has. The `F` suffix keeps
+the name off ASIX's own `AX88772B.SYS` (section 3.2). The CoreChips
+SR9800, which Linux drives with the same command set and framing
+(`sr9800.c`, "Based on asix_common.c"), is added to this package by
+roadmap 47.27 (section 6.9).
+
+**Sources.** Linux `drivers/net/usb/asix_devices.c`, `asix_common.c`
+and `asix.h` at v7.3 (SPDX GPL-2.0-or-later, so their sequences may be
+adapted with their notices kept; section 9), and
+`drivers/net/phy/ax88796b.c` (GPL-2.0+) for the embedded PHY. Cited
+below by symbol. Facts no Linux file gives are marked *inferred*.
+
+- **Ids** (`products[]`): `0B95:772B` (ASIX AX88772B; the AX88772C uses
+  the same id at revision `0002`, as ASIX's 7 INF lists it),
+  `0B95:7E2B` (ASUS, `ax88772b_info`), `17EF:7203` (Lenovo U2L100P,
+  `ax88772b_info`), and `2001:1A02` (D-Link DUB-E100 C1, which Linux
+  serves with `ax88772_info` and ASIX's 7 INF with its AX88772B/C
+  driver). The AX88772 and AX88772A ids (`7720`, `772A` and the OEM ids
+  on `ax88772_info`) are not listed: ASIX's 98/ME driver has them, and
+  the free and non-free packs never list one id on one system. HG20F9
+  (`066B:20F9`, `hg20f9_info`, "Appears to be compatible with Asix
+  88772B") is left out: no chip is named.
+- **Interface** (`usbnet_get_endpoints`): one vendor interface with a
+  bulk IN, a bulk OUT and an interrupt IN. *Inferred*: interface 0,
+  class `FF`, endpoints 0x81 (interrupt, 8 bytes), 0x82 and 0x03 (bulk);
+  the probe takes the first such interface (`NcFindVendorInterface`),
+  whatever its endpoint numbers.
+- **Requests** (`asix.h`, `asix_read_cmd`, `asix_write_cmd`): vendor,
+  device recipient, bmRequestType `C0`/`40`. `SET_SW_MII` 06,
+  `READ_MII_REG` 07 (wValue PHY, wIndex register, 2 bytes),
+  `WRITE_MII_REG` 08, `STATMNGSTS_REG` 09 (1 byte), `SET_HW_MII` 0A,
+  `READ_EEPROM` 0B (wValue word, 2 bytes), `READ_RX_CTL` 0F,
+  `WRITE_RX_CTL` 10 (wValue the mode, no data), `WRITE_IPG0` 12,
+  `READ_NODE_ID` 13, `WRITE_NODE_ID` 14 (6 bytes),
+  `WRITE_MULTI_FILTER` 16 (8 bytes), `READ_PHY_ID` 19 (2 bytes; byte 1
+  the embedded PHY's address), `READ_MEDIUM_STATUS` 1A,
+  `WRITE_MEDIUM_MODE` 1B (wValue), `WRITE_GPIOS` 1F (wValue),
+  `SW_RESET` 20 (wValue), `SW_PHY_SELECT` 22 (wValue), `QCTCTRL` 2A.
+- **MII access** (`__asix_mdio_read`, `asix_check_host_enable`): up to
+  30 tries of `SET_SW_MII`, 1 ms, `STATMNGSTS_REG`, until its bit 0
+  (`AX_HOST_EN`) is set; then the register read or write, then
+  `SET_HW_MII`. When the 30 tries run out the access fails and so does
+  the stage (Linux still writes on a timeout).
+- **Chip code** (`ax88772_bind`): `STATMNGSTS_REG` & 0x70: 0x00
+  AX88772, 0x10 AX88772A, 0x20 AX88772B (the AX88772C reads 0x20 too:
+  Linux has no other code, and its PHY id, `003b1881` against the
+  AX88772A/B's `003b1861` in `ax88796b.c`, tells them apart). Only 0x20
+  is served; any other code is refused at Start, with the code in the
+  log. An AX88772 resets differently (`ax88772_hw_reset`), and an
+  AX88772A's PHY needs Linux's link workarounds
+  (`asix_ax88772a_read_status`, `asix_ax88772a_link_change_notify`); no
+  listed id is expected to carry either.
+- **MAC** (`ax88772_bind`, `FLAG_EEPROM_MAC`): on the three
+  `ax88772b_info` ids, EEPROM words 4, 5 and 6 (`READ_EEPROM`, two bytes
+  each, the MAC in order); on `2001:1A02` (`ax88772_info`),
+  `READ_NODE_ID`. An address that is zero or multicast is reported as
+  read; the core then applies section 4.8 (a stored locally
+  administered address, written to `NODE_ID` through SetMac), where
+  Linux takes a random one.
+- **PHY** (`asix_read_phy_addr`, `ax88772_bind`): the address is byte 1
+  of `READ_PHY_ID`; it is embedded when it is 0x10 (`AX_EMBD_PHY_ADDR`).
+  Only the embedded PHY is served: with an external one Linux also parks
+  the embedded PHY with its PLL kept on (`ax88772_init_phy`), which this
+  core does not do, so Start refuses it.
+- **Bring-up** (`ax88772a_hw_reset`, then `ax88772_reset`, in Linux's
+  order): `WRITE_GPIOS` `AX_GPIO_RSE` (0x80) and 5 ms;
+  `SW_PHY_SELECT` embedded | `AX_PHYSEL_SSEN` (0x10), 10 ms;
+  `SW_RESET` `IPPD|IPRL` (0x60), 10 ms; `SW_RESET` `IPRL` (0x20),
+  160 ms; `SW_RESET` 0; `SW_RESET` `IPRL`, 200 ms; on code 0x20
+  `QCTCTRL` wValue 0x8000 wIndex 0x8001 (the bulk-IN burst: SR9800's
+  table names it the 2 KiB entry, `SR9800_BULKIN_SIZE`); `WRITE_IPG0`
+  wValue 0x001D wIndex 0x0012 (Linux writes `AX88772_IPG0_DEFAULT |
+  AX88772_IPG1_DEFAULT` and `AX88772_IPG2_DEFAULT`; the value is kept
+  as written); `WRITE_NODE_ID` the MAC; `WRITE_RX_CTL`
+  `AX_DEFAULT_RX_CTL` (0x0088: `SO` receive on, `AB` broadcast, MFB
+  2048); `WRITE_MEDIUM_MODE` `AX88772_MEDIUM_DEFAULT` (0x0306);
+  `WRITE_RX_CTL` again; `READ_RX_CTL` and `READ_MEDIUM_STATUS` for the
+  log.
+- **PHY start**: first the PHY id (registers 2 and 3), polled up to 100
+  times 1 ms apart while it reads 0 or FFFF (`asix_get_phyid`); a PHY
+  that never answers fails Start. Then the soft reset (`asix_soft_reset`
+  in `ax88796b.c`: "Asix PHY won't reset unless reset bit toggles"; IEEE
+  802.3 clause 22): BMCR 0, then BMCR reset (0x8000), polled until clear
+  (500 ms at most; a PHY that never clears fails Start); ADVERTISE
+  0x05E1 (10/100 half and full, 802.3) with symmetric and asymmetric
+  pause (0x0C00, as `ax88772_phylink_setup` offers `MAC_SYM_PAUSE |
+  MAC_ASYM_PAUSE`); BMCR autonegotiation enable and restart (0x1200).
+- **Link** (`ax88772_mac_link_up`, `ax88772_mac_link_down`; the
+  resolution is clause 22's and 28B's): BMSR read twice (the link bit
+  latches low); up when bit 2 is set and autonegotiation is complete
+  (bit 5). Speed and duplex from ADVERTISE & LPA, highest first
+  (100 full, 100 half, 10 full, 10 half), or BMCR's speed and duplex
+  bits when no common ability is read (as `asix_ax88772a_read_status`
+  falls back). Pause by IEEE 802.3 Table 28B-3 with both pause bits
+  advertised: in full duplex, a partner advertising PAUSE gives transmit
+  and receive pause, one advertising ASM_DIR only receive pause. Medium
+  on link up: `AC|RE`, plus `FD`, `PS` at 100 Mb/s, `TFC` with transmit
+  pause and `RFC` with receive pause (`ax88772_mac_link_up`). On a link
+  that goes down the medium is written 0, and with the AX88772A/B PHY
+  (id `003b1861`) the PHY is reset and autonegotiation started again, as
+  Linux does for that PHY (`asix_ax88772a_link_change_notify`: some
+  partners otherwise leave a stale LPA); the AX88772C's PHY (`003b1881`)
+  has no such rule. Linux polls the PHY (phylink); the core's Poll reads
+  BMSR each tick.
+- **Status** (interrupt IN): Linux's AX88772 path uses no status
+  report. *Inferred*: the AX88772 family sends the 8-byte report of
+  `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so
+  Status returns that bit, and a change only wakes the worker, whose
+  Link reads the PHY. A report that never comes costs nothing: Poll
+  finds the change.
+- **Receive filter** (`asix_set_multicast`): `AX_DEFAULT_RX_CTL`, plus
+  `PRO` (promiscuous), or `AMALL` (all multicast, or more than 64
+  addresses), or `AM` with the 64-bit hash (`ether_crc` >> 26) written
+  by `WRITE_MULTI_FILTER`.
+- **Stop**: medium 0 (as link down), `WRITE_RX_CTL` 0, and the PHY
+  powered down (BMCR bit 11, `genphy_suspend`): the state Linux leaves
+  it in before `phylink_start` (`ax88772_init_phy` calls
+  `phy_suspend`).
+  **Suspend**: medium `RE` cleared (`ax88772_suspend`). **Resume**: the
+  whole bring-up again, up to three times, as `ax88772_resume` tries
+  the reset three times (the core does not retry a failed resume).
+- **Transmit** (`asix_tx_fixup`): one frame per bulk-OUT transfer, after
+  a 4-byte header: the length in bits 0-15 and its complement in bits
+  16-31. When header and frame end on a packet boundary
+  (`(len + 4) % wMaxPacketSize == 0`), the 4 bytes `00 00 FF FF`
+  (0xffff0000) follow instead of a zero-length packet.
+- **Receive** (`asix_rx_fixup_internal`, `struct asix_rx_fixup_info`):
+  a stream of records, each a 4-byte header (length in bits 0-10, its
+  complement in bits 16-26) and the frame, padded to an even length.
+  One bulk-IN transfer holds several records, and **a record may span
+  two transfers**: Linux carries the partial frame, and a header split
+  2 + 2 bytes, into the next transfer. Its checks, kept here: the two
+  length fields agree; the length is at most 1518 (1500 + 14 + 4); the
+  transfer is consumed exactly, each record's pad included, so a
+  transfer that ends on an odd byte is malformed. When a frame is being
+  carried and the new transfer holds the rest, its pad and a whole
+  header after it (`((remaining + 1) & ~1) + 4` bytes; Linux tests
+  `remaining + 4`, which can read past the end), that header is checked
+  first; if it does not agree, the carried frame is dropped and parsing
+  starts at the transfer's first byte (Linux's "synchronisation was
+  lost"). A half header carried from the last transfer is completed
+  before a trailing two bytes are taken as a new half header (Linux
+  tests the other way round and would lose it). Any other bad header
+  makes the transfer malformed. A record of 1 to 13 bytes, or of 1515 to
+  1518 (a VLAN tag), is consumed and counted as dropped, across
+  transfers too, keeping the stream in step: the core's frames are 14
+  to 1514 bytes (section 4.6). A record of length 0 consumes its header
+  only. The FCS is
+  never forwarded: Linux strips none and `AX_DEFAULT_RX_CTL` asks for
+  none.
+- **Receive buffers.** The burst `QCTCTRL` sets is 2 KiB, and Linux
+  reads 2048-byte transfers (`ax88772_bind`, `rx_urb_size`). This core
+  does the same: a transfer the size of the burst ends with the burst,
+  so it never waits for data that is not coming. A larger transfer
+  would complete only on a short packet, and a burst that ends on a
+  packet boundary with no zero-length packet (not documented either
+  way) would hold its frames back until more traffic came.
+- **Carrying a frame across transfers in the core.** netchip.h's rule
+  that RxParse validates a whole transfer before emitting still holds:
+  RxParse first walks the transfer on a copy of the stream's position
+  (the counters, not the frame bytes), and only if the whole transfer
+  is well formed walks it again and emits. A malformed transfer clears
+  the live position, so a carried frame is dropped with it, and emits
+  nothing. Three changes, all kept out of the other packages' builds:
+  1. The carry state (the partial frame, up to 1518 bytes, its length
+     and the half header) lives in the chip state, which this package
+     enlarges: netchip.h's `NET_CHIP_STATE` becomes overridable
+     (`#ifndef`, default 256), and this package's build sets 2048. The
+     other packages' copies get the same three lines, with no change
+     to their binaries.
+  2. Transfers must be parsed one at a time and in order. The core
+     parses each bulk-IN transfer in its completion routine, and with
+     several outstanding, two completions could run at once on a
+     multiprocessor system. The chip asks for one bulk-IN transfer at a
+     time (`RxCount` 1): its completion parses it before the pump
+     submits the next one, so parsing is serial and in stream order on
+     any processor count. The cost is a gap between transfers, which
+     the chip's own receive buffer absorbs; throughput is a bench
+     reading (section 6.7). Parsing several outstanding transfers in
+     order would need an ordered queue in the core, not only a lock.
+  3. The stream must be restarted where data was lost. A bulk-IN
+     transfer whose data never reaches RxParse (it failed, was
+     cancelled by a quiesce, or completed with the data path closed)
+     breaks it, and so does one the core drops for a length beyond its
+     buffer, so the chip table gains an optional `RxReset`, which
+     netusb.c's completion calls for such a transfer while the slot is
+     still busy (so never beside RxParse). It drops the carried frame;
+     the next transfer is read from its first byte as a header. That
+     is all a host can do: no documented request realigns the chip's
+     stream. A transfer that then starts inside a record fails the
+     header checks and is dropped whole, until one starts on a record
+     (*inferred*: once the chip has been idle its buffer starts on a
+     record).
+     The other packages' tables leave `RxReset` NULL.
+  4. A bring-up must not run beside the data path, since it resets the
+     chip state the stream lives in. netusb.c's resume runs the
+     bring-up only on a D0 that follows a D3 (a D0 while in D0 is
+     ignored), after draining the data path; and when the chip's own
+     three tries fail it leaves the data path closed and reports the
+     device gone, as recovery does when it gives up, rather than
+     reopening traffic on a half-reset chip.
+- **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
+  mode is left as reset leaves it), EEPROM writes, LED settings,
+  jumbo frames.
+
+**INF.** `AX772F98.INF`, one `$CHICAGO$` INF for 98 SE and ME (section
+7.1), listing the four ids above. No NT INF: on 2000 and later ASIX's
+driver serves these chips. Folder `free/net/ax88772/w98se-me/`.
+
+**Tests.** Host: `chiptest.c` drives the chip core against a model of
+the request set (bring-up order, MII host-enable, link resolution,
+filter, the transmit pad, and the receive stream: records split at every
+byte offset across two and three transfers, split headers, lost
+synchronisation, bad and oversized lengths, VLAN-size skips, odd
+lengths); `coretest.c` runs the unchanged core with the larger chip
+state. The simulator `axemu772.py` (usb-redir, as `axemu.py`) models the
+request set and the stream with bursts of the `QCTCTRL` size that split
+records across transfers. The guest legs, 98 SE and ME, run against it
+under xHCI98 and, on 98 SE, NUSB's EHCI. Because the simulator and the
+driver are written from the same Linux facts, a misreading shared by
+both passes; a real AX88772B and AX88772C on the bench stay owed.
+
 ## 7. INF and install per system
 
 ### 7.1 Windows 98 SE and ME (section of one `$Chicago$` INF)
@@ -1087,6 +1348,7 @@ two folders, with no `CDCRNDIS.INF`. `rtl815x` has those two and, from
 | `free/net/rtl815x/w2k/`, `free/net/ax88179/w2k/` | the same x86 NDIS 5 binary, the NT INF |
 | `free/net/rtl815x/wxp/`, `free/net/rtl815x/wv-7-x86/` | the same x86 NDIS 5 `RTL815X.SYS`, `RTLXP7.INF` |
 | `free/net/rtl815x/wxp-x64/`, `free/net/rtl815x/wv-7-x64/` | x64 NDIS 5.1 `RTL815X.SYS` with its embedded test signature, `RTLXP7.INF` |
+| `free/net/ax88772/w98se-me/` | x86 NDIS 5 `AX772F.SYS`, `AX772F98.INF` (98 SE and ME only, section 6.8) |
 
 All names 8.3. `cdcnet`'s x64 build is one binary from XP x64 to 7 x64; it
 sits in two folders because 8.3 has no room for one name covering XP x64
@@ -1203,6 +1465,7 @@ Linux copyright lines and SPDX tag:
 | `src/net/common/*.c` (where it follows usbnet's pipeline logic) | Linux `drivers/net/usb/usbnet.c` (Brownell; David Hollis) | GPL-2.0-or-later |
 | `src/net/rtl815x/*.c` | Not adapted: written from the chips' register facts (section 6.4; owner, 2026-10-25) | - |
 | `src/net/ax88179/*.c` | Linux `drivers/net/usb/ax88179_178a.c` (Copyright (C) 2011-2013 ASIX) | GPL-2.0-or-later |
+| `src/net/ax88772/ax7chip.c`, `ax7chip.h`, `ax7emu.py` | Linux `drivers/net/usb/asix_common.c`, `asix_devices.c`, `asix.h` at v7.3 (Copyright (C) 2003-2006 David Hollis, (C) 2005 Phil Chang, (C) 2006 James Painter, (c) 2002-2003 TiVo Inc.); the PHY reset rule from `drivers/net/phy/ax88796b.c` (GPL-2.0+) as a fact | GPL-2.0-or-later |
 
 The licence column is the source's. `rtl815x` was
 rewritten from the register facts (section 6.4) and no longer follows
@@ -1463,6 +1726,9 @@ After the first `ax88179` and `rtl815x` builds
   checked for NCM parameter names, capability bits and setup behavior.
 - Windows INFs: 98 SE `usbcdc.inf`; 7 `rndiscmp.inf`.
 - Linux at `f47d2236`: `drivers/net/usb/{usbnet,cdc_ether,cdc_ncm,rndis_host,r8152,ax88179_178a,asix_devices,smsc95xx,lan78xx,dm9601,ipheth}.c`;
+- Linux at tag v7.3 (section 6.8): `drivers/net/usb/asix_devices.c`,
+  `asix_common.c`, `asix.h` (GPL-2.0-or-later), `sr9800.c` and
+  `sr9800.h` (facts only), `drivers/net/phy/ax88796b.c` (GPL-2.0+);
   `Documentation/usb/linux.inf` at `v2.6.20`.
 - QEMU `hw/usb/dev-network.c` (master, 2026-10-20); QEMU 11.1.0 on this host.
 - xHCI98: `AGENTS.md` ("Architecture Overview", "DDK"),

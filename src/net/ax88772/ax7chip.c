@@ -265,10 +265,32 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
 {
     A7_STATE *s = chip;
     nc_u16 bmsr, bmcr, adv, lpa, common, medium;
-    int up, fast, full, txPause, rxPause;
+    int up, fast, full, txPause, rxPause, was;
 
     link->Up = 0; link->Mbps = 0; link->FullDuplex = 0;
     link->RxLength = A7_RX_TRANSFER;
+    /* Up only once all of this succeeds: a Link that fails part way
+     * leaves LinkUp clear, so Poll sees the PHY's link differ and the
+     * core runs Link again. */
+    was = s->LinkUp;
+    s->LinkUp = 0;
+
+    /* The core runs Link with the data path closed (netusb.c ApplyLink,
+     * after Quiesce or before the data path starts), so the receive
+     * stream may be restarted here. When RxParse refused several
+     * transfers in a row the stream is out of step (data was lost and the
+     * chip's transfers do not start on a record): receive off and on
+     * again, which empties the chip's receive buffer (inferred: no Linux
+     * file says so), and the stream is read from the next record. */
+    if (s->BadRun >= A7_REALIGN_AFTER) {
+        Cmd(io, AX_CMD_WRITE_RX_CTL, 0, 0);
+        NcIoSleep(io, 2);
+        Cmd(io, AX_CMD_WRITE_RX_CTL, (nc_u16)(s->RxCtl ? s->RxCtl : AX_DEFAULT_RX_CTL), 0);
+        if (io->Status < 0) return io->Status;
+        Zero(&s->Rx, sizeof(s->Rx));
+        s->BadRun = 0;
+        s->Realigns++;
+    }
 
     (void)MiiRead(s, io, MII_BMSR);              /* the link bit latches low */
     bmsr = MiiRead(s, io, MII_BMSR);
@@ -277,11 +299,10 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     up = (bmsr & BMSR_LSTATUS) && (!(bmcr & BMCR_ANENABLE) || (bmsr & BMSR_ANEGCOMPLETE));
     if (!up) {
         /* ax88772_mac_link_down */
-        if (s->LinkUp) {
+        if (was) {
             Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
             if (io->Status < 0) return io->Status;
             s->Medium = 0;
-            s->LinkUp = 0;
             /* The AX88772A/B PHY (003b1861) keeps a stale LPA after some
              * partners drop the link: Linux resets it and starts
              * autonegotiation again when the link goes
@@ -337,6 +358,8 @@ int A7Poll(void *chip, NET_IO *io)
     A7_STATE *s = chip;
     nc_u16 bmsr = MiiRead(s, io, MII_BMSR);
     if (io->Status < 0) return 0;
+    /* A receive stream out of step is restarted by Link (above). */
+    if (s->BadRun >= A7_REALIGN_AFTER) return 1;
     return ((bmsr & BMSR_LSTATUS) != 0) != (s->LinkUp != 0);
 }
 
@@ -506,8 +529,10 @@ long A7RxParse(void *chip, const nc_u8 *data, nc_u32 length, NET_EMIT emit, void
          * the transfer; a frame being carried is lost with it. */
         Zero(&s->Rx, sizeof(s->Rx));
         s->Malformed++;
+        s->BadRun++;
         return NC_E_MALFORMED;
     }
+    s->BadRun = 0;
     w.Frames = 0; w.Dropped = 0; w.Resync = 0;
     w.Rx = s->Rx;
     (void)Walk(&w, data, length, s->Frame, emit, context);

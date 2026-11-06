@@ -94,6 +94,7 @@
 #define A7_RX_TRANSFER   2048UL   /* rx_urb_size: the QCTCTRL 2 KiB burst */
 #define A7_FRAME_MAX     1518U    /* mtu + ETH_HLEN + VLAN_HLEN */
 #define A7_PHY_RESET_POLLS 50     /* 10 ms apart: clause 22's 500 ms */
+#define A7_REALIGN_AFTER 4        /* malformed transfers in a row before the stream is restarted */
 
 /* What a record stream carries across bulk-IN transfers
  * (asix_rx_fixup_info). */
@@ -116,6 +117,8 @@ typedef struct A7_STATE {
     nc_u16 Medium;               /* the medium mode last written */
     nc_u16 PhyId1, PhyId2;
     nc_u32 Resyncs, Malformed;   /* receive stream: synchronisation lost; transfers refused */
+    nc_u32 BadRun;               /* malformed transfers in a row (RxParse; read by Poll) */
+    nc_u32 Realigns;             /* receive restarts by Link for a stream out of step */
     A7_RX Rx;                    /* the stream's position (the emitting walk's) */
     nc_u8 Frame[A7_FRAME_MAX];   /* the frame being collected */
 } A7_STATE;

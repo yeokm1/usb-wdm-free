@@ -48,7 +48,8 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   even. The records form one stream; each bulk-IN transfer carries at
   most the burst QCTCTRL set (2048 bytes for 0x8000) and at most what
   the host asked for, so records cross transfers, as Linux handles.
-  --cut random cuts at random even offsets instead. No FCS. Frames reach
+  --cut random cuts at random even offsets instead. INFERRED: turning
+  receive off (RX_CTL without SO) empties the buffer. No FCS. Frames reach
   the guest only while the link is up, RX_CTL has SO and the medium RE,
   and RX_CTL's filter takes them (directed by NODE_ID, AB broadcast, AM
   with the hash, AMALL, PRO).
@@ -438,6 +439,8 @@ class Model:
             status, data = (0, got) if got is not None else (4, b'')
         elif rt == 0x40 and self.config:
             status = 0 if self.chip.write(request, value, index, payload) else 4
+            if not status and request == WRITE_RX_CTL and not value & RX_SO:
+                self.stream.clear()                 # INFERRED: receive off empties the buffer
             if not status:
                 self.pump()
         data = data[:length]

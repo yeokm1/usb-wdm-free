@@ -1160,7 +1160,9 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   Linux does for that PHY (`asix_ax88772a_link_change_notify`: some
   partners otherwise leave a stale LPA); the AX88772C's PHY (`003b1881`)
   has no such rule. Linux polls the PHY (phylink); the core's Poll reads
-  BMSR each tick.
+  BMSR each tick. The chip records the link as up only once Link has
+  applied all of it, so a Link that fails part way is seen by the next
+  Poll and run again.
 - **Status** (interrupt IN): Linux's AX88772 path uses no status
   report. *Inferred*: the AX88772 family sends the 8-byte report of
   `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so
@@ -1244,12 +1246,18 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      buffer, so the chip table gains an optional `RxReset`, which
      netusb.c's completion calls for such a transfer while the slot is
      still busy (so never beside RxParse). It drops the carried frame;
-     the next transfer is read from its first byte as a header. That
-     is all a host can do: no documented request realigns the chip's
-     stream. A transfer that then starts inside a record fails the
-     header checks and is dropped whole, until one starts on a record
-     (*inferred*: once the chip has been idle its buffer starts on a
-     record).
+     the next transfer is read from its first byte as a header. A
+     transfer that then starts inside a record fails the header checks
+     and is dropped whole. Under steady traffic every later transfer
+     can start inside a record too, so the chip restarts the stream:
+     after 4 malformed transfers in a row its Poll reports a change,
+     the core quiesces the data path and runs Link (the core runs Link
+     only with the data path closed), and Link turns receive off and
+     on (`WRITE_RX_CTL` 0, then the mode) and reads the stream from its
+     next byte. *Inferred*: that turning receive off empties the chip's
+     receive buffer, so the next transfer starts on a record; no Linux
+     file says so (Linux restarts nothing and waits for a transfer that
+     starts on a record).
      The other packages' tables leave `RxReset` NULL.
   4. A bring-up must not run beside the data path, since it resets the
      chip state the stream lives in. netusb.c's resume runs the

@@ -317,6 +317,19 @@ static void TestStart(void)
     m.Link = 1;
     CHECK(A7Poll(State.Bytes, &io) == 1);
 
+    /* A Link that fails part way leaves the link down in the chip's own
+     * state, so Poll asks again even though the PHY still has a link. */
+    m.Link = 1;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    CHECK(A7Poll(State.Bytes, &io) == 0);
+    m.RefuseAfter = m.Requests + 3;                      /* fails inside the BMSR reads */
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_E_IO && !link.Up);
+    m.RefuseAfter = 0;
+    io.Status = NC_OK;
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    CHECK(A7Poll(State.Bytes, &io) == 0);
+
     /* Stop: medium 0, receive off, PHY powered down. */
     CHECK(A7Stop(State.Bytes, &io) == NC_OK);
     CHECK(m.Medium == 0 && m.RxCtl == 0 && (m.Phy[MII_BMCR] & BMCR_PDOWN));
@@ -654,6 +667,46 @@ static void TestRxSync(void)
     CHECK(Parse(b, n, &st) == 1 && Frame(0, 90, 11));
 }
 
+/* Transfers that keep starting inside records: after A7_REALIGN_AFTER
+ * malformed ones Poll asks for Link, which turns receive off and on and
+ * restarts the stream. */
+static void TestRealign(void)
+{
+    static nc_u8 b[4096];
+    MODEL m;
+    NET_IO io;
+    NET_PARAMS params;
+    NET_LINK link;
+    NET_RX_STATS st;
+    A7_STATE *s = (A7_STATE *)State.Bytes;
+    nc_u32 n, i;
+    unsigned log;
+
+    ModelInit(&m);
+    CHECK(StartWith(&m, &io, 0x0b95, 0x772b, &params) == NC_OK);
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    memset(&Got, 0, sizeof(Got));
+    n = Record(b, 0, 1000, 1);
+    for (i = 0; i < A7_REALIGN_AFTER; i++) {
+        CHECK(A7Poll(State.Bytes, &io) == 0);
+        CHECK(Parse(b + 200, n - 200, &st) == NC_E_MALFORMED);
+    }
+    CHECK(s->BadRun == A7_REALIGN_AFTER);
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    log = m.LogCount;
+    m.RxCtl = 0x1234;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    CHECK(s->BadRun == 0 && s->Realigns == 1 && s->Rx.Remaining == 0);
+    CHECK(m.RxCtl == AX_DEFAULT_RX_CTL);                  /* off, then on with the filter's value */
+    for (i = log; i < m.LogCount && m.Log[i] != AX_CMD_WRITE_RX_CTL; i++) { }
+    CHECK(i < m.LogCount && i + 1 < m.LogCount && m.Log[i + 1] == AX_CMD_WRITE_RX_CTL);
+    CHECK(A7Poll(State.Bytes, &io) == 0);
+    /* One good transfer ends a run. */
+    CHECK(Parse(b + 200, n - 200, &st) == NC_E_MALFORMED && s->BadRun == 1);
+    n = Record(b, 0, 80, 2);
+    CHECK(Parse(b, n, &st) == 1 && s->BadRun == 0);
+}
+
 static void TestStatus(void)
 {
     nc_u8 r[8] = { 0xa1, 0, 1, 0, 0, 0, 0, 0 };
@@ -674,6 +727,7 @@ int main(void)
     TestRxBasic();
     TestRxSpan();
     TestRxSync();
+    TestRealign();
     TestStatus();
     printf("ax772f chiptest: %lu checks, %lu failed\n", assertions, failures);
     return failures ? 1 : 0;

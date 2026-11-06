@@ -345,6 +345,43 @@ class Tests(CoreCase):
         self.settle(1.1)
         self.assertTrue(self.link().Up)
 
+    def test_lost_transfer_realigns(self):
+        """A transfer lost in the middle of continuous traffic whose records do
+        not line up with the 2048-byte transfers: the stream stays out of step
+        until Poll and Link restart receive, then frames flow again."""
+        self.up()
+        emit = EMIT(lambda _, p, n: None)
+
+        def transfer():
+            self.m.handle(101, 9, struct.pack('<BBHIH', a.EP_IN, 0, 2048, 0, 0))
+            replies = self.wire.take(101)
+            return replies[-1][2][10:] if replies else None
+
+        def parse(data):
+            stats = RxStats()
+            return self.chip.RxParse(self.state, buf(data), len(data), emit, None, c.byref(stats))
+
+        frame = b'\xff' * 6 + a.HOST_MAC + b'\x88\xb5' + bytes(61 - 14)  # 66-byte records
+        for _ in range(300):
+            self.m.deliver(frame)
+        self.assertGreaterEqual(parse(transfer()), 1)
+        transfer()                                        # lost on the way
+        self.chip.RxReset(self.state)
+        bad = 0
+        for _ in range(4):
+            if parse(transfer()) < 0:
+                bad += 1
+        self.assertEqual(bad, 4)
+        self.assertEqual(self.chip.Poll(self.state, c.byref(self.io)), 1)
+        self.assertTrue(self.link().Up)                   # receive off and on: the buffer is emptied
+        self.assertEqual(len(self.m.stream), 0)
+        self.assertEqual(self.chip.Poll(self.state, c.byref(self.io)), 0)
+        for _ in range(100):
+            self.m.deliver(frame)
+        frames, dropped, transfers = self.rx_all()
+        self.assertEqual((len(frames), dropped), (100, 0))
+        self.assertGreater(transfers, 3)
+
     def test_rx_reset(self):
         self.up()
         self.tx_fragmented(a.MODEL_MAC, 1400)

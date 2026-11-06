@@ -1,0 +1,87 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; AX772F98.INF - usb-wdm-free AX772F: ASIX AX88772B / AX88772C and
+; CoreChips SR9800 USB Fast Ethernet, Windows 98 SE and ME (ethernet.md
+; sections 4.4, 6.8, 6.9.1, 7.1 and 7.4). NDIS.VXD loads the WDM miniport
+; (DevLoader=*ndis, DeviceVxDs). AX772F.INF (2000 to 7) lists the SR9800
+; only: on 2000 and later ASIX's own driver serves the AX88772B and
+; AX88772C (usb-wdm-nonfree). The ids are Linux asix_devices.c's for the
+; AX88772B family and sr9800.c's; the AX88772 and AX88772A ids, which
+; ASIX's 98/ME driver lists, are not here. Written as AX179F98.INF is (the
+; Windows 2000 DDK network guide's INF pages and the Windows 98 DDK
+; documentation; no DDK sample INF was read).
+
+[Version]
+Signature="$Chicago$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=11/06/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Ax88772b%=AX,USB\VID_0B95&PID_772B
+%Asus%=AX,USB\VID_0B95&PID_7E2B
+%Lenovo%=AX,USB\VID_17EF&PID_7203
+%Dube100%=AX,USB\VID_2001&PID_1A02
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+ax772f.sys=1
+
+[DestinationDirs]
+Copy9x=11
+
+[AX]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params
+
+[Copy9x]
+ax772f.sys
+
+[Reg9x]
+HKR,,DevLoader,,*ndis
+HKR,,DeviceVxDs,,ax772f.sys
+HKR,,EnumPropPages,,"netdi.dll,EnumPropPages"
+HKR,NDIS,LogDriverName,,AX772F
+HKR,NDIS,MajorNdisVersion,1,05
+HKR,NDIS,MinorNdisVersion,1,00
+HKR,Ndi,DeviceID,,"USB\AX772F"
+HKR,Ndi\Interfaces,DefUpper,,ndis3
+HKR,Ndi\Interfaces,UpperRange,,"ndis3,ndis4,ndis5"
+HKR,Ndi\Interfaces,DefLower,,ethernet
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+HKR,Ndi\Install,ndis3,,AX.ndis
+HKR,Ndi\Install,ndis4,,AX.ndis
+HKR,Ndi\Install,ndis5,,AX.ndis
+
+[AX.ndis]
+CopyFiles=Copy9x
+
+; The Advanced tab: a locally administered address (ethernet.md 4.8).
+[Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="AX772F installation disk"
+AddressDesc="Network Address"
+Ax88772b="ASIX AX88772B/AX88772C USB 2.0 Fast Ethernet (AX772F)"
+Asus="ASUS USB Ethernet Adapter (AX772F)"
+Lenovo="Lenovo U2L100P USB 2.0 Fast Ethernet (AX772F)"
+Dube100="D-Link DUB-E100 (C1) USB 2.0 Fast Ethernet (AX772F)"
+Sr9800="CoreChips SR9800 USB 2.0 Fast Ethernet (AX772F)"

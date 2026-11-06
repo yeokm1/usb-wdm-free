@@ -93,9 +93,21 @@ KVM16 = h('05 01 09 02 a1 01 ' + MOUSE_BODY.format(xy=XY16) + ' c0')
 KVM12 = h('05 01 09 02 a1 01 ' + MOUSE_BODY.format(xy=XY12) + ' c0')
 POINTER = h('05 01 09 01 a1 01 ' + MOUSE_BODY.format(xy=XY15) + ' c0')
 
+# X and Y of a finger or contact carry a physical size (Unit: SI linear
+# length, centimetres; Unit Exponent -2: Physical 0..4095 is 0..40.95 cm;
+# HID 1.11 6.2.2.7). Windows 7's touch input took no touch from these
+# touch screens without them (it does from the pen without them);
+# Windows 10 takes either
+# (docs/testing/2026-11-06-inbox-reference.md). X and Y share one range,
+# so the surface is 40.95 cm square at 100 counts a centimetre. The global
+# Unit, Unit Exponent and Physical extent are reset after the Input item,
+# so no later item (Tip Switch of the next contact, Contact Count, the
+# mouse collection) inherits a size.
+UNITS = '65 11 55 0e'
+NO_UNITS = '65 00 55 00 35 00 45 00'
 # One finger: Tip Switch, In Range, 6 bits pad, X, Y (16-bit, 0..4095).
 FINGER = ('09 22 a1 02 09 42 09 32 15 00 25 01 75 01 95 02 81 02 95 06 81 03 '
-          '05 01 09 30 09 31 15 00 26 ff 0f 35 00 46 ff 0f 75 10 95 02 81 02 05 0d c0')
+          '05 01 09 30 09 31 15 00 26 ff 0f 35 00 46 ff 0f {units} 75 10 95 02 81 02 {nounits} 05 0d c0'.format(units=UNITS, nounits=NO_UNITS))
 TOUCH = h('05 0d 09 04 a1 01 ' + FINGER + ' c0')
 TOUCHMOUSE = h('05 0d 09 04 a1 01 85 01 ' + FINGER + ' c0 '
                '05 01 09 02 a1 01 85 02 ' + MOUSE_BODY.format(xy=XY15) + ' c0')
@@ -103,7 +115,7 @@ TOUCHMOUSE = h('05 0d 09 04 a1 01 85 01 ' + FINGER + ' c0 '
 # Contact Count Maximum feature (report 2).
 CONTACT = ('09 22 a1 02 09 42 15 00 25 01 75 01 95 01 81 02 95 07 81 03 '
            '09 51 25 0f 75 08 95 01 81 02 '
-           '05 01 09 30 09 31 15 00 26 ff 0f 35 00 46 ff 0f 75 10 95 02 81 02 05 0d c0')
+           '05 01 09 30 09 31 15 00 26 ff 0f 35 00 46 ff 0f {units} 75 10 95 02 81 02 {nounits} 05 0d c0'.format(units=UNITS, nounits=NO_UNITS))
 MTOUCH = h('05 0d 09 04 a1 01 85 01 ' + CONTACT + ' ' + CONTACT +
            ' 09 54 15 00 25 02 75 08 95 01 81 02 '
            '85 02 09 55 25 02 75 08 95 01 b1 02 c0')

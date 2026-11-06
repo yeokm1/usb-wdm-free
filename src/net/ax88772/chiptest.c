@@ -305,11 +305,12 @@ static void TestStart(void)
     m.Lpa = ADVERTISE_100HALF;
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Mbps == 100 && !link.FullDuplex);
     CHECK(m.Medium == (AX_MEDIUM_AC | AX_MEDIUM_RE | AX_MEDIUM_PS));
-    /* Cable out: Poll sees it, Link writes the medium 0. */
+    /* Cable out: Poll sees it, Link writes the medium 0; the AX88772C's
+     * PHY is not reset for it. */
     m.Link = 0;
     CHECK(A7Poll(State.Bytes, &io) == 1);
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && !link.Up && link.Mbps == 0);
-    CHECK(m.Medium == 0);
+    CHECK(m.Medium == 0 && m.PhyResets == 1);
     CHECK(A7Poll(State.Bytes, &io) == 0);
     m.Medium = 0x1234;
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && !link.Up);
@@ -330,6 +331,30 @@ static void TestStart(void)
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
     CHECK(A7Poll(State.Bytes, &io) == 0);
 
+    /* The link-down work failing part way (the AX88772A/B PHY's reset):
+     * Poll asks again until it is done. */
+    m.Phy[3] = 0x1861; s->PhyId2 = 0x1861;
+    m.Link = 0;
+    m.RefuseAfter = m.Requests + 16;                     /* inside the PHY reset */
+    CHECK(A7Link(State.Bytes, &io, &link) < 0 && s->DownPending);
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && !link.Up && !s->DownPending);
+    CHECK(m.Phy[MII_ADVERTISE] == 0x0de1 && (m.Phy[MII_BMCR] & BMCR_ANENABLE));
+    CHECK(A7Poll(State.Bytes, &io) == 0);
+    m.Link = 1;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
+
+    /* A filter that failed: Poll asks for Link (and so the filter again)
+     * while the link is up. */
+    m.RefuseAfter = m.Requests;
+    CHECK(A7SetFilter(State.Bytes, &io, NC_FILTER_ALL_MULTICAST, 0, 0) < 0 && s->FilterPending);
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    CHECK(A7SetFilter(State.Bytes, &io, NC_FILTER_ALL_MULTICAST, 0, 0) == NC_OK && !s->FilterPending);
+    CHECK(A7Poll(State.Bytes, &io) == 0);
+
     /* Stop: medium 0, receive off, PHY powered down. */
     CHECK(A7Stop(State.Bytes, &io) == NC_OK);
     CHECK(m.Medium == 0 && m.RxCtl == 0 && (m.Phy[MII_BMCR] & BMCR_PDOWN));
@@ -342,7 +367,6 @@ static void TestStart(void)
      * the AX88772C's (003b1881, above) is not. */
     {
         int resets;
-        CHECK(m.PhyResets == 1);
         ModelInit(&m);
         m.Phy[3] = 0x1861;
         CHECK(StartWith(&m, &io, 0x0b95, 0x772b, &params) == NC_OK && m.PhyResets == 1);

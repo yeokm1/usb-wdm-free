@@ -1162,7 +1162,10 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   has no such rule. Linux polls the PHY (phylink); the core's Poll reads
   BMSR each tick. The chip records the link as up only once Link has
   applied all of it, so a Link that fails part way is seen by the next
-  Poll and run again.
+  Poll and run again. The same holds for the link-down work (the medium
+  and the PHY reset) and for a filter write that failed: Poll reports a
+  change until they are done, and the core applies the filter after
+  Link while the link is up.
 - **Status** (interrupt IN): Linux's AX88772 path uses no status
   report. *Inferred*: the AX88772 family sends the 8-byte report of
   `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so

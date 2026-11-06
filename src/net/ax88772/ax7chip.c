@@ -298,8 +298,10 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     if (io->Status < 0) return io->Status;
     up = (bmsr & BMSR_LSTATUS) && (!(bmcr & BMCR_ANENABLE) || (bmsr & BMSR_ANEGCOMPLETE));
     if (!up) {
-        /* ax88772_mac_link_down */
-        if (was) {
+        /* ax88772_mac_link_down. Until all of it is done DownPending
+         * stays set, and Poll has Link run again. */
+        if (was || s->DownPending) {
+            s->DownPending = 1;
             Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
             if (io->Status < 0) return io->Status;
             s->Medium = 0;
@@ -311,6 +313,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
                 long r = PhyReset(s, io);
                 if (r < 0) return r;
             }
+            s->DownPending = 0;
         }
         s->LinkUp = 0;
         return NC_OK;
@@ -345,6 +348,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     if (io->Status < 0) return io->Status;
     s->Medium = medium;
     s->LinkUp = 1;
+    s->DownPending = 0;
     s->Mbps100 = (nc_u8)fast; s->Full = (nc_u8)full;
     s->Pause = (nc_u8)(txPause | (rxPause << 1));
     link->Up = 1;
@@ -358,8 +362,11 @@ int A7Poll(void *chip, NET_IO *io)
     A7_STATE *s = chip;
     nc_u16 bmsr = MiiRead(s, io, MII_BMSR);
     if (io->Status < 0) return 0;
-    /* A receive stream out of step is restarted by Link (above). */
-    if (s->BadRun >= A7_REALIGN_AFTER) return 1;
+    /* A receive stream out of step is restarted by Link (above); a
+     * link-down step or a filter that failed is done again (the core
+     * applies the filter after Link when the link is up). */
+    if (s->BadRun >= A7_REALIGN_AFTER || s->DownPending) return 1;
+    if (s->FilterPending && s->LinkUp) return 1;
     return ((bmsr & BMSR_LSTATUS) != 0) != (s->LinkUp != 0);
 }
 
@@ -386,8 +393,12 @@ long A7SetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *multicast, 
         rxctl |= AX_RX_CTL_AM;
     }
     Cmd(io, AX_CMD_WRITE_RX_CTL, rxctl, 0);
-    if (io->Status < 0) return io->Status;
+    if (io->Status < 0) {
+        s->FilterPending = 1;
+        return io->Status;
+    }
     s->RxCtl = rxctl;
+    s->FilterPending = 0;
     return NC_OK;
 }
 

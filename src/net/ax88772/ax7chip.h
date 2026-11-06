@@ -112,6 +112,8 @@ typedef struct A7_STATE {
     nc_u8 Embedded;              /* the PHY is the chip's own (address 0x10) */
     nc_u8 ChipCode;              /* STATMNGSTS & 0x70 */
     nc_u8 LinkUp;                /* what Link last applied */
+    nc_u8 DownPending;           /* the link-down work (medium 0, PHY reset) is not done yet */
+    nc_u8 FilterPending;         /* the last SetFilter failed: Link's caller applies it again */
     nc_u8 Mbps100, Full, Pause;  /* the link Link last applied */
     nc_u16 RxCtl, RxCtlRead, MediumRead;
     nc_u16 Medium;               /* the medium mode last written */

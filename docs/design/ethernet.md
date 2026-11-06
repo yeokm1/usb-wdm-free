@@ -1167,6 +1167,10 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   change until they are done, and the core applies the filter after
   Link while the link is up. A Link that has not finished stays pending
   in the chip state, whatever the PHY reports, so it is always run again.
+  An address write that failed is kept and written again by the next
+  Link, and an interrupted link-down step (the PHY reset leaves BMCR 0
+  part way) is finished by the next Link before the link is read, even
+  if the carrier is back by then.
 - **Status** (interrupt IN): Linux's AX88772 path uses no status
   report. *Inferred*: the AX88772 family sends the 8-byte report of
   `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so

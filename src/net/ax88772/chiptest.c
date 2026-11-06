@@ -359,6 +359,32 @@ static void TestStart(void)
     m.Link = 1;
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
 
+    /* An interrupted PHY reset is finished even when the carrier is back
+     * before the retry. */
+    m.Phy[3] = 0x1861; s->PhyId2 = 0x1861;
+    m.Link = 0;
+    m.RefuseAfter = m.Requests + 16;
+    CHECK(A7Link(State.Bytes, &io, &link) < 0 && s->DownPending);
+    CHECK(!(m.Phy[MII_BMCR] & BMCR_ANENABLE));            /* BMCR 0 written, reset not yet */
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    m.Link = 1;
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && link.Mbps == 100);
+    CHECK(!s->DownPending && (m.Phy[MII_BMCR] & BMCR_ANENABLE) && m.Phy[MII_ADVERTISE] == 0x0de1);
+    m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
+
+    /* An address write that failed is written again by Link. */
+    {
+        static const nc_u8 want[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+        m.RefuseAfter = m.Requests;
+        CHECK(A7SetMac(State.Bytes, &io, want) < 0 && s->MacPending);
+        m.RefuseAfter = 0; io.Status = NC_OK;
+        CHECK(memcmp(m.NodeId, want, 6) != 0);
+        CHECK(A7Poll(State.Bytes, &io) == 1);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+        CHECK(memcmp(m.NodeId, want, 6) == 0 && !s->MacPending && A7Poll(State.Bytes, &io) == 0);
+    }
+
     /* A filter that failed: Poll asks for Link (and so the filter again)
      * while the link is up. */
     m.RefuseAfter = m.Requests;

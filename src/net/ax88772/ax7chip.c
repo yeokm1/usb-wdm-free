@@ -255,9 +255,32 @@ long A7SetMac(void *chip, NET_IO *io, const nc_u8 mac[6])
 {
     A7_STATE *s = chip;
     nc_u32 i;
+    /* A write that fails stays pending: Poll asks for Link, which writes
+     * the address again before the link is applied. */
+    for (i = 0; i < 6; i++) s->WantMac[i] = mac[i];
+    s->MacPending = 1;
     NcIoWrite(io, AX_CMD_WRITE_NODE_ID, 0, 0, mac, 6);
     if (io->Status < 0) return io->Status;
     for (i = 0; i < 6; i++) s->Mac[i] = mac[i];
+    s->MacPending = 0;
+    return NC_OK;
+}
+
+/* ax88772_mac_link_down, and for the AX88772A/B PHY (003b1861) the PHY
+ * reset Linux does when the link goes (asix_ax88772a_link_change_notify
+ * in ax88796b.c: some partners otherwise leave a stale LPA). DownPending
+ * stays set until all of it is done. */
+static long LinkDown(A7_STATE *s, NET_IO *io)
+{
+    s->DownPending = 1;
+    Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
+    if (io->Status < 0) return io->Status;
+    s->Medium = 0;
+    if (s->PhyId1 == 0x003b && s->PhyId2 == 0x1861) {
+        long r = PhyReset(s, io);
+        if (r < 0) return r;
+    }
+    s->DownPending = 0;
     return NC_OK;
 }
 
@@ -291,6 +314,18 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
         s->BadRun = 0;
         s->Realigns++;
     }
+    /* Work a failed call left: the address, and the link-down work, which
+     * is finished whatever the carrier does now (an interrupted PHY reset
+     * leaves the PHY with autonegotiation off). */
+    if (s->MacPending) {
+        long r = A7SetMac(s, io, s->WantMac);
+        if (r < 0) return r;
+    }
+    if (s->DownPending) {
+        long r = LinkDown(s, io);
+        if (r < 0) return r;
+        s->LinkUp = 0;
+    }
 
     (void)MiiRead(s, io, MII_BMSR);              /* the link bit latches low */
     bmsr = MiiRead(s, io, MII_BMSR);
@@ -298,22 +333,9 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     if (io->Status < 0) return io->Status;
     up = (bmsr & BMSR_LSTATUS) && (!(bmcr & BMCR_ANENABLE) || (bmsr & BMSR_ANEGCOMPLETE));
     if (!up) {
-        /* ax88772_mac_link_down. Until all of it is done DownPending
-         * stays set, and Poll has Link run again. */
-        if (s->LinkUp || s->DownPending) {
-            s->DownPending = 1;
-            Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
-            if (io->Status < 0) return io->Status;
-            s->Medium = 0;
-            /* The AX88772A/B PHY (003b1861) keeps a stale LPA after some
-             * partners drop the link: Linux resets it and starts
-             * autonegotiation again when the link goes
-             * (asix_ax88772a_link_change_notify in ax88796b.c). */
-            if (s->PhyId1 == 0x003b && s->PhyId2 == 0x1861) {
-                long r = PhyReset(s, io);
-                if (r < 0) return r;
-            }
-            s->DownPending = 0;
+        if (s->LinkUp) {
+            long r = LinkDown(s, io);
+            if (r < 0) return r;
         }
         s->LinkUp = 0;
         s->LinkPending = 0;
@@ -367,7 +389,7 @@ int A7Poll(void *chip, NET_IO *io)
     /* A receive stream out of step is restarted by Link (above); a
      * link-down step or a filter that failed is done again (the core
      * applies the filter after Link when the link is up). */
-    if (s->BadRun >= A7_REALIGN_AFTER || s->DownPending || s->LinkPending) return 1;
+    if (s->BadRun >= A7_REALIGN_AFTER || s->DownPending || s->LinkPending || s->MacPending) return 1;
     if (s->FilterPending && s->LinkUp) return 1;
     return ((bmsr & BMSR_LSTATUS) != 0) != (s->LinkUp != 0);
 }

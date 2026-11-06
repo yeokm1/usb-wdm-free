@@ -823,8 +823,8 @@ static long Power(NET_DEV *d, BOOLEAN on)
             return STATUS_SUCCESS;
         }
         /* The address and the filter after a chip that came back: a
-         * failure here is logged, and a chip that keeps a failed filter
-         * pending asks for it again (ethernet.md section 6.8). */
+         * failure here is logged, and a chip that keeps a failed address
+         * or filter pending applies it again (ethernet.md section 6.8). */
         if (!SameMac(p.Mac, d->Mac)) {
             r = d->Chip->SetMac(ChipState(d), Io(d), d->Mac);
             if (r < 0) NetTrace("resume: address %d", r);

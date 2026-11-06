@@ -87,7 +87,7 @@ that Windows.
 - (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
 - (k) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
-- (m) Under xHCI98. On 7 x64 the drivers need Microsoft's SHA-2 code-signing support (KB4474419).
+- (m) Under xHCI98. On 7 x64 the drivers started only after Microsoft's SHA-2 code-signing update (KB4474419, after KB4490628) was installed; without it Windows refused their signature.
 - (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
 
 Each run, with its device, host controller driver, date and result, is in

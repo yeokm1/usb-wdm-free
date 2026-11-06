@@ -948,10 +948,15 @@ captured one is not known: one streaming interface and terminal per jack,
 each on its own clock and with no selector, is what the capture of
 `0B05:1B9B` shows (15.1a), and another board may differ.
 
-Still owed (15.6 step 3): the legs with the replayed capture
-(`uacemu.py --profile alc4080cap`, with `--vid 0db0 --pid a073` for the
-board the quirk names) on 98 SE under NUSB's EHCI and under xHCI98 and on
-7 x64; the real board (xHCI98 45-E.13).
+Read on XP x64 under xHCI98 3.4.1.0 with `uac2` 0.1.8.26, 2026-11-06
+(the rig of [uac2-swap](../testing/2026-11-06-uac2-swap.md)): the capture
+replayed (`uacemu.py --profile alc4080cap --vid 0db0 --pid a073`) installed
+three output and three input devices; a 5-second play (2 channels, 16-bit,
+48 kHz) on each output and a 3-second record on each input passed, the
+simulator streaming interfaces 4, 5 and 6 and 1, 2 and 3.
+
+Still owed (15.6 step 3): the same on 98 SE under NUSB's EHCI and under
+xHCI98 and on 7 x64; the real board (xHCI98 45-E.13).
 
 ### 15.2 What `uac2` does with it today
 
@@ -2261,16 +2266,24 @@ uses it) gains:
   both copies and rejects its removal or a value of 0.
 - XP x64, the real headset installed and Windows' default:
   - a `uac2` device new to the system (the simulated CX31993 with a
-    MAX97220 under a new id) installed with the changed INF: `Sound
-    Mapper` `Playback` names it, `Record` stays the headset's (the
-    profile has no capture); a VLC started before the install plays to
-    it at its next Stop and Play;
-  - a duplex `uac2` device (the `hs24` profile under a new id): `Playback`
-    and `Record` both name it;
+    MAX97220 under a new id) installed with the changed INF: the Audio
+    tab's default playback device is it, recording stays the headset's
+    (the profile has no capture); a VLC started before the install plays
+    to it at its next Stop and Play;
+  - a duplex `uac2` device (the `hs24` profile under a new id): playback
+    and recording both it;
   - a device with two playback pairs (the `x4full` profile under a new
-    id): `Playback` names pair 0's waveOut, and a play to the default
-    reaches pair 0's endpoint at the simulator;
+    id): playback is pair 0's waveOut, and a play to the default reaches
+    pair 0's endpoint at the simulator;
   - each case also records the MIDI default (`MIDIMap`) before and after;
   - the real X1, installed earlier without the value, updated to the
     changed INF: the defaults before and after, recorded either way.
 - Not read: 98 SE (under NUSB's EHCI and xHCI98), ME, 2000, Vista.
+
+Read on XP x64, 2026-11-06 ([uac2-swap](../testing/2026-11-06-uac2-swap.md)):
+each case as expected, with the released INF as the control (the default
+stays the headset's), and the real X1 installed fresh with the change
+taking playback and recording; the update of an installed X1 left the
+defaults alone; MIDI stayed Windows' GS synth throughout. The `Sound
+Mapper` registry values were not seen to change when read soon after; the
+Audio tab is the reading.

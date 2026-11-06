@@ -77,8 +77,8 @@ that Windows.
 - (g) The Xbox 360 wireless receiver fails under xHCI98 3.1.0.0 and works under 3.2.0.0.
 - (h) The real drive was recognised but no disk was read; reading passed with a simulated drive.
 - (i) Install and device listing only; no data transfers.
-- (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
-- (k) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
+- (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98, and the 8156 and 8156B also on 98 SE under NUSB's EHCI. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
+- (k) The newer chips only (footnote 6), at High Speed under Windows' EHCI. On XP and XP x64 the 8156 and 8156B also ran under xHCI98, at 2.5 Gb/s.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 
 Each run, with its device, host controller driver, date and result, is in

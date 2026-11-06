@@ -59,7 +59,7 @@ section 2.6 stand as far as free drivers go.
 | Realtek RTL8153C | free `rtl815x` (chip id `6400`) | same | same | nonfree INF matches (revision-less `0BDA:8153` line; U whether the driver runs it) | same U | same U | nonfree | in box 8.1 |
 | Realtek RTL8153D (`0BDA:8053`) | U (`RTL815X.INF` lists the id; its chip id is not among `rtl815x`'s, which refuses unknown ids) | U | U | gap (no `8053` line) | gap | gap | nonfree | Realtek 8+ |
 | Realtek RTL8155 | gap (`rtl815x` leaves `8155` out) | gap | gap | gap | gap | gap | nonfree | Realtek 8+ |
-| Realtek RTL8156, RTL8156B | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | nonfree | Realtek 8/10 |
+| Realtek RTL8156, RTL8156B (`0BDA:8156`; `0BDA:8056` in section 6) | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | nonfree | Realtek 8/10 |
 | Realtek RTL8157, RTL8159 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | Realtek 10+ |
 | Realtek RTL8150 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | candidate (Vista INF would install, owner question 8) | - |
 | Davicom DM9601 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
@@ -146,7 +146,7 @@ on Vista; the AX88772B/C 7 INF adds `2001:1A02` (D-Link DUB-E100 C1).
 | RTL8153C (`6400`) | `0BDA:8153` revs `32xx` (U: from the 7 INF's revision list, not named) | `r8152.c` | 7 (U) | explicit `32xx` lines in the 7 INF only; the XP and Vista INFs also match `0BDA:8153` without a revision, so Windows would offer them (U whether those drivers run the chip) |
 | RTL8153D | `0BDA:8053` (revs `33xx`, the 7 INF's `RTL8153D*` sections); the 7 INF also lists `0BDA:8153` at revs `33xx` (chip not named, U) | `r8152.c` matches `0BDA:8053` | 7 | 7 only |
 | RTL8156 (`7020`, `7030`) | `0BDA:8156` revs `30xx` | `r8152.c` | 7 7.61.20 (2021/12/28) | 7 only |
-| RTL8156B(G) (`7410`, `7420`) | `0BDA:8156` revs `31xx`, `0BDA:8056` | `r8152.c` | 7 7.61.20 | 7 only |
+| RTL8156B(G) (`7400`, `7410`) | `0BDA:8156` revs `31xx`, `0BDA:8056` | `r8152.c` | 7 7.61.20 | 7 only |
 | RTL8155 | `0BDA:8155` | `r8152.c` | 7 | 7 only |
 | RTL8157 (5G) | `0BDA:8157` (`8057`, `A157`) | `r8152.c` (`RTL_VER_16`, `r8157_*` paths) | Windows 10 10.68.20 (2026/08/31); the 8/8.1 package 8.68.20 not read (U) | none: the 7 INF has these lines **commented out** |
 | RTL8159 (10G) | `0BDA:815A` (`805A`, `A15A`) | `r8152.c` (`RTL_VER_17`) | Windows 10 10.68.20 | none (commented out in the 7 INF) |
@@ -267,8 +267,8 @@ drivers in 44.68).
 | AX88172 | XP x64, Vista, 7 | no build found. Stays uncovered |
 | AX88172A | 98 SE, ME | no build found. Stays uncovered |
 | AX88772E, AX88279A | 98 SE to 7 | ASIX lists 8 or 10 and later; id not settled (U); `cdcnet` if they present NCM (U). Stays uncovered |
-| RTL8156, RTL8156B | 98 SE, ME, 2000 | `rtl815x` refuses the chip version at start; `cdcnet` only if the dongle offers an ECM/NCM configuration (U). Stays uncovered |
-| RTL8156, RTL8156B | XP, XP x64, Vista | Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`. Stays uncovered |
+| RTL8156, RTL8156B on `0BDA:8156` | none (closed; update of 2026-11-06) | No maker's driver covers 98 SE to Vista: Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`, and Realtek offers nothing older than XP. `rtl815x` serves them there: chip ids `7020` to `7410` since task 44.70; `RTL81598.INF`, `RTL815X.INF`, and `RTLXP7.INF` for XP, XP x64 and Vista. Simulated legs only ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)). No `rtl815x` INF lists `0BDA:8056`, which is in Realtek's 7 INF and not in Linux |
+| RTL8156B on `0BDA:8056` | 98 SE to Vista | the id is in Realtek's 7 INF only, not in Linux's table, and no `rtl815x` INF lists it (owner question, 2026-11-06). Stays uncovered |
 | RTL8157, RTL8159 | 98 SE to 7 | Realtek: Windows 10 and later; the 7 INF's lines are commented out. Stays uncovered |
 | DM9601 | XP x64, Vista, 7 | Davicom's XP x64/Vista/7 INFs omit `0A46:9601`. Stays uncovered |
 | SR9700, SR9800 | 98 SE to 7 | no maker's driver found. Stays uncovered |

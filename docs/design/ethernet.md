@@ -862,6 +862,18 @@ are used (GPL-2.0-only), restated as this core's own step tables.
   `0BDA:8156` [linux] lines 10402-10403 to the ids they had; the core
   takes the chip from its id register, so any listed id serves any of
   these chips. Linux's table does not say which id an RTL8153D uses.
+- **Whose driver serves what** (2026-11-06, xHCI98 task 47.25): Realtek's
+  own drivers cover the RTL8156 and RTL8156B on 7 only (its 7 7.61.20 INF,
+  in `usb-wdm-nonfree`). Its XP 5.23 and Vista 6.27 INFs do not list
+  `0BDA:8156`, and Realtek offers nothing for 98 SE, ME or 2000 (its
+  download list, read 2026-11-06). `rtl815x` therefore serves both
+  chips on 98 SE, ME, 2000, XP, XP x64 and Vista, and leaves 7 to
+  Realtek (section 7.6). The legs ran under xHCI98 3.4.1.0 on 98 SE,
+  ME, 2000, XP and XP x64, at 2.5 Gb/s at SuperSpeed and at 1 Gb/s at
+  High Speed, and under NUSB's EHCI on 98 SE. Every leg used the simulator
+  ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)).
+  `0BDA:8056`, which Realtek's 7 INF lists for the RTL8156B and Linux
+  does not, is not listed here.
 
 #### 6.4.1 RTL8157 (5G) and RTL8159 (10G)
 

@@ -49,7 +49,7 @@ These are development legs in QEMU (TCG), not "Tested".
 
 | Model | Reference driver and OS | Result | Gaps found | Model changed | Our driver retested |
 |---|---|---|---|---|---|
-| `uacemu.py` (uac2) | `usbaudio2.sys`, Windows 10 22H2 x64 | `hs24`, `clocks`, `adaptive`, `multi` (play), `mic` (record), `x1`, `uac3dual` (configuration 1) PASS; `x4full` and `fs` FAIL (Code 10) before the fix, PASS after (`fs` with `--fs-feedback 4`); `cx31993m` and `alc4080cap` FAIL (Code 10), not resolved | the X4 layout's Mixer and Selector Units stalled the class requests Windows reads; a Full Speed feedback endpoint of 3 bytes is refused, Windows takes 4 bytes 16.16; `alc4080cap` names string 5 (iFunction, iInterface) and had none; the X4/X1/CX31993/ALC4080 layouts' HID (and the X4/X1's CDC) interfaces answer nothing (not modelled, no capture) | y (`e34bd8b`, `0de729a`, and string 5 of `alc4080cap`) | 98 SE (xHCI98) `x4full` PASS ("Retests") |
+| `uacemu.py` (uac2) | `usbaudio2.sys`, Windows 10 22H2 x64 | `hs24`, `clocks`, `adaptive`, `multi` (play), `mic` (record), `x1`, `uac3dual` (configuration 1) PASS; `x4full` and `fs` FAIL (Code 10) before the fix, PASS after (`fs` with `--fs-feedback 4`); `cx31993m` and `alc4080cap` FAIL (Code 10), settled 2026-11-07: the unanswered HID interface's device resets during the audio start (below); PASS with it answered | the X4 layout's Mixer and Selector Units stalled the class requests Windows reads; a Full Speed feedback endpoint of 3 bytes is refused, Windows takes 4 bytes 16.16; `alc4080cap` names string 5 (iFunction, iInterface) and had none; the X4/X1/CX31993/ALC4080 layouts' HID (and the X4/X1's CDC) interfaces answer nothing (not modelled, no capture) | y (`e34bd8b`, `0de729a`, and string 5 of `alc4080cap`) | 98 SE (xHCI98) `x4full` PASS ("Retests") |
 | `midiemu.py` (usbmidi) | `usbaudio.sys` MIDI, XP SP3 and 7 SP1 | XP: FAIL before the fix (the model stopped), PASS after: `MIDITEST 0 0` 355/355 twice. 7: 355/355 twice | XP pads each 64-byte bulk OUT packet with zero (reserved CIN 0) events; the model treated them as an error and closed | y (`e34bd8b`) | 98 SE (xHCI98) PASS, XP SP3 PASS ("Retests") |
 | `absemu.py` (absptr; not `penpartner`) | XP SP3 `hidusb`/`mouhid`; 7 SP1 HID touch, multi-touch and pen | XP: `tablet`, `pointer`, `touchmouse` 6/6 and all buttons; `kvm16`, `kvm12` 1/6; `touch`, `mtouch`, `pen` nothing (XP has no digitizer support). 7: `tablet`, `touchmouse` 6/6, `pen` 6/6 hovering, `touch` and `mtouch` nothing. 10: `touch`, `mtouch`, `pen` 6/6 | 7 takes no touch from the `touch` and `mtouch` collections, whose X/Y carry no physical units; with Unit and Unit Exponent added (scratch copy) 7 takes them. XP's 1/6 is XP's: it drops absolute values with the field's top bit set | patch for `w47-wdm2` (not committed here) | owed with the patch (98 SE NUSB legs of `touch`, `mtouch`, `touchmouse`) |
 | `kbdemu.py` (mediakeys) | XP SP3 `kbdhid` and `hidserv` consumer control | PASS: `twoifid`, `oneif`, `bitmap` - A, every consumer key as WM_APPCOMMAND and its VK, AL Calculator opens Calculator; `boot`: A only | none (the Keyboard page's Mute/Volume 7F-81 do nothing on XP, a Windows trait) | n | earlier legs stand |
@@ -95,6 +95,40 @@ Windows' HID driver stops that interface with Code 10 (GET_DESCRIPTOR of
 the report descriptor stalls) and `usbser.sys` binds the CDC pair but its
 line-coding requests stall. Not changed: there is nothing captured to
 answer with.
+
+#### `cx31993m` and `alc4080cap`: the HID interface (2026-11-07)
+
+Both layouts have a HID interface beside the audio function, which the
+model did not answer. In every log of the two profiles above, Windows'
+HID driver sent SET_IDLE and GET_DESCRIPTOR(Report) to that interface,
+both stalled, and the HID driver then reset the whole device: a new
+SET_CONFIGURATION, a CLEAR_FEATURE(ENDPOINT_HALT) of the HID interrupt
+endpoint and the report descriptor again, three times, about 100 ms
+apart. Where `usbaudio2.sys` had begun starting the audio function
+before those resets (`cx31993m`: one volume GET RANGE answered, the next
+stalled because the reset had cleared the configuration; `alc4080cap`:
+string 5 read, then nothing), the function failed with Code 10 and event
+16; where the resets came first (`x4full`, `x1`), it started. So the
+Code 10 is the order of two drivers' starts, not the audio descriptors.
+
+The model now answers a captured layout's HID interface (`x4`, `x4full`,
+`x1`, `cx31993m`, `alc4080cap`): SET_IDLE, and GET_DESCRIPTOR(Report)
+with a stand-in report descriptor (a vendor-page collection with one
+input byte, padded with Usage items to the length the HID descriptor
+declares); it sends no reports. The CDC pairs stay unanswered. Read on
+the same Windows 10 22H2 x64 base (fresh overlay, stock QEMU 11.1.0,
+`qemu-xhci`):
+
+| Profile | Model | Result |
+|---|---|---|
+| `cx31993m` | `66d99ee` (HID unanswered) | this time PASS: the HID resets came before the audio start; HID interface Code 10 (`w10-cxm-ref2`) |
+| `cx31993m` | HID answered | PASS: audio and HID started (HID "vendor-defined device"), one SET_CONFIGURATION, no reset; the three system sounds played (`w10-cxm-hid`) |
+| `alc4080cap` | `66d99ee` | FAIL, Code 10 on the audio function and the HID interface, as before (`w10-alc-ref2`) |
+| `alc4080cap` | HID answered | PASS: three waveOut and two waveIn devices, the sounds played, the recording carried the model's tone (peak 16385) (`w10-alc-hid`) |
+
+`cx31993m`'s Output Terminal declares its Connector control readable and
+Windows reads it (GET CUR, 6 bytes); the model stalls it, and the
+function starts all the same. Not changed.
 
 ### usbmidi: `midiemu.py` under `usbaudio.sys` (XP SP3, 7 SP1)
 

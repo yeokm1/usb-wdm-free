@@ -321,13 +321,20 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
         long r = A7SetMac(s, io, s->WantMac);
         if (r < 0) return r;
     }
+    /* BMSR's link bit latches low: a first read that shows it clear while
+     * the link was up means it went down since the last read, even if it
+     * is back now. The link-down work is done for that too, so the
+     * AX88772A/B PHY is reset after every drop (Poll keeps the same
+     * evidence). */
+    bmsr = MiiRead(s, io, MII_BMSR);
+    if (io->Status < 0) return io->Status;
+    if (s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
     if (s->DownPending) {
         long r = LinkDown(s, io);
         if (r < 0) return r;
         s->LinkUp = 0;
     }
 
-    (void)MiiRead(s, io, MII_BMSR);              /* the link bit latches low */
     bmsr = MiiRead(s, io, MII_BMSR);
     bmcr = MiiRead(s, io, MII_BMCR);
     if (io->Status < 0) return io->Status;
@@ -386,6 +393,8 @@ int A7Poll(void *chip, NET_IO *io)
     A7_STATE *s = chip;
     nc_u16 bmsr = MiiRead(s, io, MII_BMSR);
     if (io->Status < 0) return 0;
+    /* A drop seen here, even one already over, is kept for Link. */
+    if (s->LinkUp && !(bmsr & BMSR_LSTATUS)) s->DownPending = 1;
     /* A receive stream out of step is restarted by Link (above); a
      * link-down step or a filter that failed is done again (the core
      * applies the filter after Link when the link is up). */

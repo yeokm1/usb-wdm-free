@@ -27,6 +27,7 @@ static void Check(int ok, const char *what, int line)
 /* ---- the model ---------------------------------------------------------- */
 
 typedef struct MODEL {
+    int Latched;                 /* BMSR's link bit reads clear once (a drop since the last read) */
     nc_u8 Code;                  /* STATMNGSTS: chip code | host enable */
     nc_u8 PhyAddr;
     int SwMii, HostEnableAfter, HostEnableNever;
@@ -69,6 +70,7 @@ static nc_u16 PhyRead(MODEL *m, nc_u16 reg)
     if (reg == MII_BMSR) {
         nc_u16 v = (nc_u16)(m->Phy[MII_BMSR] & ~(BMSR_LSTATUS | BMSR_ANEGCOMPLETE));
         if (m->Link && !(m->Phy[MII_BMCR] & BMCR_PDOWN)) v = (nc_u16)(v | BMSR_LSTATUS | BMSR_ANEGCOMPLETE);
+        if (m->Latched) { m->Latched = 0; v = (nc_u16)(v & ~BMSR_LSTATUS); }
         return v;
     }
     if (reg == MII_LPA) return (nc_u16)(m->Link ? m->Lpa : 0);
@@ -363,7 +365,7 @@ static void TestStart(void)
      * before the retry. */
     m.Phy[3] = 0x1861; s->PhyId2 = 0x1861;
     m.Link = 0;
-    m.RefuseAfter = m.Requests + 16;
+    m.RefuseAfter = m.Requests + 8;                      /* after BMCR 0, before the reset */
     CHECK(A7Link(State.Bytes, &io, &link) < 0 && s->DownPending);
     CHECK(!(m.Phy[MII_BMCR] & BMCR_ANENABLE));            /* BMCR 0 written, reset not yet */
     m.RefuseAfter = 0; io.Status = NC_OK;
@@ -371,6 +373,23 @@ static void TestStart(void)
     CHECK(A7Poll(State.Bytes, &io) == 1);
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && link.Mbps == 100);
     CHECK(!s->DownPending && (m.Phy[MII_BMCR] & BMCR_ANENABLE) && m.Phy[MII_ADVERTISE] == 0x0de1);
+    m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
+
+    /* A drop between two polls, over by the next read: the latched BMSR
+     * shows it once, and the AX88772A/B PHY is still reset for it, from
+     * Poll's read and from Link's. */
+    m.Phy[3] = 0x1861; s->PhyId2 = 0x1861;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+    {
+        int resets = m.PhyResets;
+        m.Latched = 1;
+        CHECK(A7Poll(State.Bytes, &io) == 1 && s->DownPending);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && m.PhyResets == resets + 1 && !s->DownPending);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+        m.Latched = 1;                                    /* seen by Link's own first read */
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && m.PhyResets == resets + 2);
+        CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up && A7Poll(State.Bytes, &io) == 0);
+    }
     m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
 
     /* An address write that failed is written again by Link. */

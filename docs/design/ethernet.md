@@ -1170,7 +1170,10 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   An address write that failed is kept and written again by the next
   Link, and an interrupted link-down step (the PHY reset leaves BMCR 0
   part way) is finished by the next Link before the link is read, even
-  if the carrier is back by then.
+  if the carrier is back by then. BMSR's link bit latches low, so a drop that is already
+  over by the next read still shows once: when Poll or Link sees it
+  after a link that was up, the link-down work (and the AX88772A/B PHY's
+  reset) is done before the link is applied again.
 - **Status** (interrupt IN): Linux's AX88772 path uses no status
   report. *Inferred*: the AX88772 family sends the 8-byte report of
   `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so

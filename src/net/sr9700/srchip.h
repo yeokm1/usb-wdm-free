@@ -45,6 +45,8 @@ typedef struct SR7_STATE {
     nc_u8 RxCtrlRead;
     nc_u8 Status;                /* the network status last read */
     nc_u8 FilterPending;         /* the last SetFilter failed: Poll asks for Link, then the filter */
+    nc_u8 MacPending;            /* the last SetMac failed: Link writes WantMac first */
+    nc_u8 WantMac[6];
     nc_u32 Malformed, Tails;     /* refused transfers; transfers with a short tail */
 } SR7_STATE;
 

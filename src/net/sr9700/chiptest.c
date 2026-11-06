@@ -101,6 +101,14 @@ static void TestStartLinkFilter(void)
     CHECK(Sr7SetFilter(State.Bytes, &io, NC_FILTER_PROMISCUOUS, 0, 0) == NC_OK);
     CHECK(m.Reg[SR7_RX_CTRL] == (0x31 | SR7_RX_PROMISC));
     CHECK(Sr7SetMac(State.Bytes, &io, other) == NC_OK && memcmp(m.Reg + SR7_ADDRESS, other, 6) == 0);
+    /* An address write that failed: Link writes it again. */
+    m.RefuseAfter = m.Requests;
+    CHECK(Sr7SetMac(State.Bytes, &io, mac) < 0 && s->MacPending);
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    CHECK(memcmp(m.Reg + SR7_ADDRESS, other, 6) == 0);
+    CHECK(Sr7Poll(State.Bytes, &io) == 1);
+    CHECK(Sr7Link(State.Bytes, &io, &link) == NC_OK && link.Up && !s->MacPending);
+    CHECK(memcmp(m.Reg + SR7_ADDRESS, mac, 6) == 0 && Sr7Poll(State.Bytes, &io) == 0);
     /* A filter write that failed: Poll asks for Link (and the filter). */
     m.RefuseAfter = m.Requests;
     CHECK(Sr7SetFilter(State.Bytes, &io, NC_FILTER_ALL_MULTICAST, 0, 0) < 0 && s->FilterPending);

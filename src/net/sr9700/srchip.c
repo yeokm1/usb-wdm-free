@@ -99,18 +99,28 @@ long Sr7SetMac(void *chip, NET_IO *io, const nc_u8 mac[6])
 {
     SR7_STATE *s = chip;
     nc_u32 i;
+    /* A write that fails stays pending: Poll asks for Link, which writes
+     * the address again before it reads the link. */
+    for (i = 0; i < 6; i++) s->WantMac[i] = mac[i];
+    s->MacPending = 1;
     NcIoWrite(io, SR7_REQ_WRITE, 0, SR7_ADDRESS, mac, 6);
     if (io->Status < 0) return io->Status;
     for (i = 0; i < 6; i++) s->Mac[i] = mac[i];
+    s->MacPending = 0;
     return NC_OK;
 }
 
 long Sr7Link(void *chip, NET_IO *io, NET_LINK *link)
 {
     SR7_STATE *s = chip;
-    nc_u8 status = Get(io, SR7_NET_STATUS);
+    nc_u8 status;
     link->Up = 0; link->Mbps = 0; link->FullDuplex = 0;
     link->RxLength = SR7_RX_TRANSFER;
+    if (s->MacPending) {
+        long r = Sr7SetMac(s, io, s->WantMac);
+        if (r < 0) { s->LinkUp = 0; return r; }
+    }
+    status = Get(io, SR7_NET_STATUS);
     if (io->Status < 0) { s->LinkUp = 0; return io->Status; }
     s->Status = status;
     s->LinkUp = (nc_u8)((status & SR7_NET_STATUS_LINK) != 0);
@@ -128,7 +138,7 @@ int Sr7Poll(void *chip, NET_IO *io)
     if (io->Status < 0) return 0;
     /* A filter write that failed is applied again: the core runs Link and,
      * with the link up, the filter. */
-    if (s->FilterPending && s->LinkUp) return 1;
+    if (s->MacPending || (s->FilterPending && s->LinkUp)) return 1;
     return ((status & SR7_NET_STATUS_LINK) != 0) != (s->LinkUp != 0);
 }
 

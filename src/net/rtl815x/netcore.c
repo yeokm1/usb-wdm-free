@@ -13,9 +13,10 @@
  *   bounded and an excess packet, or any packet while the link is down,
  *   completes with failure at once;
  * - received frames are copied into a preallocated packet pool and
- *   indicated; a SUCCESS indication transfers ownership until
- *   ReturnPacket, a RESOURCES indication (pool low) is reclaimed on
- *   return using the status saved before the call;
+ *   indicated up to NET_RX_BATCH at a time per bulk-IN transfer; a SUCCESS
+ *   indication transfers ownership until ReturnPacket, a RESOURCES
+ *   indication (pool low, one packet alone) is reclaimed on return using
+ *   the status saved before the call;
  * - OIDs that need the device (filter, multicast, power) and reset pend
  *   and complete from the lower edge's passive worker;
  * - the address: the Advanced tab's NetworkAddress if valid, else the
@@ -52,6 +53,15 @@ typedef struct ADAPTER {
     ULONG TxBytes, RxBytes;
 } ADAPTER;
 
+/* The core's lock is taken from the lower edge's USB completions, which
+ * run under the kernel's dispatch level, and from NDIS's own calls. Windows
+ * 98 SE's NDIS spin lock does not keep those completions out (the send
+ * queue and the receive pool were corrupted under load), so the kernel spin
+ * lock inside NDIS_SPIN_LOCK is taken directly: on NT that is what
+ * NdisAcquireSpinLock does. */
+#define CoreLock(a) KeAcquireSpinLock(&(a)->Lock.SpinLock, &(a)->Lock.OldIrql)
+#define CoreUnlock(a) KeReleaseSpinLock(&(a)->Lock.SpinLock, (a)->Lock.OldIrql)
+
 #define NEXT(p) (*(PNDIS_PACKET *)&(p)->MiniportReserved[0])
 
 static NDIS_OID supported[] = {
@@ -72,7 +82,16 @@ static NDIS_OID supported[] = {
 
 /* ---------------- callbacks from the lower edge ---------------- */
 
-static void Receive(void *context, const nc_u8 *frame, nc_u32 length)
+/* Indicate what is gathered, in order. Every packet in it was given
+ * NDIS_STATUS_SUCCESS: NDIS returns each through ReturnPacket. */
+static void ReceiveFlush(ADAPTER *a, NET_RX_GATHER *g)
+{
+    if (!g->Count) return;
+    NdisMIndicateReceivePacket(a->Handle, (PPNDIS_PACKET)g->Packets, g->Count);
+    g->Count = 0;
+}
+
+static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 length)
 {
     ADAPTER *a = context;
     PNDIS_PACKET packet = NULL;
@@ -81,13 +100,12 @@ static void Receive(void *context, const nc_u8 *frame, nc_u32 length)
     UINT size;
     ULONG filter, i;
     BOOLEAN accept = FALSE, low = FALSE;
-    NDIS_STATUS saved;
 
     if (length < NC_ETH_MIN || length > NC_ETH_MAX) return;
-    NdisAcquireSpinLock(&a->Lock);
+    CoreLock(a);
     filter = a->Filter;
     if (a->Halting || !filter) {
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         return;
     }
     /* Software filter: the chips' 64-bin multicast hash and always-on
@@ -111,11 +129,16 @@ static void Receive(void *context, const nc_u8 *frame, nc_u32 length)
             a->RxOut++;
             a->RxOk++;
             a->RxBytes += length;
+#if defined(NET_TRACE_E9)
+            if (!(a->RxOk % 8192))
+                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, tx %u/%u queued %u", a->RxOk, a->RxFreeCount,
+                         a->RxOut, a->RxNoBuffer, a->TxOk, a->TxError, a->TxQueued);
+#endif
         } else {
             a->RxNoBuffer++;
         }
     }
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
     if (!packet) return;
 
     NdisQueryPacket(packet, NULL, NULL, &buffer, NULL);
@@ -124,33 +147,45 @@ static void Receive(void *context, const nc_u8 *frame, nc_u32 length)
     NdisAdjustBufferLength(buffer, length);
     NdisRecalculatePacketCounts(packet);
     NDIS_SET_PACKET_HEADER_SIZE(packet, 14);
-    saved = low ? NDIS_STATUS_RESOURCES : NDIS_STATUS_SUCCESS;
-    NDIS_SET_PACKET_STATUS(packet, saved);
-    NdisMIndicateReceivePacket(a->Handle, &packet, 1);
-    /* The status saved before the call decides ownership, never the
-     * status after it (NDIS 5 receive indication contract). */
-    if (saved == NDIS_STATUS_RESOURCES) {
-        NdisAcquireSpinLock(&a->Lock);
+    if (low) {
+        /* Pool low: what is gathered goes first, in order, then this
+         * packet alone with NDIS_STATUS_RESOURCES, which the protocols
+         * copy during the call; it is reclaimed at once. The status set
+         * before the call decides ownership, never the status after it
+         * (NDIS 5 receive indication contract). */
+        ReceiveFlush(a, g);
+        NDIS_SET_PACKET_STATUS(packet, NDIS_STATUS_RESOURCES);
+        NdisMIndicateReceivePacket(a->Handle, &packet, 1);
+        CoreLock(a);
         a->RxFree[a->RxFreeCount++] = packet;
         a->RxOut--;
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
+        return;
     }
+    NDIS_SET_PACKET_STATUS(packet, NDIS_STATUS_SUCCESS);
+    g->Packets[g->Count++] = packet;
+    if (g->Count == NET_RX_BATCH) ReceiveFlush(a, g);
+}
+
+static void ReceiveEnd(void *context, NET_RX_GATHER *g)
+{
+    ReceiveFlush(context, g);
 }
 
 static VOID ReturnPacket(NDIS_HANDLE context, PNDIS_PACKET packet)
 {
     ADAPTER *a = context;
-    NdisAcquireSpinLock(&a->Lock);
+    CoreLock(a);
     a->RxFree[a->RxFreeCount++] = packet;
     a->RxOut--;
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
 }
 
 static nc_u32 TxTake(void *context, void **packets, nc_u32 max)
 {
     ADAPTER *a = context;
     nc_u32 n = 0;
-    NdisAcquireSpinLock(&a->Lock);
+    CoreLock(a);
     while (n < max && a->TxHead) {
         PNDIS_PACKET p = a->TxHead;
         a->TxHead = NEXT(p);
@@ -158,7 +193,7 @@ static nc_u32 TxTake(void *context, void **packets, nc_u32 max)
         a->TxQueued--;
         packets[n++] = p;
     }
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
     return n;
 }
 
@@ -189,9 +224,9 @@ static void TxDone(void *context, void **packets, nc_u32 count, int success)
         PNDIS_PACKET p = packets[i];
         UINT size;
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
-        NdisAcquireSpinLock(&a->Lock);
+        CoreLock(a);
         if (success) { a->TxOk++; a->TxBytes += size; } else a->TxError++;
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         NdisMSendComplete(a->Handle, p, success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE);
     }
 }
@@ -208,12 +243,12 @@ static void Link(void *context, int connected, nc_u32 speed)
 {
     ADAPTER *a = context;
     BOOLEAN changed;
-    NdisAcquireSpinLock(&a->Lock);
+    CoreLock(a);
     if (connected < 0) a->Gone = TRUE;
     if (speed) a->LinkSpeed = speed;
     changed = a->Connected != (connected > 0);
     a->Connected = connected > 0;
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
     if (connected <= 0) Flush(a);
     /* No indication before MiniportInitialize has returned. */
     if (changed && a->Ready) {
@@ -333,10 +368,10 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
     case OID_802_3_MULTICAST_LIST:
         if (length % 6) { *needed = (length / 6 + 1) * 6; return NDIS_STATUS_INVALID_LENGTH; }
         if (length > sizeof(a->Multicast)) return NDIS_STATUS_MULTICAST_FULL;
-        NdisAcquireSpinLock(&a->Lock);
+        CoreLock(a);
         if (length) NdisMoveMemory(a->Multicast, buffer, length);
         a->MulticastCount = length / 6;
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         *read = length;
         if (a->Gone || !NetUsbRequest(a->Usb, NET_REQ_MULTICAST, 0, buffer, length))
             return NDIS_STATUS_SUCCESS;
@@ -362,9 +397,9 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
                       NDIS_PACKET_TYPE_MULTICAST | NDIS_PACKET_TYPE_ALL_MULTICAST |
                       NDIS_PACKET_TYPE_PROMISCUOUS))
             return NDIS_STATUS_NOT_SUPPORTED;
-        NdisAcquireSpinLock(&a->Lock);
+        CoreLock(a);
         a->Filter = value;
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         if (a->Gone || !NetUsbRequest(a->Usb, NET_REQ_FILTER, value, NULL, 0))
             return NDIS_STATUS_SUCCESS;
         return NDIS_STATUS_PENDING;
@@ -386,8 +421,13 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
         PNDIS_PACKET p = packets[i];
         UINT size;
         BOOLEAN queued = FALSE;
+        /* Pending until NdisMSendComplete (the deserialized rules allow
+         * the Status member to be set). Windows 98 SE's NDIS reads it: a
+         * packet left at another value is handed back to the protocol
+         * while it is still queued here, and reused. */
+        NDIS_SET_PACKET_STATUS(p, NDIS_STATUS_PENDING);
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
-        NdisAcquireSpinLock(&a->Lock);
+        CoreLock(a);
         if (!a->Gone && !a->Halting && a->Connected && size >= NC_ETH_MIN && size <= NC_ETH_MAX &&
             a->TxQueued < TX_LIMIT) {
             NEXT(p) = NULL;
@@ -396,7 +436,7 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
             a->TxQueued++;
             queued = TRUE;
         }
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         if (!queued) {
             void *one = p;
             TxDone(a, &one, 1, 0);
@@ -433,9 +473,10 @@ static VOID Halt(NDIS_HANDLE context)
 {
     ADAPTER *a = context;
     ULONG waited = 0;
-    NdisAcquireSpinLock(&a->Lock);
+    NetTrace("halt: begin, %d receive packets out", a->RxOut);
+    CoreLock(a);
     a->Halting = TRUE;
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
     NetUsbStop(a->Usb);          /* no USB activity or callback after this */
     a->Usb = NULL;
     Flush(a);
@@ -458,9 +499,9 @@ static VOID PnPEvent(NDIS_HANDLE context, NDIS_DEVICE_PNP_EVENT event, PVOID buf
     UNREFERENCED_PARAMETER(buffer);
     UNREFERENCED_PARAMETER(length);
     if (event == NdisDevicePnPEventSurpriseRemoved) {
-        NdisAcquireSpinLock(&a->Lock);
+        CoreLock(a);
         a->Gone = TRUE;
-        NdisReleaseSpinLock(&a->Lock);
+        CoreUnlock(a);
         NetUsbSurpriseRemoved(a->Usb);
         Flush(a);
     }
@@ -587,6 +628,7 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     a->Lookahead = 1500;
     a->PowerState = NdisDeviceStateD0;
     NdisAllocateSpinLock(&a->Lock);
+    KeInitializeSpinLock(&a->Lock.SpinLock);   /* 98 SE: NDIS need not initialise it */
 
     /* Receive pool: packets, buffers and storage, all before USB starts. */
     NdisAllocatePacketPool(&status, &a->PacketPool, RX_PACKETS, 4 * sizeof(PVOID));
@@ -614,7 +656,7 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 
-    cb.Context = a; cb.Receive = Receive; cb.TxTake = TxTake; cb.TxCopy = TxCopy;
+    cb.Context = a; cb.Receive = Receive; cb.ReceiveEnd = ReceiveEnd; cb.TxTake = TxTake; cb.TxCopy = TxCopy;
     cb.TxDone = TxDone; cb.Link = Link; cb.TaskDone = TaskDone; cb.Anomaly = Anomaly;
     if (NetUsbStart(lower, &cb, &a->Start, &a->Usb) < 0) {
         NetTrace("initialize failed: stage %u status %x", a->Start.Failure, a->Start.Status);
@@ -632,11 +674,11 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
         FreeAdapter(a);
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
-    NdisAcquireSpinLock(&a->Lock);
+    CoreLock(a);
     a->Connected = connected != 0;
     if (speed) a->LinkSpeed = speed;
     a->Ready = TRUE;
-    NdisReleaseSpinLock(&a->Lock);
+    CoreUnlock(a);
     NetTrace("initialized: %x:%x chip %x, %s speed USB, link %u, %x:%x:%x:%x:%x:%x",
              a->Start.Vendor, a->Start.Product, a->Start.Version,
              a->Start.Speed == NC_SPEED_SUPER ? "super" : a->Start.Speed == NC_SPEED_HIGH ? "high" : "full",
@@ -667,7 +709,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING path)
     chars.ReturnPacketHandler = ReturnPacket;
     chars.SendPacketsHandler = SendPackets;
     status = NdisMRegisterMiniport(wrapper, &chars, sizeof(chars));
-    NetTrace("DriverEntry: register %x", status);
+    NetTrace("DriverEntry: register %x, at %x", status, (ULONG)(ULONG_PTR)DriverEntry);
     if (status != NDIS_STATUS_SUCCESS) NdisTerminateWrapper(wrapper, NULL);
     return status;
 }

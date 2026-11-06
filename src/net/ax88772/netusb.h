@@ -12,7 +12,7 @@
  * - NetUsbStart, NetUsbOpen and NetUsbStop run at PASSIVE_LEVEL, from
  *   MiniportInitialize and MiniportHalt.
  * - NetUsbKick and NetUsbRequest may run at IRQL <= DISPATCH_LEVEL.
- * - Receive, TxTake, TxCopy, TxDone and Link are called at
+ * - Receive, ReceiveEnd, TxTake, TxCopy, TxDone and Link are called at
  *   IRQL <= DISPATCH_LEVEL, from USB completions, the pump or the worker,
  *   never with a lower-edge lock held.
  * - TaskDone is called once per accepted request, at PASSIVE_LEVEL from
@@ -25,6 +25,16 @@
 #include "netchip.h"
 
 #define NET_TX_BATCH 32          /* frames per bulk-OUT transfer, at most */
+#define NET_RX_BATCH 16          /* received frames per receive indication, at most */
+
+/* One bulk-IN transfer's frames, gathered by the upper edge into receive
+ * indications of up to NET_RX_BATCH packets. It lives on the stack of the
+ * completion that parses the transfer, so concurrent completions never
+ * share one. */
+typedef struct NET_RX_GATHER {
+    void *Packets[NET_RX_BATCH];
+    nc_u32 Count;
+} NET_RX_GATHER;
 
 /* Requests run on the adapter's passive worker. */
 #define NET_REQ_FILTER     1     /* Value: NDIS packet filter bits */
@@ -34,7 +44,10 @@
 
 typedef struct NET_CALLBACKS {
     void *Context;
-    void (*Receive)(void *context, const nc_u8 *frame, nc_u32 length);
+    /* One frame of a bulk-IN transfer; gather starts empty for each
+     * transfer, and ReceiveEnd follows its last frame. */
+    void (*Receive)(void *context, NET_RX_GATHER *gather, const nc_u8 *frame, nc_u32 length);
+    void (*ReceiveEnd)(void *context, NET_RX_GATHER *gather);
     /* Dequeue up to max queued NDIS packets; returns the number taken. */
     nc_u32 (*TxTake)(void *context, void **packets, nc_u32 max);
     /* Copy one packet's frame; returns its length, 0 if unusable. */

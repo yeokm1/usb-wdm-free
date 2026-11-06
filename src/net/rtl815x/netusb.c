@@ -291,6 +291,8 @@ static NTSTATUS Sync(NET_DEV *d, PURB urb, ULONG timeoutMs)
         status = irp->IoStatus.Status;
     }
     IoFreeIrp(irp);
+    /* A failure whose URB says the device is gone reads as gone. */
+    if (!NT_SUCCESS(status) && DeviceGone(status, urb->UrbHeader.Status)) status = STATUS_DEVICE_NOT_CONNECTED;
     if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status)) {
         status = DeviceGone(status, urb->UrbHeader.Status) ? STATUS_DEVICE_NOT_CONNECTED : STATUS_UNSUCCESSFUL;
     }
@@ -539,10 +541,15 @@ static void Pump(NET_DEV *d)
     KeReleaseSpinLock(&d->Lock, old);
 }
 
+typedef struct EMIT_CONTEXT {
+    NET_DEV *Dev;
+    NET_RX_GATHER Gather;
+} EMIT_CONTEXT;
+
 static void Emit(void *context, const nc_u8 *frame, nc_u32 length)
 {
-    NET_DEV *d = context;
-    d->Cb.Receive(d->Cb.Context, frame, length);
+    EMIT_CONTEXT *e = context;
+    e->Dev->Cb.Receive(e->Dev->Cb.Context, &e->Gather, frame, length);
 }
 
 static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
@@ -577,8 +584,12 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
                 if (d->Chip->RxReset) d->Chip->RxReset(ChipState(d));
             } else if (length) {
                 NET_RX_STATS st = { 0 };
-                if (d->Chip->RxParse(ChipState(d), s->Buffer, length, Emit, d, &st) < 0) d->Malformed++;
+                EMIT_CONTEXT e;
+                e.Dev = d;
+                e.Gather.Count = 0;
+                if (d->Chip->RxParse(ChipState(d), s->Buffer, length, Emit, &e, &st) < 0) d->Malformed++;
                 else d->Dropped += st.Dropped;
+                d->Cb.ReceiveEnd(d->Cb.Context, &e.Gather);
                 if (st.Dropped) DropSample(s->Buffer, length);
                 if (st.FcsStripped) {
                     /* The chip is configured to deliver frames without
@@ -638,7 +649,18 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* Close the gate and drain every data IRP. PASSIVE_LEVEL. */
+static void ReportGone(NET_DEV *d);
+
+/* ABORT_PIPE; a device-gone answer marks the device gone. */
+static void AbortPipe(NET_DEV *d, USBD_PIPE_HANDLE pipe)
+{
+    if (DeviceGone(PipeRequest(d, URB_FUNCTION_ABORT_PIPE, pipe), 0)) d->Gone = TRUE;
+}
+
+/* Close the gate and drain every data IRP. PASSIVE_LEVEL. A departure
+ * known before or found during the drain is reported first, from the
+ * worker (not from halt, which runs after the worker has ended): its
+ * sends are released then, which no drain may wait for (ReleaseGone). */
 static void Quiesce(NET_DEV *d)
 {
     KIRQL old;
@@ -657,16 +679,23 @@ static void Quiesce(NET_DEV *d)
         Sleep(1);
     }
     for (;;) {
+        if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
         KeAcquireSpinLock(&d->Lock, &old);
         idle = !d->Outstanding;
         if (!idle) KeClearEvent(&d->Drained);
         KeReleaseSpinLock(&d->Lock, old);
         if (idle) break;
         if (!(waits++ % 4)) {
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->In);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Out);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Int);
-            if (waits > 1) NetTrace("quiesce: %u still outstanding", d->Outstanding);
+            /* A departure found by the abort before is reported before
+             * the next one (a synchronous request; see ReleaseGone). */
+            AbortPipe(d, d->In);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Out);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Int);
+            if (waits > 1) NetTrace("quiesce: %u still outstanding (int %u rx %u%u%u%u tx %u%u%u%u)", d->Outstanding,
+                                    d->IntSlot.Busy, d->Rx[0].Busy, d->Rx[1].Busy, d->Rx[2].Busy, d->Rx[3].Busy,
+                                    d->Tx[0].Busy, d->Tx[1].Busy, d->Tx[2].Busy, d->Tx[3].Busy);
         }
         (void)Wait(&d->Drained, 500);
     }
@@ -698,6 +727,62 @@ static void Reopen(NET_DEV *d)
 /* ------------------------------------------------------------------ */
 /* Chip operations, worker or Start/Open/Stop context. */
 
+/* The device has left. A host controller driver may hold a departed
+ * device's transfers until its pipes are aborted or the device is removed
+ * (xHCI98 parks them on the device), while the protocols above do not let
+ * the adapter be removed - so halted - before every send they made has
+ * completed. So the gate closes and every frame a transmit slot holds is
+ * completed now, failed: its data was copied into the slot, which stays
+ * busy until its IRP ends. The pipes are aborted after the report
+ * (AbortGone); halt's quiesce waits for the IRPs themselves. */
+static void ReleaseGone(NET_DEV *d)
+{
+    KIRQL old;
+    BOOLEAN idle;
+    ULONG i;
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Open = FALSE;
+    KeReleaseSpinLock(&d->Lock, old);
+    for (;;) {
+        KeAcquireSpinLock(&d->Lock, &old);
+        idle = !d->PumpActive;
+        KeReleaseSpinLock(&d->Lock, old);
+        if (idle) break;
+        Sleep(1);
+    }
+    for (i = 0; i < d->TxCount; i++) {
+        void *packets[NET_TX_BATCH];
+        ULONG count = 0;
+        SLOT *s = &d->Tx[i];
+        KeAcquireSpinLock(&d->Lock, &old);
+        if (s->Stage != TX_IDLE && s->Count) {
+            count = s->Count;
+            RtlCopyMemory(packets, s->Packets, count * sizeof(void *));
+            s->Count = 0;
+        }
+        KeReleaseSpinLock(&d->Lock, old);
+        if (count) d->Cb.TxDone(d->Cb.Context, packets, count, 0);
+    }
+}
+
+/* After the upper edge has been told: the pipes aborted once, so a host
+ * controller driver that holds the transfers lets them go now. These are
+ * synchronous requests, so they come after the report, which nothing may
+ * delay. */
+static void AbortGone(NET_DEV *d)
+{
+    KIRQL old;
+    ULONG outstanding;
+    KeAcquireSpinLock(&d->Lock, &old);
+    outstanding = d->Outstanding;
+    KeReleaseSpinLock(&d->Lock, old);
+    if (!outstanding) return;
+    AbortPipe(d, d->In);
+    AbortPipe(d, d->Out);
+    AbortPipe(d, d->Int);
+    NetTrace("gone: %u of %u transfers still outstanding after the abort", d->Outstanding, outstanding);
+}
+
 static void ReportGone(NET_DEV *d)
 {
     KIRQL old;
@@ -708,7 +793,9 @@ static void ReportGone(NET_DEV *d)
     KeReleaseSpinLock(&d->Lock, old);
     if (report) {
         NetTrace("device gone");
+        ReleaseGone(d);
         d->Cb.Link(d->Cb.Context, -1, d->Speed);
+        AbortGone(d);
     }
 }
 

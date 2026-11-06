@@ -662,6 +662,22 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\5')[0], 4)   # 4 inputs
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x1a03, 1)[0], 4)
 
+    def test_referenced_strings_answer(self):
+        # Every iFunction (IAD) and iInterface a profile's descriptors name
+        # has a string: Windows 10's own UAC 2.0 driver reads them and fails
+        # the function (Code 10) on a stall (alc4080cap's index 5).
+        for name in uacemu.PROFILE_NAMES:
+            p = uacemu.Profile(name)
+            d, off, named = p.config, 0, set()
+            while off < len(d) and d[off] >= 2:
+                if d[off + 1] == 4:
+                    named.add(d[off + 8])
+                elif d[off + 1] == 0x0b:
+                    named.add(d[off + 7])
+                off += d[off]
+            for index in named - {0}:
+                self.assertIn(index, p.strings, (name, index))
+
     def test_feature_unit_modes_and_access(self):
         # The descriptor's bmaControls decide what answers: SET only where
         # read/write, GET where readable, a stall elsewhere.

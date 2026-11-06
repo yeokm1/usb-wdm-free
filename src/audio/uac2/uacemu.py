@@ -462,10 +462,14 @@ class Profile:
             base = (ALC_FIXTURE / 'device.bin').read_bytes()
             self.vid, self.pid = vid or 0x0b05, pid or 0x1b9b
             # Strings: index 1 product, 3 manufacturer in the capture; serial none.
+            # Index 5 is the IAD's iFunction and every interface's iInterface;
+            # Windows 10's own UAC 2.0 driver reads it and fails the function
+            # (Code 10) when it stalls.
             self.device = base[:8] + struct.pack('<HH', self.vid, self.pid) + base[12:]
             self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0xef, 2, 1, 64, 1, 0)
             self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('ALC4080 capture - SIMULATED'),
-                            3: usb_string('usb-wdm-free SIMULATED')}
+                            3: usb_string('usb-wdm-free SIMULATED'),
+                            5: usb_string('ALC4080 audio function - SIMULATED')}
             all44 = sorted(FAMILY_44 + FAMILY_48)
             self.rates = {1: all44, 3: all44, 4: all44, 5: all44, 6: all44 + [352800, 384000], 8: all44}
             self.allowed, self.fu_settable = None, True

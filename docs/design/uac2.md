@@ -2278,7 +2278,7 @@ uses it) gains:
   - each case also records the MIDI default (`MIDIMap`) before and after;
   - the real X1, installed earlier without the value, updated to the
     changed INF: the defaults before and after, recorded either way.
-- Not read: 98 SE (under NUSB's EHCI and xHCI98), ME, 2000, Vista.
+- Not read: ME, 2000, Vista. 98 SE: read below.
 
 Read on XP x64, 2026-11-06 ([uac2-swap](../testing/2026-11-06-uac2-swap.md)):
 each case as expected, with the released INF as the control (the default
@@ -2294,8 +2294,12 @@ became the preferred playback and recording device, one with the released
 INF did not; updating a device that was not the preferred one left the
 choice alone until the restart it asked for (after it, under xHCI98, the
 recording choice had moved, cause not settled; under NUSB a new device
-installed at that start took both). 98 SE installs further devices from its one `INF\OTHER` copy
-of the INF, so the changed INF reaches a system that has `uac2` already
+installed at that start took both). 98 SE installs further devices from
+its one `INF\OTHER` copy of the INF, so the changed INF reaches a system that has `uac2` already
 by Have Disk or Update Driver once; Windows sets the value to 0 after
 acting on it; updating the preferred device itself moved the preference to
-another device (no released-INF control for that). ME and 2000 not read.
+another device while its driver was replaced, and from one starting state
+the released INF does the same (D / D before the restart, A / A after a
+cold start, both INFs): that move is 98 SE's own. In one run from another
+starting state the move lasted past the cold start; whether the change
+plays a part there is not settled. ME and 2000 not read.

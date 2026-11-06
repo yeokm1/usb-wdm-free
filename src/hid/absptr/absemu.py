@@ -34,9 +34,10 @@ shaped like the device families named; strings say SIMULATED):
               (056A:0000, interface 03/01/02, QEMU's report descriptor; HID
               mode sends 4-byte relative mouse reports with no report ID;
               a SET_REPORT of feature report 2 with value 2 switches to the
-              tablet mode, whose 7-byte reports are 02, X (le16, 0..5040),
-              Y (le16, 0..3780), status (0x20 eraser, 0x40 side switch),
-              pressure (signed, -127 = none)), the protocol Linux's
+              tablet mode (a GET_REPORT returns the current input report,
+              as QEMU's model does), whose 7-byte reports are 02, X (le16,
+              0..5040), Y (le16, 0..3780), status (0x20 eraser, 0x40 side
+              switch), pressure (signed, -127 = none)), the protocol Linux's
               wacom_penpartner_irq reads (drivers/hid/wacom_wac.c)
 
 Input is driven over a second TCP port (--ctl), one JSON object a line:
@@ -358,7 +359,11 @@ class Model:
         elif reqtype == 0xA1 and request == 0x01:                    # GET_REPORT
             rtype, rid = value >> 8, value & 255
             if self.profile == 'penpartner':
-                result = bytes([0, self.state['mode']])
+                # QEMU's model answers a GET_REPORT (A1 01) with its current
+                # input report, whatever report was asked for (dev-wacom.c,
+                # HID_GET_REPORT); its "00 mode" answer is for the vendor
+                # request 21 01 only.
+                result = reports(self.profile, self.s, self.state)[0]
             elif self.profile == 'mtouch' and rtype == 3 and rid == 2:
                 result = bytes([2, 2])
             else:

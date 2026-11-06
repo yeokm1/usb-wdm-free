@@ -2,7 +2,8 @@
 
 Status: design of 2026-11-06, from the readings of section 3 (QEMU guests,
 simulated and QEMU-modelled devices), reviewed and revised; first build
-in `src/hid/absptr/` (sections 5 to 9).
+in `src/hid/absptr/` (sections 5 to 9); its legs of section 12 are in the
+record (section 14), with two open points (section 13, Q8).
 
 ## 1. Purpose and devices served
 
@@ -99,24 +100,26 @@ PenPartner model, at either speed).
 
 Windows' own drivers (no absptr):
 
-| Device | 98 SE, xHCI98 | 98 SE, NUSB EHCI | ME, xHCI98 | XP SP3, xHCI98 |
-|---|---|---|---|---|
-| QEMU `usb-tablet` | 6/6, buttons | 6/6 (`usb_version=2`) | 6/6, buttons | 6/6, buttons |
-| `tablet`, `pointer`, `kvm16` | 6/6 | 6/6 | not run | see the record |
-| `kvm12` | 1/6: positions at 1/16 of the screen | the same | not run | see the record |
-| `touchmouse` | 5/6, through its mouse collection | 6/6, the same | not run | see the record |
-| `touch`, `mtouch`, `pen` | no pointer movement | the same | not run | see the record |
-| QEMU `usb-wacom-tablet`, `penpartner` | no movement (the power-on mode's reports do not match the model's own descriptor) | the same (`penpartner`) | not run | see the record |
+| Device | 98 SE, xHCI98 | 98 SE, NUSB EHCI | ME, xHCI98 | 2000 SP4, xHCI98 | XP SP3, xHCI98 |
+|---|---|---|---|---|---|
+| QEMU `usb-tablet` | 6/6, buttons | 6/6 (`usb_version=2`) | 6/6, buttons | 6/6, buttons | 6/6, buttons |
+| `tablet` | 6/6 | 6/6 | not run | not run | 6/6 |
+| `pointer` | not read | 6/6 | not run | not run | 6/6 |
+| `kvm16` (0..65535) | not read | 6/6 | not run | 1/6: values above 32767 land at 0 | the same as 2000 |
+| `kvm12` | 1/6: positions at 1/16 of the screen | the same | not run | the same | not read |
+| `touchmouse` | 5/6, through its mouse collection | 6/6, the same | not run | not run | 6/6, the same |
+| `touch`, `mtouch`, `pen` | no pointer movement | the same | not run | the same (`touch`, `pen`) | the same |
+| QEMU `usb-wacom-tablet`, `penpartner` | no movement (the power-on mode's reports do not match the model's own descriptor) | the same (`penpartner`) | not run | the same (`penpartner`) | the same (`penpartner`) |
 
-2000 was read under Windows' EHCI on the q35 base, which has no EHCI
-driver installed (its Found New Hardware wizard found none without the
-2000 CD), so that reading is void; 2000 under xHCI98 is owed (section
-12).
+2000 and XP were first read under Windows' EHCI on the q35 bases, which
+have no EHCI driver installed (the Found New Hardware wizard found none
+without the CD), so those readings are void; the columns above are under
+xHCI98.
 
 What follows from it:
 
 1. **98 SE and ME map an absolute Generic Desktop X/Y to the pointer
-   themselves**, and so does XP. On 98 SE and ME the HID mouse
+   themselves**, and so do 2000 and XP. On 98 SE and ME the HID mouse
    collection (`HID_DEVICE_SYSTEM_MOUSE`) gets `mouhid.vxd` from
    `msmouse.inf` (`[HIDMouse]`: `DevLoader=*ntkern`,
    `NTMPDriver=mouhid.vxd`). `msmouse.inf` of both systems binds the ELO
@@ -125,8 +128,8 @@ What follows from it:
    rectangles: the in-box absolute path is Microsoft's own design for the
    touch screens of 1998.
 2. **The 16-bit field with Logical 0..32767 is the safe shape.** 98 SE
-   maps 0..65535 too, XP does not (it puts values above 32767 at 0); a
-   12-bit field fails on both.
+   maps 0..65535 too, 2000 and XP do not (they put values above 32767
+   at 0); a 12-bit field fails on 98 SE and 2000 (XP not read).
 3. **Nothing on 98 SE or ME takes the HID Digitizer page.** A touch screen
    or pen whose only collection is a Digitizer one is no pointer.
 4. **The PenPartner needs its tablet mode**, which only a driver of its
@@ -262,14 +265,18 @@ the pen has left. The range is 0..5040 by 0..3780
 
 QEMU's model (`hw/usb/dev-wacom.c`, MIT licence; read for its behaviour):
 it takes the first byte of a SET_REPORT's data as its new mode (so `02 02`
-gives mode 2), answers GET_REPORT with `00 mode`, and in mode 2 sends the
-7-byte report above with the pressure byte 0 while the left button (pen
-tip) or the middle button (eraser) is down and -127 otherwise.
+gives mode 2), answers the class GET_REPORT with its current input report
+whatever report is asked for (its `00 mode` answer is for a vendor
+request `21 01`), and in mode 2 sends the 7-byte report above with the
+pressure byte 0 while the left button (pen tip) or the middle button
+(eraser) is down and -127 otherwise.
 
-The front end: at start, the mode switch (up to three tries; the start
-fails if the tablet never answers mode 2); after a return to D0, the
-same switch again from a work item before the IN transfers restart (the
-tablet may have reset). Report 2: X, Y, tip (the
+The front end: at start, the mode switch (up to three tries while the
+write fails or the read-back does not answer mode 2, as Linux does); a
+write that went through but was never confirmed does not fail the start
+(QEMU's model cannot confirm it, found by the first final leg), a write
+that never went through does; after a return to D0, the same switch again from
+a work item before the IN transfers restart (the tablet may have reset). Report 2: X, Y, tip (the
 pen or the eraser touching) as the left button, side switch as the
 right. Report 1 with bit 80h set: the same; with it clear: every button
 up, the position kept. Anything else (the 4-byte mouse-mode reports) is
@@ -393,13 +400,31 @@ NUSB's, xHCI98).
   with the simulator's ids (`FFFF:0031`, `0032`, `0034`, `0036`, `0037`) for the
   legs; they are never released.
 - **hidclass.sys and hidparse.sys on 98 SE** are Microsoft's and are not
-  shipped. 98 SE's own `hiddev.inf` and `msmouse.inf` copy them from the
-  Windows files when the first HID device is installed. Whether they are
-  present when absptr's device is the first HID device a 98 SE ever saw
-  is read by the first-HID-install leg (section 12) on the q35 98 SE base
-  (which never had a USB stack before xHCI98). If they are not, the INF
-  gets a CopyFiles of them from the Windows media through
-  `LayoutFile=LAYOUT.INF`, and that is read again.
+  shipped. Read on the q35 98 SE base, which never had a USB stack before
+  xHCI98: both are in `SYSTEM32\DRIVERS` from Setup, and with absptr's
+  device as the first HID device that system ever saw, the install took
+  `mouhid.vxd` from the Windows files through `msmouse.inf` and asked for
+  no restart. No CopyFiles of Microsoft's files is needed.
+- **What the user sees** (read in the legs):
+  - 98 SE: the wizard's floppy search offers absptr over 98's own HID
+    driver ("The updated driver (Recommended)").
+  - ME: the first plug installs ME's own HID driver silently; in Device
+    Manager, the device's Update Driver with "Automatic search" finds
+    `A:\ABSPTR.INF` and installs absptr. Later devices that the INF lists
+    get absptr at their first plug (the INF is then in ME's INF folder).
+  - 2000: with the INF known to Windows (once through "Have Disk", or
+    staged), a listed device gets absptr at its first plug, after the
+    "Digital Signature Not Found" prompt. A device that already has
+    Windows' own HID driver is uninstalled in Device Manager and found
+    again ("Scan for hardware changes").
+  - XP: XP prefers its own signed HID driver at every plug, so the user
+    runs Update Driver, "Don't search. I will choose", and picks absptr's
+    entry. For a device whose own collection was not a mouse (a touch
+    screen, a pen), the child device then still shows as "HID-compliant
+    device" with no pointer: XP keeps the driver it gave that child
+    before. Uninstalling that child in Device Manager and scanning for
+    hardware changes makes it "HID-compliant mouse"; the record has the
+    steps. The release notes need this (Q9).
 - No registry values in v1.
 
 ## 9. Files
@@ -446,7 +471,7 @@ The legs, each on a fresh overlay with the package installed by its INF
 | System | Host controller drivers | Devices |
 |---|---|---|
 | 98 SE | xHCI98 3.4.1.0; NUSB 3.3 EHCI | QEMU `usb-wacom-tablet` (xHCI98), `penpartner` (both), `touch`, `mtouch`, `pen`, `kvm12` (both); QEMU `usb-tablet` stays on Windows' own path (regression) |
-| ME | xHCI98 3.4.1.0; Windows' own UHCI | the same as 98 SE under xHCI98; under UHCI QEMU's `usb-wacom-tablet` and `touch` (NUSB does not install on ME, so ME has no EHCI stack to test) |
+| ME | xHCI98 3.4.1.0; Windows' own UHCI | the same as 98 SE under xHCI98; under UHCI QEMU's `usb-wacom-tablet` and `touch` (NUSB does not install on ME; an EHCI leg needs a maker's USB 2.0 stack for ME) |
 | 2000 SP4 | xHCI98 3.4.1.0 (the in-box reading of section 3 first) | `penpartner`, `touch`, `pen` |
 | XP SP3 | xHCI98 3.4.1.0; Windows' EHCI where the base has its driver | `penpartner`, `touch`, `pen`, `kvm16` |
 
@@ -468,8 +493,17 @@ controller driver whose leg is missing.
 - Calibration and axis swap/inversion (Q4), multi-monitor.
 - Later Wacom tablets (Graphire, Intuos), each with its own protocol in
   `wacom_wac.c`.
-- A mouse mapper of its own for 2000, if section 3's 2000 reading shows
-  the in-box one ignores absolute X/Y (section 4, option 3).
+- On 98 SE, now and then the first touch after the device starts moves
+  the pointer but its press is not seen; every later touch is right
+  (record, "Open points"). Not seen on ME, 2000 or XP. To be traced
+  before touch screen support is called ready on 98 SE (Q8).
+- 2000 shows "Unsafe Removal of Device" when an absptr device is
+  unplugged: the driver does not report the device as safe to remove by
+  surprise (`SurpriseRemovalOK` in its `IRP_MN_QUERY_CAPABILITIES`
+  answer). XP does not show the dialog (Q8).
+- XP's child device keeping its earlier driver (section 8): absptr's own
+  product id in `IOCTL_HID_GET_DEVICE_ATTRIBUTES` would give the child a
+  new device id, and so a fresh install as a mouse; not tried.
 - x64 builds for XP x64 (Q6).
 
 ## 14. Records
@@ -502,3 +536,12 @@ legs of section 12.
   leave it so, or say in the release notes which maker covers which
   screen? Recommended: leave the INFs so and name the makers in the
   release notes.
+- **Q8. The two open points of section 13** (98 SE's first touch after a
+  start, 2000's "Unsafe Removal" dialog): (a) fix both before the first
+  release (a trace of the first reports after a start; the capability in
+  the driver's PnP path), with the 98 SE and 2000 legs run again; (b)
+  release with them listed as known issues. Recommended: (a); the
+  PenPartner and absolute mouse legs are unaffected either way.
+- **Q9. XP's install steps** (section 8): only in the release notes, or
+  also a small tool that does the Update Driver and the child's
+  reinstall? Recommended: the release notes in v1.

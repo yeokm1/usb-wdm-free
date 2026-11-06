@@ -388,11 +388,19 @@ static NTSTATUS InComplete(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
 
 /* ---- the front ends' start requests (design 5.1, 5.2) ---- */
 
+/* The PenPartner's tablet mode (design 5.2): SET_REPORT of feature report
+ * 2 with 02 02, read back with GET_REPORT, up to AP_MODE_TRIES times while
+ * the write fails or the answer's second byte is not 2, as Linux's
+ * wacom_set_device_mode does. A write that went through but was never
+ * confirmed does not fail the start (QEMU's model answers GET_REPORT with
+ * its current input report, so its read-back cannot confirm); a write that
+ * never went through does, as the tablet is then still in its mouse mode. */
 static NTSTATUS PenPartnerMode(AP_DEV *dev)
 {
     UCHAR buf[8];
     ULONG got, n;
     unsigned tries;
+    BOOLEAN written = FALSE;
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     for (tries = 0; tries < AP_MODE_TRIES; tries++) {
         n = ApPenPartnerModeData(buf, sizeof(buf));
@@ -400,14 +408,15 @@ static NTSTATUS PenPartnerMode(AP_DEV *dev)
         APT("pp-set", status, tries, 0);
         if (!NT_SUCCESS(status))
             continue;
+        written = TRUE;
         RtlZeroMemory(buf, sizeof(buf));
+        got = 0;
         status = ClassRequest(dev, HID_GET_REPORT, (USHORT)((HID_FEATURE << 8) | 2), TRUE, buf, 2, &got);
         APT("pp-get", status, got, buf[1]);
         if (NT_SUCCESS(status) && ApPenPartnerModeOk(buf, got))
-            return STATUS_SUCCESS;
-        status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
     }
-    return status;
+    return written ? STATUS_SUCCESS : status;
 }
 
 /* The Device Mode feature (design 5.1): read the feature report, write

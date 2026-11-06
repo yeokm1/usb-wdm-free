@@ -2169,3 +2169,108 @@ Not used:
 - Emulator legs (`docs/testing/2026-11-05-uac2-names.md`): XP x64, 7
   x86 and 98 SE, with distinct product strings, no product, an empty
   product, a long one, and a rename on the same instance.
+
+## 22. Windows' preferred device: `SetupPreferredAudioDevices` (xHCI98 task 47.11, 2026-11-06)
+
+### 22.1 The report and the legs
+
+A user reported, on XP x64, that swapping to a different USB audio device
+needs VLC restarted, and that a swap to or from a UAC 1.0 device under
+`usbaudio` does not. The legs on XP x64
+([uac2-swap](../testing/2026-11-06-uac2-swap.md): the real X4 and X1 and a
+UAC 1.0 headset passed through, VLC 3.0.11) read:
+
+- **One device at a time:** no difference. Whatever was swapped in, under
+  `uac2` or `usbaudio`, was the only sound device and so Windows' default,
+  and VLC reached it at its next Stop and Play.
+- **Two devices attached:** the headset (`usbaudio`) attached after the
+  X1 was Windows' default playback device at once; the X1 (`uac2`)
+  attached after the headset was not, and VLC's Default output stayed on
+  the headset. A default chosen by hand in Sounds and Audio Devices
+  (Audio, Default device) was not followed by the running VLC at Stop and
+  Play, in either direction (to the X1 and to the headset); a VLC restart
+  reached it.
+
+So `uac2` differs from `usbaudio` in one measured way: a `usbaudio` device
+takes Windows' default, a `uac2` device does not. On a PC with another
+sound device this leaves the user to pick the `uac2` device by hand, and
+VLC then needs a restart to follow (the second point). That this is the
+user's symptom is a likely reading, not a reproduction of his PC.
+
+### 22.2 Where the difference comes from
+
+Windows' own USB audio INF (`wdma_usb.inf`, read as text in the XP x64
+guest; the 98 SE copy carries the same line, `2026-10-22-usbmidi-m1.md`)
+has `HKR,,SetupPreferredAudioDevices,3,01,00,00,00` in its install
+sections; `uac2wdm.inf` has no such line. Microsoft's driver kit
+documentation (*SetupPreferredAudioDevices*, audio device INF keywords):
+
+- the keyword makes the device's functions the defaults for sound
+  playback, sound recording and MIDI music playback when the driver is
+  installed, displacing the device that held the role; the user can
+  change them in Control Panel;
+- the value must be nonzero; flags 3 (binary, no-clobber) keep a device's
+  existing preferred-device entries when its driver is merely upgraded;
+- it is supported by 98/ME, 2000, XP and Vista, not by Windows 7;
+- on Vista any endpoint whose value is odd can become the default, and
+  the KS filter exposed last decides.
+
+In the guest, after both devices' installs, `HKCU\Software\Microsoft\
+Multimedia\Sound Mapper` held `Playback` and `Record` = "Logi USB
+Headset", the X1's driver key `SetupPreferredAudioDevicesCount` 0
+(written by Windows). Adding the value by hand to the already installed
+X1's key changed nothing at its next arrival, as the documentation's
+"when the driver is installed" says. The preferred device is kept by
+name, so the headset was the default again at each later arrival.
+
+### 22.3 The change
+
+`[AudioSupport]` of both INF copies (`uac2wdm.inf`, and `x64\uac2wdm.inf`
+for the 64-bit systems; every install section, 9x, 2000, XP and x64,
+uses it) gains:
+
+    HKR,,SetupPreferredAudioDevices,3,02,00,00,00
+
+- **Value 2, not 1.** Nonzero, so 98 SE, ME, 2000, XP and XP x64 act on
+  it; even, so Vista's endpoint builder does not (22.2). `uac2` registers
+  pair 0 first and later pairs after it (15.3), so on Vista a value of 1
+  could make a later pair (the X4's S/PDIF, say) the default; Vista keeps
+  its own choice instead. 7 and 8 do not read it.
+- **Flags 3** as Windows' INF: a later update of a device whose driver key
+  already holds the value does not take the defaults again.
+- **What users see:** on 98 SE to XP x64, installing `uac2` for a device
+  makes it the default for playback, and for recording where it records,
+  as a UAC 1.0 device under Windows' own driver does. MIDI too may move:
+  the INF registers WDMAud's MIDI path (`Drivers\midi`), through which
+  Windows' software synth plays on the device
+  ([uac2-swmidi](../testing/2026-10-28-uac2-swmidi.md)), and the keyword
+  covers the MIDI default; 22.4 reads it. This is a behaviour change (release notes). Updating a
+  device installed with an older `uac2` writes the value for the first
+  time: whether Windows takes that as an install and moves the defaults
+  once is read in 22.4.
+- **Which pair.** A device with several pairs (15.3) registers several
+  wave filters; the one meant to become the default is pair 0, the first
+  output in descriptor order (the X4's analog output, not its S/PDIF).
+  22.4 reads which one Windows takes on XP.
+- Windows reads the value, the driver does not: no tuning value, no
+  `tuning.md` row.
+
+### 22.4 Tests
+
+- The INF gate (`infchk.ps1`) requires the line in `[AudioSupport]` of
+  both copies and rejects its removal or a value of 0.
+- XP x64, the real headset installed and Windows' default:
+  - a `uac2` device new to the system (the simulated CX31993 with a
+    MAX97220 under a new id) installed with the changed INF: `Sound
+    Mapper` `Playback` names it, `Record` stays the headset's (the
+    profile has no capture); a VLC started before the install plays to
+    it at its next Stop and Play;
+  - a duplex `uac2` device (the `hs24` profile under a new id): `Playback`
+    and `Record` both name it;
+  - a device with two playback pairs (the `x4full` profile under a new
+    id): `Playback` names pair 0's waveOut, and a play to the default
+    reaches pair 0's endpoint at the simulator;
+  - each case also records the MIDI default (`MIDIMap`) before and after;
+  - the real X1, installed earlier without the value, updated to the
+    changed INF: the defaults before and after, recorded either way.
+- Not read: 98 SE (under NUSB's EHCI and xHCI98), ME, 2000, Vista.

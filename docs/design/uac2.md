@@ -2300,6 +2300,9 @@ by Have Disk or Update Driver once; Windows sets the value to 0 after
 acting on it; updating the preferred device itself moved the preference to
 another device while its driver was replaced, and from one starting state
 the released INF does the same (D / D before the restart, A / A after a
-cold start, both INFs): that move is 98 SE's own. In one run from another
-starting state the move lasted past the cold start; whether the change
-plays a part there is not settled. ME and 2000 not read.
+cold start, both INFs): that move is 98 SE's own. In one run, with the
+other device installed with the changed INF and the user's choice made by
+hand, the move lasted past the cold start; with that device on the released
+INF the user's choice came back after the start. So on 98 SE the change may
+keep a device that got the role at install preferred across a later
+update's restart; one run each, not proven. ME and 2000 not read.

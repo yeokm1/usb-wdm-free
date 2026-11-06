@@ -126,6 +126,9 @@ int Sr7Poll(void *chip, NET_IO *io)
     SR7_STATE *s = chip;
     nc_u8 status = Get(io, SR7_NET_STATUS);
     if (io->Status < 0) return 0;
+    /* A filter write that failed is applied again: the core runs Link and,
+     * with the link up, the filter. */
+    if (s->FilterPending && s->LinkUp) return 1;
     return ((status & SR7_NET_STATUS_LINK) != 0) != (s->LinkUp != 0);
 }
 
@@ -139,8 +142,9 @@ long Sr7SetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *multicast,
     else if ((filter & NC_FILTER_ALL_MULTICAST) || ((filter & NC_FILTER_MULTICAST) && count))
         rx |= SR7_RX_ALL_MULTI;
     Set(io, SR7_RX_CTRL, rx);
-    if (io->Status < 0) return io->Status;
+    if (io->Status < 0) { s->FilterPending = 1; return io->Status; }
     s->RxCtrl = rx;
+    s->FilterPending = 0;
     return NC_OK;
 }
 

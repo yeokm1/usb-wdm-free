@@ -101,6 +101,13 @@ static void TestStartLinkFilter(void)
     CHECK(Sr7SetFilter(State.Bytes, &io, NC_FILTER_PROMISCUOUS, 0, 0) == NC_OK);
     CHECK(m.Reg[SR7_RX_CTRL] == (0x31 | SR7_RX_PROMISC));
     CHECK(Sr7SetMac(State.Bytes, &io, other) == NC_OK && memcmp(m.Reg + SR7_ADDRESS, other, 6) == 0);
+    /* A filter write that failed: Poll asks for Link (and the filter). */
+    m.RefuseAfter = m.Requests;
+    CHECK(Sr7SetFilter(State.Bytes, &io, NC_FILTER_ALL_MULTICAST, 0, 0) < 0 && s->FilterPending);
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    CHECK(Sr7Poll(State.Bytes, &io) == 1);
+    CHECK(Sr7SetFilter(State.Bytes, &io, NC_FILTER_ALL_MULTICAST, 0, 0) == NC_OK && !s->FilterPending);
+    CHECK(Sr7Poll(State.Bytes, &io) == 0);
     CHECK(Sr7Stop(State.Bytes, &io) == NC_OK && m.Reg[SR7_RX_CTRL] == 0 && !s->LinkUp);
     m.RefuseAfter = m.Requests + 1;
     CHECK(Sr7Resume(State.Bytes, &io, &p, &params) == NC_E_IO);   /* three tries, each fails */

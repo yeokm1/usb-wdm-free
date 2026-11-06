@@ -99,14 +99,14 @@
 /* SR9800 (ethernet.md section 6.9.1): its own requests and values. */
 #define A7_KIND_AX772B   0
 #define A7_KIND_SR9800   1
-#define SR_LED_MUX       0x70     /* wValue 0x4080, wIndex 0x4001 */
-#define SR_BULKIN_SIZE   0x2a     /* as AX_QCTCTRL: 4 KiB 0x8100/0x8147, 2 KiB 0x8000/0x8001 */
-#define SR_GPIO_RESET    0xb0     /* RSE | GPO_2 | GPO2EN */
-#define SR_SWRESET_PRTE  0x04
-#define SR_SWRESET_PRL   0x08
-#define SR_DEFAULT_RX_CTL 0x0188  /* SO | AB | RH1M */
-#define SR_MEDIUM_DEFAULT 0x0336  /* FD | RFC | TFC | PS | AC | RE */
-#define SR_RX_HIGH       4096UL   /* rx_urb_size at High Speed */
+#define S98_LEDS_REQ       0x70     /* LED sources: wValue 0x4080, wIndex 0x4001 */
+#define S98_INBURST_REQ    0x2a     /* bulk-IN burst: 4 KiB 0x8100/0x8147, 2 KiB 0x8000/0x8001 */
+#define S98_GPIO_AT_RESET  0xb0     /* EEPROM reload, GPIO 2 driven high */
+#define S98_RESET_EXTPHY   0x04     /* SW_RESET value with an external PHY */
+#define S98_RESET_PHYLINE  0x08     /* SW_RESET: the PHY reset line */
+#define S98_RX_MODE        0x0188   /* RX_CTL: receive on, broadcast, bit 8 */
+#define S98_MEDIUM_MODE    0x0336   /* full duplex, both pause, 100 Mb/s, AC, receive on */
+#define S98_RX_TRANSFER_HS 4096UL   /* bulk-IN transfer at High Speed */
 #define A7_FRAME_MAX     1518U    /* mtu + ETH_HLEN + VLAN_HLEN */
 #define A7_PHY_RESET_POLLS 50     /* 10 ms apart: clause 22's 500 ms */
 #define A7_REALIGN_AFTER 4        /* malformed transfers in a row before the stream is restarted */
@@ -136,7 +136,7 @@ typedef struct A7_STATE {
     nc_u8 FilterPending;         /* the last SetFilter failed: Link's caller applies it again */
     nc_u8 Mbps100, Full, Pause;  /* the link Link last applied */
     nc_u16 RxCtl, RxCtlRead, MediumRead;
-    nc_u16 RxBase;               /* RX_CTL before the filter bits (AX_DEFAULT_RX_CTL or SR_DEFAULT_RX_CTL) */
+    nc_u16 RxBase;               /* RX_CTL before the filter bits (AX_DEFAULT_RX_CTL or S98_RX_MODE) */
     nc_u32 RxTransfer;           /* bulk-IN transfer length: the chip's burst */
     nc_u16 Medium;               /* the medium mode last written */
     nc_u16 PhyId1, PhyId2;

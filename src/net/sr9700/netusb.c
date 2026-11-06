@@ -31,6 +31,8 @@
  *   event before PsTerminateSystemThread; Windows 98 faults a wait on a
  *   thread object (xHCI98 docs/usb-xhci-info/win98-wdm.md), so the thread
  *   object is waited on only where WDM 1.10 (Windows 2000) is available.
+ *   On 98 SE and ME (one processor) the worker sets the event at the
+ *   highest priority, so halt cannot run before it has terminated.
  */
 #include <wdm.h>
 #include <usbdi.h>
@@ -909,6 +911,14 @@ static void Worker(PVOID context)
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */
     }
+    /* The worker's last instructions in this image run after the event,
+     * and on 98 SE and ME halt has only the event to wait on (a wait on a
+     * thread object faults there). Those systems run one processor: at
+     * the highest priority this thread is not preempted by the halt it
+     * wakes, which can run (and the image be unloaded) only once this
+     * thread has left in PsTerminateSystemThread. On NT halt waits for
+     * the thread object too. */
+    (void)KeSetPriorityThread(KeGetCurrentThread(), HIGH_PRIORITY);
     KeSetEvent(&d->Exited, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -1163,14 +1173,11 @@ void NetUsbStop(void *device)
         if (d->ThreadObject) {
             KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode, FALSE, NULL);
             ObDereferenceObject(d->ThreadObject);
-        } else {
-            /* Windows 98 and ME: no thread object to wait on. The worker
-             * has only PsTerminateSystemThread left after the event; give
-             * it time to get there before this image can be unloaded. A
-             * delay narrows the window and does not close it (the other
-             * packages' copies have no delay at all). */
-            Sleep(100);
         }
+        /* Windows 98 and ME: the event only. The worker raised itself to
+         * the highest priority before it set the event (Worker), so on
+         * their one processor this thread runs again only after the
+         * worker has terminated. */
     }
     Quiesce(d);
     if (!d->Gone && !d->Suspended) (void)d->Chip->Stop(ChipState(d), Io(d));

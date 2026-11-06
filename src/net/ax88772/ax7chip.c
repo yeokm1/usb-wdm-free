@@ -247,11 +247,11 @@ static void SrDefaultMode(A7_STATE *s, NET_IO *io)
     MiiWrite(s, io, MII_ADVERTISE, ADVERTISE_CSMA | ADVERTISE_10HALF | ADVERTISE_10FULL |
                                    ADVERTISE_100HALF | ADVERTISE_100FULL);
     MiiWrite(s, io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
-    Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, SR_MEDIUM_DEFAULT, 0);
+    Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, S98_MEDIUM_MODE, 0);
     Cmd(io, AX_CMD_WRITE_IPG0, AX88772_IPG0_DEFAULT | AX88772_IPG1_DEFAULT, AX88772_IPG2_DEFAULT);
-    Cmd(io, AX_CMD_WRITE_RX_CTL, SR_DEFAULT_RX_CTL, 0);
-    s->RxCtl = SR_DEFAULT_RX_CTL;
-    s->Medium = SR_MEDIUM_DEFAULT;
+    Cmd(io, AX_CMD_WRITE_RX_CTL, S98_RX_MODE, 0);
+    s->RxCtl = S98_RX_MODE;
+    s->Medium = S98_MEDIUM_MODE;
     s->RxCtlRead = Read16(io, AX_CMD_READ_RX_CTL);
     s->MediumRead = Read16(io, AX_CMD_READ_MEDIUM_STATUS);
 }
@@ -262,7 +262,7 @@ static long SrStart(A7_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS 
     nc_u8 b[2] = { 0, 0 };
     int i;
 
-    Cmd(io, SR_LED_MUX, 0x4080, 0x4001);
+    Cmd(io, S98_LEDS_REQ, 0x4080, 0x4001);
     NcIoRead(io, AX_CMD_READ_NODE_ID, 0, 0, s->Mac, 6);
     NcIoRead(io, AX_CMD_READ_PHY_ID, 0, 0, b, 2);
     if (io->Status < 0) return io->Status;
@@ -290,27 +290,27 @@ static long SrStart(A7_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS 
     s->PhyId2 = MiiRead(s, io, 0x03);
     SrDefaultMode(s, io);
     if (probe->Speed == NC_SPEED_HIGH) {
-        Cmd(io, SR_BULKIN_SIZE, 0x8100, 0x8147);
-        s->RxTransfer = SR_RX_HIGH;
+        Cmd(io, S98_INBURST_REQ, 0x8100, 0x8147);
+        s->RxTransfer = S98_RX_TRANSFER_HS;
     } else {
-        Cmd(io, SR_BULKIN_SIZE, 0x8000, 0x8001);
+        Cmd(io, S98_INBURST_REQ, 0x8000, 0x8001);
         s->RxTransfer = A7_RX_TRANSFER;
     }
     /* sr9800_reset */
-    Cmd(io, AX_CMD_WRITE_GPIOS, SR_GPIO_RESET, 0);
+    Cmd(io, AX_CMD_WRITE_GPIOS, S98_GPIO_AT_RESET, 0);
     NcIoSleep(io, 5);
     NcIoRead(io, AX_CMD_READ_PHY_ID, 0, 0, b, 2);
     Cmd(io, AX_CMD_SW_PHY_SELECT, s->Embedded, 0);
-    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPPD | SR_SWRESET_PRL, 0);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPPD | S98_RESET_PHYLINE, 0);
     NcIoSleep(io, 150);
     Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_CLEAR, 0);
     NcIoSleep(io, 150);
-    Cmd(io, AX_CMD_SW_RESET, (nc_u16)(s->Embedded ? AX_SWRESET_IPRL : SR_SWRESET_PRTE), 0);
+    Cmd(io, AX_CMD_SW_RESET, (nc_u16)(s->Embedded ? AX_SWRESET_IPRL : S98_RESET_EXTPHY), 0);
     NcIoSleep(io, 150);
     Cmd(io, AX_CMD_WRITE_RX_CTL, 0, 0);
-    Cmd(io, AX_CMD_SW_RESET, SR_SWRESET_PRL, 0);
+    Cmd(io, AX_CMD_SW_RESET, S98_RESET_PHYLINE, 0);
     NcIoSleep(io, 150);
-    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPRL | SR_SWRESET_PRL, 0);
+    Cmd(io, AX_CMD_SW_RESET, AX_SWRESET_IPRL | S98_RESET_PHYLINE, 0);
     NcIoSleep(io, 150);
     SrDefaultMode(s, io);
     NcIoWrite(io, AX_CMD_WRITE_NODE_ID, 0, 0, s->Mac, 6);
@@ -329,7 +329,7 @@ long A7Start(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
     Zero(s, sizeof(*s));
     if (probe->Vendor == 0x0fe6 && probe->Product == 0x9800) {
         s->Kind = A7_KIND_SR9800;
-        s->RxBase = SR_DEFAULT_RX_CTL;
+        s->RxBase = S98_RX_MODE;
         return SrStart(s, io, probe, params);
     }
     s->Kind = A7_KIND_AX772B;
@@ -477,7 +477,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
      * SR9800 (sr9800_link_reset): its default with PS and FD cleared as
      * the link needs, RFC and TFC always (it advertises no pause). */
     if (s->Kind == A7_KIND_SR9800) {
-        medium = SR_MEDIUM_DEFAULT;
+        medium = S98_MEDIUM_MODE;
         if (!fast) medium &= (nc_u16)~AX_MEDIUM_PS;
         if (!full) medium &= (nc_u16)~AX_MEDIUM_FD;
         txPause = rxPause = 1;

@@ -1289,10 +1289,15 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      next completion pump again.
   6. On 98 SE and ME the worker thread cannot be joined (a wait on a
      thread object faults there; section 4.7.1), so halt waits for its
-     exit event and then 100 ms more before the image may be unloaded.
-     This narrows the gap between the event and the thread's end; it
-     does not close it: a known residual of every package on the
-     shared core, left until a 98 SE/ME-safe join exists.
+     exit event only, and the worker still runs a few instructions in
+     this image after setting it. Those systems run one processor, so
+     the worker raises itself to the highest priority (31) first: the
+     halt it wakes cannot be scheduled, and the image cannot be
+     unloaded, until the worker has terminated in
+     `PsTerminateSystemThread`. On NT halt also waits for the thread
+     object. A residual stays where the thread object could not be
+     referenced on NT (a multiprocessor system), as in xHCI98's own
+     threads.
 - **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
   mode is left as reset leaves it), EEPROM writes, LED settings,
   jumbo frames.

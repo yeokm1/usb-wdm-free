@@ -101,7 +101,7 @@ CHIPCODE_772B, HOST_EN = 0x20, 0x01
 EMBD_PHY = 0x10
 MODEL_MAC = bytes.fromhex('000ec6772b01')
 BURST = {0x8000: 2048, 0x8100: 4096, 0x8200: 6144, 0x8300: 8192, 0x8400: 16384}
-LED_MUX = 0x70
+LEDS_REQ = 0x70
 CHIPS = {'772b': (0x003b1861, 0x0001, 0x0b95, 0x772b, 'AX88772B'),
          '772c': (0x003b1881, 0x0002, 0x0b95, 0x772b, 'AX88772C'),
          'sr9800': (0x0283bc30, 0x0001, 0x0fe6, 0x9800, 'SR9800')}
@@ -212,7 +212,7 @@ class Chip:
         elif request == WRITE_GPIOS and not data:
             if value & 0x80:                            # RSE: reload the EEPROM's MAC
                 self.node_id[:] = MODEL_MAC
-        elif request in (SW_RESET, SW_PHY_SELECT, WRITE_IPG0, LED_MUX) and not data:
+        elif request in (SW_RESET, SW_PHY_SELECT, WRITE_IPG0, LEDS_REQ) and not data:
             pass
         elif request == QCTCTRL and not data:
             self.qct = (value, index)

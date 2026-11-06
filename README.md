@@ -67,6 +67,8 @@ that Windows.
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
 | `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
 | `ax88179` | Real PC (l); real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
+| `ax88772` | Simulator only | Simulator only | Simulator only, SR9800 (m) | Simulator only, SR9800 (m) | Not evaluated | Simulator only, SR9800 (m) | - |
+| `sr9700` | Simulator only (n) | Simulator only | Simulator only (m) | Simulator only (m) | Not evaluated | Simulator only (m) | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
 | `noaud` | Real device (VM) | - | - | - | - | - | - |
@@ -85,6 +87,8 @@ that Windows.
 - (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
 - (k) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
+- (m) 32-bit only, under xHCI98. The x64 builds were not run.
+- (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

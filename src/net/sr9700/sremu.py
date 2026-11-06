@@ -53,9 +53,9 @@ from ax7emu import CAPS, CAP_VERSION, HOST_IP, HOST_MAC, checksum, ipv4, ipv4_fr
 
 EP_IN, EP_OUT, EP_INT = 0x81, 0x02, 0x83
 READ, WRITE, WRITE1 = 0x00, 0x01, 0x03
-NCR, NSR, RCR, PAR, PRR = 0x00, 0x01, 0x05, 0x10, 0x1f
-NSR_LINK = 0x40
-RCR_ON, RCR_PROMISC, RCR_ALL = 0x01, 0x02, 0x08
+REG_NETCTL, REG_NETSTAT, REG_RXCTL, REG_ADDR, REG_PHYRST = 0x00, 0x01, 0x05, 0x10, 0x1f
+NETSTAT_LINK = 0x40
+RX_ON, RX_PROMISC, RX_ALLMULTI = 0x01, 0x02, 0x08
 MODEL_MAC = bytes.fromhex('000ec6970001')
 VENDOR, PRODUCT, RELEASE = 0x0fe6, 0x9700, 0x0001
 
@@ -63,7 +63,7 @@ VENDOR, PRODUCT, RELEASE = 0x0fe6, 0x9700, 0x0001
 class Chip:
     def __init__(self):
         self.regs = bytearray(256)
-        self.regs[PAR:PAR + 6] = MODEL_MAC
+        self.regs[REG_ADDR:REG_ADDR + 6] = MODEL_MAC
         self.link = False
         self.mbps, self.half = 10, True
         self.restarts = 0
@@ -75,27 +75,27 @@ class Chip:
         return 0x0100 if self.receiving() else 0
 
     def receiving(self):
-        return self.link and bool(self.regs[RCR] & RCR_ON)
+        return self.link and bool(self.regs[REG_RXCTL] & RX_ON)
 
     def powered(self):
         return not self.phy_reset
 
     def accepts(self, frame):
-        rx, dest = self.regs[RCR], frame[:6]
-        if rx & RCR_PROMISC:
+        rx, dest = self.regs[REG_RXCTL], frame[:6]
+        if rx & RX_PROMISC:
             return True
         if dest == b'\xff' * 6:
             return True
         if dest[0] & 1:
-            return bool(rx & RCR_ALL)
-        return dest == bytes(self.regs[PAR:PAR + 6])
+            return bool(rx & RX_ALLMULTI)
+        return dest == bytes(self.regs[REG_ADDR:REG_ADDR + 6])
 
     def read(self, request, value, index, length):
         if request != READ or value or index + length > 256:
             return None
         out = bytearray(self.regs[index:index + length])
-        if index <= NSR < index + length:
-            out[NSR - index] = NSR_LINK if self.link else 0
+        if index <= REG_NETSTAT < index + length:
+            out[REG_NETSTAT - index] = NETSTAT_LINK if self.link else 0
         return bytes(out)
 
     def write(self, request, value, index, data):
@@ -103,10 +103,10 @@ class Chip:
             self.regs[index:index + len(data)] = data
             return True
         if request == WRITE1 and not data and value < 256 and index < 256:
-            if index == NCR and value & 1:
-                self.regs[RCR] = 0                       # INFERRED: a reset turns receive off
+            if index == REG_NETCTL and value & 1:
+                self.regs[REG_RXCTL] = 0                       # INFERRED: a reset turns receive off
                 value &= ~1
-            if index == PRR:
+            if index == REG_PHYRST:
                 was = self.phy_reset
                 self.phy_reset = bool(value & 1)
                 if was and not self.phy_reset:
@@ -173,7 +173,7 @@ class Model(ax7emu.Model):
         self.log('link', up=up, why=why, mbps=10 if up else 0, half=True)
         if not up:
             self.stream.clear()
-        self.irq.append(bytes((NSR_LINK if up else 0, 0, 0, 0, 0, 0, 0, 0)))
+        self.irq.append(bytes((NETSTAT_LINK if up else 0, 0, 0, 0, 0, 0, 0, 0)))
         self.flush_irq()
 
     def flush_irq(self):

@@ -47,9 +47,11 @@ NTOSKRNL.EXE!IoIsWdmVersionAvailable
 NTOSKRNL.EXE!IofCallDriver
 NTOSKRNL.EXE!KeClearEvent
 NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeGetCurrentThread
 NTOSKRNL.EXE!KeInitializeEvent
 NTOSKRNL.EXE!KeInitializeSpinLock
 NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeSetPriorityThread
 NTOSKRNL.EXE!KeWaitForSingleObject
 NTOSKRNL.EXE!ObReferenceObjectByHandle
 NTOSKRNL.EXE!ObfDereferenceObject

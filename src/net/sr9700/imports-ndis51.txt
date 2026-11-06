@@ -40,11 +40,9 @@ NTOSKRNL.EXE!IofCallDriver
 NTOSKRNL.EXE!KeAcquireSpinLockRaiseToDpc
 NTOSKRNL.EXE!KeClearEvent
 NTOSKRNL.EXE!KeDelayExecutionThread
-NTOSKRNL.EXE!KeGetCurrentThread
 NTOSKRNL.EXE!KeInitializeEvent
 NTOSKRNL.EXE!KeReleaseSpinLock
 NTOSKRNL.EXE!KeSetEvent
-NTOSKRNL.EXE!KeSetPriorityThread
 NTOSKRNL.EXE!KeWaitForSingleObject
 NTOSKRNL.EXE!MmMapLockedPages
 NTOSKRNL.EXE!ObReferenceObjectByHandle

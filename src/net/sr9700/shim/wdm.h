@@ -125,10 +125,6 @@ void ExFreePool(PVOID p);
 NTSTATUS PsCreateSystemThread(PHANDLE handle, ULONG access, PVOID attributes, HANDLE process,
                               PVOID client, void (*start)(PVOID), PVOID context);
 NTSTATUS PsTerminateSystemThread(NTSTATUS status);
-typedef LONG KPRIORITY;
-#define HIGH_PRIORITY 31
-PVOID KeGetCurrentThread(void);
-KPRIORITY KeSetPriorityThread(PVOID thread, KPRIORITY priority);
 NTSTATUS ObReferenceObjectByHandle(HANDLE handle, ULONG access, PVOID type, KPROCESSOR_MODE mode,
                                    PVOID *object, PVOID info);
 void ObfDereferenceObject(PVOID object);

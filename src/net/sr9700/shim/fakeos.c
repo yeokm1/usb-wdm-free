@@ -223,18 +223,6 @@ NTSTATUS PsCreateSystemThread(PHANDLE handle, ULONG access, PVOID attributes, HA
     return STATUS_SUCCESS;
 }
 
-PVOID KeGetCurrentThread(void)
-{
-    return (PVOID)1;
-}
-
-KPRIORITY KeSetPriorityThread(PVOID thread, KPRIORITY priority)
-{
-    (void)thread; (void)priority;
-    NoLock("KeSetPriorityThread");
-    return 8;
-}
-
 NTSTATUS PsTerminateSystemThread(NTSTATUS status)
 {
     (void)status;

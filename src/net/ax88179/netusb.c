@@ -117,7 +117,8 @@ struct NET_DEV {
 
     /* Worker-only state. */
     KEVENT Wake;                  /* synchronization */
-    KEVENT Exited;                /* notification, set by the worker last */
+    KEVENT Exited;                /* notification, set by the worker last (NT) */
+    PKEVENT ExitEvent;            /* &Exited on NT; on 98 SE and ME its own block (ExitByKernel) */
     PVOID ThreadObject;           /* referenced on NT only */
     BOOLEAN Worker;               /* the worker thread exists */
     KEVENT CtrlDone;
@@ -860,6 +861,45 @@ static long Reset(NET_DEV *d)
     return STATUS_SUCCESS;
 }
 
+/* The worker's exit on 98 SE and ME (ethernet.md section 6.8, item 6).
+ * Halt has only the exit event to wait on there (a wait on a thread
+ * object faults), and once it has, the image may be unloaded. So no
+ * instruction of this image may run after the event is set: KeSetEvent
+ * is entered with a frame whose return address is PsTerminateSystemThread
+ * and whose next two words are that call's own (a return address it never
+ * uses, STATUS_SUCCESS). KeSetEvent is stdcall with three arguments, so it
+ * returns straight into PsTerminateSystemThread, both of them NTKERN's
+ * code, their addresses read from the import table before the signal.
+ * KeSetEvent may still be touching the event after a halt has woken, so
+ * the event is a block of its own that is never freed: one KEVENT per
+ * worker started on those systems. The host test and the x64 build (NT
+ * only) take the plain calls. */
+#if defined(_M_IX86) && !defined(SHIM_WDM_H)
+static void ExitByKernel(PKEVENT event)
+{
+    PVOID set = (PVOID)KeSetEvent;
+    PVOID term = (PVOID)PsTerminateSystemThread;
+    __asm {
+        mov eax, set
+        mov ecx, term
+        mov edx, event
+        push 0          ; PsTerminateSystemThread: STATUS_SUCCESS
+        push 0          ; its return address, never used
+        push 0          ; KeSetEvent: Wait FALSE
+        push 0          ; Increment
+        push edx        ; Event
+        push ecx        ; its return address: PsTerminateSystemThread
+        jmp eax
+    }
+}
+#else
+static void ExitByKernel(PKEVENT event)
+{
+    KeSetEvent(event, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+#endif
+
 static void Worker(PVOID context)
 {
     NET_DEV *d = context;
@@ -911,14 +951,9 @@ static void Worker(PVOID context)
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */
     }
-    /* The worker's last instructions in this image run after the event,
-     * and on 98 SE and ME halt has only the event to wait on (a wait on a
-     * thread object faults there). Those systems run one processor: at
-     * the highest priority this thread is not preempted by the halt it
-     * wakes, which can run (and the image be unloaded) only once this
-     * thread has left in PsTerminateSystemThread. On NT halt waits for
-     * the thread object too. */
-    (void)KeSetPriorityThread(KeGetCurrentThread(), HIGH_PRIORITY);
+    /* 98 SE and ME: no instruction of this image after the event. NT:
+     * halt waits for the thread object too. */
+    if (d->ExitEvent != &d->Exited) ExitByKernel(d->ExitEvent);
     KeSetEvent(&d->Exited, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -1139,9 +1174,22 @@ long NetUsbOpen(void *device, const nc_u8 mac[6], NET_START *start, int *connect
     }
     d->Speed = 1000000;
     ApplyLink(d);          /* reports through Link before NDIS is ready: ignored there */
+    d->ExitEvent = &d->Exited;
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        /* 98 SE and ME: never freed once the worker runs (ExitByKernel). */
+        d->ExitEvent = ExAllocatePoolWithTag(NonPagedPool, sizeof(KEVENT), TAG);
+        if (!d->ExitEvent) {
+            Fail(start, NET_FAIL_MEMORY, STATUS_INSUFFICIENT_RESOURCES);
+            (void)d->Chip->Stop(ChipState(d), Io(d));
+            Free(d);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        KeInitializeEvent(d->ExitEvent, NotificationEvent, FALSE);
+    }
     status = PsCreateSystemThread(&thread, 0, NULL, NULL, NULL, Worker, d);
     if (!NT_SUCCESS(status)) {
         Fail(start, NET_FAIL_THREAD, status);
+        if (d->ExitEvent != &d->Exited) ExFreePool(d->ExitEvent);
         (void)d->Chip->Stop(ChipState(d), Io(d));
         Free(d);
         return status;
@@ -1169,15 +1217,17 @@ void NetUsbStop(void *device)
     KeSetEvent(&d->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&d->Lock, old);
     if (d->Worker) {
-        Wait(&d->Exited, 0);
+        Wait(d->ExitEvent, 0);
         if (d->ThreadObject) {
             KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode, FALSE, NULL);
             ObDereferenceObject(d->ThreadObject);
         }
-        /* Windows 98 and ME: the event only. The worker raised itself to
-         * the highest priority before it set the event (Worker), so on
-         * their one processor this thread runs again only after the
-         * worker has terminated. */
+        /* Windows 98 and ME: the event only, set from no instruction of
+         * this image (ExitByKernel), and not freed. */
+#if defined(SHIM_WDM_H)
+        /* The host test's KeSetEvent has returned before its Wait does. */
+        if (d->ExitEvent != &d->Exited) ExFreePool(d->ExitEvent);
+#endif
     }
     Quiesce(d);
     if (!d->Gone && !d->Suspended) (void)d->Chip->Stop(ChipState(d), Io(d));

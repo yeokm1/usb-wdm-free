@@ -1289,14 +1289,22 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
      next completion pump again.
   6. On 98 SE and ME the worker thread cannot be joined (a wait on a
      thread object faults there; section 4.7.1), so halt waits for its
-     exit event only, and the worker still runs a few instructions in
-     this image after setting it. Those systems run one processor, so
-     the worker raises itself to the highest priority (31) first: the
-     halt it wakes cannot be scheduled, and the image cannot be
-     unloaded, until the worker has terminated in
-     `PsTerminateSystemThread`. On NT halt also waits for the thread
-     object. A residual stays where the thread object could not be
-     referenced on NT (a multiprocessor system), as in xHCI98's own
+     exit event only, after which the image may be unloaded. So no
+     instruction of the image runs after that event is set
+     (`ExitByKernel`, x86 only): the worker enters `KeSetEvent` with a
+     stack frame whose return address is `PsTerminateSystemThread`,
+     followed by that call's own return address and status, so the
+     stdcall `KeSetEvent` returns straight into
+     `PsTerminateSystemThread`. Both addresses are read from the import
+     table before the signal. Because `KeSetEvent` may still touch the
+     event after halt has woken, the event is a nonpaged block of its
+     own that is never freed: one `KEVENT` per worker started on those
+     systems. Assumed, not documented for NTKERN: that the two imports
+     resolve to its resident code, that `KeSetEvent` takes three
+     stack words, and that `PsTerminateSystemThread` neither returns nor
+     uses its caller's frame. On NT halt waits for the event and the
+     thread object, with the plain calls. A residual stays where the
+     thread object could not be referenced on NT, as in xHCI98's own
      threads.
 - **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
   mode is left as reset leaves it), EEPROM writes, LED settings,

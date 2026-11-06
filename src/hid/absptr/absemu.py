@@ -95,10 +95,11 @@ POINTER = h('05 01 09 01 a1 01 ' + MOUSE_BODY.format(xy=XY15) + ' c0')
 
 # X and Y of a finger or contact carry a physical size (Unit: SI linear
 # length, centimetres; Unit Exponent -2: Physical 0..4095 is 0..40.95 cm;
-# HID 1.11 6.2.2.7). Windows 7's touch input took no touch from these
-# touch screens without them (it does from the pen without them);
-# Windows 10 takes either
-# (docs/testing/2026-11-06-inbox-reference.md). X and Y share one range,
+# HID 1.11 6.2.2.7), as Microsoft's digitizer guidance asks of X and Y.
+# Windows 10 takes the touch without them (the inbox reference runs),
+# and Windows 7 x86 with or without them once the restart its touch
+# support asks for is done (docs/testing/2026-11-06-absptr.md,
+# 2026-11-07). X and Y share one range,
 # so the surface is 40.95 cm square at 100 counts a centimetre. The global
 # Unit, Unit Exponent and Physical extent are reset after the Input item,
 # so no later item (Tip Switch of the next contact, Contact Count, the

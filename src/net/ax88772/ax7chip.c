@@ -265,15 +265,15 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
 {
     A7_STATE *s = chip;
     nc_u16 bmsr, bmcr, adv, lpa, common, medium;
-    int up, fast, full, txPause, rxPause, was;
+    int up, fast, full, txPause, rxPause;
 
     link->Up = 0; link->Mbps = 0; link->FullDuplex = 0;
     link->RxLength = A7_RX_TRANSFER;
-    /* Up only once all of this succeeds: a Link that fails part way
-     * leaves LinkUp clear, so Poll sees the PHY's link differ and the
-     * core runs Link again. */
-    was = s->LinkUp;
-    s->LinkUp = 0;
+    /* Until this Link has finished, LinkPending stays set and Poll asks
+     * for it again: a Link that fails part way is run again, whatever the
+     * PHY then reports (the core treats a failed Link as link down).
+     * LinkUp keeps what was last applied. */
+    s->LinkPending = 1;
 
     /* The core runs Link with the data path closed (netusb.c ApplyLink,
      * after Quiesce or before the data path starts), so the receive
@@ -300,7 +300,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     if (!up) {
         /* ax88772_mac_link_down. Until all of it is done DownPending
          * stays set, and Poll has Link run again. */
-        if (was || s->DownPending) {
+        if (s->LinkUp || s->DownPending) {
             s->DownPending = 1;
             Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, 0, 0);
             if (io->Status < 0) return io->Status;
@@ -316,6 +316,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
             s->DownPending = 0;
         }
         s->LinkUp = 0;
+        s->LinkPending = 0;
         return NC_OK;
     }
     adv = MiiRead(s, io, MII_ADVERTISE);
@@ -349,6 +350,7 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
     s->Medium = medium;
     s->LinkUp = 1;
     s->DownPending = 0;
+    s->LinkPending = 0;
     s->Mbps100 = (nc_u8)fast; s->Full = (nc_u8)full;
     s->Pause = (nc_u8)(txPause | (rxPause << 1));
     link->Up = 1;
@@ -365,7 +367,7 @@ int A7Poll(void *chip, NET_IO *io)
     /* A receive stream out of step is restarted by Link (above); a
      * link-down step or a filter that failed is done again (the core
      * applies the filter after Link when the link is up). */
-    if (s->BadRun >= A7_REALIGN_AFTER || s->DownPending) return 1;
+    if (s->BadRun >= A7_REALIGN_AFTER || s->DownPending || s->LinkPending) return 1;
     if (s->FilterPending && s->LinkUp) return 1;
     return ((bmsr & BMSR_LSTATUS) != 0) != (s->LinkUp != 0);
 }

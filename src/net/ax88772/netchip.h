@@ -13,9 +13,10 @@
  * directory's owner agrees; until then a change to one copy is made to
  * all. The src/net/ax88772/ copies of this file and netusb.c add what
  * the others take when they are next changed: NET_CHIP_STATE may be set
- * by the package's build, the chip table may name RxReset, and netusb.c's
+ * by the package's build, the chip table may name RxReset, netusb.c's
  * resume ignores a D0 while already in D0 and reports a chip that did
- * not come back (ethernet.md section 6.8).
+ * not come back, and its pump stops after a failed IRP allocation
+ * instead of retrying it at once (ethernet.md section 6.8).
  *
  * Rules for a chip (section 3.3):
  * - Probe is a pure parser of descriptors; it changes nothing.

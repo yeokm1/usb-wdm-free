@@ -1165,7 +1165,8 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   Poll and run again. The same holds for the link-down work (the medium
   and the PHY reset) and for a filter write that failed: Poll reports a
   change until they are done, and the core applies the filter after
-  Link while the link is up.
+  Link while the link is up. A Link that has not finished stays pending
+  in the chip state, whatever the PHY reports, so it is always run again.
 - **Status** (interrupt IN): Linux's AX88772 path uses no status
   report. *Inferred*: the AX88772 family sends the 8-byte report of
   `asix_status` (`struct ax88172_int_data`, byte 2 bit 0 the link), so
@@ -1225,7 +1226,7 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
   (the counters, not the frame bytes), and only if the whole transfer
   is well formed walks it again and emits. A malformed transfer clears
   the live position, so a carried frame is dropped with it, and emits
-  nothing. Three changes, all kept out of the other packages' builds:
+  nothing. Five changes, all kept out of the other packages' builds:
   1. The carry state (the partial frame, up to 1518 bytes, its length
      and the half header) lives in the chip state, which this package
      enlarges: netchip.h's `NET_CHIP_STATE` becomes overridable
@@ -1272,6 +1273,14 @@ below by symbol. Facts no Linux file gives are marked *inferred*.
 - **Not done**: checksum offload (none in v1), wake-on-LAN (the monitor
   mode is left as reset leaves it), EEPROM writes, LED settings,
   jumbo frames.
+     Only the chip's bring-up failing counts as that: a failure to
+     write the address or the filter after it is logged, and a filter
+     the chip keeps pending is applied again later.
+  5. The pump stops after a failed IRP allocation instead of picking
+     the slot it just freed again at once (a loop at DISPATCH_LEVEL
+     while allocations keep failing); the worker's next tick and the
+     next completion pump again. The other packages' copies have the
+     same loop.
 
 **INF.** `AX772F98.INF`, one `$CHICAGO$` INF for 98 SE and ME (section
 7.1), listing the four ids above. No NT INF: on 2000 and later ASIX's

@@ -346,6 +346,19 @@ static void TestStart(void)
     CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
     m.Phy[3] = 0x1881; s->PhyId2 = 0x1881;
 
+    /* A cable-down Link failing in its first PHY read: still pending, and
+     * the next one does the link-down work. */
+    m.Link = 0;
+    m.RefuseAfter = m.Requests + 2;
+    CHECK(A7Link(State.Bytes, &io, &link) < 0 && s->LinkPending && s->LinkUp);
+    m.RefuseAfter = 0; io.Status = NC_OK;
+    CHECK(A7Poll(State.Bytes, &io) == 1);
+    m.Medium = 0x0336;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && !link.Up && m.Medium == 0);
+    CHECK(!s->LinkPending && !s->LinkUp && A7Poll(State.Bytes, &io) == 0);
+    m.Link = 1;
+    CHECK(A7Link(State.Bytes, &io, &link) == NC_OK && link.Up);
+
     /* A filter that failed: Poll asks for Link (and so the filter again)
      * while the link is up. */
     m.RefuseAfter = m.Requests;

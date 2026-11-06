@@ -7,8 +7,9 @@
  * was read. Derived from cdcnet's cdcusb.c (same author and licence),
  * with the CDC protocols replaced by the netchip.h chip table. A copy of
  * src/net/ax88179/'s and src/net/rtl815x/'s, plus the chip's RxReset
- * (netchip.h), and a resume that ignores a D0 while already in D0 and
- * reports a chip that did not come back (Power).
+ * (netchip.h), a resume that ignores a D0 while already in D0 and
+ * reports a chip that did not come back (Power), and a pump that stops
+ * after a failed IRP allocation (Pump).
  *
  * - NetUsbStart reads the device and every configuration descriptor, lets
  *   the chip's Probe choose, selects that configuration and runs the
@@ -397,7 +398,9 @@ static void CheckDrained(NET_DEV *d)
     if (!d->Open && !d->Outstanding && !d->PumpActive) KeSetEvent(&d->Drained, IO_NO_INCREMENT, FALSE);
 }
 
-static void Submit(NET_DEV *d, SLOT *s, ULONG length)
+/* Returns FALSE when no IRP could be allocated (the slot is free again);
+ * the caller's pump then stops until the worker's next tick. */
+static BOOLEAN Submit(NET_DEV *d, SLOT *s, ULONG length)
 {
     PIRP irp = IoAllocateIrp(d->Lower->StackSize, FALSE);
     PIO_STACK_LOCATION stack;
@@ -418,7 +421,7 @@ static void Submit(NET_DEV *d, SLOT *s, ULONG length)
         CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
         if (count) d->Cb.TxDone(d->Cb.Context, packets, count, 0);
-        return;
+        return FALSE;
     }
     RtlZeroMemory(&s->Urb, sizeof(s->Urb));
     s->Urb.Hdr.Length = sizeof(s->Urb);
@@ -433,14 +436,15 @@ static void Submit(NET_DEV *d, SLOT *s, ULONG length)
     stack->Parameters.Others.Argument1 = &s->Urb;
     IoSetCompletionRoutine(irp, Done, s, TRUE, TRUE, TRUE);
     (void)IoCallDriver(d->Lower, irp);
+    return TRUE;
 }
 
 static nc_u32 AlignUp(nc_u32 v, nc_u32 a) { return (v + a - 1) & ~(a - 1); }
 
 /* Build the next bulk-OUT transfer in slot s. Called by the pump with
  * s->Stage == TX_BUILD and the lock not held. Returns TRUE if a transfer
- * was queued. */
-static BOOLEAN BuildTx(NET_DEV *d, SLOT *s)
+ * was queued; *starved is set when no IRP could be allocated for it. */
+static BOOLEAN BuildTx(NET_DEV *d, SLOT *s, BOOLEAN *starved)
 {
     void *packets[NET_TX_BATCH];
     nc_u32 count, i, total = 0;
@@ -484,14 +488,14 @@ static BOOLEAN BuildTx(NET_DEV *d, SLOT *s)
     s->Busy = TRUE;
     d->Outstanding++;
     KeReleaseSpinLock(&d->Lock, old);
-    Submit(d, s, total);
+    if (!Submit(d, s, total)) { *starved = TRUE; return FALSE; }
     return TRUE;
 }
 
 static void Pump(NET_DEV *d)
 {
     KIRQL old;
-    BOOLEAN txTried = FALSE;
+    BOOLEAN txTried = FALSE, starved = FALSE;
     KeAcquireSpinLock(&d->Lock, &old);
     if (d->PumpActive) {
         d->PumpAgain = TRUE;
@@ -503,7 +507,10 @@ static void Pump(NET_DEV *d)
         SLOT *s = NULL, *build = NULL;
         ULONG i, length = 0;
         if (d->PumpAgain) { d->PumpAgain = FALSE; txTried = FALSE; }
-        if (d->Open) {
+        /* After a failed IRP allocation nothing more this pass: the slot
+         * it freed would be picked again at once (the worker's tick and
+         * the next completion pump again). */
+        if (d->Open && !starved) {
             if (d->Int && !d->IntSlot.Busy) { s = &d->IntSlot; length = s->Size; }
             for (i = 0; !s && d->LinkUp && i < d->RxCount; i++)
                 if (!d->Rx[i].Busy) { s = &d->Rx[i]; length = d->RxLength; }
@@ -522,8 +529,8 @@ static void Pump(NET_DEV *d)
         }
         if (s) { s->Busy = TRUE; d->Outstanding++; }
         KeReleaseSpinLock(&d->Lock, old);
-        if (s) Submit(d, s, length);
-        else if (!BuildTx(d, build)) txTried = TRUE;
+        if (s) { if (!Submit(d, s, length)) starved = TRUE; }
+        else if (!BuildTx(d, build, &starved)) txTried = TRUE;
         KeAcquireSpinLock(&d->Lock, &old);
     }
     d->PumpActive = FALSE;
@@ -774,17 +781,6 @@ static void LinkChanged(NET_DEV *d)
     Reopen(d);
 }
 
-/* The chip's bring-up again (resume), then the address, filter and link. */
-static long Restart(NET_DEV *d)
-{
-    NET_PARAMS p;
-    long r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
-    if (r >= 0 && !SameMac(p.Mac, d->Mac))
-        r = d->Chip->SetMac(ChipState(d), Io(d), d->Mac);
-    if (r >= 0) r = ApplyFilter(d);
-    return r;
-}
-
 static long Power(NET_DEV *d, BOOLEAN on)
 {
     KIRQL old;
@@ -812,17 +808,28 @@ static long Power(NET_DEV *d, BOOLEAN on)
     /* The device may have lost power: the whole bring-up again (the
      * Realtek and ASIX resume paths both do), then the cached address,
      * filter and the link. */
-    r = Restart(d);
-    NetTrace("resume: %d", r);
-    if (r < 0) {
-        /* The chip did not come back (its Resume has its own retries):
-         * the data path stays closed and NDIS is told it is gone, as
-         * Recover does when it gives up. */
-        KeAcquireSpinLock(&d->Lock, &old);
-        d->Gone = TRUE;
-        KeReleaseSpinLock(&d->Lock, old);
-        ReportGone(d);
-        return STATUS_SUCCESS;
+    {
+        NET_PARAMS p;
+        r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
+        NetTrace("resume: %d", r);
+        if (r < 0) {
+            /* The chip did not come back (its Resume has its own
+             * retries): the data path stays closed and NDIS is told it
+             * is gone, as Recover does when it gives up. */
+            KeAcquireSpinLock(&d->Lock, &old);
+            d->Gone = TRUE;
+            KeReleaseSpinLock(&d->Lock, old);
+            ReportGone(d);
+            return STATUS_SUCCESS;
+        }
+        /* The address and the filter after a chip that came back: a
+         * failure here is logged, and a chip that keeps a failed filter
+         * pending asks for it again (ethernet.md section 6.8). */
+        if (!SameMac(p.Mac, d->Mac)) {
+            r = d->Chip->SetMac(ChipState(d), Io(d), d->Mac);
+            if (r < 0) NetTrace("resume: address %d", r);
+        }
+        (void)ApplyFilter(d);
     }
     ApplyLink(d);
     d->Recoveries = 0;

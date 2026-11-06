@@ -883,6 +883,23 @@ class NewerModelTests(unittest.TestCase):
                 self.assertEqual(sizes, [3, 3])
                 self.assertFalse(self.m.rx)
 
+    def test_patch_request_by_its_low_byte(self):
+        """Realtek's XP driver 5.23 asks for the PHY patch with the low byte
+        alone (40 05 B820, wIndex 0101, docs/testing/2026-11-06-reference-drivers.md);
+        PATCH_GRANTED follows as for a word write, and clears again."""
+        self.make('8153', 'high')
+        chip = self.m.chip
+        chip.pla[r.MR_PHY_PAGE:r.MR_PHY_PAGE + 2] = b'\x00\xb0'
+        self.assertTrue(chip.write(0xb820, 0x0101, bytes((0x10, 0, 0, 0))))
+        self.assertTrue(chip.phy_read(r.PR_PATCH_STATE) & r.PATCH_GRANTED)
+        self.assertTrue(chip.write(0xb820, 0x0101, bytes(4)))
+        self.assertFalse(chip.phy_read(r.PR_PATCH_STATE) & r.PATCH_GRANTED)
+        # A word written in one request is one PHY write: BMCR's restart counts once.
+        before = chip.autoneg
+        chip.pla[r.MR_PHY_PAGE:r.MR_PHY_PAGE + 2] = b'\x00\xa0'
+        self.assertTrue(chip.write(0xb400, 0x0103, struct.pack('<I', 0x1200)))
+        self.assertEqual(chip.autoneg, before + 1)
+
 
 def pending(chip):
     def wrap(f):

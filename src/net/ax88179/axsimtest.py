@@ -486,6 +486,62 @@ class Tests(CoreCase):
         self.assertEqual((length + 7) & ~7, offset)
         self.assertNotEqual(zlib.crc32(data[2:length]), struct.unpack_from('<I', data, length - 2)[0])
 
+    # What ASIX's XP driver 1.4.2.0 needed (docs/testing/2026-11-06-reference-drivers.md).
+    def bulk_in(self):
+        self.m.handle(101, 9, struct.pack('<BBHIH', a.EP_IN, 0, 16384 & 0xffff, 0, 0))
+        return self.wire.take(101)[-1][2][10:]
+
+    def test_reference_bring_up_reads(self):
+        self.setup()
+        chip = self.m.chip
+        self.assertNotEqual(chip.read(a.ACCESS_PHY, a.PHY_ID, a.PHY_ID1, 2, 'high'), b'\0\0')
+        self.assertEqual(chip.read(a.ACCESS_EFUSE, 0, 0x20, 64, 'high'), b'\xff' * 64)
+        self.assertEqual(chip.read(a.ACCESS_EEPROM, 0x3c, 1, 2, 'high'), b'\xff\xff')
+        self.assertEqual(chip.read(a.ACCESS_EEPROM, 0x43, 1, 2, 'high'), b'\0\0')
+        self.assertTrue(chip.write(0x91, 0xff, 0, b''))
+        self.assertTrue(chip.write(0x06, 0, 0, b''))
+
+    def test_reference_transmit_form(self):
+        """Bit 31 in the first header dword, each frame padded to 4 bytes,
+        several records in one bulk-OUT transfer."""
+        self.up()
+        frames = [echo_request(a.MODEL_MAC, n)[0] for n in (18, 601, 1001)]
+        data = b''.join(struct.pack('<II', len(f) | 0x80000000, 0) + f + bytes(-len(f) % 4) for f in frames)
+        self.m.transmit(data)
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 3)
+        self.assertEqual(len(self.events('icmp_echo')), 3)
+        with self.assertRaises(ValueError):
+            self.m.transmit(struct.pack('<II', 100 | 0x80000000, 0) + bytes(60))
+        with self.assertRaises(ValueError):          # Linux's form stays exact
+            self.m.transmit(struct.pack('<II', 60, 0) + bytes(64))
+
+    def test_receive_lead_bytes_follow_ipe(self):
+        self.up()
+        frame = a.MODEL_MAC + a.HOST_MAC + b'\x08\x00' + bytes(46)
+        rx_ctl = self.m.chip.word(a.R_RX_CTL)
+        for ipe in (True, False):
+            with self.subTest(ipe=ipe):
+                v = rx_ctl | a.RX_IPE if ipe else rx_ctl & ~a.RX_IPE
+                self.m.chip.mac_regs[a.R_RX_CTL:a.R_RX_CTL + 2] = struct.pack('<H', v)
+                self.m.deliver(frame)
+                data = self.bulk_in()
+                self.assertEqual(data[:8], (b'\0\0' + a.MODEL_MAC) if ipe else frame[:8])
+
+    def test_header_array_padded_to_8(self):
+        """An even number of records gets 4 bytes between the header array and
+        the trailer, so every transfer is a multiple of 8 bytes; the trailer
+        still gives the offset Linux reads."""
+        self.up()
+        for n in (1, 2, 3, 4):
+            with self.subTest(records=n):
+                for _ in range(n):
+                    self.m.deliver(a.MODEL_MAC + a.HOST_MAC + b'\x08\x00' + bytes(46))
+                data = self.bulk_in()
+                count, offset = struct.unpack_from('<HH', data, len(data) - 4)
+                self.assertEqual(count, n)
+                self.assertEqual(len(data) % 8, 0)
+                self.assertEqual(len(data), offset + 4 * n + 4 + (4 if n % 2 == 0 else 0))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -2287,3 +2287,15 @@ taking playback and recording; the update of an installed X1 left the
 defaults alone; MIDI stayed Windows' GS synth throughout. The `Sound
 Mapper` registry values were not seen to change when read soon after; the
 Audio tab is the reading.
+
+Read on 98 SE under xHCI98 3.4.1.0 and under NUSB's EHCI, 2026-11-06
+(simulators, same record): a new device installed with the changed INF
+became the preferred playback and recording device, one with the released
+INF did not; updating a device that was not the preferred one left the
+choice alone until the restart it asked for (after it, under xHCI98, the
+recording choice had moved, cause not settled; under NUSB a new device
+installed at that start took both). 98 SE installs further devices from its one `INF\OTHER` copy
+of the INF, so the changed INF reaches a system that has `uac2` already
+by Have Disk or Update Driver once; Windows sets the value to 0 after
+acting on it; updating the preferred device itself moved the preference to
+another device (no released-INF control for that). ME and 2000 not read.

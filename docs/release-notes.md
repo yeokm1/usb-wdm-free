@@ -21,7 +21,8 @@ Per package, newest first. A release is a commit and a tag
   - Every x64 image is signed again, the unchanged ones too, with a
     SHA-1 file digest and no timestamp. Their image digests do not
     change. The x86 images are unsigned, as always.
-  - XP x64 does not check driver signatures.
+  - XP x64 does not enforce kernel-mode signing; its Setup still warns
+    about an unsigned package ("Continue Anyway").
 
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 

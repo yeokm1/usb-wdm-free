@@ -656,15 +656,21 @@ foreach ($l in [IO.File]::ReadAllLines((Join-Path $stage 'SHA256.TXT'))) {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage $pth.Replace('/', '\'))).Hash.ToLowerInvariant() -ne $h) { Fail "SHA256.TXT: $pth does not verify" }
 }
 
-# Certificate (public half).
-if ($Certificate -ne '') {
-    $cb = [IO.File]::ReadAllBytes($Certificate)
-    $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $cb)
-    if ($c.HasPrivateKey) { Fail "certificate: carries a private key" }
-    if ($c.Thumbprint -ne $Thumbprint) { Fail "certificate: thumbprint $($c.Thumbprint), not $Thumbprint" }
-    if ($Sha1SigOids -notcontains $c.SignatureAlgorithm.Value) { Fail "certificate: itself signed with $($c.SignatureAlgorithm.FriendlyName), not SHA-1 with RSA" }
-    if ($cb[0] -ne 0x30) { Fail "certificate: not DER" }
-    Copy-Item -LiteralPath $Certificate -Destination (Join-Path $stage 'usb-wdm-free-test.cer')
+# Certificate (public half). Without -Certificate a release of the x64 folders keeps
+# the root's usb-wdm-free-test.cer, which must then be the signer's.
+$certIn = if ($Certificate -ne '') { $Certificate } elseif ($Part -eq 'all') { Join-Path $Root 'usb-wdm-free-test.cer' } else { '' }
+if ($certIn -ne '') {
+    $cl = if ($Certificate -ne '') { 'certificate' } else { 'certificate (the root usb-wdm-free-test.cer, no -Certificate)' }
+    if (-not (Test-Path -LiteralPath $certIn -PathType Leaf)) { Fail "$cl`: '$certIn' missing" }
+    else {
+        $cb = [IO.File]::ReadAllBytes($certIn)
+        $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $cb)
+        if ($c.HasPrivateKey) { Fail "$cl`: carries a private key" }
+        if ($c.Thumbprint -ne $Thumbprint) { Fail "$cl`: thumbprint $($c.Thumbprint), not $Thumbprint" }
+        if ($Sha1SigOids -notcontains $c.SignatureAlgorithm.Value) { Fail "$cl`: itself signed with $($c.SignatureAlgorithm.FriendlyName), not SHA-1 with RSA" }
+        if ($cb[0] -ne 0x30) { Fail "$cl`: not DER" }
+        if ($Certificate -ne '') { Copy-Item -LiteralPath $Certificate -Destination (Join-Path $stage 'usb-wdm-free-test.cer') }
+    }
 }
 
 # ---------------------------------------------------------------- report and publish

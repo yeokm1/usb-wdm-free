@@ -581,23 +581,24 @@ class ChipModel(acmemu.Model):
         if request == 0x0E:
             return 0, f.chars, None
         if request == 0x06:
-            # IMM_CHAR: a byte (a larger wValue is refused) that goes out ahead
-            # of what waits, so the plug brings it back first.
+            # IMM_CHAR: a byte (a larger wValue is refused) that goes out at
+            # once, so the plug brings it back. The model keeps one queue for
+            # what was sent and what came back, so it queues behind both: a
+            # part sends it ahead of waiting output (not modelled).
             if value > 0xFF:
                 return 4, b'', None
             self.log('imm_char', char=value, function=f.index)
             if f.enabled:
-                f.echo.appendleft(bytes([value]))
+                f.echo.append(bytes([value]))
                 f.queued += 1
                 self.drain_fn(f)
             return 0, b'', None
         if request == 0x10:
-            # GET_COMM_STATUS (cp210x_comm_status): no errors; the looped-back
-            # bytes wait for the host, or, while CTS holds them, to go out. The
-            # hold-reason bits are not modelled (0).
-            held = f.flow and not f.rts
-            return 0, struct.pack('<IIIIBBB', 0, 0, 0 if held else f.queued,
-                                  f.queued if held else 0, 0, 0, 0), None
+            # GET_COMM_STATUS (cp210x_comm_status): no errors or hold reasons,
+            # and every byte the model holds counted as waiting for the host.
+            # The model keeps one queue for what was sent and what came back,
+            # so bytes CTS holds back are not told apart (not modelled).
+            return 0, struct.pack('<IIIIBBB', 0, 0, f.queued, 0, 0, 0, 0), None
         if request == 0x1E and length == 4:
             f.rate = struct.unpack('<I', payload)[0]
             self.log('rate', rate=f.rate, function=f.index)

@@ -425,6 +425,27 @@ class Tests(CoreCase):
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0][12:14], b'\x08\x06')
 
+    def test_supereal_sr9800_requests(self):
+        """Supereal's SR9800 1.1.7.0 (docs/testing/2026-11-07-model-fixes-ref4.md):
+        SET_FEATURE(DEVICE_REMOTE_WAKEUP) first, then WRITE_MONITOR_MODE 0x1D."""
+        self.setup(chip='sr9800')
+        self.wire.messages.clear()
+        self.m.handle(100, 3, struct.pack('<BBBBHHH', 0x00, 0x03, 0x00, 0, 1, 0, 0))
+        self.assertEqual(self.wire.take(100)[-1][2][3], 0)
+        self.assertTrue(self.m.remote_wakeup)
+        self.m.handle(100, 4, struct.pack('<BBBBHHH', 0x00, 0x01, 0x00, 0, 1, 0, 0))
+        self.assertEqual(self.wire.take(100)[-1][2][3], 0)
+        self.assertFalse(self.m.remote_wakeup)
+        self.m.handle(100, 5, struct.pack('<BBBBHHH', 0x00, 0x03, 0x00, 0, 2, 0, 0))   # TEST_MODE: refused
+        self.assertEqual(self.wire.take(100)[-1][2][3], 4)
+        self.m.handle(100, 6, struct.pack('<BBBBHHH', 0x00, 0x1d, 0x40, 0, 0x0000, 0, 0))
+        self.assertEqual(self.wire.take(100)[-1][2][3], 0)
+        self.m.handle(100, 7, struct.pack('<BBBBHHH', 0x00, 0x1d, 0x40, 0, 0x0006, 0, 0))
+        self.m.handle(100, 8, struct.pack('<BBBBHHH', 0x80, 0x1c, 0xc0, 0, 0, 0, 1))
+        reply = self.wire.take(100)[-1][2]
+        self.assertEqual((reply[3], reply[10:]), (0, b'\x06'))
+        self.assertEqual(self.m.config_desc[7], 0xa0)                    # remote wakeup advertised
+
     def test_vendor_requests_unconfigured(self):
         """ASIX's XP driver 5.4.3.0 sets configuration 0 and then talks on
         endpoint 0 (docs/testing/2026-11-06-reference-drivers.md): vendor

@@ -224,19 +224,6 @@ static void Async(void)
     CHECK(Uac1Parse(work, sizeof(async1), 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
 }
 
-/* Playback and capture alternates on one AS interface (hostile): the
- * first direction carried keeps the interface; the other is not carried. */
-static void SharedInterface(void)
-{
-    static UAC1_DESC h;
-    CHECK(Uac1Parse(logi, logiLen, 0, 0, &h) == UAC1_OK && h.AltCount == 2);
-    CHECK(h.Alt[0].Capture && !h.Alt[1].Capture);
-    h.Alt[1].Interface = h.Alt[0].Interface;
-    h.Alt[1].Alternate = (unsigned char)(h.Alt[0].Alternate + 1);
-    CHECK(Uac1Model(&h, 0, &m) == UAC1_OK && m.AltCount == 1 && m.Skipped == 1);
-    CHECK((m.Alt[0].DataEndpoint & 0x80) && m.Alt[0].Interface == h.Alt[0].Interface);
-}
-
 static void Midi(void)
 {
     CHECK(Uac1View(midi, sizeof(midi), 0) == UAC1_VIEW_CONTROL);
@@ -462,7 +449,7 @@ int main(int argc, char **argv)
     brioLen = Load(argv[1], brio, sizeof(brio));
     logiLen = Load(argv[2], logi, sizeof(logi));
     play2Len = Load(argv[3], play2, sizeof(play2));
-    Brio(); Logi(); Play2(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); SharedInterface(); Hostile();
+    Brio(); Logi(); Play2(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); Hostile();
     printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback)\n", checks);
     return 0;
 }

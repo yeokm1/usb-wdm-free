@@ -3099,12 +3099,6 @@ built; Windows' `usbaudio` stays the default unless the user installs
 `uac1` (xHCI98's installer row unticked); the three behaviours are known
 issues. Record: [uac1-98se](../testing/2026-11-07-uac1-98se.md).
 
-**One direction per AS interface.** An alternate whose endpoint runs the
-other way from one already carried on the same AudioStreaming interface
-is not carried (a hostile layout; no device read has one), so starting
-one direction never selects another alternate of the interface under
-the other direction's running stream.
-
 **Adaptive sources.** An adaptive IN endpoint whose `bSynchAddress`
 names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is
 read as a plain IN endpoint: the synch endpoint is selected with its

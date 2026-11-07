@@ -93,17 +93,6 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
             d->Skipped++;
             continue;
         }
-        /* One direction per AS interface: an alternate whose endpoint runs
-         * the other way from one already carried on the same interface is
-         * not carried, so starting one direction never reselects the
-         * interface under the other's running stream. */
-        for (k = 0; k < d->AltCount; k++)
-            if (d->Alt[k].Interface == a->Interface &&
-                ((d->Alt[k].DataEndpoint & 0x80) != 0) != (a->Capture != 0)) break;
-        if (k < d->AltCount) {
-            d->Skipped++;
-            continue;
-        }
         o = &d->Alt[d->AltCount++];
         o->Interface = a->Interface; o->Alternate = a->Alternate; o->Terminal = a->Terminal;
         o->Channels = a->Channels; o->Subslot = a->Subframe; o->Bits = a->Bits;

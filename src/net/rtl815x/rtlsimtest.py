@@ -581,6 +581,11 @@ class OffloadModelTests(unittest.TestCase):
         (out,) = m.transmit(self.record(frame, 0, r.TX_IPV4_CS))       # the IP checksum alone
         self.assertEqual(r.ones(out[14:34]), 0)
         self.assertEqual(out[50:52], frame[50:52])
+        ack = tcp_frame(b'')
+        (out,) = m.transmit(self.record(ack, 0, r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17))   # unpadded: 54
+        self.assertTrue(checksums_ok(out))
+        with self.assertRaises(ValueError):                    # padded to 60: the real chip got it wrong
+            m.transmit(self.record(ack + bytes(6), 0, r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17))
         with self.assertRaises(ValueError):                    # TCP asked of a frame whose header is elsewhere
             m.transmit(self.record(frame, 0, r.TX_IPV4_CS | r.TX_TCP_CS | 38 << 17))
 

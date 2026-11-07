@@ -447,11 +447,12 @@ static nc_u32 AlignUp(nc_u32 v, nc_u32 a) { return (v + a - 1) & ~(a - 1); }
 
 /* Build the next bulk-OUT transfer in slot s. Called by the pump with
  * s->Stage == TX_BUILD and the lock not held. Returns TRUE if a transfer
- * was queued; *starved is set when no IRP could be allocated for it. */
+ * was queued, or if every send taken failed alone (build again); *starved
+ * is set when no IRP could be allocated for it. */
 static BOOLEAN BuildTx(NET_DEV *d, SLOT *s, BOOLEAN *starved)
 {
     void *packets[NET_TX_BATCH];
-    nc_u32 count, i, total = 0;
+    nc_u32 count, i, total = 0, kept = 0;
     nc_u32 header = d->Params.TxHeader, align = d->Params.TxAlign;
     PUCHAR b = s->Buffer;
     BOOLEAN ok = TRUE;
@@ -465,25 +466,46 @@ static BOOLEAN BuildTx(NET_DEV *d, SLOT *s, BOOLEAN *starved)
         KeReleaseSpinLock(&d->Lock, old);
         return FALSE;
     }
-    /* TxTake took only what fits, padding included; checked again here. */
+    /* TxTake took only what fits, padding included; checked again here. A
+     * send that cannot be copied or asks for an offload the chip lacks
+     * fails alone; the others go on (kept). */
     for (i = 0; i < count && ok; i++) {
         nc_u32 at = AlignUp(total, align), n;
         NET_TX_INFO info;
-        if (at + header + NC_ETH_PAD > s->Size) { ok = FALSE; break; }
+        if (at + header + NC_ETH_PAD > s->Size) {
+            /* Never (TxTake's own rule): this and the rest fail below. */
+            while (i < count) packets[kept++] = packets[i++];
+            ok = FALSE;
+            break;
+        }
         info.Flags = 0; info.Mss = 0; info.Transport = 0;
         n = d->Cb.TxCopy(d->Cb.Context, packets[i], b + at + header, s->Size - at - header, &info);
-        if (n < NC_ETH_MIN) { ok = FALSE; break; }
-        if (n < NC_ETH_PAD) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
+        if (n < NC_ETH_MIN || (info.Flags && !d->Chip->TxOffload)) {
+            d->Malformed++;
+            NetTrace("tx: a send failed alone (length %u, offload %x)", n, info.Flags);
+            d->Cb.TxDone(d->Cb.Context, &packets[i], 1, 0);
+            continue;
+        }
+        /* A frame with an offload is left as it is: the chip pads it (Linux
+         * r8152.c sends such frames unpadded; a padded one came out with a
+         * bad TCP checksum from a real RTL8157). */
+        if (n < NC_ETH_PAD && !info.Flags) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
         if (at > total) RtlZeroMemory(b + total, at - total);
         d->Chip->TxHeader(ChipState(d), b + at, n, d->OutMax, count == 1);
-        if (info.Flags) {
-            if (!d->Chip->TxOffload) { ok = FALSE; break; }
-            d->Chip->TxOffload(ChipState(d), b + at, &info);
-        }
+        if (info.Flags) d->Chip->TxOffload(ChipState(d), b + at, &info);
         total = at + header + n;
+        packets[kept++] = packets[i];
     }
-    if (ok) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
+    count = kept;
+    if (ok && count) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
     KeAcquireSpinLock(&d->Lock, &old);
+    if (!count) {
+        /* Every send taken failed alone: the slot is free again, and the
+         * pump builds once more for what is still queued. */
+        s->Stage = TX_IDLE;
+        KeReleaseSpinLock(&d->Lock, old);
+        return TRUE;
+    }
     if (!ok || !d->Open || !d->LinkUp) {
         s->Stage = TX_IDLE;
         KeReleaseSpinLock(&d->Lock, old);

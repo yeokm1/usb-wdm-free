@@ -602,6 +602,10 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
     cannot do (not enabled, not IPv4, the wrong protocol) fails that send;
     nothing is sent wrong. A large send's value becomes its TCP payload
     bytes once it is in a transfer, and 0 if that transfer fails (9.7).
+  - A frame with an offload is not padded to 60 bytes: the chip pads it,
+    as Linux leaves it to. Padded, a TCP ACK with a checksum request left
+    a real RTL8157 with a bad checksum (the peer dropped the ACKs and
+    receives stalled at 0.44 Mb/s on XP).
   - Receive: the chip's verdicts (`RxChecksum`), masked by what TCP/IP
     enabled, set the `...Succeeded` bits of the packet's checksum
     information. A failure is never reported: TCP/IP checks such a frame

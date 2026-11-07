@@ -1039,6 +1039,18 @@ static void TaskOffload(void)
     CHECK(CompleteOut(STATUS_SUCCESS) == 204 && (dev.Sent[0][3] & 0x80));
     CHECK(chip.LastInfo.Flags == NC_TX_TCP4 && chip.LastInfo.Transport == 34);
     UNTIL(tp[1].Completions == 1 && tp[1].Status == NDIS_STATUS_SUCCESS, 2000);
+    /* a short frame with an offload is not padded (the chip pads it);
+     * a plain one is */
+    p = TcpPacket(22, 54, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 4 + 54);
+    UNTIL(tp[22].Completions == 1 && tp[22].Status == NDIS_STATUS_SUCCESS, 2000);
+    p = TcpPacket(23, 54, 0, 0, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 4 + 60);
+    UNTIL(tp[23].Completions == 1 && tp[23].Status == NDIS_STATUS_SUCCESS, 2000);
     /* the IPv4 header checksum alone */
     p = TcpPacket(2, 98, 0, CS_IP, 1);
     Fake.Chars.SendPacketsHandler(ctx, &p, 1);
@@ -1110,6 +1122,55 @@ static void TaskOffload(void)
     CHECK(NDIS_PER_PACKET_INFO_FROM_PACKET(&tp[9].P, TcpLargeSendPacketInfo) == NULL);
     UNTIL(chip.Links > links, 5000);                   /* recovered */
     UNTIL(Queued(P_IN) == 4 && Queued(P_INT) == 1, 5000);
+
+    /* One refused request in a batch fails alone: the frames before and
+     * after it share the transfer. */
+    {
+        PNDIS_PACKET three[3];
+        three[0] = TcpPacket(13, 100, 0, 0, 6);
+        three[1] = TcpPacket(14, 100, 0, CS_TCP, 17);   /* a TCP request on UDP */
+        three[2] = TcpPacket(15, 120, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, three, 3);
+        UNTIL(Queued(P_OUT) == 1, 2000);
+        CHECK(tp[14].Completions == 1 && tp[14].Status == NDIS_STATUS_FAILURE);
+        CHECK(CompleteOut(STATUS_SUCCESS) == 104 + 124);
+        UNTIL(tp[13].Completions == 1 && tp[13].Status == NDIS_STATUS_SUCCESS, 2000);
+        UNTIL(tp[15].Completions == 1 && tp[15].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+    {
+        /* every send of a batch (four, the frame cap) refused: the one
+         * queued after them still goes, with no further send to kick it */
+        PNDIS_PACKET five[5];
+        int k;
+        for (k = 0; k < 4; k++) five[k] = TcpPacket(30 + k, 100, 0, CS_UDP, 17);
+        five[4] = TcpPacket(34, 100, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, five, 5);
+        for (k = 0; k < 4; k++) CHECK(tp[30 + k].Completions == 1 && tp[30 + k].Status == NDIS_STATUS_FAILURE);
+        CHECK(Queued(P_OUT) == 1);                     /* within the same call */
+        CHECK(CompleteOut(STATUS_SUCCESS) == 104);
+        UNTIL(tp[34].Completions == 1 && tp[34].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+
+    /* Turned off while a large send waits behind a transfer: that send
+     * fails alone, the plain one after it goes. */
+    {
+        PNDIS_PACKET q[2];
+        p = TcpPacket(19, 200, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+        UNTIL(Queued(P_OUT) == 1, 2000);              /* the one slot is busy */
+        q[0] = TcpPacket(20, 3000, 1460, 0, 6);
+        q[1] = TcpPacket(21, 200, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, q, 2);
+        CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);   /* no large send */
+        CompleteOut(STATUS_SUCCESS);
+        UNTIL(tp[20].Completions == 1, 2000);
+        CHECK(tp[20].Status == NDIS_STATUS_FAILURE);
+        CHECK(NDIS_PER_PACKET_INFO_FROM_PACKET(&tp[20].P, TcpLargeSendPacketInfo) == NULL);
+        UNTIL(Queued(P_OUT) == 1, 2000);
+        CHECK(CompleteOut(STATUS_SUCCESS) == 204);
+        UNTIL(tp[21].Completions == 1 && tp[21].Status == NDIS_STATUS_SUCCESS, 2000);
+        UNTIL(tp[19].Completions == 1 && tp[19].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
 
     /* Disabled (a header and no task): nothing reported or asked. */
     {

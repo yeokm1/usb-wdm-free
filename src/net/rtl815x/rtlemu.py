@@ -820,6 +820,12 @@ def tx_checksum(frame, opts2):
     if not info:
         raise ValueError('checksum offload on a frame that is not IPv4')
     ihl, total, proto = info
+    if len(frame) > 14 + total and opts2 & (TX_TCP_CS | TX_UDP_CS):
+        # A real RTL8157 sent a TCP ACK padded to 60 bytes with a TCP
+        # checksum request out with the checksum wrong (the peer dropped
+        # the ACKs; 2026-11-07, seen as stalled receives, the wire not
+        # captured); Linux and Realtek's driver send such frames unpadded.
+        raise ValueError('checksum offload on a frame padded past its IP length')
     out = bytearray(frame)
     if opts2 & (TX_TCP_CS | TX_UDP_CS):
         transport = opts2 >> 17 & 0x7ff

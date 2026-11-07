@@ -22,6 +22,8 @@ These drivers are experimental. They may not work with every device and can make
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
 | `rtl815x` | Realtek RTL8152, 8153, 8156, 8157 and 8159 USB Ethernet | 98 SE, ME, 2000. Newer chips also XP to 7, x64 too (6) |
 | `ax88179` | ASIX AX88179 and AX88178A USB Gigabit Ethernet | 98 SE, ME, 2000 |
+| `ax88772` | ASIX AX88772B and AX88772C, CoreChips SR9800 USB Fast Ethernet | 98 SE, ME; the SR9800 also 2000 to 7, x64 from XP (7) |
+| `sr9700` | CoreChips SR9700 USB Ethernet | 98 SE to 7; x64 from XP |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
@@ -39,6 +41,9 @@ These drivers are experimental. They may not work with every device and can make
    current inkjets and host-based printers have no Windows 98 or ME driver.
 6. XP and Vista: the RTL8153D, 8156 and 8156B. XP, Vista and 7: the
    RTL8157 and 8159. Realtek's own drivers serve the other chips there.
+7. The AX88772B and AX88772C on 2000 and later: ASIX's own driver, in
+   usb-wdm-nonfree. The AX88772 and AX88772A: ASIX's driver on every
+   Windows.
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 
@@ -62,6 +67,8 @@ that Windows.
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
 | `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
 | `ax88179` | Real PC (l); real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
+| `ax88772` | Simulator only | Simulator only | Simulator only, SR9800 (m) | Simulator only, SR9800, x86 and x64 (m) | Not evaluated | Simulator only, SR9800, x86 and x64 (m) | - |
+| `sr9700` | Simulator only (n) | Simulator only | Simulator only (m) | Simulator only, x86 and x64 (m) | Not evaluated | Simulator only, x86 and x64 (m) | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
 | `noaud` | Real device (VM) | - | - | - | - | - | - |
@@ -80,6 +87,8 @@ that Windows.
 - (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98, and the 8156 and 8156B also on 98 SE under NUSB's EHCI. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
 - (k) The newer chips only (footnote 6), at High Speed under Windows' EHCI. On XP and XP x64 the 8156 and 8156B also ran under xHCI98, at 2.5 Gb/s.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
+- (m) Under xHCI98. On 7 x64 the drivers started only after Microsoft's SHA-2 code-signing update (KB4474419, after KB4490628) was installed; without it Windows refused their signature.
+- (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

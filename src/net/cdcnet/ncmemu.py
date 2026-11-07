@@ -27,6 +27,11 @@ front|end|split (where the device puts its NDP16s), --mc-filters
 rtlemu.py (192.168.77.1: ARP, ICMP echo, DHCP). Every NTB the host sends
 is checked against NCM 1.0's rules and the advertised parameters; a
 violation is logged as ntb_out_bad with its reason.
+--udp LOCAL:REMOTE replaces the simulated host by a bridge, as in
+rtlemu.py: each datagram the host sends goes as one UDP datagram to
+127.0.0.1:REMOTE, each one arriving on 127.0.0.1:LOCAL is a frame from the
+network (QEMU's "socket,udp=" framing), and NTBs are then not logged one
+by one.
 """
 import argparse
 import collections
@@ -175,6 +180,8 @@ def parse_out_ntb(b, f):
 
 
 class Model:
+    bridge = None                                  # (socket, peer) of --udp, or None
+
     def __init__(self, connection, trace, function=None, now=time.monotonic, in_layout='front',
                  flap_after=None, flap_for=3.0):
         self.connection, self.trace, self.now = connection, trace, now
@@ -311,7 +318,8 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(ntb)) + ntb)
             self.totals['rx_ntbs'] += 1
             self.totals['rx_datagrams'] += len(frames)
-            self.log('ntb_in', length=len(ntb), datagrams=len(frames), layout=self.in_layout)
+            if not self.bridge:
+                self.log('ntb_in', length=len(ntb), datagrams=len(frames), layout=self.in_layout)
 
     def transmit(self, data):
         datagrams, problems = parse_out_ntb(data, self.f)
@@ -319,9 +327,14 @@ class Model:
         if problems:
             self.totals['tx_bad'] += 1
             self.log('ntb_out_bad', length=len(data), problems=problems[:8])
-        self.log('ntb_out', length=len(data), datagrams=len(datagrams))
+        if not self.bridge:
+            self.log('ntb_out', length=len(data), datagrams=len(datagrams))
         for frame in datagrams:
             self.totals['tx_datagrams'] += 1
+            if self.bridge:
+                if self.connected:
+                    self.bridge[0].sendto(frame, self.bridge[1])
+                continue
             if self.connected:
                 for reply in self.net.handle(frame):
                     self.deliver(reply)
@@ -522,8 +535,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -570,6 +592,7 @@ def main():
     ap.add_argument('--flap-for', type=float, default=3.0)
     ap.add_argument('--vid', type=lambda s: int(s, 16), default=0x0525)
     ap.add_argument('--pid', type=lambda s: int(s, 16), default=0xa4a2)
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     function = Function(args.speed, args.caps, args.ntb32, out_divisor=args.out_divisor,
                         out_remainder=args.out_remainder, out_alignment=args.out_alignment,
@@ -584,6 +607,13 @@ def main():
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, function, in_layout=args.in_layout,
                           flap_after=args.flap_after, flap_for=args.flap_for)
+            if args.udp:
+                local, remote = (int(x) for x in args.udp.split(':'))
+                udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+                udp.bind(('127.0.0.1', local))
+                udp.setblocking(False)
+                model.bridge = (udp, ('127.0.0.1', remote))
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

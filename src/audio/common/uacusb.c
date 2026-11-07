@@ -433,39 +433,6 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
     }
     return *count ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 }
-
-/* A rate is kept only when an alternate of the format can carry it
- * (UacPlanPick: listed, and fits the packet), so rates no alternate runs
- * never take the list's room from ones that run. */
-static VOID AddRateFor(UAC_DEV *d, const UAC_FORMAT *format, int capture, ULONG *rates, ULONG max,
-                       ULONG *count, ULONG rate)
-{
-    unsigned int index;
-    if (UacPlanPick(&d->Desc, capture, format->Terminal, format->Channels, format->Subslot, format->Bits,
-                    format->ChannelConfig, rate, d->HighSpeed, &index) == UAC_OK)
-        AddRate(rates, max, count, rate);
-}
-
-NTSTATUS UacUsbRatesFor(UAC_DEV *d, const UAC_FORMAT *format, ULONG *rates, ULONG max, ULONG *count)
-{
-    ULONG i, k;
-    if (!d || !format || !rates || !count) return STATUS_INVALID_PARAMETER;
-    *count = 0;
-    for (i = 0; i < d->Desc.AltCount; i++) {
-        const UAC_ALT *a = &d->Desc.Alt[i];
-        int capture = (a->DataEndpoint & 0x80) != 0;
-        if (a->Terminal != format->Terminal || a->Channels != format->Channels ||
-            a->Subslot != format->Subslot || a->Bits != format->Bits) continue;
-        if (a->RateCount)
-            for (k = 0; k < a->RateCount && k < UAC1_RATES; k++)
-                AddRateFor(d, format, capture, rates, max, count, a->Rate[k]);
-        else
-            for (k = 0; k < sizeof(CommonRates) / sizeof(CommonRates[0]); k++)
-                if (CommonRates[k] >= a->RateMin && CommonRates[k] <= a->RateMax)
-                    AddRateFor(d, format, capture, rates, max, count, CommonRates[k]);
-    }
-    return *count ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
-}
 #else
 NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count)
 {

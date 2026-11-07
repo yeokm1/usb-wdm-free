@@ -925,20 +925,10 @@ private:
     }
     static void BuildRanges(UAC_DIR_FORMATS *f, BOOLEAN capture) {
         f->Ranges = 0;
-#ifdef UAC_V1
-        /* UAC 1.0 keeps up to 32 rates per format: the ranges take each
-         * format's rates in turn, so no format's rates crowd another
-         * format out of the table. */
-        for (ULONG pass = 0; pass < 3; pass++)
-            for (ULONG k = 0; k < UAC_USB_RATES; k++)
-            for (ULONG i = 0; i < f->Count && f->Ranges < UAC_RANGES; i++) {
-                if (k >= f->RateCount[i] || RateRank(capture, f->Rate[i][k]) != pass) continue;
-#else
         for (ULONG i = 0; i < f->Count; i++)
             for (ULONG pass = 0; pass < 3; pass++)
             for (ULONG k = 0; k < f->RateCount[i] && f->Ranges < UAC_RANGES; k++) {
                 if (RateRank(capture, f->Rate[i][k]) != pass) continue;
-#endif
                 KSDATARANGE_AUDIO *r = &f->Range[f->Ranges];
                 RtlZeroMemory(r, sizeof(*r));
                 r->DataRange.FormatSize = sizeof(KSDATARANGE_AUDIO);
@@ -974,11 +964,7 @@ private:
             ULONG rates[UAC_USB_RATES], count = 0, kept = 0;
             if (all[i].Subslot < 2) continue; /* 8-bit: see UacStream::Parse */
             if (all[i].Terminal != terminal) continue;
-#ifdef UAC_V1
-            if (!NT_SUCCESS(UacUsbRatesFor(dev, &all[i], rates, UAC_USB_RATES, &count))) continue;
-#else
             if (!NT_SUCCESS(UacUsbRates(dev, all[i].Terminal, rates, UAC_USB_RATES, &count))) continue;
-#endif
             for (ULONG k = 0; k < count; k++) {
                 unsigned int index;
                 if (UacPlanPick(descriptor, d->Capture, terminal, all[i].Channels, all[i].Subslot,

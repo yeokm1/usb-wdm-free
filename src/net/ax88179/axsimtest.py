@@ -365,8 +365,8 @@ class Tests(CoreCase):
         frame, _ = echo_request(a.MODEL_MAC, 512 - 8 - 14 - 20 - 8)
         self.m.transmit(struct.pack('<II', len(frame), a.TX_PAD) + frame + b'\0')
         self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (1, 1))
-        with self.assertRaises(ValueError):           # a pad byte where there is no boundary
-            self.m.transmit(struct.pack('<II', len(frame) - 1, 0) + frame[:-1] + b'\0')
+        with self.assertRaises(ValueError):           # bytes past the frame and its padding to 4
+            self.m.transmit(struct.pack('<II', len(frame) - 1, 0) + frame[:-1] + bytes(6))
         self.up('full')
         for size in (64 - 8 - 14 - 20 - 8, 100, 1000):
             frame, _ = echo_request(a.MODEL_MAC, size)
@@ -424,6 +424,32 @@ class Tests(CoreCase):
         self.up('full')
         with self.assertRaises(ValueError):          # a Linux-form length no frame has
             self.m.receive_out(struct.pack('<II', 0x7fffffff, 0) + bytes(56))
+
+    def test_padded_unmarked_records_and_checksum_insertion(self):
+        """ASIX's 7 and 3.20/4.20 drivers and Windows 10's own: records
+        padded to 4, bit 31 on some only, several per transfer; with TXCOE
+        set the chip fills the checksums of the unmarked IPv4 ones."""
+        self.up('high')
+        disc = bytearray(dhcp_discover(a.MODEL_MAC))
+        disc[14 + 10:14 + 12] = b'\0\0'                     # IPv4 header checksum left to the chip
+        disc[14 + 20 + 6:14 + 20 + 8] = b'\x12\x34'         # a wrong UDP checksum, to be replaced
+        ping, _ = echo_request(a.MODEL_MAC, 30)
+        arp = arp_request(a.MODEL_MAC)
+
+        def record(frame, mark):
+            body = frame + bytes(-len(frame) % 4)
+            return struct.pack('<II', len(frame) | (0x80000000 if mark else 0), 0) + body
+        data = record(arp, True) + record(bytes(disc), False) + record(ping, False)
+        self.m.chip.mac_regs[a.R_TXCOE] = 0x67
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(data), 0, 0) + data)
+        self.assertEqual(self.m.totals['tx_frames'], 3)
+        self.assertEqual((self.m.totals['tx_records_asix_form'], self.m.totals['tx_records_padded_unmarked']), (1, 2))
+        self.assertEqual((self.m.totals['tx_csum_ip'], self.m.totals['tx_csum_udp']), (2, 1))
+        self.assertEqual(self.m.net.refused, 0)
+        self.assertTrue([e for e in self.events('dhcp')])
+        self.up('high')                                  # TXCOE 0 (ax179f): nothing is filled
+        self.m.transmit(record(bytes(disc), False))
+        self.assertEqual((self.m.totals['tx_csum_ip'], self.m.net.refused), (0, 1))
 
     def test_corrupted_requests_get_no_answer(self):
         self.up()

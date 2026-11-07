@@ -56,6 +56,12 @@ has none) and --serial-stall N STALLs the first N reads of it in this run,
 after the first K answered with --serial-skip K (a re-enumeration's reads
 failing once the first ones passed), so a host's instance id rules can be
 exercised (xHCI98 task 45.40).
+--udp LOCAL:REMOTE replaces the simulated host by a bridge: every frame the
+guest sends goes as one UDP datagram to 127.0.0.1:REMOTE, every datagram
+arriving on 127.0.0.1:LOCAL is a frame from the network (the framing of
+QEMU's "-netdev dgram"/"socket,udp=" backend, so a QEMU user-mode network
+behind a hub gives real TCP, for sustained-traffic legs); frames are then
+not logged one by one.
 No physical USB device is accessed.
 """
 import argparse
@@ -563,8 +569,9 @@ class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
                  link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
                  power_cut=False, phy_patch=False, serial=None, serial_stall=0,
-                 serial_skip=0):
+                 serial_skip=0, bridge=None):
         self.connection, self.trace, self.now = connection, trace, now
+        self.bridge = bridge                       # (socket, remote) of --udp, or None
         self.chip_name, self.speed = chip, speed or default_speed(chip)
         self.chip = Chip(chip, ext_init, power_cut, phy_patch)
         kind = self.chip.kind
@@ -748,7 +755,8 @@ class Model:
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
-            self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if not self.bridge:
+                self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def check_rx_request(self, length):
         """The newer chips end a bulk-IN transfer once the early size is
@@ -796,6 +804,10 @@ class Model:
             self.totals['tx_sig_check_left_on'] += 1
         for frame in frames:
             self.totals['tx_frames'] += 1
+            if self.bridge:
+                if self.link:
+                    self.bridge[0].sendto(frame, self.bridge[1])
+                continue
             self.log('tx_frame', length=len(frame), destination=frame[:6].hex(),
                      ethertype=frame[12:14].hex() if len(frame) >= 14 else '')
             if self.link:
@@ -946,8 +958,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -997,7 +1018,16 @@ def main():
                     help='STALL the first N reads of the serial number string of this run')
     ap.add_argument('--serial-skip', type=int, default=0,
                     help='answer the first K reads of the serial string before those STALLs')
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
+    bridge = None
+    if args.udp:
+        local, remote = (int(x) for x in args.udp.split(':'))
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+        udp.bind(('127.0.0.1', local))
+        udp.setblocking(False)
+        bridge = (udp, ('127.0.0.1', remote))
     if args.serial is not None and not (0 < len(args.serial) <= 126 and args.serial.isascii()):
         ap.error('--serial needs 1 to 126 ASCII characters (a string descriptor holds 126)')
     if args.serial_stall < 0 or args.serial_skip < 0:
@@ -1021,7 +1051,7 @@ def main():
                           flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
                           ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched,
                           serial=args.serial, serial_stall=args.serial_stall,
-                          serial_skip=args.serial_skip)
+                          serial_skip=args.serial_skip, bridge=bridge)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

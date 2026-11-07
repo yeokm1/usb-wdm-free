@@ -79,7 +79,14 @@ MULFLTARY hash; PRO everything).
 Behind the adapter sits a SIMULATED network of one host, 192.168.77.1
 (02:00:5E:77:00:01): it answers ARP, ICMP echo and DHCP (offering
 192.168.77.2/24, router 192.168.77.1), and logs every frame (the same
-host as rtlemu.py's). No physical USB device is accessed.
+host as rtlemu.py's).
+--udp LOCAL:REMOTE replaces the simulated host by a bridge: every frame the
+guest sends goes as one UDP datagram to 127.0.0.1:REMOTE, every datagram
+arriving on 127.0.0.1:LOCAL is a frame from the network (the framing of
+QEMU's "-netdev dgram"/"socket,udp=" backend, so a QEMU user-mode network
+behind a hub gives real TCP, for sustained-traffic legs); frames are then
+not logged one by one.
+No physical USB device is accessed.
 """
 import argparse
 import collections
@@ -489,6 +496,8 @@ def bos_descriptor(speed):
 
 
 class Model:
+    bridge = None                                  # (socket, peer) of --udp, or None
+
     def __init__(self, connection, trace, speed='super', now=time.monotonic, link_after=1.0,
                  flap_after=None, flap_for=2.0, mbps=1000, fcs=False, serial='SIM179'):
         self.connection, self.trace, self.now = connection, trace, now
@@ -648,7 +657,8 @@ class Model:
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
-            self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if not self.bridge:
+                self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def transmit(self, data):
         """One bulk-OUT transfer: the 8-byte header and one frame, exactly
@@ -683,6 +693,10 @@ class Model:
 
     def transmit_frame(self, frame):
         self.totals['tx_frames'] += 1
+        if self.bridge:
+            if self.chip.link:
+                self.bridge[0].sendto(frame, self.bridge[1])
+            return frame
         self.log('tx_frame', length=len(frame), destination=frame[:6].hex(), ethertype=frame[12:14].hex())
         if self.chip.link:
             for reply in self.net.handle(frame):
@@ -826,8 +840,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -856,6 +879,16 @@ class Model:
                     self.handle(kind, ident, packet)
 
 
+def open_bridge(spec):
+    """--udp LOCAL:REMOTE: the bound, non-blocking socket and the peer."""
+    local, remote = (int(x) for x in spec.split(':'))
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    udp.bind(('127.0.0.1', local))
+    udp.setblocking(False)
+    return udp, ('127.0.0.1', remote)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', type=int, required=True)
@@ -867,6 +900,7 @@ def main():
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--fcs', action='store_true', help='forward the FCS in every receive record')
     ap.add_argument('--serial', default='SIM179', help='the serial number string (iSerialNumber 3)')
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     if not (0 < len(args.serial) <= 126 and args.serial.isascii()):
         ap.error('--serial needs 1 to 126 ASCII characters')
@@ -881,6 +915,8 @@ def main():
             model = Model(connection, trace, args.speed, link_after=args.link_after,
                           flap_after=args.flap_after, flap_for=args.flap_for, mbps=args.mbps,
                           fcs=args.fcs, serial=args.serial)
+            if args.udp:
+                model.bridge = open_bridge(args.udp)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

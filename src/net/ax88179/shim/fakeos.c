@@ -28,6 +28,9 @@ void (*FakeResetComplete)(NDIS_STATUS);
 
 static __declspec(thread) long held;
 static __declspec(thread) long depth;
+static __declspec(thread) long completing;   /* in a USB completion routine */
+static __declspec(thread) long timing;       /* in the NDIS timer's routine */
+static void *timerLock;
 static void *account;
 
 static void Account(long *counter, long delta)
@@ -101,7 +104,9 @@ void FakeComplete(PIRP irp, NTSTATUS status, USBD_STATUS usb)
     NTSTATUS r;
     urb->UrbHeader.Status = usb;
     irp->IoStatus.Status = status;
+    completing++;
     r = irp->Next.CompletionRoutine(irp->FakeDevice, irp, irp->Next.Context);
+    completing--;
     if (r != STATUS_MORE_PROCESSING_REQUIRED) FakeViolation("completion routine let the IRP go on");
 }
 
@@ -302,7 +307,11 @@ NDIS_STATUS NdisAllocateMemory(PVOID *p, UINT length, UINT flags, NDIS_PHYSICAL_
 
 void NdisFreeMemory(PVOID p, UINT length, UINT flags)
 {
-    (void)length; (void)flags;
+    (void)flags;
+    if (Fake.Timer && (UCHAR *)Fake.Timer >= (UCHAR *)p && (UCHAR *)Fake.Timer < (UCHAR *)p + length) {
+        if (Fake.Timer->Set) FakeViolation("memory holding a set NDIS timer freed");
+        Fake.Timer = NULL;
+    }
     free(p);
     Account(&Fake.NdisMemory, -1);
 }
@@ -459,6 +468,66 @@ void NdisReadNetworkAddress(PNDIS_STATUS s, PVOID *address, PUINT length, NDIS_H
 
 void NdisGetCurrentSystemTime(PLARGE_INTEGER t) { t->QuadPart = (LONGLONG)FwTicks() * 10000; }
 void NdisMSleep(ULONG us) { NoLock("NdisMSleep"); FwSleep((us + 999) / 1000); }
+
+/* The NDIS timer. Its routine runs only from FakeRunTimer (the test's
+ * DPC); setting it is allowed with a spin lock held, as at DISPATCH_LEVEL. */
+void NdisMInitializeTimer(PNDIS_MINIPORT_TIMER t, NDIS_HANDLE h, PNDIS_TIMER_FUNCTION f, PVOID context)
+{
+    (void)h;
+    if (!timerLock) timerLock = FwLockNew();
+    t->Function = f;
+    t->Context = context;
+    t->Set = 0;
+    Fake.Timer = t;
+}
+
+void NdisMSetTimer(PNDIS_MINIPORT_TIMER t, UINT ms)
+{
+    (void)ms;
+    if (Fake.Timer != t) { FakeViolation("NdisMSetTimer on an uninitialised timer"); return; }
+    FwLock(timerLock);
+    if (t->Set) FakeViolation("NdisMSetTimer on a timer already set (the core arms it once)");
+    t->Set = 1;
+    FwUnlock(timerLock);
+    Account(&Fake.TimerSets, 1);
+}
+
+void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled)
+{
+    NoLock("NdisMCancelTimer");
+    FwLock(timerLock);
+    *cancelled = (BOOLEAN)(t->Set != 0);
+    Fake.TimerSetAtCancel = t->Set;
+    t->Set = 0;
+    FwUnlock(timerLock);
+    Account(&Fake.TimerCancels, 1);
+}
+
+int FakeRunTimer(void)
+{
+    PNDIS_MINIPORT_TIMER t = Fake.Timer;
+    int run;
+    if (!t || !timerLock) return 0;
+    FwLock(timerLock);
+    run = t->Set;
+    t->Set = 0;
+    FwUnlock(timerLock);
+    if (!run) return 0;
+    Account(&Fake.TimerRuns, 1);
+    timing++;
+    t->Function(NULL, t->Context, NULL, NULL);
+    timing--;
+    return 1;
+}
+
+static void NotFromCompletion(const char *where)
+{
+    if (!Fake.Wdm110 && completing && !timing) {
+        char text[128];
+        sprintf(text, "%s from a USB completion on 98 SE/ME", where);
+        FakeViolation(text);
+    }
+}
 void NdisWriteErrorLogEntry(NDIS_HANDLE h, ULONG code, ULONG count, ...)
 {
     va_list a;
@@ -495,6 +564,7 @@ void NdisMIndicateReceivePacket(NDIS_HANDLE h, PPNDIS_PACKET packets, UINT count
     UINT i;
     (void)h;
     NoLock("NdisMIndicateReceivePacket");
+    NotFromCompletion("NdisMIndicateReceivePacket");
     for (i = 0; i < count; i++) FakeReceive(packets[i]);
 }
 
@@ -511,6 +581,7 @@ void NdisMSendComplete(NDIS_HANDLE h, PNDIS_PACKET p, NDIS_STATUS status)
 {
     (void)h;
     NoLock("NdisMSendComplete");
+    NotFromCompletion("NdisMSendComplete");
     FakeSendComplete(p, status);
 }
 

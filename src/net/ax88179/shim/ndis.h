@@ -170,6 +170,15 @@ void NdisWriteConfiguration(PNDIS_STATUS s, NDIS_HANDLE h, PNDIS_STRING name,
 void NdisReadNetworkAddress(PNDIS_STATUS s, PVOID *address, PUINT length, NDIS_HANDLE h);
 void NdisGetCurrentSystemTime(PLARGE_INTEGER t);
 void NdisMSleep(ULONG microseconds);
+typedef VOID (*PNDIS_TIMER_FUNCTION)(PVOID s1, PVOID context, PVOID s2, PVOID s3);
+typedef struct _NDIS_MINIPORT_TIMER {
+    PNDIS_TIMER_FUNCTION Function;
+    PVOID Context;
+    int Set;                          /* set and its routine not yet started */
+} NDIS_MINIPORT_TIMER, *PNDIS_MINIPORT_TIMER;
+void NdisMInitializeTimer(PNDIS_MINIPORT_TIMER t, NDIS_HANDLE h, PNDIS_TIMER_FUNCTION f, PVOID context);
+void NdisMSetTimer(PNDIS_MINIPORT_TIMER t, UINT ms);
+void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled);
 void NdisWriteErrorLogEntry(NDIS_HANDLE h, ULONG code, ULONG count, ...);
 void NdisMSetAttributesEx(NDIS_HANDLE h, NDIS_HANDLE context, UINT timeout, ULONG attributes,
                           NDIS_INTERFACE_TYPE type);

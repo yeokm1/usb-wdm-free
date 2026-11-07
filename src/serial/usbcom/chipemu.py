@@ -382,8 +382,12 @@ class ChipModel(acmemu.Model):
                 result = b'\x00'
             else:
                 status = 4
-        elif self.config != 1 and not (self.family == 'ftdi' and reqtype == 0xC0 and request == 0x90):
-            status = 4                                    # FTDI's 98 driver reads the EEPROM unconfigured
+        elif self.config != 1 and not (self.family == 'ftdi' and reqtype == 0xC0 and request == 0x90) \
+                and self.family != 'pl2303':
+            # FTDI's 98 driver reads the EEPROM unconfigured. INFERRED: a
+            # PL2303 answers its requests in the Address state too (Prolific's
+            # 2.1.51 sends eight before SET_CONFIGURATION on a replug).
+            status = 4
         else:
             handler = getattr(self, 'control_' + self.family)
             status, result, kick = handler(request, reqtype, value, index, length, payload)
@@ -484,7 +488,15 @@ class ChipModel(acmemu.Model):
             if value == 0x8080 and kind not in ('TA', 'TB'):
                 return 4, b'', None
             reg = value & 0x7F if request == 0x01 else value
-            return 0, bytes([self.regs[reg] & 0xFF]), None
+            # INFERRED (Prolific's 3.8.31.1 and 2.1.51 drivers against this
+            # model, docs/testing/2026-11-07-model-fixes-ref4.md): after
+            # writing 0x0404 = 1 they read 0x8484 until it is no longer 1,
+            # so 0x8484 does not read back that write; it reads 00 here.
+            # Linux's start sequence ignores what it reads.
+            byte = 0 if request == 0x01 and value == 0x8484 else self.regs[reg] & 0xFF
+            # INFERRED: a read asks for wLength bytes (Prolific's drivers
+            # ask for 2 at 0x8C-0x8F, 0x9494, 0x8686); the register, then 00.
+            return 0, bytes([byte]) + bytes(max(length, 1) - 1), None
         if reqtype == 0x40 and request in (0x01, 0x80):
             if (request == 0x80) != (kind == 'G'):
                 return 4, b'', None
@@ -594,7 +606,7 @@ class ChipModel(acmemu.Model):
         if reqtype not in (0x41, 0xC1) or index >= len(self.fns):
             return 4, b'', None
         # Each request has one direction; the wrong one stalls.
-        if (reqtype == 0xC1) != (request in (0x04, 0x08, 0x0E, 0x0F, 0x10, 0x14, 0x1D)):
+        if (reqtype == 0xC1) != (request in (0x02, 0x04, 0x08, 0x0E, 0x0F, 0x10, 0x14, 0x1D)):
             return 4, b'', None
         f = self.fns[index]
         if request == 0x0F:
@@ -643,12 +655,33 @@ class ChipModel(acmemu.Model):
             return 0, b'', None
         if request == 0x1D:
             return 0, struct.pack('<I', f.rate), None
+        if request == 0x01:
+            # SET_BAUDDIV (Linux cp210x.c names 0x01): the rate is 3686400
+            # divided by wValue, the form Silicon Labs' 2004 driver (4.20)
+            # sets every rate with; a divisor of 0 is refused.
+            if not value:
+                return 4, b'', None
+            f.rate = 3686400 // value
+            self.log('rate', rate=f.rate, function=f.index, bauddiv=value)
+            return 0, b'', None
+        if request == 0x02:
+            # GET_BAUDDIV (0x02): the divisor of the rate in use.
+            return 0, struct.pack('<H', min(0xFFFF, 3686400 // max(f.rate, 1))), None
+        if request == 0x11:
+            # RESET (Linux cp210x.c names 0x11; 4.20 sends it at every open,
+            # before IFC_ENABLE). INFERRED: taken, no state changes.
+            self.log('cp_reset', function=f.index)
+            return 0, b'', None
         if request == 0x03:
             bits, parity, stop = (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F
             if bits not in (5, 6, 7, 8) or parity > 4 or stop > 2:  # stop 1: 1.5
                 return 4, b'', None
             if stop == 1 and bits != 5:
-                return 4, b'', None                       # 1.5 stop bits: 5 data bits only
+                # INFERRED (the 16550 convention): 1.5 stop bits exist with 5
+                # data bits only; with 6 to 8 the part sends 2. Taken, not
+                # refused: Silicon Labs' 4.20 driver wedges the port on a
+                # refusal (7 bits, space, 1.5 stop: wValue 0x0741).
+                stop = 2
             narrow = self.extra['partnum'] == 1 or (self.extra['partnum'] == 5 and f.index == 1)
             if narrow and (bits != 8 or parity > 2 or stop != 0):
                 return 4, b'', None                       # the CP2101, the CP2105's second interface

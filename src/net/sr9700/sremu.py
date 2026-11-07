@@ -23,11 +23,12 @@ share passes here, so the real chip stays owed to the bench.
   0x10-0x15, PHY reset 0x1F (bit 0). INFERRED: other registers read as
   written; wrong requests STALL.
 - Link: 10 Mb/s half duplex only (sr9700_get_link_ksettings); up
-  --link-after seconds after the PHY leaves reset. The status report:
+  --link-after seconds after power-on and after the PHY leaves reset. The status report:
   8 bytes, the first the network status (sr9700_status).
 - Receive (sr9700_rx_fixup): packets of status 0x40, the length with
   the FCS (little endian), the frame and its FCS, back to back, as many
   whole packets as fit the host's request (Linux never splits one).
+  At most 3072 bytes a transfer (INFERRED, see RX_TRANSFER_MAX).
   Only while the link is up and receive is on; the filter: directed by
   the address, broadcast, all multicast when bit 3, everything when bit 1.
 - Transmit (sr9700_tx_fixup, usbnet): a 2-byte length, then the frame;
@@ -65,6 +66,11 @@ REG_NETCTL, REG_NETSTAT, REG_RXCTL, REG_ADDR, REG_PHYRST = 0x00, 0x01, 0x05, 0x1
 NETSTAT_LINK = 0x40
 RX_ON, RX_PROMISC, RX_ALLMULTI = 0x01, 0x02, 0x08
 MODEL_MAC = bytes.fromhex('000ec6970001')
+# INFERRED: one receive transfer holds whole packets up to 3072 bytes, the
+# receive URB Linux's sr9700_bind sets (rx_urb_size) and sr9700f uses; more
+# never comes without a short packet. CoreChips' driver dropped a 6733-byte
+# five-packet transfer and took a 2610-byte one.
+RX_TRANSFER_MAX = 3072
 VENDOR, PRODUCT, RELEASE = 0x0fe6, 0x9700, 0x0001
 
 
@@ -74,7 +80,11 @@ class Chip:
         self.regs[REG_ADDR:REG_ADDR + 6] = MODEL_MAC
         self.link = False
         self.mbps, self.half = 10, True
-        self.restarts = 0
+        # The PHY links at power-on: CoreChips' own driver never resets it
+        # (it writes no 0x1F) and waits for the link on the interrupt
+        # endpoint (docs/testing/2026-11-07-model-fixes-ref4.md). Linux's and
+        # sr9700f's reset through 0x1F takes the link down and back up.
+        self.restarts = 1
         self.phy_reset = False
         self.sw_mii = False
 
@@ -215,7 +225,7 @@ class Model(ax7emu.Model):
         while self.pending and self.rx_packets:
             ident, length = next(iter(self.pending.items()))
             data = b''
-            while self.rx_packets and len(data) + len(self.rx_packets[0]) <= length:
+            while self.rx_packets and len(data) + len(self.rx_packets[0]) <= min(length, RX_TRANSFER_MAX):
                 data += self.rx_packets.pop(0)
             if not data:
                 if not self.totals['rx_request_too_small']:

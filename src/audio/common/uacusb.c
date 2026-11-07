@@ -204,6 +204,7 @@ struct UAC_USB {
     BOOLEAN Stop, ActiveAlt, WaitThread; /* WaitThread: WDM 1.10+ */
     ULONG NextSequence, CompletedSequence;
     ULONG LostRun, LostLimit; /* section 25: lost data URBs in a row, and the most ridden out */
+    ULONG FbRestartRun;       /* 25.7: feedback URBs refused for their start frame, in a row */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
     ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 25: the deadline in bus time */
     ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
@@ -1165,7 +1166,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
 {
     KIRQL old;
     ULONG i, j, raw, errors = PacketErrors(slot);
-    BOOLEAN stop, valid = FALSE, good, lost;
+    BOOLEAN stop, valid = FALSE, good, lost, restart;
     NTSTATUS status = slot->Status;
     USBD_STATUS usbStatus = slot->Urb->Hdr.Status;
 #if defined(UAC_TRACE_E9)
@@ -1200,6 +1201,14 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
      * UAC_LOST_LIMIT_MS of data stops it. */
     lost = !stop && status != STATUS_CANCELLED &&
         UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot));
+    /* Design 25.7: a feedback URB the stack refused for its start frame
+     * is passed over a few times in a row; data keeps the rules above. */
+    restart = slot->Feedback && !stop && status != STATUS_CANCELLED &&
+        UacPlanFbRestart((ULONG)usbStatus, s->FbRestartRun);
+    if (slot->Feedback && !stop && status != STATUS_CANCELLED) {
+        if (restart) s->FbRestartRun++;
+        else if (good) s->FbRestartRun = 0;
+    }
     if (slot->Feedback) {
         if (good) {
             for (i = 0; i < slot->Packets; i++) {
@@ -1316,6 +1325,8 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
     if (lost) {
         if (!slot->Feedback && s->LostRun >= s->LostLimit)
             Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
+    } else if (restart) {
+        /* passed over: the slot is resubmitted ASAP by the worker */
     } else if (!stop && !NT_SUCCESS(status)) Fail(s, status);
     else if (!stop && !USBD_SUCCESS(usbStatus)) Fail(s, STATUS_DEVICE_DATA_ERROR);
 }
@@ -1718,6 +1729,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     }
     s->NextSequence = s->CompletedSequence = 0;
     s->LostRun = 0; s->LostLimit = UacPlanLostLimit(s->TransferUs);
+    s->FbRestartRun = 0;
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;

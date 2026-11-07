@@ -2603,6 +2603,22 @@ answers for 5 s keep the start deadline away and leave BadFeedback at 0,
 a value then makes the stream active and later empties keepalives; the
 start deadline still fires for rejected packets; `uac1test.c` likewise.
 
+### 25.7 A feedback URB refused for its start frame (2026-11-08)
+
+On 98 SE under NUSB's UHCI a stream sometimes ended when one feedback URB
+came back with `USBD_STATUS_BAD_START_FRAME`, after a guest stall (the
+stream's stats: one failed feedback URB, `STATUS_DEVICE_DATA_ERROR`,
+feedback good until then). Every build since the first ended the stream
+on it. Now a feedback URB, and only a feedback URB, that comes back so is
+passed over and its slot resubmitted (ASAP), the last good value kept,
+while fewer than `UAC_FB_RESTART_LIMIT` (8) came back so in a row
+(`UacPlanFbRestart`); a good feedback URB ends the run. The USBD header
+marks that status as halting the pipe: a stack that keeps the pipe halted
+fails the next URBs the same way, and the stream ends after 8 of them, as
+it did at the first; no pipe reset is issued. Data URBs keep 25.3's
+rules. `desctest.c`: passed over for that status below 8 in a row, not at
+8 or for any other status.
+
 ## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
 
 Status: design, 2026-11-07; the options of 26.5 and 26.6 are the

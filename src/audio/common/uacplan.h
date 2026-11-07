@@ -179,6 +179,17 @@ unsigned int UacPlanIsoLost(unsigned long urbStatus, unsigned int packets, unsig
 #define UAC_LOST_LIMIT_MS 1000U
 unsigned int UacPlanLostLimit(unsigned long spanUs);
 
+/* Design 25.7: a feedback URB (only feedback) that comes back with
+ * USBD_STATUS_BAD_START_FRAME is passed over and the slot resubmitted
+ * (ASAP), the last good value kept, while fewer than
+ * UAC_FB_RESTART_LIMIT came back so in a row; run is how many did before
+ * this one. 1 to pass it over, 0 to end the stream as before. A stack
+ * that keeps the pipe halted after that status fails the next ones the
+ * same way, and the stream ends after the limit, as it did at the first. */
+#define UAC_ISO_BAD_START_STATUS 0xC0000A00UL
+#define UAC_FB_RESTART_LIMIT 8U
+unsigned int UacPlanFbRestart(unsigned long urbStatus, unsigned int run);
+
 /* Section 25: 1 when a device's PDO belongs to Windows 2000's USB 1.1
  * hub driver, whose devices run at Full or Low Speed: the driver object's
  * name (count UTF-16 units, no terminator needed) is "\Driver\usbhub",

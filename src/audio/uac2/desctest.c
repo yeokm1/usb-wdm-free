@@ -187,6 +187,16 @@ static void LostTests(void)
     CHECK(UacPlanLostLimit(1000000UL) == 2);
     CHECK(UacPlanLostLimit(32768000UL) == 2);
     CHECK(UacPlanLostLimit(0) == 1000);
+    /* 25.7: a feedback URB refused for its start frame, up to 8 in a row. */
+    CHECK(UAC_ISO_BAD_START_STATUS == 0xC0000A00UL && UAC_FB_RESTART_LIMIT == 8);
+    CHECK(UacPlanFbRestart(UAC_ISO_BAD_START_STATUS, 0));
+    CHECK(UacPlanFbRestart(UAC_ISO_BAD_START_STATUS, 7));
+    CHECK(!UacPlanFbRestart(UAC_ISO_BAD_START_STATUS, 8));
+    CHECK(!UacPlanFbRestart(UAC_ISO_BAD_START_STATUS, 100));
+    CHECK(!UacPlanFbRestart(UAC_ISO_LOST_STATUS, 0));
+    CHECK(!UacPlanFbRestart(0xC0007000UL, 0));
+    CHECK(!UacPlanFbRestart(0xC0000004UL, 0));
+    CHECK(!UacPlanFbRestart(0, 0));
 
     /* Windows 2000's USB 1.1 hub driver, by its driver object's name. */
     {

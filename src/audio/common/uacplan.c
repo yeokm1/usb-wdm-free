@@ -68,6 +68,11 @@ unsigned int UacPlanIsoLost(unsigned long urbStatus, unsigned int packets, unsig
     return urbStatus == UAC_ISO_LOST_STATUS && packets && failed == packets;
 }
 
+unsigned int UacPlanFbRestart(unsigned long urbStatus, unsigned int run)
+{
+    return urbStatus == UAC_ISO_BAD_START_STATUS && run < UAC_FB_RESTART_LIMIT;
+}
+
 unsigned int UacPlanLostLimit(unsigned long spanUs)
 {
     unsigned long n;

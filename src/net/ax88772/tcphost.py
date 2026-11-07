@@ -4,9 +4,12 @@
 """TCP for the SIMULATED host of axemu.py's Network (192.168.77.1), so that
 a guest's TCP traffic through a simulated adapter can be checked end to end
 (test aid only; no physical network). RFC 9293's segment handling, kept to
-what a lossless link needs: one connection per (guest address, guest port,
-host port), no window scaling, no options but MSS, no urgent data, a fixed
-1 s retransmission from the oldest unacknowledged byte (go-back-N).
+what a link that seldom loses a frame needs: one connection per (guest
+address, guest port, host port), no window scaling, no options but MSS, no
+urgent data, a fixed 1 s retransmission from the oldest unacknowledged byte
+(go-back-N), a 1-byte probe into a zero window, a reset taken only inside
+the receive window, and TIME-WAIT for TIME_WAIT_S after a close (a FIN
+repeated then is acknowledged again).
 
 Services on the host address:
 - port 7, echo (RFC 862): every byte received is sent back;
@@ -25,6 +28,7 @@ compare them with what the guest says it sent and received.
 import collections
 import hashlib
 import struct
+import types
 
 from axemu import HOST_IP, Network, checksum, ipv4
 
@@ -35,7 +39,9 @@ SOURCE_BYTES = 1 << 20
 WINDOW = 65535
 MSS = 1460
 IN_FLIGHT = 16384              # bytes unacknowledged at most: well inside the adapter models' receive buffers
+ECHO_QUEUE = 262144            # echo bytes held for the guest at most; the window offered shrinks to keep it
 RTO = 1.0
+TIME_WAIT_S, TIME_WAIT_MAX = 30.0, 64
 MOD = 1 << 32
 
 
@@ -77,6 +83,7 @@ class Host(Network):
     def __init__(self, log, now):
         super().__init__(log, now)
         self.conns = collections.OrderedDict()
+        self.closed = collections.OrderedDict()    # TIME-WAIT: key -> (until, snd_nxt, rcv_nxt)
         self.isn = 0x1000
         self.tcp_ident = 0x5500
 
@@ -85,13 +92,20 @@ class Host(Network):
         peer_ip, peer_port, port = conn.key
         options = struct.pack('!BBH', 2, 4, MSS) if mss else b''
         head = struct.pack('!HHIIBBHHH', port, peer_port, seq, conn.rcv_nxt if flags & ACK else 0,
-                           (5 + len(options) // 4) << 4, flags, WINDOW, 0, 0) + options
+                           (5 + len(options) // 4) << 4, flags, self.window(conn), 0, 0) + options
         body = head + payload
         pseudo = HOST_IP + peer_ip + struct.pack('!BBH', 0, 6, len(body))
         body = body[:16] + struct.pack('!H', checksum(pseudo + body)) + body[18:]
         self.tcp_ident = (self.tcp_ident + 1) & 0xffff
         packet = ipv4(HOST_IP, peer_ip, 6, body, self.tcp_ident)
         return self.frame(conn.mac, 0x0800, packet)
+
+    @staticmethod
+    def window(conn):
+        """The receive window offered: echo keeps at most ECHO_QUEUE bytes queued."""
+        if conn.key[2] == ECHO:
+            return max(0, min(WINDOW, ECHO_QUEUE - len(conn.out)))
+        return WINDOW
 
     def reset(self, mac, peer_ip, peer_port, port, seq, ack, flags):
         head = struct.pack('!HHIIBBHHH', port, peer_port, seq, ack, 5 << 4, flags, 0, 0, 0)
@@ -138,9 +152,23 @@ class Host(Network):
         conn = self.conns.get(key)
         now = self.now()
         if flags & RST:
-            if conn:
+            # RFC 9293 3.10.7.4 / RFC 5961: only a reset inside the receive window ends the connection
+            if conn and (seq - conn.rcv_nxt) % MOD < max(1, self.window(conn)):
                 self.close(conn, 'reset_by_guest')
+            elif conn:
+                self.log('tcp_reset_ignored', port=port, seq=seq)
             return []
+        wait = self.closed.get(key)
+        if wait and now >= wait[0]:
+            del self.closed[key]
+            wait = None
+        if conn is None and wait and not flags & SYN:
+            if flags & FIN:                        # our last ACK was lost: say it again
+                ghost = types.SimpleNamespace(key=key, mac=mac, rcv_nxt=wait[2], out=b'')
+                return [self.segment(ghost, ACK, wait[1])]
+            return []
+        if conn is None and wait:
+            del self.closed[key]
         if conn is None:
             if flags & SYN and not flags & ACK and port in (ECHO, DISCARD, SOURCE, HTTP):
                 mss = self.peer_mss(seg[20:hlen])
@@ -184,6 +212,10 @@ class Host(Network):
         answer = False
         if payload or flags & FIN:
             if seq == conn.rcv_nxt and not conn.peer_fin:
+                if payload and port == ECHO:
+                    space = self.window(conn)
+                    if len(payload) > space:       # beyond the window offered: not taken, nor its FIN
+                        payload, flags = payload[:space], flags & ~FIN
                 if payload:
                     conn.rx_bytes += len(payload)
                     conn.rx_hash.update(payload)
@@ -233,7 +265,8 @@ class Host(Network):
                     self.http_answer(conn, 400, b'bad length\r\n')
                     return
                 self.log('http_request', method=method, target=target)
-                self.http_answer(conn, 200, source_pattern(0, n), 'application/octet-stream')
+                self.http_answer(conn, 200, b'', 'application/octet-stream', n)
+                conn.source_left, conn.source_at = n, 0
                 return
             if method == 'POST':
                 try:
@@ -261,10 +294,13 @@ class Host(Network):
     def http_reason(code):
         return {200: 'OK', 400: 'Bad Request'}[code]
 
-    def http_answer(self, conn, code, body, kind='text/plain'):
+    def http_answer(self, conn, code, body, kind='text/plain', length=None):
+        """The answer's head and body, then FIN; with length, the body is the
+        port 19 pattern that output() streams (source_left)."""
         conn.http_done = True
         conn.out += ('HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n'
-                     % (code, self.http_reason(code), kind, len(body))).encode('ascii') + body
+                     % (code, self.http_reason(code), kind, len(body) if length is None else length)
+                     ).encode('ascii') + body
         conn.fin_queued = True
 
     @staticmethod
@@ -327,6 +363,13 @@ class Host(Network):
         now = self.now()
         frames = []
         for conn in list(self.conns.values()):
+            if conn.state != 'syn_rcvd' and conn.snd_nxt == conn.snd_una and not conn.peer_win and \
+                    conn.out and now - conn.progress >= RTO:
+                conn.progress = now                # the persist timer: one byte into the zero window
+                self.log('tcp_window_probe', port=conn.key[2])
+                frames.append(self.segment(conn, ACK, conn.snd_una, bytes(conn.out[:1])))
+                conn.snd_nxt = (conn.snd_una + 1) % MOD
+                continue
             if conn.snd_nxt != conn.snd_una and now - conn.progress >= RTO:
                 conn.progress = now
                 self.log('tcp_retransmit', port=conn.key[2], at=(conn.snd_una - conn.iss) % MOD)
@@ -343,5 +386,9 @@ class Host(Network):
 
     def close(self, conn, why):
         del self.conns[conn.key]
+        if why == 'closed':
+            self.closed[conn.key] = (self.now() + TIME_WAIT_S, conn.snd_nxt, conn.rcv_nxt)
+            while len(self.closed) > TIME_WAIT_MAX:
+                self.closed.popitem(last=False)
         self.log('tcp_close', why=why, port=conn.key[2], peer_port=conn.key[1], received=conn.rx_bytes,
                  received_sha256=conn.rx_hash.hexdigest(), sent_acknowledged=conn.tx_bytes)

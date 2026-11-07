@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ax7emu as a  # noqa: E402
+import tcphost  # noqa: E402
 
 DLL_PATH = Path(__file__).resolve().parents[3] / 'out/net/ax88772/hostabi/ax7chipcore.dll'
 STATE_SIZE = 2048                     # NET_CHIP_STATE for this package
@@ -618,6 +619,77 @@ class Tests(CoreCase):
         self.assertEqual(struct.unpack_from('!I', answers[0], 14 + 20 + 8)[0], 101)
         self.assertEqual(answers[0][14 + 20 + 20:14 + 20 + 24], struct.pack('!BBH', 2, 4, 1460))
         self.assertEqual(self.events('tcp_open')[0]['port'], 7)
+
+
+class TcpHostTests(unittest.TestCase):
+    """tcphost.Host segment by segment: the recovery paths a guest leg seldom takes."""
+    GUEST = bytes((192, 168, 77, 2))
+
+    def setUp(self):
+        self.t = [0.0]
+        self.logs = []
+        self.h = tcphost.Host(lambda ev, **f: self.logs.append((ev, f)), lambda: self.t[0])
+
+    def seg(self, port, seq, ack, flags, payload=b'', win=65535):
+        head = struct.pack('!HHIIBBHHH', 4000, port, seq, ack, 5 << 4, flags, win, 0, 0) + payload
+        pseudo = self.GUEST + a.HOST_IP + struct.pack('!BBH', 0, 6, len(head))
+        head = head[:16] + struct.pack('!H', a.checksum(pseudo + head)) + head[18:]
+        out = self.h.handle(a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + a.ipv4(self.GUEST, a.HOST_IP, 6, head))
+        return [struct.unpack_from('!IIBBH', f, 38) + (f[54:14 + struct.unpack_from('!H', f, 16)[0]],)
+                for f in out]
+
+    def open(self, port, win=65535):
+        (iss, ack, _, flags, _, _), = self.seg(port, 1000, 0, tcphost.SYN)
+        self.assertEqual((flags, ack), (0x12, 1001))
+        return iss + 1, self.seg(port, 1001, iss + 1, tcphost.ACK, win=win)
+
+    def test_echo_window_bounds_the_queue(self):
+        una, _ = self.open(tcphost.ECHO, win=0)                  # the guest reads nothing
+        seq, offered = 1001, []
+        for _ in range(8):
+            out = self.seg(tcphost.ECHO, seq, una, tcphost.ACK, bytes(40000), win=0)
+            seq = out[-1][1]
+            offered.append(out[-1][4])
+        conn = next(iter(self.h.conns.values()))
+        self.assertEqual(len(conn.out), tcphost.ECHO_QUEUE)
+        self.assertEqual(seq, 1001 + tcphost.ECHO_QUEUE)
+        self.assertEqual(offered[-1], 0)
+
+    def test_zero_window_probe(self):
+        una, _ = self.open(tcphost.ECHO, win=0)
+        self.seg(tcphost.ECHO, 1001, una, tcphost.ACK, b'hello', win=0)
+        self.t[0] += 1.5
+        probe = self.h.poll()
+        self.assertEqual(len(probe), 1)
+        self.assertEqual(probe[0][54:55], b'h')
+        out = self.seg(tcphost.ECHO, 1006, una, tcphost.ACK, win=4096)  # the window opens
+        self.assertEqual(b''.join(o[5] for o in out), b'ello')
+        self.assertEqual(self.logs[-1][0], 'tcp_window_probe')
+
+    def test_stale_reset_ignored(self):
+        una, _ = self.open(tcphost.DISCARD)
+        self.seg(tcphost.DISCARD, 1001 + 200000, 0, tcphost.RST)
+        self.assertEqual(len(self.h.conns), 1)
+        self.seg(tcphost.DISCARD, 1001, 0, tcphost.RST)
+        self.assertEqual(len(self.h.conns), 0)
+
+    def test_time_wait_acks_a_repeated_fin(self):
+        una, _ = self.open(tcphost.HTTP)
+        req = b'GET /source?n=10 HTTP/1.1\r\n\r\n'
+        out = self.seg(tcphost.HTTP, 1001, una, tcphost.ACK, req)
+        data = b''.join(o[5] for o in out)
+        self.assertTrue(data.endswith(tcphost.source_pattern(0, 10)))
+        fin_seq = una + len(data)
+        self.assertTrue(out[-1][3] & tcphost.FIN)
+        seq = 1001 + len(req)
+        self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.ACK)
+        self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.FIN | tcphost.ACK)
+        self.assertEqual(len(self.h.conns), 0)
+        again = self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.FIN | tcphost.ACK)   # its ACK was lost
+        self.assertEqual([(o[0], o[1], o[3]) for o in again], [(fin_seq + 1, seq + 1, tcphost.ACK)])
+        self.t[0] += tcphost.TIME_WAIT_S + 1
+        late = self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.FIN | tcphost.ACK)
+        self.assertEqual(late[0][3], tcphost.RST)
 
 
 if __name__ == '__main__':

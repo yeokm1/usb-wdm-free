@@ -85,7 +85,7 @@
         }
         @{
             Id = 'audio/uac1'; Kind = 'CLASS'
-            Desc = 'USB audio (uac1, Windows 98 SE): USB Audio Class 1.0 sound cards, headsets and microphones'
+            Desc = 'USB audio (uac1, Windows 98 SE): USB Audio Class 1.0 sound cards, headsets, mics'
             DeviceIds = @()
             Services = @()
             Folders = @(

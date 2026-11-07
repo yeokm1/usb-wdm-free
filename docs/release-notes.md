@@ -72,8 +72,9 @@ Per package, newest first. A release is a commit and a tag
     Windows 98 Second Edition CD-ROM once if no WDM sound device was
     installed before.
   - Windows 98 SE only: ME keeps Windows' own driver, which xHCI98
-    3.4.2.0 fixes for the unplug; on 2000 and later the INF matches
-    nothing.
+    3.4.2.0 fixes for the unplug. On XP and later the INF matches
+    nothing; ME and 2000 would read it, so do not point them at this
+    folder.
   - Known issues (README, Known issues): stop playback or recording
     before unplugging a USB audio device, as with Windows' own driver;
     the first audio device plugged in after a start can freeze 98 SE, as

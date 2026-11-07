@@ -55,6 +55,15 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+The release after 0.1.8 (not yet tagged) signs every x64 image with a new
+test certificate, `CN=usb-wdm-free test signing SHA-1 (not trusted)`,
+thumbprint `7A3C6E6289EC46E6E128D87BB54E87196B824959`
+(`release/usb-wdm-free-test-sha1.cer`, published as
+`usb-wdm-free-test.cer`): 0.1.4's certificate (`E6A2749B...`) is itself
+signed with SHA-256, which 7 x64 accepts only after Microsoft's SHA-2
+code-signing update and Vista x64 has no update for; `release.ps1` now
+refuses a signer certificate not signed with SHA-1
+([the certificate's legs](testing/2026-11-06-sha1-cert.md)).
 Release 0.1.8 (prepared 2026-11-05; awaiting the owner's x64 signature
 and the tag): `uac2` 0.1.8.26 (the queue, the real-time worker, the volume
 topped at 0 dB, the device names) and the STAGE.TXT lines owner-approved on

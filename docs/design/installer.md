@@ -837,6 +837,17 @@ Owner, 2026-10-20: signing as xHCI98 and Stor98 do it:
   signed catalog as their package design specifies; there is no image
   of this repository's to embed-sign in that case.
 
+The test certificate is itself signed with SHA-1, and so is each image's
+file digest (owner, 2026-11-06). Windows 7 x64 without Microsoft's SHA-2
+code-signing update refuses a driver whose certificate is signed with
+SHA-256 (Code Integrity event 3004), and Vista x64 has no such update.
+From the release after 0.1.8 that certificate is
+`CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
+`7A3C6E6289EC46E6E128D87BB54E87196B824959`
+(`release/usb-wdm-free-test-sha1.cer`, published as
+`usb-wdm-free-test.cer`); 0.1.4 to 0.1.8 used `E6A2749B...`, signed with
+SHA-256. `release.ps1` refuses a signer certificate not signed with SHA-1.
+
 What the installer does:
 
 - **Test-signing mode.** `WDMIN64 /TESTSIGN` reads

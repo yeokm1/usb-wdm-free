@@ -31,6 +31,11 @@
 # such as the worktree a release was first made in; a tool is built in this checkout by
 # its own build script. Never signs anything and never reads a private key: the x64
 # images arrive signed in -X64Dir.
+# The signer's certificate must itself be signed with SHA-1: Windows 7 x64 without
+# Microsoft's SHA-2 code-signing update refuses a driver whose certificate is signed
+# with SHA-256 (Code Integrity event 3004), and Vista x64 has no such update. From
+# the release after 0.1.8 that certificate is release\usb-wdm-free-test-sha1.cer
+# (-Certificate), published as usb-wdm-free-test.cer in the root.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Definition,
@@ -38,7 +43,7 @@ param(
     [string]$X64Dir = '',
     [string]$NonFree = '',
     [string]$Certificate = '',
-    [string]$Thumbprint = '814CF778B45159EC2659C39C16C7E75EB3C37145',
+    [string]$Thumbprint = '7A3C6E6289EC46E6E128D87BB54E87196B824959',
     [string]$OutRoot = '',
     [switch]$Check
 )
@@ -48,6 +53,8 @@ $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $BuildRoot = if ($OutRoot -ne '') { [IO.Path]::GetFullPath($OutRoot).TrimEnd('\') } else { $Root }
 $script:Errors = New-Object System.Collections.Generic.List[string]
 $script:Notes = New-Object System.Collections.Generic.List[string]
+# sha1WithRSAEncryption (PKCS #1) and sha1WithRSASignature (OIW, as MakeCert writes it).
+$Sha1SigOids = @('1.2.840.113549.1.1.5', '1.3.14.3.2.29')
 function Fail([string]$m) { $script:Errors.Add($m) }
 function Note([string]$m) { $script:Notes.Add($m) }
 
@@ -353,6 +360,7 @@ function Test-Image([string]$Path, [string]$Arch, [string]$Label) {
     if ($cms.SignerInfos.Count -ne 1) { Fail "$Label`: $($cms.SignerInfos.Count) signers" ; return }
     $si = $cms.SignerInfos[0]
     if ($si.Certificate.Thumbprint -ne $Thumbprint) { Fail "$Label`: signer $($si.Certificate.Thumbprint), not $Thumbprint"; return }
+    if ($Sha1SigOids -notcontains $si.Certificate.SignatureAlgorithm.Value) { Fail "$Label`: the signer's certificate is itself signed with $($si.Certificate.SignatureAlgorithm.FriendlyName), not SHA-1 with RSA"; return }
     if ($si.DigestAlgorithm.Value -ne '1.3.14.3.2.26') { Fail "$Label`: digest algorithm $($si.DigestAlgorithm.FriendlyName), not SHA-1"; return }
     # The Authenticode SHA-1 image digest (checksum, security entry and table skipped).
     $sha = [Security.Cryptography.SHA1]::Create()
@@ -648,14 +656,21 @@ foreach ($l in [IO.File]::ReadAllLines((Join-Path $stage 'SHA256.TXT'))) {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage $pth.Replace('/', '\'))).Hash.ToLowerInvariant() -ne $h) { Fail "SHA256.TXT: $pth does not verify" }
 }
 
-# Certificate (public half).
-if ($Certificate -ne '') {
-    $cb = [IO.File]::ReadAllBytes($Certificate)
-    $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $cb)
-    if ($c.HasPrivateKey) { Fail "certificate: carries a private key" }
-    if ($c.Thumbprint -ne $Thumbprint) { Fail "certificate: thumbprint $($c.Thumbprint), not $Thumbprint" }
-    if ($cb[0] -ne 0x30) { Fail "certificate: not DER" }
-    Copy-Item -LiteralPath $Certificate -Destination (Join-Path $stage 'usb-wdm-free-test.cer')
+# Certificate (public half). Without -Certificate a release of the x64 folders keeps
+# the root's usb-wdm-free-test.cer, which must then be the signer's.
+$certIn = if ($Certificate -ne '') { $Certificate } elseif ($Part -eq 'all') { Join-Path $Root 'usb-wdm-free-test.cer' } else { '' }
+if ($certIn -ne '') {
+    $cl = if ($Certificate -ne '') { 'certificate' } else { 'certificate (the root usb-wdm-free-test.cer, no -Certificate)' }
+    if (-not (Test-Path -LiteralPath $certIn -PathType Leaf)) { Fail "$cl`: '$certIn' missing" }
+    else {
+        $cb = [IO.File]::ReadAllBytes($certIn)
+        $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $cb)
+        if ($c.HasPrivateKey) { Fail "$cl`: carries a private key" }
+        if ($c.Thumbprint -ne $Thumbprint) { Fail "$cl`: thumbprint $($c.Thumbprint), not $Thumbprint" }
+        if ($Sha1SigOids -notcontains $c.SignatureAlgorithm.Value) { Fail "$cl`: itself signed with $($c.SignatureAlgorithm.FriendlyName), not SHA-1 with RSA" }
+        if ($cb[0] -ne 0x30) { Fail "$cl`: not DER" }
+        if ($Certificate -ne '') { Copy-Item -LiteralPath $Certificate -Destination (Join-Path $stage 'usb-wdm-free-test.cer') }
+    }
 }
 
 # ---------------------------------------------------------------- report and publish

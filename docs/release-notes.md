@@ -4,6 +4,26 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Next release (after 0.1.8, not yet tagged)
+
+- **Signing**: every x64 image is signed with a new test certificate,
+  `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
+  `7A3C6E6289EC46E6E128D87BB54E87196B824959`, valid 2020-01-01 to
+  2039-12-31. Trust the `usb-wdm-free-test.cer` of this release (in
+  Trusted Root and Trusted Publishers). 0.1.4's certificate
+  (`E6A2749B78E9E4074260CF79972A57EEB6E76C0A`) no longer applies; it can
+  be removed from both stores.
+  - Why: 0.1.4's certificate is itself signed with SHA-256. Windows 7 x64
+    refused drivers signed with it (Code Integrity event 3004, Code 52)
+    unless Microsoft's SHA-2 code-signing update (KB4490628, then
+    KB4474419) was installed, and Vista x64 has no such update. The new
+    certificate is signed with SHA-1, so 7 x64 needs no update.
+  - Every x64 image is signed again, the unchanged ones too, with a
+    SHA-1 file digest and no timestamp. Their image digests do not
+    change. The x86 images are unsigned, as always.
+  - XP x64 does not enforce kernel-mode signing; its Setup still warns
+    about an unsigned package ("Continue Anyway").
+
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 
 `uac2` 0.1.8.26 (build 26). `STAGE.TXT` also stages these on more

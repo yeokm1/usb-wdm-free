@@ -53,7 +53,7 @@ class NetProbe(c.Structure):
 class NetParams(c.Structure):
     _fields_ = [('Mac', c.c_ubyte * 6)] + [(n, c.c_ulong) for n in (
         'RxSize', 'RxCount', 'TxSize', 'TxSlots', 'TxBatch', 'TxHeader', 'TxAlign', 'Version',
-        'RxConfig', 'RxConfigRead')]
+        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax')]
 
 
 class NetLink(c.Structure):
@@ -79,7 +79,10 @@ NetChip = type('NetChip', (c.Structure,), {'_fields_': [
     ('Status', c.CFUNCTYPE(c.c_int, c.c_void_p, U8P, c.c_ulong)),
     ('RxParse', c.CFUNCTYPE(c.c_long, c.c_void_p, U8P, c.c_ulong, EMIT, c.c_void_p, P(RxStats))),
     ('TxHeader', c.CFUNCTYPE(None, c.c_void_p, U8P, c.c_ulong, c.c_ulong, c.c_int)),
-    ('TxEnd', c.CFUNCTYPE(c.c_int, c.c_void_p, U8P, P(c.c_ulong), c.c_ulong, c.c_ulong))]})
+    ('TxEnd', c.CFUNCTYPE(c.c_int, c.c_void_p, U8P, P(c.c_ulong), c.c_ulong, c.c_ulong)),
+    ('RxReset', c.c_void_p),
+    ('TxOffload', c.CFUNCTYPE(None, c.c_void_p, U8P, c.c_void_p)),
+    ('RxChecksum', c.CFUNCTYPE(c.c_ulong, c.c_void_p, U8P))]})
 
 FILTER_DIRECTED, FILTER_MULTICAST, FILTER_ALL_MULTICAST, FILTER_BROADCAST, FILTER_PROMISCUOUS = 1, 2, 4, 8, 0x20
 
@@ -505,6 +508,131 @@ def parse_config(data):
             out[-1][3] = bytes(data[off:off + n])
         off += n
     return iclass, out
+
+
+def tcp_frame(payload, seq=1000, flags=0x18, ident=0x1234, total=None):
+    """An Ethernet II / IPv4 / TCP frame (no options), its checksums as a
+    stack that offloads them leaves them: the IP one 0, the TCP one the
+    pseudo-header sum without the length (a large send) or 0."""
+    ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, total or 40 + len(payload), ident, 0x4000, 128, 6, 0,
+                     r.GUEST_IP, r.HOST_IP)
+    tcp = struct.pack('!HHIIBBHHH', 1025, 80, seq, 7, 0x50, flags, 8192, 0, 0)
+    return r.HOST_MAC + bytes(6) + b'\x08\x00' + ip + tcp + payload
+
+
+def checksums_ok(frame):
+    ihl = (frame[14] & 15) * 4
+    total = struct.unpack_from('!H', frame, 16)[0]
+    if r.ones(frame[14:14 + ihl]) != 0:
+        return False
+    proto, t = frame[23], 14 + ihl
+    seg = frame[t:14 + total]
+    pseudo = frame[26:34] + struct.pack('!BBH', 0, proto, len(seg))
+    return r.ones(pseudo + seg) == 0
+
+
+class OffloadModelTests(unittest.TestCase):
+    """The RTL8157/8159 offloads in the model, against the bits a real
+    RTL8157 showed (rtlemu.py, the TX_/RX2_ constants), and the driver
+    core's own descriptors through the model."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dll = c.CDLL(str(DLL_PATH)) if DLL_PATH.exists() else None
+
+    def make(self, chip='8157'):
+        self.m = r.Model(Wire(), io.StringIO(), chip, 'super')
+        return self.m
+
+    def record(self, frame, opts1=0, opts2=0):
+        return struct.pack('<IIII', r.TX_FIRST_LAST | opts1 | len(frame), opts2, len(frame) << 4,
+                           r.TX_SIGNATURE) + frame
+
+    def test_large_send_segments(self):
+        m = self.make()
+        payload = bytes((k * 7) & 255 for k in range(4000))
+        frame = tcp_frame(payload, flags=0x19)                # PSH, FIN, ACK
+        for given in (0, 34):                                  # Realtek's 0, Linux's offset
+            segs = m.transmit(self.record(frame, r.TX_GTSENDV4 | given << 18, 1460 << 17))
+            self.assertEqual([len(f) - 54 for f in segs], [1460, 1460, 1080])
+            self.assertEqual(b''.join(f[54:] for f in segs), payload)
+            for k, f in enumerate(segs):
+                self.assertTrue(checksums_ok(f))
+                self.assertEqual(struct.unpack_from('!H', f, 18)[0], 0x1234 + k)
+                self.assertEqual(struct.unpack_from('!I', f, 38)[0], 1000 + 1460 * k)
+                self.assertEqual(f[47], 0x19 if k == 2 else 0x10)
+        self.assertEqual(m.totals['tx_large_sends'], 2)
+        with self.assertRaises(ValueError):                    # a wrong header offset
+            m.transmit(self.record(frame, r.TX_GTSENDV4 | 40 << 18, 1460 << 17))
+        with self.assertRaises(ValueError):                    # an MSS that makes long frames
+            m.transmit(self.record(frame, r.TX_GTSENDV4, 1500 << 17))
+        with self.assertRaises(ValueError):                    # longer than a frame, no large send
+            m.transmit(self.record(frame))
+        with self.assertRaises(ValueError):                    # offload bits on the first format
+            r.Model(Wire(), io.StringIO(), '8156b', 'super').transmit(
+                struct.pack('<II', r.TX_FIRST_LAST | 60, r.TX_IPV4_CS) + bytes(60))
+
+    def test_checksums(self):
+        m = self.make()
+        frame = tcp_frame(b'abc' * 100)
+        (out,) = m.transmit(self.record(frame, 0, r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17))
+        self.assertTrue(checksums_ok(out))
+        self.assertEqual(out[:24] + out[26:50], frame[:24] + frame[26:50])
+        (out,) = m.transmit(self.record(frame, 0, r.TX_IPV4_CS))       # the IP checksum alone
+        self.assertEqual(r.ones(out[14:34]), 0)
+        self.assertEqual(out[50:52], frame[50:52])
+        with self.assertRaises(ValueError):                    # TCP asked of a frame whose header is elsewhere
+            m.transmit(self.record(frame, 0, r.TX_IPV4_CS | r.TX_TCP_CS | 38 << 17))
+
+    def test_receive_bits_as_the_real_chip(self):
+        good = r.tx_checksum(tcp_frame(b'x' * 60), r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17)
+        self.assertEqual(r.rx_checksum_bits(good), 0x02004400)      # the real chip's TCP value
+        bad = bytearray(good)
+        bad[60] ^= 1
+        self.assertEqual(r.rx_checksum_bits(bytes(bad)), 0x03004400)
+        bad = bytearray(good)
+        bad[24] ^= 1
+        self.assertEqual(r.rx_checksum_bits(bytes(bad)) & r.RX2_IPF, r.RX2_IPF)
+        arp = b'\xff' * 6 + r.HOST_MAC + b'\x08\x06' + bytes(46)
+        self.assertEqual(r.rx_checksum_bits(arp), 0x07000000)
+        icmp = b'\x00\x00\x00\x00\x12\x34\x00\x01' + bytes(32)
+        icmp = icmp[:2] + struct.pack('!H', r.checksum(icmp)) + icmp[4:]
+        ping = r.HOST_MAC + bytes(6) + b'\x08\x00' + r.ipv4(r.HOST_IP, r.GUEST_IP, 1, icmp)
+        self.assertEqual(r.rx_checksum_bits(ping), 0x03004000)
+        udp = struct.pack('!HHHH', 53, 1025, 8 + 4, 0) + b'abcd'
+        dgram = r.HOST_MAC + bytes(6) + b'\x08\x00' + r.ipv4(r.HOST_IP, r.GUEST_IP, 17, udp)
+        self.assertEqual(r.rx_checksum_bits(dgram), 0x01004800)        # no UDP checksum: not failed
+
+
+@unittest.skipUnless(DLL_PATH.exists(), 'run host.ps1 first')
+class OffloadCoreTests(CoreCase):
+    """The driver core's offload descriptors (TxOffload) and receive
+    checksum reading (RxChecksum) on a started RTL8157 and RTL8159,
+    through the model."""
+
+    def test_core_descriptors_through_the_model(self):
+        for name in ('8157', '8159'):
+            with self.subTest(chip=name):
+                self.assertEqual(self.setup(name, 'super'), 0)
+                self.assertEqual(self.params.Offload, 0x1f)
+                self.assertEqual(self.params.LsoMax, 32768 - 16)
+                info = (c.c_ulong * 3)(8, 1460, 34)                # NC_TX_LSO4, MSS, TCP header
+                payload = bytes(range(256)) * 12
+                frame = tcp_frame(payload)
+                h = (c.c_ubyte * 16)()
+                self.chip.TxHeader(self.state, h, len(frame), 1024, 1)
+                self.chip.TxOffload(self.state, h, c.cast(info, c.c_void_p))
+                segs = self.m.transmit(bytes(h) + frame)
+                self.assertEqual(b''.join(f[54:] for f in segs), payload)
+                self.assertTrue(all(checksums_ok(f) for f in segs))
+                small = tcp_frame(b'q' * 200)
+                info = (c.c_ulong * 3)(2 | 1, 0, 34)               # NC_TX_TCP4 | NC_TX_IP4
+                self.chip.TxHeader(self.state, h, len(small), 1024, 1)
+                self.chip.TxOffload(self.state, h, c.cast(info, c.c_void_p))
+                (out,) = self.m.transmit(bytes(h) + small)
+                self.assertTrue(checksums_ok(out))
+                rec = buf(bytes(8) + struct.pack('<I', r.rx_checksum_bits(out)) + bytes(4) + out)
+                self.assertEqual(self.chip.RxChecksum(self.state, c.cast(c.byref(rec, 16), U8P)), 1 | 2)
 
 
 class NewerModelTests(unittest.TestCase):

@@ -22,6 +22,10 @@
  *   indication or send completion is made from a USB completion: both
  *   are queued and made from an NDIS timer (Upcalls, ethernet.md section
  *   4.4);
+ * - on NT, task offload (ethernet.md section 4.9): the checksums and the
+ *   large send a chip offers (NET_START.Offload) are answered on
+ *   OID_TCP_TASK_OFFLOAD, and each send's per-packet request goes to the
+ *   chip; 98 SE and ME read no per-packet information;
  * - OIDs that need the device (filter, multicast, power) and reset pend
  *   and complete from the lower edge's passive worker;
  * - the address: the Advanced tab's NetworkAddress if valid, else the
@@ -70,6 +74,13 @@ typedef struct ADAPTER {
     ULONG TxBytes, RxBytes;
     ULONG RxCopied;                /* trace: frames indicated with NDIS_STATUS_RESOURCES */
     ULONG TxPeak;                  /* trace: the longest the send queue has been */
+    /* Task offload (section 4.9), NT only: PerPacket is set where the
+     * packets carry per-packet information (not on 98 SE and ME, whose
+     * TCP/IP never asks). TaskTx (NC_TX_*) and TaskRx (NC_RX_*_OK) are
+     * what TCP/IP enabled, under Lock. */
+    BOOLEAN PerPacket;
+    ULONG TaskTx, TaskRx;
+    ULONG TxLarge, RxChecked;      /* trace: large sends; frames given a checksum result */
 #if NET_DEFER
     /* 98 SE and ME (Defer): what the USB completions would have indicated
      * or completed waits here for Upcalls, under Lock. RxPend is a ring of
@@ -101,6 +112,15 @@ typedef struct ADAPTER {
 
 #define NEXT(p) (*(PNDIS_PACKET *)&(p)->MiniportReserved[0])
 #define DONE_STATUS(p) (*(NDIS_STATUS *)&(p)->MiniportReserved[sizeof(PVOID)])
+/* While a send is queued, the same second slot holds its length. */
+#define QUEUED_SIZE(p) (*(ULONG *)&(p)->MiniportReserved[sizeof(PVOID)])
+#define LARGE_SEND(p) NDIS_PER_PACKET_INFO_FROM_PACKET(p, TcpLargeSendPacketInfo)
+#define CHECKSUM_INFO(p) NDIS_PER_PACKET_INFO_FROM_PACKET(p, TcpIpChecksumPacketInfo)
+#define ETH_HEADER 14
+#define IP_PROTO_TCP 6
+#define IP_PROTO_UDP 17
+/* Headroom in a large send for the IP and TCP headers with options. */
+#define LSO_HEADERS (ETH_HEADER + 60 + 60)
 
 #if NET_DEFER
 /* Windows 98 SE and ME. Under sustained TCP, receive indications and send
@@ -264,7 +284,8 @@ static void ReceiveFlush(ADAPTER *a, NET_RX_GATHER *g)
     g->Count = 0;
 }
 
-static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 length)
+static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 length,
+                    nc_u32 checksum)
 {
     ADAPTER *a = context;
     PNDIS_PACKET packet = NULL;
@@ -273,9 +294,17 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
     UINT size;
     ULONG filter, i;
     BOOLEAN accept = FALSE, low = FALSE;
+    NDIS_TCP_IP_CHECKSUM_PACKET_INFO info;
 
     if (length < NC_ETH_MIN || length > NC_ETH_MAX) return;
+    info.Value = 0;
     CoreLock(a);
+    /* Only what the chip verified and TCP/IP enabled is reported; a
+     * failure is never reported, so TCP/IP checks such a frame itself. */
+    checksum &= a->TaskRx;
+    if (checksum & NC_RX_IP_OK) info.Receive.NdisPacketIpChecksumSucceeded = 1;
+    if (checksum & NC_RX_TCP_OK) info.Receive.NdisPacketTcpChecksumSucceeded = 1;
+    if (checksum & NC_RX_UDP_OK) info.Receive.NdisPacketUdpChecksumSucceeded = 1;
     filter = a->Filter;
     if (a->Halting || !filter) {
         CoreUnlock(a);
@@ -302,11 +331,12 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
             a->RxOut++;
             a->RxOk++;
             a->RxBytes += length;
+            if (info.Value) a->RxChecked++;
 #if defined(NET_TRACE_E9)
             if (!(a->RxOk % 8192))
-                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, %u copied; tx %u/%u queued %u peak %u%s",
-                         a->RxOk, a->RxFreeCount, a->RxOut, a->RxNoBuffer, a->RxCopied, a->TxOk, a->TxError,
-                         a->TxQueued, a->TxPeak, DEFERRING(a) ? "; deferred" : "");
+                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, %u copied, %u checked; tx %u/%u queued %u peak %u, %u large%s",
+                         a->RxOk, a->RxFreeCount, a->RxOut, a->RxNoBuffer, a->RxCopied, a->RxChecked, a->TxOk,
+                         a->TxError, a->TxQueued, a->TxPeak, a->TxLarge, DEFERRING(a) ? "; deferred" : "");
 #endif
         } else {
             a->RxNoBuffer++;
@@ -321,6 +351,8 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
     NdisAdjustBufferLength(buffer, length);
     NdisRecalculatePacketCounts(packet);
     NDIS_SET_PACKET_HEADER_SIZE(packet, 14);
+    /* Every packet of the pool is set, as it is reused (NT only). */
+    if (a->PerPacket) CHECKSUM_INFO(packet) = (PVOID)(ULONG_PTR)info.Value;
 #if NET_DEFER
     if (a->Defer) {
         /* Indicated by Upcalls, always with NDIS_STATUS_SUCCESS: the
@@ -368,13 +400,20 @@ static VOID ReturnPacket(NDIS_HANDLE context, PNDIS_PACKET packet)
     CoreUnlock(a);
 }
 
-static nc_u32 TxTake(void *context, void **packets, nc_u32 max)
+static nc_u32 TxTake(void *context, void **packets, nc_u32 max, nc_u32 room, nc_u32 header,
+                     nc_u32 align)
 {
     ADAPTER *a = context;
-    nc_u32 n = 0;
+    nc_u32 n = 0, used = 0;
     CoreLock(a);
     while (n < max && a->TxHead) {
         PNDIS_PACKET p = a->TxHead;
+        nc_u32 size = QUEUED_SIZE(p), at = (used + align - 1) & ~(align - 1);
+        if (size < NC_ETH_PAD) size = NC_ETH_PAD;
+        /* The first always goes (SendPackets admits no packet longer than
+         * a transfer holds); the rest only while they fit. */
+        if (n && (at + header + size > room || at + header + size < at)) break;
+        used = at + header + size;
         a->TxHead = NEXT(p);
         if (!a->TxHead) a->TxTail = NULL;
         a->TxQueued--;
@@ -384,11 +423,59 @@ static nc_u32 TxTake(void *context, void **packets, nc_u32 max)
     return n;
 }
 
-static nc_u32 TxCopy(void *context, void *packet, nc_u8 *bytes, nc_u32 capacity)
+/* The offloads a send asks for (2000 DDK network guide sections 9.5 and
+ * 9.7), from its per-packet information and its headers as copied.
+ * Returns FALSE when the packet asks for one this adapter cannot do. On a
+ * large send the per-packet value becomes the TCP payload bytes, which is
+ * what is sent once the transfer completes (TxDone resets it on failure). */
+static BOOLEAN TxOffloads(ADAPTER *a, PNDIS_PACKET p, const nc_u8 *f, nc_u32 total, NET_TX_INFO *info)
 {
+    ULONG mss = (ULONG)(ULONG_PTR)LARGE_SEND(p);
+    NDIS_TCP_IP_CHECKSUM_PACKET_INFO ci;
+    nc_u32 ip, transport, tcp, enabled;
+    ci.Value = (ULONG)(ULONG_PTR)CHECKSUM_INFO(p);
+    if (!mss && !ci.Transmit.NdisPacketChecksumV4) return total <= NC_ETH_MAX;
+    CoreLock(a);
+    enabled = a->TaskTx;
+    CoreUnlock(a);
+    /* IPv4 behind an Ethernet II header (the 802.3 encapsulation TCP/IP
+     * was told). */
+    if (total < ETH_HEADER + 20 || f[12] != 0x08 || f[13] != 0x00 || (f[14] >> 4) != 4) return FALSE;
+    ip = (f[14] & 0x0f) * 4;
+    transport = ETH_HEADER + ip;
+    if (ip < 20 || transport > total) return FALSE;
+    if (mss) {
+        if (!(enabled & NC_TX_LSO4) || f[23] != IP_PROTO_TCP || mss > total) return FALSE;
+        if (transport + 20 > total) return FALSE;
+        tcp = (f[transport + 12] >> 4) * 4;
+        if (tcp < 20 || transport + tcp > total) return FALSE;
+        info->Flags = NC_TX_LSO4;
+        info->Mss = mss;
+        info->Transport = transport;
+        LARGE_SEND(p) = (PVOID)(ULONG_PTR)(total - transport - tcp);
+        return TRUE;
+    }
+    if (total > NC_ETH_MAX) return FALSE;
+    if (ci.Transmit.NdisPacketTcpChecksum) {
+        if (!(enabled & NC_TX_TCP4) || f[23] != IP_PROTO_TCP) return FALSE;
+        info->Flags |= NC_TX_TCP4;
+    } else if (ci.Transmit.NdisPacketUdpChecksum) {
+        if (!(enabled & NC_TX_UDP4) || f[23] != IP_PROTO_UDP) return FALSE;
+        info->Flags |= NC_TX_UDP4;
+    }
+    if (ci.Transmit.NdisPacketIpChecksum) {
+        if (!(enabled & NC_TX_IP4)) return FALSE;
+        info->Flags |= NC_TX_IP4;
+    }
+    info->Transport = transport;
+    return TRUE;
+}
+
+static nc_u32 TxCopy(void *context, void *packet, nc_u8 *bytes, nc_u32 capacity, NET_TX_INFO *info)
+{
+    ADAPTER *a = context;
     PNDIS_BUFFER b;
     UINT total, copied = 0;
-    UNREFERENCED_PARAMETER(context);
     NdisQueryPacket((PNDIS_PACKET)packet, NULL, NULL, &b, &total);
     if (total < NC_ETH_MIN || total > capacity) return 0;
     while (b) {
@@ -400,7 +487,11 @@ static nc_u32 TxCopy(void *context, void *packet, nc_u8 *bytes, nc_u32 capacity)
         copied += size;
         NdisGetNextBuffer(b, &b);
     }
-    return copied == total ? total : 0;
+    if (copied != total) return 0;
+    if (!a->PerPacket) return total <= NC_ETH_MAX ? total : 0;
+    if (!TxOffloads(a, (PNDIS_PACKET)packet, bytes, total, info)) return 0;
+    if (info->Flags & NC_TX_LSO4) a->TxLarge++;      /* trace only; an unlocked count */
+    return total;
 }
 
 static void TxDone(void *context, void **packets, nc_u32 count, int success)
@@ -411,6 +502,8 @@ static void TxDone(void *context, void **packets, nc_u32 count, int success)
         PNDIS_PACKET p = packets[i];
         UINT size;
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
+        /* A large send that failed sent no payload (section 9.7). */
+        if (!success && a->PerPacket && LARGE_SEND(p)) LARGE_SEND(p) = NULL;
         CoreLock(a);
         if (success) { a->TxOk++; a->TxBytes += size; } else a->TxError++;
 #if NET_DEFER
@@ -437,7 +530,7 @@ static void Flush(ADAPTER *a)
 {
     void *packets[NET_TX_BATCH];
     nc_u32 n;
-    while ((n = TxTake(a, packets, NET_TX_BATCH)) != 0) TxDone(a, packets, n, 0);
+    while ((n = TxTake(a, packets, NET_TX_BATCH, 0xffffffffUL, 0, 1)) != 0) TxDone(a, packets, n, 0);
 }
 
 static void Link(void *context, int connected, nc_u32 speed)
@@ -485,6 +578,132 @@ static void TaskDone(void *context, int request, long status)
      * which keeps delivery correct; a power change always completes, the
      * adapter recovering or reporting itself gone. */
     NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
+}
+
+/* ---------------- task offload (section 4.9) ---------------- */
+
+/* 2000 DDK network guide chapter 9: TCP/IP queries OID_TCP_TASK_OFFLOAD
+ * with an NDIS_TASK_OFFLOAD_HEADER, then sets the tasks it enables (a set
+ * with no task disables them all). IPv4 over Ethernet II only. */
+#define TASK_OFFSET ((ULONG)FIELD_OFFSET(NDIS_TASK_OFFLOAD, TaskBuffer))
+#define TASK_ROUND(n) (((n) + 3) & ~3UL)
+
+static BOOLEAN TaskHeaderOk(const NDIS_TASK_OFFLOAD_HEADER *h)
+{
+    return h->Version == NDIS_TASK_OFFLOAD_VERSION && h->Size == sizeof(*h) &&
+           h->EncapsulationFormat.Encapsulation == IEEE_802_3_Encapsulation &&
+           h->EncapsulationFormat.EncapsulationHeaderSize == ETH_HEADER;
+}
+
+static NDIS_STATUS QueryTasks(ADAPTER *a, PVOID buffer, ULONG length, PULONG written, PULONG needed)
+{
+    NDIS_TASK_OFFLOAD_HEADER h;
+    ULONG offload = a->Start.Offload, at, size, csum = 0;
+    PUCHAR out = buffer;
+    if (!a->PerPacket || !offload) return NDIS_STATUS_NOT_SUPPORTED;
+    if (length < sizeof(h)) { *needed = sizeof(h); return NDIS_STATUS_INVALID_LENGTH; }
+    NdisMoveMemory(&h, buffer, sizeof(h));
+    if (!TaskHeaderOk(&h)) return NDIS_STATUS_NOT_SUPPORTED;
+    if (offload & (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4))
+        csum = TASK_ROUND(TASK_OFFSET + sizeof(NDIS_TASK_TCP_IP_CHECKSUM));
+    size = sizeof(h) + csum;
+    if (offload & NC_OFFLOAD_LSO4) size += TASK_ROUND(TASK_OFFSET + sizeof(NDIS_TASK_TCP_LARGE_SEND));
+    if (size == sizeof(h)) return NDIS_STATUS_NOT_SUPPORTED;
+    if (length < size) { *needed = size; return NDIS_STATUS_INVALID_LENGTH; }
+    NdisZeroMemory(out, size);
+    h.OffsetFirstTask = sizeof(h);
+    NdisMoveMemory(out, &h, sizeof(h));
+    at = sizeof(h);
+    if (csum) {
+        PNDIS_TASK_OFFLOAD t = (PNDIS_TASK_OFFLOAD)(out + at);
+        PNDIS_TASK_TCP_IP_CHECKSUM c = (PNDIS_TASK_TCP_IP_CHECKSUM)t->TaskBuffer;
+        t->Version = NDIS_TASK_OFFLOAD_VERSION;
+        t->Size = sizeof(NDIS_TASK_OFFLOAD);
+        t->Task = TcpIpChecksumNdisTask;
+        t->TaskBufferLength = sizeof(NDIS_TASK_TCP_IP_CHECKSUM);
+        t->OffsetNextTask = size > at + csum ? csum : 0;
+        c->V4Transmit.IpOptionsSupported = 1;
+        c->V4Transmit.TcpOptionsSupported = 1;
+        c->V4Transmit.TcpChecksum = (offload & NC_OFFLOAD_TX_TCP4) != 0;
+        c->V4Transmit.UdpChecksum = (offload & NC_OFFLOAD_TX_UDP4) != 0;
+        c->V4Transmit.IpChecksum = (offload & NC_OFFLOAD_TX_IP4) != 0;
+        if (offload & NC_OFFLOAD_RX4) {
+            c->V4Receive.IpOptionsSupported = 1;
+            c->V4Receive.TcpOptionsSupported = 1;
+            c->V4Receive.TcpChecksum = 1;
+            c->V4Receive.UdpChecksum = 1;
+            c->V4Receive.IpChecksum = 1;
+        }
+        at += csum;
+    }
+    if (offload & NC_OFFLOAD_LSO4) {
+        PNDIS_TASK_OFFLOAD t = (PNDIS_TASK_OFFLOAD)(out + at);
+        PNDIS_TASK_TCP_LARGE_SEND l = (PNDIS_TASK_TCP_LARGE_SEND)t->TaskBuffer;
+        t->Version = NDIS_TASK_OFFLOAD_VERSION;
+        t->Size = sizeof(NDIS_TASK_OFFLOAD);
+        t->Task = TcpLargeSendNdisTask;
+        t->TaskBufferLength = sizeof(NDIS_TASK_TCP_LARGE_SEND);
+        t->OffsetNextTask = 0;
+        l->Version = 0;
+        l->MaxOffLoadSize = a->Start.LsoMax - LSO_HEADERS;   /* user data, any header options */
+        l->MinSegmentCount = 2;
+        l->TcpOptions = TRUE;
+        l->IpOptions = TRUE;
+    }
+    *written = size;
+    return NDIS_STATUS_SUCCESS;
+}
+
+static NDIS_STATUS SetTasks(ADAPTER *a, PVOID buffer, ULONG length, PULONG read, PULONG needed)
+{
+    NDIS_TASK_OFFLOAD_HEADER h;
+    ULONG offload = a->Start.Offload, at, tx = 0, rx = 0, guard = 0;
+    PUCHAR in = buffer;
+    if (!a->PerPacket || !offload) return NDIS_STATUS_NOT_SUPPORTED;
+    if (length < sizeof(h)) { *needed = sizeof(h); return NDIS_STATUS_INVALID_LENGTH; }
+    NdisMoveMemory(&h, buffer, sizeof(h));
+    if (!TaskHeaderOk(&h)) return NDIS_STATUS_NOT_SUPPORTED;
+    for (at = h.OffsetFirstTask; at; ) {
+        NDIS_TASK_OFFLOAD t;
+        if (++guard > 8 || at < sizeof(h) || at > length || length - at < TASK_OFFSET)
+            return NDIS_STATUS_INVALID_DATA;
+        NdisMoveMemory(&t, in + at, TASK_OFFSET);
+        if (t.TaskBufferLength > length - at - TASK_OFFSET) return NDIS_STATUS_INVALID_DATA;
+        if (t.Task == TcpIpChecksumNdisTask) {
+            NDIS_TASK_TCP_IP_CHECKSUM c;
+            if (t.TaskBufferLength < sizeof(c)) return NDIS_STATUS_INVALID_DATA;
+            NdisMoveMemory(&c, in + at + TASK_OFFSET, sizeof(c));
+            if (c.V4Transmit.TcpChecksum) tx |= NC_TX_TCP4;
+            if (c.V4Transmit.UdpChecksum) tx |= NC_TX_UDP4;
+            if (c.V4Transmit.IpChecksum) tx |= NC_TX_IP4;
+            if (c.V4Receive.TcpChecksum) rx |= NC_RX_TCP_OK;
+            if (c.V4Receive.UdpChecksum) rx |= NC_RX_UDP_OK;
+            if (c.V4Receive.IpChecksum) rx |= NC_RX_IP_OK;
+            if (c.V6Transmit.TcpChecksum || c.V6Transmit.UdpChecksum) return NDIS_STATUS_NOT_SUPPORTED;
+        } else if (t.Task == TcpLargeSendNdisTask) {
+            if (t.TaskBufferLength < sizeof(NDIS_TASK_TCP_LARGE_SEND)) return NDIS_STATUS_INVALID_DATA;
+            tx |= NC_TX_LSO4;
+        } else {
+            return NDIS_STATUS_NOT_SUPPORTED;
+        }
+        if (!t.OffsetNextTask) break;
+        if (t.OffsetNextTask > length - at) return NDIS_STATUS_INVALID_DATA;
+        at += t.OffsetNextTask;
+    }
+    /* Only what was offered. */
+    if (((tx & NC_TX_TCP4) && !(offload & NC_OFFLOAD_TX_TCP4)) ||
+        ((tx & NC_TX_UDP4) && !(offload & NC_OFFLOAD_TX_UDP4)) ||
+        ((tx & NC_TX_IP4) && !(offload & NC_OFFLOAD_TX_IP4)) ||
+        ((tx & NC_TX_LSO4) && !(offload & NC_OFFLOAD_LSO4)) ||
+        (rx && !(offload & NC_OFFLOAD_RX4)))
+        return NDIS_STATUS_NOT_SUPPORTED;
+    CoreLock(a);
+    a->TaskTx = tx;
+    a->TaskRx = rx;
+    CoreUnlock(a);
+    NetTrace("task offload: tx %x rx %x", tx, rx);
+    *read = length;
+    return NDIS_STATUS_SUCCESS;
 }
 
 /* ---------------- NDIS handlers ---------------- */
@@ -552,6 +771,7 @@ static NDIS_STATUS Query(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
         data = &pm; size = sizeof(pm);
         break;
     case OID_PNP_QUERY_POWER: size = 0; break;
+    case OID_TCP_TASK_OFFLOAD: return QueryTasks(a, buffer, length, written, needed);
     default: return NDIS_STATUS_NOT_SUPPORTED;
     }
     if (counter) {
@@ -621,6 +841,8 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
         if (a->Gone || !NetUsbRequest(a->Usb, NET_REQ_FILTER, value, NULL, 0))
             return NDIS_STATUS_SUCCESS;
         return NDIS_STATUS_PENDING;
+    case OID_TCP_TASK_OFFLOAD:
+        return SetTasks(a, buffer, length, read, needed);
     case OID_GEN_PROTOCOL_OPTIONS:
     case OID_GEN_NETWORK_LAYER_ADDRESSES:
     case OID_GEN_TRANSPORT_HEADER_OFFSET:
@@ -637,7 +859,7 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
     UINT i;
     for (i = 0; i < count; i++) {
         PNDIS_PACKET p = packets[i];
-        UINT size;
+        UINT size, limit;
         BOOLEAN queued = FALSE;
         /* Pending until NdisMSendComplete (the deserialized rules allow
          * the Status member to be set). Windows 98 SE's NDIS reads it: a
@@ -645,13 +867,18 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
          * while it is still queued here, and reused. */
         NDIS_SET_PACKET_STATUS(p, NDIS_STATUS_PENDING);
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
+        /* A large send (section 4.9) may be as long as one transmit
+         * buffer holds; anything else one frame. */
+        limit = NC_ETH_MAX;
+        if (a->PerPacket && a->Start.LsoMax && LARGE_SEND(p)) limit = a->Start.LsoMax;
         CoreLock(a);
         /* No limit on the queue: a deserialized miniport keeps every valid
          * send until it can go (NDIS 5 rules); the packets themselves are
          * the queue (MiniportReserved), so nothing is allocated. Only a
          * gone, halting or disconnected adapter or a bad length fails one. */
-        if (!a->Gone && !a->Halting && a->Connected && size >= NC_ETH_MIN && size <= NC_ETH_MAX) {
+        if (!a->Gone && !a->Halting && a->Connected && size >= NC_ETH_MIN && size <= limit) {
             NEXT(p) = NULL;
+            QUEUED_SIZE(p) = size;
             if (a->TxTail) NEXT(a->TxTail) = p; else a->TxHead = p;
             a->TxTail = p;
             a->TxQueued++;
@@ -890,6 +1117,9 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     a->Defer = !IoIsWdmVersionAvailable(1, 0x10);
     if (a->Defer) NdisMInitializeTimer(&a->UpcallTimer, handle, Upcalls, a);
 #endif
+    /* NT's packets carry per-packet information (section 4.9); 98 SE's
+     * and ME's are not read for it. */
+    a->PerPacket = !DEFERRING(a);
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 

@@ -45,7 +45,7 @@ class NetProbe(c.Structure):
 class NetParams(c.Structure):
     _fields_ = [('Mac', c.c_ubyte * 6)] + [(n, c.c_ulong) for n in (
         'RxSize', 'RxCount', 'TxSize', 'TxSlots', 'TxBatch', 'TxHeader', 'TxAlign', 'Version',
-        'RxConfig', 'RxConfigRead')]
+        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax')]
 
 
 class NetLink(c.Structure):

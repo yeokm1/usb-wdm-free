@@ -24,6 +24,17 @@ typedef struct UAC_ALT {
     UAC_BYTE Attributes, Interval, FeedbackInterval;
     UAC_WORD MaxPacket, FeedbackMaxPacket;
     unsigned int ChannelConfig; /* AS_GENERAL bmChannelConfig (UAC2 4.1) */
+#ifdef UAC_V1
+    /* USB Audio 1.0, uac1 only (docs/design/uac2.md section 26): the
+     * alternate's own rates from its Type I format descriptor, discrete
+     * (RateCount 1..UAC1_RATES) or continuous (RateCount 0, RateMin to
+     * RateMax), and its class-specific endpoint bmAttributes (D0 Sampling
+     * Frequency, D7 MaxPacketsOnly). ChannelConfig holds the stream's
+     * cluster wChannelConfig. Entity offsets point at UAC 1.0 layouts. */
+#define UAC1_RATES 32   /* uacfmt.h UAC_FMT_MAX_RATES: every rate the parser keeps */
+    unsigned int RateCount, RateMin, RateMax, Rate[UAC1_RATES];
+    UAC_BYTE EpControls;
+#endif
 } UAC_ALT;
 
 typedef struct UAC_DESC {
@@ -33,6 +44,10 @@ typedef struct UAC_DESC {
     UAC_WORD Entity[256]; /* descriptor offsets; zero means absent */
     unsigned int AltCount, Skipped;
     UAC_ALT Alt[UAC_MAX_ALTS];
+#ifdef UAC_V1
+    /* The bus speed uac1 parsed the function for: 1 Full, 2 High Speed. */
+    unsigned int Speed;
+#endif
 } UAC_DESC;
 
 /* Only the caller's function is parsed. Count must include Control.

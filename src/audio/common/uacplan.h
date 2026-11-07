@@ -61,6 +61,12 @@ unsigned int UacPlanPacketBytes(unsigned int rate, int highSpeed,
 int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
                 unsigned int channels, unsigned int subslot, unsigned int bits,
                 unsigned int config, unsigned int rate, int highSpeed, unsigned int *index);
+#ifdef UAC_V1
+/* USB Audio 1.0 (uac1): whether the alternate's own rate list holds rate
+ * (discrete) or its continuous range contains it. UacPlanPick takes only
+ * such an alternate. */
+int UacPlanHasRate(const UAC_ALT *alt, unsigned int rate);
+#endif
 
 /* The first terminal (descriptor order) a direction's runnable alternates
  * serve: the one a single wave pin represents. 0 if none. */

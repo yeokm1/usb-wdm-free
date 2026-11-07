@@ -259,6 +259,18 @@ unsigned int UacPlanQuirks(unsigned int vid, unsigned int pid)
     return 0;
 }
 
+#ifdef UAC_V1
+int UacPlanHasRate(const UAC_ALT *a, unsigned int rate)
+{
+    unsigned int i;
+    if (!a || !rate) return 0;
+    if (!a->RateCount) return rate >= a->RateMin && rate <= a->RateMax;
+    for (i = 0; i < a->RateCount && i < UAC1_RATES; i++)
+        if (a->Rate[i] == rate) return 1;
+    return 0;
+}
+#endif
+
 int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
                 unsigned int channels, unsigned int subslot, unsigned int bits,
                 unsigned int config, unsigned int rate, int highSpeed, unsigned int *index)
@@ -274,6 +286,9 @@ int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
         if (config != UAC_PLAN_ANY_CONFIG && a->ChannelConfig != config) continue;
         if (terminal && a->Terminal != terminal) continue;
         if (!Runnable(a, highSpeed)) continue;
+#ifdef UAC_V1
+        if (!UacPlanHasRate(a, rate)) continue;
+#endif
         need = UacPlanPacketBytes(rate, highSpeed, a->Interval,
                                   (unsigned int)a->Channels * a->Subslot, UacPlanSync(a) == 1);
         cap = UacPlanCapacity(a->MaxPacket);

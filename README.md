@@ -15,6 +15,7 @@ These drivers are experimental. They may not work with every device and can make
 
 | Driver | Device class | Windows |
 |---|---|---|
+| `uac1` | USB Audio Class 1.0, playback and recording, with volume and mute; optional: Windows' own driver stays the default unless you install `uac1` | 98 SE |
 | `uac2` | USB Audio Class 2.0, playback and recording, with volume and mute | 98 SE to 8; x64 from XP |
 | `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
@@ -60,6 +61,7 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
+| `uac1` | Real device (VM); simulator (o) | - | - | - | - | - | - |
 | `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
@@ -89,6 +91,7 @@ that Windows.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 - (m) Under xHCI98.
 - (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
+- (o) Under xHCI98: the Logi USB Headset, and simulated headsets, DACs and a copy of the Sound Blaster Play! 2's layout. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install
@@ -98,10 +101,15 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 - **98 SE may freeze when the first USB audio device is plugged in after
   a boot** (an audio or MIDI interface, a headset, a webcam with a
-  microphone), with Windows' own audio driver too. Plug the device in
-  before switching on and leave it in; if Windows freezes, restart with
-  it plugged in. For a webcam whose microphone you do not need, install
+  microphone), with `uac1`, `uac2` and Windows' own audio driver alike.
+  Plug the device in before switching on and leave it in; if Windows
+  freezes, restart with it plugged in. For a webcam whose microphone you do not need, install
   `NOAUD98.INF`.
+- **On Windows 98 SE, stop audio playback or recording before
+  unplugging a USB audio device.** Unplugging while it plays can stop
+  Windows; unplugging while it records can leave the recording program
+  not responding until the next restart. This happens with Windows' own
+  USB audio driver too.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
 - **XP and XP x64 install their own USB audio driver for a `uac2` device
@@ -179,7 +187,14 @@ Do not plug the device in before step 3: Windows 2000's audio driver
 takes it and can stop Windows. If that happens, restart without the
 device and do the steps. The edited INF no longer matches `SHA256.TXT`.
 
-`uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
+`uac1`, `uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
+
+`uac1` on 98 SE is optional. Without it, Windows' own USB audio driver
+keeps every USB Audio 1.0 device, as before. To use `uac1`, point the
+wizard (or Update Driver, for a device Windows' driver already has) at
+`free/audio/uac1/w98se/`. After that, USB Audio 1.0 devices plugged in
+for the first time get `uac1` too. To go back for one device, use Update
+Driver and pick Windows' own USB audio driver from the list.
 
 `usbprn` on 98 SE and ME: plug the printer in, point the wizard at
 `free/print/usbprn/w98se/` or `wme/`, then add the printer with Add

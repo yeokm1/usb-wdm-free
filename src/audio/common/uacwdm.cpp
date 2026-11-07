@@ -3,6 +3,8 @@
  * Experimental UAC 2.0 WaveCyclic/USB streaming: render and capture in
  * the formats and rates the device's descriptors and clocks offer.
  * Original code from DDK headers and published PortCls documentation.
+ * Built as uac2wdm.sys (USB Audio 2.0) and, with UAC_V1 defined, as
+ * uac1wdm.sys (USB Audio 1.0, docs/design/uac2.md section 26).
  */
 #define PC_NEW_NAMES
 #include <initguid.h>
@@ -22,6 +24,9 @@ extern "C" {
 #include "uacplan.h"
 #include "uactopo.h"
 #include "uacvol.h"
+#ifdef UAC_V1
+#include "uac1desc.h"
+#endif
 }
 #ifndef KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL
 #define KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL 0x00000002 /* XP ks.h */
@@ -244,12 +249,25 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     /* got: the bytes a GET returned (may be short); NULL: exactly size. */
     NTSTATUS Feature(UAC_BYTE unit, ULONG selector, ULONG channel, BOOLEAN read,
                      ULONG attribute, PVOID bytes, ULONG size, ULONG *got = NULL) {
+#ifdef UAC_V1
+        /* USB Audio 1.0 (ADC-1 5.2.2.4): SET_CUR 0x01, GET_CUR 0x81 and,
+         * as `attribute`, GET_MIN 0x82, GET_MAX 0x83, GET_RES 0x84;
+         * wValue selector << 8 | channel, wIndex unit << 8 | interface. */
+        UCHAR setup[8];
+        if (selector > 255 || channel > 255 || size > 0xffff) return STATUS_INVALID_PARAMETER;
+        setup[0] = read ? 0xA1 : 0x21;
+        setup[1] = (UCHAR)(!read ? 0x01 : attribute == UAC_CTL_CUR ? 0x81 : attribute);
+        setup[2] = (UCHAR)channel; setup[3] = (UCHAR)selector;
+        setup[4] = descriptor->Control; setup[5] = unit;
+        setup[6] = (UCHAR)size; setup[7] = (UCHAR)(size >> 8);
+#else
         UAC_CTL_TARGET t;
         UCHAR setup[8];
         t.Interface = descriptor->Control; t.Entity = unit; t.Endpoint = 0;
         t.Channel = channel; t.MaxChannel = 255;
         if (!UacCtlSetup(UAC_CTL_FEATURE, selector, &t, read ? 1 : 3, attribute, read ? 1 : 0,
                          size, 0, setup)) return STATUS_INVALID_PARAMETER;
+#endif
         ULONG length = size;
         NTSTATUS s = UacUsbClassRequest(dev, setup, bytes, &length);
         if (got) *got = length;
@@ -264,6 +282,18 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         if (channel < UAC_VOL_SLOTS) level.RangeRead |= 1u << channel;
         return TRUE;
     }
+#ifdef UAC_V1
+    /* USB Audio 1.0: GET_MIN, GET_MAX and GET_RES (2 bytes each), held as
+     * the one subrange of a RANGE answer, under UacVolRange's rules. */
+    BOOLEAN ReadRangeOnce(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
+        UCHAR b[8];
+        ULONG i;
+        b[0] = 1; b[1] = 0;
+        for (i = 0; i < 3; i++)
+            if (!NT_SUCCESS(Feature(unit, 2, channel, TRUE, 0x82 + i, b + 2 + 2 * i, 2))) return FALSE;
+        return UacVolRange(b, sizeof(b), range) ? TRUE : FALSE;
+    }
+#else
     BOOLEAN ReadRangeOnce(UAC_BYTE unit, ULONG channel, UAC_VOL_RANGE *range) {
         UCHAR b[2 + 6 * UAC_VOL_RANGES];
         ULONG got = 0, n;
@@ -277,6 +307,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         if (!n || n > UAC_VOL_RANGES) return FALSE;
         return UacVolRange(b, 2 + 6 * n, range) ? TRUE : FALSE;
     }
+#endif
     /* CUR, raw: volume in 1/256 dB (UAC_VOL_SILENCE included), mute 0/1. */
     BOOLEAN ReadCur(UAC_BYTE unit, ULONG selector, ULONG channel, int *value) {
         UCHAR b[2];
@@ -990,6 +1021,11 @@ public:
      * own, read without a selector choice: until a clock reservation at
      * stream open exists (section 15.3 item 5), endpoints that share a
      * clock stay one pair, as before. */
+#ifdef UAC_V1
+    /* USB Audio 1.0 has no clock entities to tell endpoints apart by:
+     * one pair, the first playback and capture terminal (section 26.4). */
+    ULONG Pairs() const { return 1; }
+#else
     ULONG Pairs() const {
         unsigned int t[2][UAC_PAIRS];
         UAC_BYTE seen[2 * UAC_PAIRS], source;
@@ -1023,6 +1059,7 @@ public:
         }
         return n[0] > n[1] ? n[0] : n[1];
     }
+#endif
     /* A Feature Unit pair 0 or an earlier pair drives (pair 0 only). */
     BOOLEAN UnitTaken(UAC_BYTE unit) {
         BOOLEAN taken = FALSE;
@@ -1434,7 +1471,11 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
     UNICODE_STRING stageName = { 22, 24, L"Uac2M0Stage" };
     UNICODE_STRING statusName = { 24, 26, L"Uac2M0Status" };
     UNICODE_STRING buildName = { 18, 20, L"Uac2Build" };
+#ifdef UAC_V1
+    ULONG build = UAC1_BUILD;   /* uac1's own build number (uac1wdm.rc) */
+#else
     ULONG build = 26;
+#endif
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &stageName, 0, REG_DWORD, &stage, sizeof(stage));
@@ -1580,7 +1621,11 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
 
 /* The INF's name (its Device string; infchk.ps1 checks they agree): what a
  * device without a usable product string is named, a later pair " N". */
+#ifdef UAC_V1
+static const char NameFallback[] = "UAC1 USB audio (experiment)";
+#else
 static const char NameFallback[] = "UAC2 USB audio (experiment)";
+#endif
 
 /* Windows Vista and later (WDM 6.00) name the audio endpoints after the
  * devnode's FriendlyName, read when an endpoint arrives (section 21.2):
@@ -1745,6 +1790,51 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
     if (!bytes || !parsed) { s = STATUS_INSUFFICIENT_RESOURCES; goto done; }
     s = Descriptor(ext->Lower, bytes, header.wTotalLength);
     Record(fdo, 3, s);
+#ifdef UAC_V1
+    /* USB Audio 1.0 (section 26): the function the PDO names (its MI_
+     * interface, else the whole device's first UAC 1.0 function) parsed for
+     * the bus speed (the bus's answer; without one, the speed the
+     * descriptors alone fit; else Full Speed, the only one 98 SE's own
+     * stack has), then put in the shared model. A function that is not an
+     * AudioControl one, or has no alternate this driver runs (MIDI only,
+     * say), comes back with no alternates: Start makes it a null function. */
+    if (NT_SUCCESS(s)) {
+        unsigned int whole = 256, view;
+        int rc = UAC1_OK, guessed = 0;
+        BOOLEAN high = FALSE;
+        UAC1_DESC *p1 = (UAC1_DESC *)ExAllocatePoolWithTag(NonPagedPool, sizeof(UAC1_DESC), 'q1aU');
+        if (!p1) { s = STATUS_INSUFFICIENT_RESOURCES; goto done; }
+        RtlZeroMemory(parsed, sizeof(*parsed));
+        if (first < 0) {
+            rc = Uac1WholeFirst(bytes, header.wTotalLength, &whole);
+            first = (int)whole;
+        }
+        view = rc ? UAC1_VIEW_NONE : (unsigned int)Uac1View(bytes, header.wTotalLength, first);
+        if (view == UAC1_VIEW_CONTROL) {
+            if (NT_SUCCESS(UacUsbBusSpeed(ext->Lower, &high))) guessed = high ? 2 : 1;
+            else {
+                int hs = 0;
+                guessed = Uac1GuessSpeed(bytes, header.wTotalLength, first, p1, &hs) ? (hs ? 2 : 1) : 1;
+            }
+            rc = Uac1Parse(bytes, header.wTotalLength, first, guessed == 2, p1);
+            if (rc == UAC1_OK || rc == UAC1_NO_AUDIO) {
+                parsed->Bytes = bytes; parsed->Length = header.wTotalLength;
+                parsed->Control = (UAC_BYTE)first;
+                if (rc == UAC1_OK) rc = Uac1Model(p1, guessed == 2, parsed);
+                parsed->Speed = (unsigned int)guessed;
+            }
+        }
+        RecordDescriptors(fdo, bytes, header.wTotalLength, first, view | ((unsigned int)guessed << 8),
+                          parsed->AltCount | (parsed->Skipped << 16), rc);
+        DbgPrint("uac1wdm: descriptor result %d, view %u, PCM alternates %u, skipped %u\n",
+                 rc, view, parsed->AltCount, parsed->Skipped);
+        ExFreePool(p1);
+        /* Only a malformed AudioControl function fails the start. */
+        if (rc == UAC1_BAD_DESCRIPTOR || rc == UAC1_TOO_MANY_ALTS) s = STATUS_DEVICE_CONFIGURATION_ERROR;
+        else if (!parsed->Bytes) { parsed->Bytes = bytes; parsed->Length = header.wTotalLength; parsed->AltCount = 0; }
+        Record(fdo, 4, s);
+    }
+#else
     if (NT_SUCCESS(s)) {
         unsigned int count = 0, control = 256, whole = 256;
         int rc = UAC_OK;
@@ -1761,6 +1851,7 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
         if (rc) s = STATUS_DEVICE_CONFIGURATION_ERROR;
         Record(fdo, 4, s);
     }
+#endif
 done:
     if (NT_SUCCESS(s)) { *model = parsed; parsed = NULL; bytes = NULL; }
     if (parsed) ExFreePool(parsed);
@@ -1823,6 +1914,17 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     UAC_DESC *model = NULL;
     NTSTATUS s = ParseDevice(fdo, &model);
     if (!NT_SUCCESS(s)) return s;
+#ifdef UAC_V1
+    /* A null function (section 26.6, G3): nothing this driver runs (a
+     * MIDI-only function, say, or formats it does not carry). It starts
+     * with no audio device, as Windows' driver leaves such a function on
+     * 98 SE, rather than failing (Code 10); stage 0x40 records it. */
+    if (!model->AltCount) {
+        Record(fdo, 0x40, STATUS_NOT_SUPPORTED);
+        ExFreePool((PVOID)model->Bytes); ExFreePool(model);
+        return STATUS_SUCCESS;
+    }
+#endif
     void *wm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Wave), 'w2aU');
     if (!wm) {
         ExFreePool((PVOID)model->Bytes); ExFreePool(model);
@@ -1833,6 +1935,14 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     ReadName(fdo);
     s = w->Prepare();
     Record(fdo, 13, s);
+#ifdef UAC_V1
+    /* No format either direction can run: a null function too. */
+    if (s == STATUS_NOT_SUPPORTED) {
+        ShutdownPairs(ext, TRUE, TRUE);
+        Record(fdo, 0x41, s);
+        return STATUS_SUCCESS;
+    }
+#endif
     if (NT_SUCCESS(s)) s = StartPair(fdo, irp, resources, w, 0);
     if (NT_SUCCESS(s)) { s = PcRegisterAdapterPowerManagement((PMINIPORTWAVECYCLIC)w, fdo); Record(fdo, 12, s); }
     /* The later pairs (section 15.3): a pair that cannot be brought up is

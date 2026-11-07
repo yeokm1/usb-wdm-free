@@ -546,6 +546,27 @@ static ULONG TerminalClock(UAC_DEV *d, UAC_BYTE terminal)
     return 0;
 }
 
+#ifdef UAC_V1
+/* USB Audio 1.0: the rates the terminal's alternates list, no request: a
+ * discrete list as given, a continuous range as the common rates in it. */
+NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count)
+{
+    ULONG i, k;
+    if (!d || !rates || !count) return STATUS_INVALID_PARAMETER;
+    *count = 0;
+    for (i = 0; i < d->Desc.AltCount; i++) {
+        const UAC_ALT *a = &d->Desc.Alt[i];
+        if (a->Terminal != terminal) continue;
+        if (a->RateCount)
+            for (k = 0; k < a->RateCount && k < UAC1_RATES; k++) AddRate(rates, max, count, a->Rate[k]);
+        else
+            for (k = 0; k < sizeof(CommonRates) / sizeof(CommonRates[0]); k++)
+                if (CommonRates[k] >= a->RateMin && CommonRates[k] <= a->RateMax)
+                    AddRate(rates, max, count, CommonRates[k]);
+    }
+    return *count ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+#else
 NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count)
 {
     WALK *w;
@@ -572,8 +593,17 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
     ExFreePool(w);
     return *count ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 }
+#endif
 
 int UacUsbHighSpeed(UAC_DEV *d) { return d && d->HighSpeed; }
+
+#ifdef UAC_V1
+NTSTATUS UacUsbBusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
+{
+    if (!lower || !high || KeGetCurrentIrql() != PASSIVE_LEVEL) return STATUS_INVALID_PARAMETER;
+    return BusSpeed(lower, high);
+}
+#endif
 
 NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
                           PVOID buffer, USHORT size, ULONG *got)
@@ -627,6 +657,10 @@ static VOID ReadFeature(UAC_USB *s)
     ULONG size, i;
     NTSTATUS status;
     s->Stats.FeatureStatus = STATUS_NOT_SUPPORTED;
+#ifdef UAC_V1
+    /* UAC 2.0 Feature Unit layouts and requests: not read for UAC 1.0. */
+    return;
+#endif
     for (i = 1; i < 256 && !id; i++) {
         const UCHAR *p = Entity(d, i);
         if (p && p[2] == 6 && p[0] >= 10) { id = (UCHAR)i; controls = p[5]; }
@@ -723,6 +757,57 @@ static VOID ReleasePath(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate)
     KeReleaseMutex(&d->Lock, FALSE);
 }
 
+#ifdef UAC_V1
+/* USB Audio 1.0 has no clock entity: the rate is the data endpoint's
+ * Sampling Frequency control, set after the alternate is selected
+ * (EndpointRate). */
+static NTSTATUS SetClock(UAC_USB *s)
+{
+    UNREFERENCED_PARAMETER(s);
+    return STATUS_SUCCESS;
+}
+
+/* ADC-1 5.2.3.2.3.1: SET_CUR (0x01) of SAMPLING_FREQ_CONTROL (0x01) to the
+ * data endpoint, 3 bytes, where its class-specific endpoint descriptor
+ * sets D0 (an endpoint without it runs its one rate). Then GET_CUR (0x81),
+ * advisory: many devices stall it; a different answer is recorded in
+ * ClockHz and the stream runs at the asked rate, as the specification has
+ * a discrete endpoint round only a rate it does not list. */
+static NTSTATUS EndpointRate(UAC_USB *s)
+{
+    struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST urb;
+    UCHAR b[3];
+    NTSTATUS status;
+    s->Stats.ClockHz = s->Rate;
+    if (!(s->Alt.EpControls & 1)) return STATUS_SUCCESS;
+    b[0] = (UCHAR)s->Rate; b[1] = (UCHAR)(s->Rate >> 8); b[2] = (UCHAR)(s->Rate >> 16);
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_CLASS_ENDPOINT;
+    urb.TransferFlags = 0;
+    urb.TransferBuffer = b; urb.TransferBufferLength = 3;
+    urb.Request = 0x01;
+    urb.Value = 0x0100;
+    urb.Index = s->Alt.DataEndpoint;
+    KeWaitForSingleObject(&s->Dev->Lock, Executive, KernelMode, FALSE, NULL);
+    status = UsbRequest(s->Dev->Lower, (PURB)&urb);
+    if (NT_SUCCESS(status)) {
+        RtlZeroMemory(&urb, sizeof(urb));
+        RtlZeroMemory(b, sizeof(b));
+        urb.Hdr.Length = sizeof(urb);
+        urb.Hdr.Function = URB_FUNCTION_CLASS_ENDPOINT;
+        urb.TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+        urb.TransferBuffer = b; urb.TransferBufferLength = 3;
+        urb.Request = 0x81;
+        urb.Value = 0x0100;
+        urb.Index = s->Alt.DataEndpoint;
+        if (NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&urb)) && urb.TransferBufferLength == 3)
+            s->Stats.ClockHz = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16);
+    }
+    KeReleaseMutex(&s->Dev->Lock, FALSE);
+    return status;
+}
+#else
 /* Set the stream's clock path: selector inputs, then the source frequency
  * (written only if it differs and the control is writable), then read back
  * the frequency and, if readable, the validity. */
@@ -792,6 +877,7 @@ done:
     if (!NT_SUCCESS(status) && s->ClockHeld) { ReleasePath(d, &s->Path, s->Rate); s->ClockHeld = FALSE; }
     return status;
 }
+#endif
 
 static NTSTATUS Configure(UAC_DEV *d)
 {
@@ -1384,6 +1470,12 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *de
      * whole device where no parent splits it (98 SE under NUSB). */
     if (UacAltZero(desc->Bytes, desc->Length, numbers, pipes, 32, &ifCount) != UAC_OK)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
+#ifdef UAC_V1
+    /* uac1 decided the speed before parsing (UacUsbBusSpeed and the
+     * descriptors, uacwdm.cpp). */
+    high = desc->Speed == 2;
+    status = desc->Speed == 1 || desc->Speed == 2 ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+#else
     status = BusSpeed(lower, &high);
     /* 2000 (WDM 1.10, below 1.20): the device's PDO is its USB 1.1 hub
      * driver's (usbhub; the USB 2.0 one is usbhub20). */
@@ -1392,6 +1484,7 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *de
         usb11 = UacPlanUsb11Hub(pdo->DriverObject->DriverName.Buffer,
                                 pdo->DriverObject->DriverName.Length / sizeof(WCHAR)) ? TRUE : FALSE;
     TR_LINE(("speed", (ULONG)status, high, usb11));
+#endif
     /* No speed from the USBDI interface (STATUS_NOT_SUPPORTED: no answer,
      * or a version 0 interface, which predates USB 2.0; any other unusable
      * answer fails otherwise) on a system below WDM 1.10 (98 SE, ME):
@@ -1583,6 +1676,10 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     ReadFeature(s);
     status = SelectAlt(s, TRUE);
     if (!NT_SUCCESS(status)) goto done;
+#ifdef UAC_V1
+    status = EndpointRate(s);
+    if (!NT_SUCCESS(status)) goto done;
+#endif
     {
         struct _URB_GET_CURRENT_FRAME_NUMBER frame;
         RtlZeroMemory(&frame, sizeof(frame));

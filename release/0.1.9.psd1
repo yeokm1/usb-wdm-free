@@ -9,6 +9,8 @@
 #   0BDA:8056 and the Realtek-listed ids (owner, 2026-11-07); staged on 98 SE, ME, 2000, XP and XP x64 (owner, 2026-11-06);
 # - ax88179 0.1.3.0: the net core fixes;
 # - xpad98 0.1.1.0: SurpriseRemovalOK;
+# - uac1 0.1.0.1 (new, Windows 98 SE only): USB Audio Class 1.0 by class, built from the
+#   driver core uac2 shares (docs/design/uac2.md 26); uac2's image unchanged;
 # - new packages: ax88772 (AX88772B/C on 98 SE and ME, the SR9800 on 98 SE to
 #   7), sr9700 (98 SE to 7) and absptr (98 SE to 7 x64; x64 folder xp-7-x64,
 #   owner 2026-11-07).
@@ -79,6 +81,17 @@
                    Files = @{ 'uac2wdm.sys' = 'x64:uac2.wv-8-x64.uac2wdm.sys'; 'uac2wdm.inf' = 'tree:src\audio\uac2\x64\uac2wdm.inf'; 'UACCI1.DLL' = 'x64:uac2.wv-8-x64.UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
                    Stage = @{ 'uac2wdm.inf' = @('COPY', 'WVISTA64 W7X64 W8X64', 'copy only (owner, 2026-10-24); test signing on; 0.1.10.0: no Vista to 8.1 x64 leg at preparation; 0.1.8.26: no Vista to 8.1 x64 leg of build 26 at preparation; 0.1.6.0 source signed in the guest with a throwaway certificate: first plug with no restart prompt and the seek test on 7 x64 (simulator); 0.1.5.0 source signed in the guest with a throwaway certificate (a catalog on 8 and 8.1): co-installer, play, rec, ramp and the ALC4080 capture passed on Vista, 7, 8 and 8.1 x64 (simulator)')
                               'UACCI.INF' = @('COPY', 'WVISTA64 W7X64 W8X64', 'the co-installer, set up by hand (DefaultInstall); passed on Vista to 8.1 x64 (simulator, its test build)') } }
+            )
+        }
+        @{
+            Id = 'audio/uac1'; Kind = 'CLASS'
+            Desc = 'USB audio (uac1, Windows 98 SE): USB Audio Class 1.0 sound cards, headsets, mics'
+            DeviceIds = @()
+            Services = @()
+            Folders = @(
+                @{ Name = 'w98se'; Arch = 'x86'
+                   Files = @{ 'uac1wdm.sys' = 'out\audio\uac1\wdmx86\free\uac1wdm.sys'; 'uac1wdm.inf' = 'out\audio\uac1\wdmx86\free\uac1wdm.inf' }
+                   Stage = @{ 'uac1wdm.inf' = @('STAGE', 'W98SE', 'staged, opt-in (owner, 2026-11-07): on 98 SE under xHCI98 3.4.2.0 the real Logi headset and simulated devices installed, played, recorded and took volume; under 98 SE''s own UHCI a simulated headset; formats it does not run start as a null function; the first plug after a start and an unplug while playing behave as with Windows'' own driver (record 2026-11-07 uac1-98se)') } }
             )
         }
         @{
@@ -395,7 +408,9 @@
            Imports = @('AVICAP32.DLL', 'USER32.DLL', 'KERNEL32.DLL', 'MSVCRT.DLL') }
     )
     Relations = @(
-        'EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids'
+        'EXCLUDES | free:audio/uac1 | free:audio/usbmidi | WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids'
+        'COEXISTS | free:audio/uac1 | free:audio/usbmidi | W98SE | uac1 0.1.0.1 serves no MIDI: a MIDI-only function gets a null start; usbmidi keeps the devices it lists by hardware id (outranking uac1''s class line) and its by-hand model serves the rest (docs/design/uac2.md 26.10)'
+        'COEXISTS | free:audio/uac1 | free:audio/noaud | W98SE | noaud''s hardware ids (a webcam microphone, opt-in) outrank uac1''s class line: the microphone stays driverless where the user chose it'
         'EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | the same chips'
         'COEXISTS | free:net/rtl815x | nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: RTLXP7.INF lists only chips the nonfree INFs leave out on each system (owner, 2026-10-29: split again with the xHCI98 packager change, xHCI98 task 45.6)'
         'EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips'

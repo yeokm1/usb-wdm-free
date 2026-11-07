@@ -6,7 +6,7 @@
 # the 4-byte binary form in 98 SE / ME's [UAC2]. Mutations of the INF text
 # must be refused. Reads text only; installs nothing.
 $ErrorActionPreference = 'Stop'
-$plan = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'uacplan.h'))
+$plan = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../common/uacplan.h'))
 if ($plan -notmatch '#define UAC_QUEUE_DEFAULT_MS (\d+)U') { throw 'UAC_QUEUE_DEFAULT_MS not found in uacplan.h' }
 $default = [int]$Matches[1]
 $bytes = (0..3 | ForEach-Object { '{0:x2}' -f (($default -shr (8 * $_)) -band 255) }) -join ','
@@ -132,8 +132,9 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
 }
 # The driver's fallback name (uac2wdm.cpp NameFallback, docs/design/uac2.md 21)
 # is each INF's Device string.
-$cpp = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'uac2wdm.cpp'))
-if ($cpp -notmatch 'static const char NameFallback\[\] = "([^"]*)";') { throw 'NameFallback not found in uac2wdm.cpp' }
+$cpp = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../common/uacwdm.cpp'))
+# uacwdm.cpp is shared with uac1 (UAC_V1): uac2's name is the #else branch's.
+if ($cpp -notmatch '#else\r?\nstatic const char NameFallback\[\] = "([^"]*)";') { throw 'NameFallback not found in uac2wdm.cpp' }
 $fallback = $Matches[1]
 foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
     $t = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $inf))

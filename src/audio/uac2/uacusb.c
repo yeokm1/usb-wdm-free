@@ -71,7 +71,13 @@ static VOID TrDec(ULONG v)
 
 static VOID TrStr(const char *s) { while (*s) TrByte(*s++); }
 
-static ULONG TrNow(void) { return (ULONG)(KeQueryInterruptTime() / 10000); }
+/* Milliseconds from the performance counter (the interrupt time is the
+ * stream's own clock; watchchk.ps1 counts its uses). */
+static ULONG TrNow(void)
+{
+    LARGE_INTEGER hz, now = KeQueryPerformanceCounter(&hz);
+    return hz.QuadPart >= 1000 ? (ULONG)(now.QuadPart / (hz.QuadPart / 1000)) : 0;
+}
 
 static VOID TrLine(const char *tag, ULONG a, ULONG b, ULONG c)
 {
@@ -158,6 +164,7 @@ typedef struct USB_SLOT {
     PUCHAR Buffer;
     ULONG Packets, Bytes, BufferBytes, Sequence;
     LONG Phase; /* 0 idle,1 lower-owned,2 completed and caller-owned */
+    ULONG DoneStamp; /* section 24: the stream's completion count when it came back */
     BOOLEAN Feedback, CancelIssued, Used;
     NTSTATUS Status;
 } USB_SLOT;
@@ -198,6 +205,8 @@ struct UAC_USB {
     ULONG NextSequence, CompletedSequence;
     ULONG LostRun, LostLimit; /* section 24: lost data URBs in a row, and the most ridden out */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
+    ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 24: the deadline in bus time */
+    ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 24: completions, the last usable and the newest feedback's stamps */
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
     USB_SLOT Slot[SLOTS];
@@ -908,6 +917,7 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     KeAcquireSpinLock(&s->Lock, &old);
     slot->Status = irp->IoStatus.Status;
     slot->Phase = 2;
+    slot->DoneStamp = ++s->DoneCount;
     /* The sound driver's wait increment: on NT the woken worker runs
      * boosted (at most 15, decaying) ahead of normal-priority threads
      * (docs/design/uac2.md 19.6). */
@@ -1140,12 +1150,32 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
                     s->LastFeedbackValueAt = KeQueryInterruptTime();
                     break;
                 default:
+                    /* 'F': a rejected feedback packet (A its first 4 bytes, B
+                     * its length, C its offset, D the stride). */
+                    TR_EVENT_(('F', (ULONG)(slot - s->Slot), i, slot->Packets,
+                               packet->Length && packet->Offset + 4 <= slot->BufferBytes ?
+                               *(ULONG UNALIGNED *)(slot->Buffer + packet->Offset) : 0,
+                               packet->Length, packet->Offset, s->FeedbackBytes));
                     break;
                 }
             }
         }
         if (lost) s->Rate_.BadFeedback += slot->Packets;
-        if (valid) s->LastFeedbackPacket = KeQueryInterruptTime();
+        /* Section 24: the deadline counts the service time of the URBs
+         * that came back with nothing usable, not the time since the last
+         * usable packet: a time in which the stack held every URB and none
+         * came back is not the device's. The feedback slots are retired by
+         * index, so one that came back before the newest already retired
+         * one leaves the accounting alone. */
+        if (UacFeedbackAfter(slot->DoneStamp, s->FeedbackStamp)) {
+            s->FeedbackStamp = slot->DoneStamp;
+            if (valid) {
+                s->LastFeedbackPacket = KeQueryInterruptTime();
+                s->FeedbackUnusableUs = s->FeedbackQuietUs = 0;
+                s->QuietFrom = slot->DoneStamp;
+            } else if (!stop && status != STATUS_CANCELLED)
+                s->FeedbackUnusableUs = UacFeedbackAdd(s->FeedbackUnusableUs, slot->Packets, s->FeedbackPacketUs);
+        }
         KeAcquireSpinLock(&s->Lock, &old);
         if (!stop && status != STATUS_CANCELLED) FeedbackDiag(s, slot, status);
         s->Stats.FeedbackUrbs++;
@@ -1184,6 +1214,10 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
         }
         if (lost) s->LostRun++;
         else if (good) s->LostRun = 0;
+        /* Section 24: bus time since the last usable feedback, also while
+         * feedback URBs are held or come back unusable. */
+        if (s->Feedback && (good || lost) && UacFeedbackAfter(slot->DoneStamp, s->QuietFrom))
+            s->FeedbackQuietUs = UacFeedbackAdd(s->FeedbackQuietUs, 1, s->TransferUs);
         s->CompletedSequence++;
     }
     slot->Phase = 0;
@@ -1234,15 +1268,32 @@ static VOID Worker(PVOID context)
     busy = 0;
     for (;;) {
         KeClearEvent(&s->Wake);
-        /* Feedback first so newly prepared data uses the newest valid rate.
-         * Data completions are retired in sequence even if callbacks reorder. */
+        /* Feedback first so newly prepared data uses the newest valid rate,
+         * in the order the feedback URBs came back (section 24: the oldest
+         * stamp first). Data completions are retired in sequence even if
+         * callbacks reorder. */
         do {
+            USB_SLOT *oldest = NULL;
+            ULONG oldestStamp = 0, stamp;
             progress = FALSE;
+            /* One look under the lock: no completion lands between two
+             * slots' reads and makes a newer one look the oldest. */
+            KeAcquireSpinLock(&s->Lock, &old);
             for (i = 0; i < SLOTS; i++) {
                 USB_SLOT *slot = &s->Slot[i];
-                if (!slot->Used) continue;
+                if (!slot->Used || !slot->Feedback) continue;
+                phase = slot->Phase; stamp = slot->DoneStamp;
+                if (phase == 2 && (!oldest || UacFeedbackAfter(oldestStamp, stamp))) {
+                    oldest = slot; oldestStamp = stamp;
+                }
+            }
+            KeReleaseSpinLock(&s->Lock, old);
+            if (oldest) { Completed(s, oldest); progress = TRUE; continue; }
+            for (i = 0; i < SLOTS; i++) {
+                USB_SLOT *slot = &s->Slot[i];
+                if (!slot->Used || slot->Feedback) continue;
                 KeAcquireSpinLock(&s->Lock, &old); phase = slot->Phase; KeReleaseSpinLock(&s->Lock, old);
-                if (phase == 2 && (slot->Feedback || slot->Sequence == s->CompletedSequence)) {
+                if (phase == 2 && slot->Sequence == s->CompletedSequence) {
                     Completed(s, slot); progress = TRUE;
                 }
             }
@@ -1265,13 +1316,13 @@ static VOID Worker(PVOID context)
             }
         }
         if (stop && !pending) break;
-        /* Adjustable system time is unsuitable for elapsed deadlines: NTP
-         * or SetSystemTime must not create a feedback loss or hide one. */
-        if (!stop && s->Feedback && UacFeedbackLate(KeQueryInterruptTime(), s->LastFeedbackPacket,
-                                                    s->Rate_.FeedbackActive)) {
+        /* The deadline is in bus time (section 24), never system time:
+         * NTP or SetSystemTime must not create a feedback loss or hide one. */
+        if (!stop && s->Feedback &&
+            UacFeedbackStaleBus(s->FeedbackUnusableUs, s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
             TR_LINE(("fblate", (ULONG)s->Rate_.FeedbackActive, s->Rate_.GoodFeedback, s->Rate_.BadFeedback));
             Fail(s, STATUS_IO_TIMEOUT);
-        } /* no usable rate for 1 s at start, 200 ms after */
+        } /* nothing usable back for 1 s at start, 200 ms after */
         /* 19.6's fairness rule (build 23): a stack that completes URBs
          * inline over and over (nothing delivered, no Fail) leaves Wake
          * signalled, so the wait below returns at once and a real-time
@@ -1566,6 +1617,9 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;
+    s->FeedbackUnusableUs = s->FeedbackQuietUs = 0;
+    s->DoneCount = s->QuietFrom = s->FeedbackStamp = 0;
+    s->FeedbackPacketUs = UacFeedbackPacketUs(s->Dev->HighSpeed, s->Alt.FeedbackInterval);
     KeClearEvent(&s->Ready); KeClearEvent(&s->Wake); KeClearEvent(&s->Exited);
     /* PsCreateSystemThread wants the system process on 2000 and 98 SE;
      * SetState runs in the client's. An executive work item creates the

@@ -2392,7 +2392,8 @@ is not settled.
 
 A trace build (`build.cmd wdmx86 trace`, test-only: every URB's submit
 and completion, written to QEMU's debug console port 0xE9 at an anomaly)
-on XP under Windows' EHCI and UHCI:
+on XP under Windows' EHCI and UHCI, on 7 under Windows' EHCI and on 2000
+under its UHCI:
 
 - When the host controller falls behind its schedule (here QEMU's EHCI
   and UHCI skipping frames under load; on real hardware a resubmission
@@ -2407,10 +2408,17 @@ on XP under Windows' EHCI and UHCI:
   the queue and exited, and nothing resubmitted until the client stopped
   the stream. A URB with only some packets failed was already counted
   and passed over (4.4, "never retried").
+- On 7 under Windows' EHCI the stack at times held every queued URB,
+  feedback and data alike, for 0.6 to 1.2 s with none coming back, then
+  completed them and went on. The feedback deadline (23.2, 200 ms after
+  the last usable packet) ended the stream inside such a hold, though no
+  feedback URB had come back unusable: the time counted was the stack's,
+  not the device's.
 - On 2000 and the controller's own UHCI, the device sits under 2000's
   USB 1.1 stack (its hub service is `usbhub`; the EHCI controller's
   devices are under 2000's USB 2.0 hub driver, `usbhub20`, as the
-  device registry of these legs shows). That hub does not answer the USBDI bus interface query (version 1, with
+  device registry of these legs shows). That hub does not answer the
+  USBDI bus interface query (`STATUS_NOT_SUPPORTED`; version 1 carries
   `IsHighSpeed`), and `UacUsbOpen` refused an unknown speed on 2000 and
   later, so the start failed before the configuration was selected; the
   same as ME before its rule (16.5, the ME row).
@@ -2430,9 +2438,34 @@ on XP under Windows' EHCI and UHCI:
 - **Bounded.** Lost data URBs in a row are counted; a run covering
   `UAC_LOST_LIMIT_MS` (1 s) of data (`UacPlanLostLimit`: 250 URBs of
   4 ms, at least 2) stops the stream as a failure did before. A good
-  data URB ends the run. Feedback stays under its own deadline (23.2,
-  `uacwatch.h`: 1 s before the first valid value, 200 ms after), which
-  this change does not move.
+  data URB ends the run. Feedback has its own deadline (next item).
+- **The feedback deadline in bus time.** The deadline keeps its lengths
+  (23.2: 1 s before the first valid value of a stream, 200 ms after) but
+  counts the service time of the feedback URBs that came back (not
+  cancelled) with no usable packet since the last usable one: each such
+  URB adds its packets times one packet's service time
+  (`UacFeedbackPacketUs`: 125 << (`bInterval` - 1) microseconds at High
+  Speed, a frame at Full Speed; `UacFeedbackAdd`, `UacFeedbackStale`,
+  `uacwatch.h`), and a usable packet resets the count. The data URBs
+  that come back after the last usable packet count the same way (their
+  span each, reset only by a usable packet; data that came back before
+  it but is retired after it, as the worker retires feedback first, is
+  not counted: `UacFeedbackAfter` on each completion's stamp. The
+  worker retires the completed feedback URBs in the order they came back
+  (the oldest stamp first, chosen in one look under the stream's lock,
+  then the data in sequence), and a feedback
+  URB that came back before the newest one already retired changes
+  neither count;
+  `UacFeedbackStaleBus`, the
+  larger of the two counts), so feedback held, or trickling back
+  unusable, while data plays still ends the stream after 200 ms of bus
+  time. A time in which
+  the stack holds every URB and none comes back, or the guest's clock
+  jumps, no longer counts against the device; a device whose feedback
+  comes back empty, failed or out of range for 200 ms of bus time still
+  ends the stream, as before. A stack that never returns the URBs leaves
+  the stream silent until it is stopped, where before it failed after
+  200 ms; neither plays.
 - **The speed under 2000's USB 1.1 stack.** The rule that a missing or
   version 0 USBDI answer means Full Speed (98 SE and ME, below WDM 1.10)
   now also applies on 2000 (WDM 1.10, below 1.20) when the device's PDO
@@ -2450,9 +2483,10 @@ on XP under Windows' EHCI and UHCI:
   by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays.
 - Packet counts (multiples of 8 at High Speed `bInterval` 1) and the
   queue (19.4).
-- The feedback deadline. Under QEMU on a loaded host it can still end a
-  stream when the controller skips more than 200 ms of frames; a stall
-  that long is not expected on real hardware.
+- The deadline's lengths. Under QEMU on a loaded host a controller that
+  skips more than 200 ms of frames still returns that much unusable
+  feedback and ends the stream; a stall that long is not expected on
+  real hardware.
 - When a stream stops on a failure, the KS pin stays in RUN with a
   position that no longer moves, until the client stops or closes it;
   with Windows' mixer (XP) that can be much later than the client's own
@@ -2460,6 +2494,17 @@ on XP under Windows' EHCI and UHCI:
 
 ### 24.5 Tests
 
+- `test.cmd` (`watchtest.c`): `UacFeedbackStale` at the 200 ms and 1 s
+  boundaries and never at 0; `UacFeedbackPacketUs` for each High Speed
+  `bInterval` (and out of range) and Full Speed; 25 then 26 unusable
+  8-packet URBs of 1 ms packets once active, 125 then 126 at start;
+  `UacFeedbackAdd` saturating; `UacFeedbackStaleBus` on either count,
+  and 50 then 51 data URBs of 4 ms with feedback held, also with an
+  unusable feedback URB back after every 49th; a 128 ms backlog of data
+  older than a usable feedback URB not counted, also with the two
+  feedback slots retired in reverse of their order; an older usable and
+  a newer unusable feedback URB retired oldest first near the boundary;
+  the stamps' wrap.
 - `test.cmd` (`desctest.c`): `UacPlanIsoLost` true only for that URB
   status with every packet failed (not with one packet good, no packets,
   success, a bad start frame, device gone, a cancelled or a halted

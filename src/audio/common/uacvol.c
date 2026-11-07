@@ -48,6 +48,21 @@ static const UAC_BYTE *Entity(const UAC_DESC *d, unsigned int id)
 static unsigned int Sources(const UAC_BYTE *p, unsigned int *first)
 {
     unsigned int n = p[0], count;
+#ifdef UAC_V1
+    /* USB Audio 1.0 (ADC-1 Tables 4-4 to 4-15): Output Terminal 9 bytes;
+     * Processing 7 and Extension 8, their pins at 6; no Effect or SRC. */
+    switch (p[2]) {
+    case 0x03: *first = 7; count = n >= 9 ? 1 : 0; break;      /* Output Terminal */
+    case 0x06: *first = 4; count = n >= 7 ? 1 : 0; break;      /* Feature */
+    case 0x04: case 0x05:                                      /* Mixer, Selector */
+        *first = 5; count = n >= 5 ? p[4] : 0; break;
+    case 0x07: case 0x08:                                      /* Processing, Extension */
+        *first = 7; count = n >= 7 ? p[6] : 0; break;
+    default: return 0;
+    }
+    if (*first + count > n) return 0;
+    return count;
+#else
     switch (p[2]) {
     case 0x03: *first = 7; count = n >= 12 ? 1 : 0; break;     /* Output Terminal */
     case 0x06: case 0x0d: *first = 4; count = n >= 5 ? 1 : 0; break; /* Feature, SRC */
@@ -60,6 +75,7 @@ static unsigned int Sources(const UAC_BYTE *p, unsigned int *first)
     }
     if (*first + count > n) return 0;
     return count;
+#endif
 }
 
 /* Depth-first from `id` back to `terminal`; path[] collects the ids from
@@ -88,14 +104,30 @@ static int Walk(const UAC_DESC *d, unsigned int id, unsigned int terminal,
 /* A Feature Unit's logical channels (not counting the master), or -1. */
 static int UnitChannels(const UAC_BYTE *p)
 {
+#ifdef UAC_V1
+    /* ADC-1 Table 4-7: bControlSize (p[5]) bytes per bitmap, master
+     * first, then iFeature: bLength 7 + (channels + 1) * bControlSize. */
+    if (!p || p[2] != 0x06 || p[0] < 8 || !p[5] || p[5] > 4 || (p[0] - 7) % p[5] ||
+        (p[0] - 7) / p[5] < 1) return -1;
+    return (p[0] - 7) / p[5] - 1;
+#else
     if (!p || p[2] != 0x06 || p[0] < 10 || (p[0] - 6) % 4) return -1;
     return (p[0] - 6) / 4 - 1;
+#endif
 }
 
 /* The control's access on logical channel `channel` of a Feature Unit. */
 static int Access(const UAC_BYTE *fu, unsigned int channel, unsigned int selector)
 {
+#ifdef UAC_V1
+    /* One bit per control, D(selector - 1); USB Audio 1.0 has no
+     * read-only form: a control present is read/write. */
+    unsigned int size = fu[5], bit = selector - 1;
+    if (!selector || bit >= 8 * size) return 0;
+    return (fu[6 + channel * size + bit / 8] >> (bit % 8)) & 1 ? 3 : 0;
+#else
     return UacCtlAccess(fu + 5 + 4 * channel, 4, selector);
+#endif
 }
 
 static void Pick(const UAC_DESC *d, const UAC_BYTE *path, unsigned int length,
@@ -131,7 +163,11 @@ unsigned int UacVolJack(const UAC_DESC *desc, int capture, unsigned int terminal
     if (!desc || !desc->Bytes || !terminal || terminal > 255) return 0;
     for (id = 1; id < 256; id++) {
         p = Entity(desc, id);
+#ifdef UAC_V1
+        if (!p || p[2] != (capture ? 0x02 : 0x03) || p[0] < (capture ? 12 : 9)) continue;
+#else
         if (!p || p[2] != (capture ? 0x02 : 0x03) || p[0] < (capture ? 17 : 12)) continue;
+#endif
         type = (unsigned int)p[4] | ((unsigned int)p[5] << 8);
         if (type == 0x0101) continue;
         for (i = 0; i < 256; i++) visited[i] = 0;
@@ -161,7 +197,11 @@ int UacVolFind(const UAC_DESC *desc, unsigned int terminal, unsigned int channel
     if (!desc || !desc->Bytes || !terminal || terminal > 255) return 0;
     for (id = 1; id < 256; id++) {
         const UAC_BYTE *p = Entity(desc, id);
+#ifdef UAC_V1
+        if (!p || p[2] != 0x03 || p[0] < 9) continue;
+#else
         if (!p || p[2] != 0x03 || p[0] < 12) continue;
+#endif
         if (((unsigned int)p[4] | ((unsigned int)p[5] << 8)) == 0x0101) continue;
         for (i = 0; i < 256; i++) visited[i] = 0;
         if (!Walk(desc, id, terminal, visited, path, 0, &length)) continue;

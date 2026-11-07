@@ -77,6 +77,12 @@ typedef struct UAC_USB_STATS {
 NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out);
 NTSTATUS UacUsbRates(UAC_DEV *dev, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count);
 int UacUsbHighSpeed(UAC_DEV *dev);
+#ifdef UAC_V1
+/* uac1, PASSIVE: the USBDI bus interface's speed answer for the device
+ * below lower; STATUS_NOT_SUPPORTED when there is none (no answer, or a
+ * version 0 interface). UacUsbOpen takes the speed from desc->Speed. */
+NTSTATUS UacUsbBusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high);
+#endif
 void UacUsbClose(UAC_DEV *dev);
 /* PASSIVE. One class request to the function, under the device lock that
  * also orders the clock requests: setup is the 8 bytes uacctl.c's

@@ -1,0 +1,96 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; Experimental USB Audio Class 1.0 driver for Windows 98 SE only
+; (docs/design/uac2.md section 24): playback and capture in the formats and
+; rates the device describes, on the driver core uac2 shares.
+[Version]
+Signature="$CHICAGO$"
+Class=MEDIA
+ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=11/07/2026,0.1.0.1
+
+[Manufacturer]
+%Provider%=Models
+
+; Windows 98 SE only: no NT section, so 2000 and later find nothing to
+; install here. A USB Audio 1.0 function as a composite parent presents
+; it: by its AudioControl interface (01/01/00: the legacy grouping, or a
+; MIDI-only AC+MS function, which starts as a null function), or by an IAD
+; (bFunctionSubClass 00 or 02, protocol 00). These rank above
+; WDMA_USB.INF's USB\CLASS_01, a later entry of the same compatible list;
+; the devices WDMA_USB.INF lists by hardware id, and those usbmidi.inf lists,
+; keep their drivers. USB Audio 2.0 functions (protocol 20) are uac2's.
+[Models]
+%Device%=UAC1,USB\Class_01&SubClass_01&Prot_00
+%Device%=UAC1,USB\Class_01&SubClass_00&Prot_00
+%Device%=UAC1,USB\Class_01&SubClass_02&Prot_00
+
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+uac1wdm.sys=1
+[DestinationDirs]
+Driver.Copy=10,system32\drivers
+
+[UAC1]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration
+CopyFiles=Driver.Copy
+AddReg=Loader,AudioSupport,Queue9x
+[Driver.Copy]
+uac1wdm.sys
+[Loader]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,uac1wdm.sys
+[AudioSupport]
+; As uac2wdm.inf: the published PortCls multimedia registration contract;
+; the midi subclass gives WinMM WDMAud's software synthesiser through
+; this device, not the device's own MIDI.
+HKR,,AssociatedFilters,,wdmaud
+HKR,,Driver,,uac1wdm.sys
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%Device%
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
+; Windows makes the device the preferred one when it installs it, as
+; Windows' own USB audio INF does (docs/design/uac2.md 22).
+HKR,,SetupPreferredAudioDevices,3,02,00,00,00
+
+; The driver core's settings, under uac2's names (docs/design/uac2.md 19.3,
+; 19.6 and 20): the milliseconds of audio queued to the USB stack (16 to
+; 128, default 32), the real-time worker, and the volume range's top at
+; 0 dB. Written at the defaults, never over a value already there; 9x
+; takes the DWORD as its four bytes.
+[Queue9x]
+HKR,,Uac2QueueMs,0x00000003,20,00,00,00
+HKR,,Uac2Realtime,0x00000003,01,00,00,00
+HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00
+
+; RENDER and CAPTURE come from the wave filter (PcRegisterSubdevice
+; registers the categories its descriptor lists), as in uac2wdm.inf.
+[UAC1.Interfaces]
+AddInterface=%Audio%,Wave,Wave.Interface
+AddInterface=%Audio%,Topology,Topology.Interface
+AddInterface=%Topology%,Topology,Topology.Interface
+[Wave.Interface]
+AddReg=Wave.Interface.Reg
+[Topology.Interface]
+AddReg=Topology.Interface.Reg
+[Wave.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device%
+[Topology.Interface.Reg]
+HKR,,CLSID,,%Proxy%
+HKR,,FriendlyName,,%Device%
+
+[Strings]
+Provider="usb-wdm-free"
+Device="UAC1 USB audio (experiment)"
+Disk="UAC1 experimental build folder"
+Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+Topology="{DDA54A40-1E4C-11D1-A050-405705C10000}"
+Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

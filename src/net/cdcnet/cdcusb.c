@@ -102,6 +102,7 @@ struct CDC_DEV {
     UCHAR ReqData[32 * 6];
     BOOLEAN ResetPending;
     ULONG IdleTicks;
+    ULONG ProbeTicks;             /* quiet worker ticks, for the departure probe */
     BOOLEAN Connected;
     ULONG Speed;
 
@@ -286,6 +287,18 @@ static NTSTATUS ClassRequest(CDC_DEV *d, BOOLEAN in, UCHAR request, USHORT value
     status = Sync(d, (PURB)&urb, CTRL_TIMEOUT);
     if (actual) *actual = NT_SUCCESS(status) ? urb.TransferBufferLength : 0;
     return status;
+}
+
+/* GET_STATUS to the device: two bytes into d->Ctrl. Worker context. */
+static NTSTATUS DeviceStatus(CDC_DEV *d)
+{
+    struct _URB_CONTROL_GET_STATUS_REQUEST urb;
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_GET_STATUS_FROM_DEVICE;
+    urb.TransferBuffer = d->Ctrl;
+    urb.TransferBufferLength = 2;
+    return Sync(d, (PURB)&urb, CTRL_TIMEOUT);
 }
 
 static NTSTATUS PipeRequest(CDC_DEV *d, USHORT function, USBD_PIPE_HANDLE pipe)
@@ -1257,6 +1270,17 @@ static void Worker(PVOID context)
 #else
         UNREFERENCED_PARAMETER(status);
 #endif
+        /* A departed device whose transfers the host controller driver
+         * holds (xHCI98 parks them on the device) completes nothing, and
+         * ECM and NCM send no control request of their own: ask the device
+         * every 2 s of a quiet worker; a device-gone answer reports it. */
+        if (status == STATUS_TIMEOUT && !d->Gone && !d->Suspended && d->Open && (++d->ProbeTicks % 2) == 0) {
+            NTSTATUS probe = DeviceStatus(d);
+            if (DeviceGone(probe, 0)) {
+                CdcTrace("probe: device gone (%x)", probe);
+                d->Gone = TRUE;
+            }
+        }
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */
     }

@@ -18,6 +18,10 @@
  *   indication transfers ownership until ReturnPacket, a RESOURCES
  *   indication (pool low, one packet alone) is reclaimed on return using
  *   the status saved before the call;
+ * - on 98 SE and ME (the x86 NDIS 5.0 build, at run time) no receive
+ *   indication or send completion is made from a USB completion: both
+ *   are queued and made from an NDIS timer (Upcalls, ethernet.md section
+ *   4.4);
  * - OIDs that need the device (filter, multicast, power) and reset pend
  *   and complete from the lower edge's passive worker;
  * - the address: the Advanced tab's NetworkAddress if valid, else the
@@ -32,6 +36,16 @@
 #define RX_PACKETS 64
 #define RX_LOW 8
 #define RX_STRIDE 1536
+
+/* The 98 SE / ME upcall queue (Upcalls) exists in the x86 NDIS 5.0 build
+ * only; the NDIS 5.1 (x64) build has none of it. */
+#if !defined(NDIS51_MINIPORT)
+#define NET_DEFER 1
+#define DEFERRING(a) ((a)->Defer)
+#else
+#define NET_DEFER 0
+#define DEFERRING(a) FALSE
+#endif
 
 typedef struct ADAPTER {
     NDIS_HANDLE Handle;
@@ -56,6 +70,22 @@ typedef struct ADAPTER {
     ULONG TxBytes, RxBytes;
     ULONG RxCopied;                /* trace: frames indicated with NDIS_STATUS_RESOURCES */
     ULONG TxPeak;                  /* trace: the longest the send queue has been */
+#if NET_DEFER
+    /* 98 SE and ME (Defer): what the USB completions would have indicated
+     * or completed waits here for Upcalls, under Lock. RxPend is a ring of
+     * packets taken from RxFree and not yet indicated (it cannot overflow:
+     * there are RX_PACKETS packets); DoneHead/DoneTail lists completed
+     * sends through NEXT, their status in DONE_STATUS. */
+    BOOLEAN Defer;
+    BOOLEAN UpcallArmed;           /* the timer is set and its routine has not started */
+    BOOLEAN UpcallRunning;         /* Upcalls is running */
+    BOOLEAN UpcallStop;            /* Halt: the timer is never set again */
+    NDIS_MINIPORT_TIMER UpcallTimer;
+    PNDIS_PACKET RxPend[RX_PACKETS];
+    ULONG RxPendHead, RxPendCount;
+    PNDIS_PACKET DoneHead, DoneTail;
+    ULONG UpcallRuns;              /* trace */
+#endif
 } ADAPTER;
 
 /* The core's lock is taken from the lower edge's USB completions, which
@@ -68,6 +98,77 @@ typedef struct ADAPTER {
 #define CoreUnlock(a) KeReleaseSpinLock(&(a)->Lock.SpinLock, (a)->Lock.OldIrql)
 
 #define NEXT(p) (*(PNDIS_PACKET *)&(p)->MiniportReserved[0])
+#define DONE_STATUS(p) (*(NDIS_STATUS *)&(p)->MiniportReserved[sizeof(PVOID)])
+
+#if NET_DEFER
+/* Windows 98 SE and ME. Under sustained TCP, receive indications and send
+ * completions made straight from the USB completions stalled or faulted
+ * the 98 TCP/IP (fatal exceptions 0E in MSTCP, streams stalling within
+ * seconds), with the core's own state intact; the same calls made from an
+ * NDIS timer did not (docs/testing/2026-11-07-98se-tcp.md). So on these
+ * systems the completions only queue (Receive, TxDone) and arm the timer,
+ * and Upcalls makes the calls. NT makes them at once, as before. Called
+ * with the lock held. */
+static void ArmUpcalls(ADAPTER *a)
+{
+    if (a->UpcallArmed || a->UpcallStop) return;
+    a->UpcallArmed = TRUE;
+    NdisMSetTimer(&a->UpcallTimer, 0);
+}
+
+/* Complete the queued sends and indicate the queued receives, in order,
+ * until both queues are empty. With indicate FALSE (Halt) the receives go
+ * back to the pool unindicated. */
+static void Deliver(ADAPTER *a, BOOLEAN indicate)
+{
+    PNDIS_PACKET rx[NET_RX_BATCH], done;
+    ULONG n, i, taken;
+    for (;;) {
+        CoreLock(a);
+        done = a->DoneHead;
+        a->DoneHead = a->DoneTail = NULL;
+        n = 0;
+        while (n < NET_RX_BATCH && a->RxPendCount) {
+            rx[n++] = a->RxPend[a->RxPendHead];
+            a->RxPendHead = (a->RxPendHead + 1) % RX_PACKETS;
+            a->RxPendCount--;
+        }
+        taken = n;
+        if (!indicate) {
+            for (i = 0; i < n; i++) a->RxFree[a->RxFreeCount++] = rx[i];
+            a->RxOut -= (LONG)n;
+            n = 0;
+        }
+        CoreUnlock(a);
+        if (!done && !taken) return;
+        while (done) {
+            PNDIS_PACKET next = NEXT(done);
+            NdisMSendComplete(a->Handle, done, DONE_STATUS(done));
+            done = next;
+        }
+        if (n) NdisMIndicateReceivePacket(a->Handle, rx, n);
+    }
+}
+
+static VOID Upcalls(PVOID s1, PVOID context, PVOID s2, PVOID s3)
+{
+    ADAPTER *a = context;
+    BOOLEAN indicate;
+    UNREFERENCED_PARAMETER(s1);
+    UNREFERENCED_PARAMETER(s2);
+    UNREFERENCED_PARAMETER(s3);
+    CoreLock(a);
+    a->UpcallArmed = FALSE;
+    a->UpcallRunning = TRUE;
+    a->UpcallRuns++;
+    indicate = !a->Halting;
+    CoreUnlock(a);
+    Deliver(a, indicate);
+    CoreLock(a);
+    a->UpcallRunning = FALSE;
+    CoreUnlock(a);
+}
+#endif
 
 static NDIS_OID supported[] = {
     OID_GEN_SUPPORTED_LIST, OID_GEN_HARDWARE_STATUS, OID_GEN_MEDIA_SUPPORTED,
@@ -136,9 +237,9 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
             a->RxBytes += length;
 #if defined(NET_TRACE_E9)
             if (!(a->RxOk % 8192))
-                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, %u copied; tx %u/%u queued %u peak %u",
+                NetTrace("rx: %u ok, %u free, %d out, %u no buffer, %u copied; tx %u/%u queued %u peak %u%s",
                          a->RxOk, a->RxFreeCount, a->RxOut, a->RxNoBuffer, a->RxCopied, a->TxOk, a->TxError,
-                         a->TxQueued, a->TxPeak);
+                         a->TxQueued, a->TxPeak, DEFERRING(a) ? "; deferred" : "");
 #endif
         } else {
             a->RxNoBuffer++;
@@ -153,6 +254,18 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
     NdisAdjustBufferLength(buffer, length);
     NdisRecalculatePacketCounts(packet);
     NDIS_SET_PACKET_HEADER_SIZE(packet, 14);
+#if NET_DEFER
+    if (a->Defer) {
+        /* Indicated by Upcalls, always with NDIS_STATUS_SUCCESS: the
+         * RESOURCES path below needs the indication inside this call. */
+        NDIS_SET_PACKET_STATUS(packet, NDIS_STATUS_SUCCESS);
+        CoreLock(a);
+        a->RxPend[(a->RxPendHead + a->RxPendCount++) % RX_PACKETS] = packet;
+        ArmUpcalls(a);
+        CoreUnlock(a);
+        return;
+    }
+#endif
     if (low) {
         /* Pool low: what is gathered goes first, in order, then this
          * packet alone with NDIS_STATUS_RESOURCES, which the protocols
@@ -233,6 +346,17 @@ static void TxDone(void *context, void **packets, nc_u32 count, int success)
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
         CoreLock(a);
         if (success) { a->TxOk++; a->TxBytes += size; } else a->TxError++;
+#if NET_DEFER
+        if (a->Defer) {
+            NEXT(p) = NULL;
+            DONE_STATUS(p) = success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
+            if (a->DoneTail) NEXT(a->DoneTail) = p; else a->DoneHead = p;
+            a->DoneTail = p;
+            ArmUpcalls(a);
+            CoreUnlock(a);
+            continue;
+        }
+#endif
         CoreUnlock(a);
         NdisMSendComplete(a->Handle, p, success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE);
     }
@@ -494,6 +618,32 @@ static VOID Halt(NDIS_HANDLE context)
     NetUsbStop(a->Usb);          /* no USB activity or callback after this */
     a->Usb = NULL;
     Flush(a);
+#if NET_DEFER
+    if (a->Defer) {
+        /* No timer after this; a routine already started or due runs to
+         * its end (it indicates nothing once Halting is set), then what is
+         * left is completed here. */
+        BOOLEAN cancelled = FALSE, busy;
+        CoreLock(a);
+        a->UpcallStop = TRUE;
+        CoreUnlock(a);
+        NdisMCancelTimer(&a->UpcallTimer, &cancelled);
+        CoreLock(a);
+        if (cancelled) a->UpcallArmed = FALSE;
+        busy = a->UpcallArmed || a->UpcallRunning;
+        CoreUnlock(a);
+        while (busy) {
+            NdisMSleep(1000);
+            if (++waited % 5000 == 0) NetTrace("halt: upcall routine still due");
+            CoreLock(a);
+            busy = a->UpcallArmed || a->UpcallRunning;
+            CoreUnlock(a);
+        }
+        waited = 0;
+        Deliver(a, FALSE);
+        NetTrace("halt: %u upcall runs", a->UpcallRuns);
+    }
+#endif
     /* Every indicated packet comes back before its pool is freed. */
     while (a->RxOut > 0) {
         NdisMSleep(10000);
@@ -667,6 +817,13 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
                          | NDIS_ATTRIBUTE_SURPRISE_REMOVE_OK
 #endif
                          , NdisInterfaceInternal);
+#if NET_DEFER
+    /* 98 SE and ME: the WDM 1.10 query fails there (as in netusb.c). The
+     * timer is set only once NDIS can send or set a filter, which is after
+     * Initialize returns, so no failure path below has one to cancel. */
+    a->Defer = !IoIsWdmVersionAvailable(1, 0x10);
+    if (a->Defer) NdisMInitializeTimer(&a->UpcallTimer, handle, Upcalls, a);
+#endif
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 

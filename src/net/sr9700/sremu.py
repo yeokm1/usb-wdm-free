@@ -188,6 +188,9 @@ class Model(ax7emu.Model):
             return
         if len(frame) < 60:
             frame += bytes(60 - len(frame))
+        if len(self.rx_packets) >= 256:                # a full receive FIFO drops, as ax7emu's
+            self.totals['rx_overflow'] += 1
+            return
         packet = bytes((0x40,)) + struct.pack('<H', len(frame) + 4) + frame + struct.pack('<I', zlib.crc32(frame))
         self.rx_packets.append(packet)
         self.totals['rx_frames'] += 1
@@ -213,7 +216,8 @@ class Model(ax7emu.Model):
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
-            self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if not self.bridge:
+                self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def reset_device(self):
         super().reset_device()
@@ -234,6 +238,10 @@ class Model(ax7emu.Model):
         padded = (len(data) - 1) % self.bulk_max == 0 and data[-1] == 0
         frame = data[2:]
         self.totals['tx_frames'] += 1
+        if self.bridge:
+            if self.chip.link:
+                self.bridge[0].sendto(frame, self.bridge[1])
+            return frame
         if padded:
             self.totals['tx_padded'] += 1
         self.log('tx_frame', length=len(frame), destination=frame[:6].hex(), ethertype=frame[12:14].hex(),
@@ -295,6 +303,7 @@ def main():
     ap.add_argument('--flap-after', type=float)
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--serial', default='SIM9700')
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
@@ -306,6 +315,8 @@ def main():
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, link_after=args.link_after, flap_after=args.flap_after,
                           flap_for=args.flap_for, serial=args.serial)
+            if args.udp:
+                model.bridge = ax7emu.open_bridge(args.udp)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

@@ -240,6 +240,8 @@ def config_descriptor(speed, kind=2):
 
 
 class Model:
+    bridge = None                                  # (socket, peer) of --udp, or None
+
     def __init__(self, connection, trace, speed='high', now=time.monotonic, link_after=1.0,
                  flap_after=None, flap_for=2.0, mbps=100, half=False, partner_pause=True,
                  chip='772b', vid=None, pid=None, cut='burst', seed=1, serial='SIM772'):
@@ -394,7 +396,8 @@ class Model:
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
-            self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if not self.bridge:
+                self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def transmit(self, data):
         """One bulk-OUT transfer: one record, and the pad word when it ends on a packet boundary."""
@@ -413,6 +416,10 @@ class Model:
             raise ValueError('transmit pad word %s' % data[-4:].hex())
         frame = data[4:4 + length]
         self.totals['tx_frames'] += 1
+        if self.bridge:
+            if self.chip.link and self.chip.medium & MEDIUM_RE:
+                self.bridge[0].sendto(frame, self.bridge[1])
+            return frame
         if pad:
             self.totals['tx_padded'] += 1
         self.log('tx_frame', length=len(frame), destination=frame[:6].hex(), ethertype=frame[12:14].hex(),
@@ -559,8 +566,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -589,6 +605,16 @@ class Model:
                     self.handle(kind, ident, packet)
 
 
+def open_bridge(spec):
+    """--udp LOCAL:REMOTE: the bound, non-blocking socket and the peer."""
+    local, remote = (int(x) for x in spec.split(':'))
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    udp.bind(('127.0.0.1', local))
+    udp.setblocking(False)
+    return udp, ('127.0.0.1', remote)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', type=int, required=True)
@@ -607,6 +633,7 @@ def main():
     ap.add_argument('--flap-after', type=float, help='seconds after link-up to take the cable out, once')
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--serial', default='SIM772', help='the serial number string (iSerialNumber 3)')
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     if not (0 < len(args.serial) <= 126 and args.serial.isascii()):
         ap.error('--serial needs 1 to 126 ASCII characters')
@@ -622,6 +649,8 @@ def main():
                           flap_after=args.flap_after, flap_for=args.flap_for, mbps=args.mbps,
                           half=args.half, partner_pause=not args.no_partner_pause, chip=args.chip,
                           vid=args.vid, pid=args.pid, cut=args.cut, seed=args.seed, serial=args.serial)
+            if args.udp:
+                model.bridge = open_bridge(args.udp)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

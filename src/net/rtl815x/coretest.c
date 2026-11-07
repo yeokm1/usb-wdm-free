@@ -863,6 +863,118 @@ static void SendPath(void)
     Balanced();
 }
 
+/* 98 SE and ME: what the USB completions bring is indicated and completed
+ * only from the NDIS timer, in order; nothing from a completion routine
+ * (the fake counts that as a violation); Halt cancels the timer, completes
+ * the queued sends and takes back the receives it never indicated. */
+static void Deferred98(void)
+{
+    UCHAR b[2048];
+    PNDIS_PACKET list[8];
+    static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+    ULONG at = 0, i;
+    int completed, sets;
+
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(Fake.Timer != NULL && Fake.TimerSets == 0);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CHECK(Fake.TimerSets == 0);                      /* link and filter: nothing queued */
+
+    /* Three frames in one transfer: queued, the timer armed once. */
+    for (i = 0; i < 3; i++) {
+        ULONG len = 100 + i;
+        b[at] = (UCHAR)len; b[at + 1] = 0;
+        memset(b + at + 2, (int)(0x60 + i), len);
+        memcpy(b + at + 2, dev.Mac, 6);
+        at += 2 + len;
+    }
+    CompleteIn(P_IN, b, at);
+    CHECK(nd.Received == 0 && Fake.TimerSets == 1);
+    CHECK(QueryUlong(OID_GEN_RCV_OK) == 3);
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, at);                         /* still armed: not set again */
+    CHECK(nd.Received == 0 && Fake.TimerSets == 1);
+    CHECK(FakeRunTimer() == 1);
+    CHECK(nd.Received == 6 && nd.Resources == 0);
+    CHECK(nd.LastLength == 102 && nd.Last[6] == 0x62);   /* in order: the last one last */
+    CHECK(FakeRunTimer() == 0);
+
+    /* Sends: completed by the timer, once each, with their status. */
+    for (i = 0; i < 4; i++) list[i] = MakePacket((int)i, 300, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 4);
+    for (completed = 0; completed < 100; completed++) {
+        int done = 0, after = 0;
+        for (i = 0; i < 4; i++) done += tp[i].Completions;
+        if (done == 4) break;
+        if (Queued(P_OUT)) {
+            CompleteOut(STATUS_SUCCESS);
+            for (i = 0; i < 4; i++) after += tp[i].Completions;
+            CHECK(after == done);                     /* never from the completion */
+        } else if (!FakeRunTimer()) {
+            FwSleep(10);
+        }
+    }
+    for (i = 0; i < 4; i++) CHECK(tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS);
+    CHECK(QueryUlong(OID_GEN_XMIT_OK) == 4);
+
+    /* A send that fails at once (bad length) completes from the timer too. */
+    list[0] = MakePacket(10, 10, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 1);
+    CHECK(tp[10].Completions == 0);
+    CHECK(FakeRunTimer() == 1);
+    CHECK(tp[10].Completions == 1 && tp[10].Status == NDIS_STATUS_FAILURE);
+
+    /* Halt with receives and sends still queued: the sends complete once,
+     * the receives are never indicated, the timer is cancelled while set,
+     * and the pool is whole again (Balanced; Halt would wait forever for a
+     * receive left behind). */
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, at);
+    for (i = 0; i < 2; i++) list[i] = MakePacket(20 + (int)i, 300, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 2);
+    UNTIL(Queued(P_OUT) > 0, 2000);
+    while (Queued(P_OUT)) CompleteOut(STATUS_SUCCESS);
+    CHECK(Fake.Timer->Set);
+    sets = Fake.TimerSets;
+    Halt();
+    CHECK(nd.Received == 6);
+    CHECK(tp[20].Completions == 1 && tp[21].Completions == 1);
+    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.TimerSets == sets);
+    CHECK(Fake.Timer == NULL);                        /* freed with the adapter, not set */
+    Balanced();
+}
+
+/* 98 SE and ME: Halt with more queued receives than one indication's
+ * batch and no queued send (17), and with the whole pool queued (64):
+ * every one goes back to the pool. */
+static void DeferredHalt98(ULONG frames)
+{
+    UCHAR b[64];
+    ULONG i;
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    for (i = 0; i < frames; i++) {
+        UNTIL(Queued(P_IN) > 0, 2000);
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    }
+    CHECK(nd.Received == 0 && QueryUlong(OID_GEN_RCV_OK) == frames);
+    CHECK(Fake.TimerSets == 1 && Fake.Timer->Set);
+    {
+        void *t = FwThread((void (*)(void *))Fake.Chars.HaltHandler, ctx);
+        CHECK(FwWait(t, 5000) == 0);                  /* returns: nothing left out */
+        FwClose(t);
+    }
+    CHECK(nd.Received == 0);
+    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
+    Balanced();
+}
+
 static void ZeroLengthPackets(void)
 {
     PNDIS_PACKET list[2];
@@ -1058,6 +1170,9 @@ int main(void)
     InlineStorm();
     HoldAndResources();
     SendPath();
+    Deferred98();
+    DeferredHalt98(17);
+    DeferredHalt98(64);
     ZeroLengthPackets();
     PowerAndReset();
     SurpriseRemoval();

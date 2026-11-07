@@ -128,6 +128,17 @@ int main(void)
         q=UacFeedbackAdd(UacFeedbackAdd(q,1,4000),1,4000);
         CHECK(!UacFeedbackStaleBus(u,q,1));
     }
+    /* Both clocks must be past the deadline (98 SE under NUSB): bus time
+     * past it with 100 ms of interrupt time is not stale, nor 2 s of
+     * interrupt time with no bus time; both past it is. */
+    CHECK(!UacFeedbackStaleBoth(base+1000000,base,8000000ul,0,1));
+    CHECK(!UacFeedbackStaleBoth(base+1000000,base,0,8000000ul,0));
+    CHECK(!UacFeedbackStaleBoth(base+20000000,base,0,0,1));
+    CHECK(UacFeedbackStaleBoth(base+2000001,base,200001,0,1));
+    CHECK(!UacFeedbackStaleBoth(base+2000000,base,200001,0,1));
+    CHECK(!UacFeedbackStaleBoth(base+2000001,base,200000,0,1));
+    CHECK(UacFeedbackStaleBoth(base+10000001,base,0,1000001,0));
+    CHECK(!UacFeedbackStaleBoth(base+10000000,base,0,1000001,0));
     CHECK(UacFeedbackAdd(0xfffffff0ul,8,1000)==0xfffffffful);
     CHECK(UacFeedbackAdd(0,0x80000000ul,4)==0xfffffffful);
     printf("PASS: %u monotonic feedback watchdog checks\n",checks);return 0;

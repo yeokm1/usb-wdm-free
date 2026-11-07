@@ -1405,7 +1405,8 @@ static VOID Worker(PVOID context)
         /* The deadline is in bus time (section 25), never system time:
          * NTP or SetSystemTime must not create a feedback loss or hide one. */
         if (!stop && s->Feedback &&
-            UacFeedbackStaleBus(s->FeedbackUnusableUs, s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
+            UacFeedbackStaleBoth(KeQueryInterruptTime(), s->LastFeedbackPacket, s->FeedbackUnusableUs,
+                                 s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
             TR_LINE(("fblate", (ULONG)s->Rate_.FeedbackActive, s->Rate_.GoodFeedback, s->Rate_.BadFeedback));
             Fail(s, STATUS_IO_TIMEOUT);
         } /* nothing usable back for 1 s at start, 200 ms after */

@@ -2521,6 +2521,15 @@ under its UHCI:
   ends the stream, as before. A stack that never returns the URBs leaves
   the stream silent until it is stopped, where before it failed after
   200 ms; neither plays.
+- **Both clocks (2026-11-08).** Bus time alone ended streams on 98 SE
+  under NUSB 3.3: in 3 of 12 plays the first play stopped within 0.3 s
+  (a burst of OUT packets, then none), where the build before this
+  section stopped in none of 30. The count of service time can run ahead
+  of the time that passed where a stack returns URBs faster than their
+  span. The deadline is now passed only when both the bus-time count and
+  the interrupt time since the last usable packet (or the stream's start)
+  are past it (`UacFeedbackStaleBoth`): never earlier than before this
+  section, and still not inside a hold in which nothing comes back.
 - **The speed under 2000's USB 1.1 stack.** The rule that a missing or
   version 0 USBDI answer means Full Speed (98 SE and ME, below WDM 1.10)
   now also applies on 2000 (WDM 1.10, below 1.20) when the device's PDO
@@ -2559,7 +2568,8 @@ under its UHCI:
   older than a usable feedback URB not counted, also with the two
   feedback slots retired in reverse of their order; an older usable and
   a newer unusable feedback URB retired oldest first near the boundary;
-  the stamps' wrap.
+  the stamps' wrap; `UacFeedbackStaleBoth` only with both clocks past
+  the deadline, at each clock's boundary.
 - `test.cmd` (`desctest.c`): `UacPlanIsoLost` true only for that URB
   status with every packet failed (not with one packet good, no packets,
   success, a bad start frame, device gone, a cancelled or a halted

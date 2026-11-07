@@ -157,7 +157,7 @@ static void QueueTests(void)
     CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);
 }
 
-/* Section 24: a URB the stack failed whole is a lost interval, not a
+/* Section 25: a URB the stack failed whole is a lost interval, not a
  * broken pipe; a run of them covering a second stops the stream. And
  * 2000's USB 1.1 hub driver by name. */
 static void LostTests(void)

@@ -33,7 +33,7 @@ static int UacFeedbackLate(UAC_WATCH_TICK now,UAC_WATCH_TICK last,int active)
     if(active) return UacFeedbackExpired(now,last);
     return now>=last && now-last>UAC_FEEDBACK_START_TIMEOUT_100NS;
 }
-/* docs/design/uac2.md section 24: the same deadlines in bus time.
+/* docs/design/uac2.md section 25: the same deadlines in bus time.
  * unusableUs is the service time covered by the feedback URBs that came
  * back (not cancelled) without a usable packet since the last usable one.
  * A time in which the stack held every URB and none came back, or the

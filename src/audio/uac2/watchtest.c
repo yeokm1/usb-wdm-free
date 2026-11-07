@@ -45,7 +45,7 @@ int main(void)
     CHECK(!UacFeedbackLate(base+2000000,base,1));
     CHECK(!UacFeedbackLate(base,base+1,0));
     CHECK(!UacFeedbackLate(base,base+1,1));
-    /* Section 24: the deadlines in bus time. */
+    /* Section 25: the deadlines in bus time. */
     CHECK(!UacFeedbackStale(0,1)); CHECK(!UacFeedbackStale(0,0));
     CHECK(!UacFeedbackStale(200000,1)); CHECK(UacFeedbackStale(200001,1));
     CHECK(!UacFeedbackStale(1000000,0)); CHECK(UacFeedbackStale(1000001,0));

@@ -2375,9 +2375,9 @@ device 1.5% fast); a device at 44.1 kHz likewise on 98 SE. The released
 either size, and 0.1.8.26 fails the 3-byte case the same way; the cause
 is not settled.
 
-## 24. A URB the stack fails whole, and Full Speed under 2000's own UHCI (xHCI98 Phase 47, 2026-11-07)
+## 25. A URB the stack fails whole, and Full Speed under 2000's own UHCI (xHCI98 Phase 47, 2026-11-07)
 
-### 24.1 The reports
+### 25.1 The reports
 
 - XP, 7 and Vista under Windows' own EHCI and UHCI: playback of the
   asynchronous profiles (an explicit feedback endpoint) stopped after a
@@ -2388,7 +2388,7 @@ is not settled.
   device's service, yet the device was never configured (no
   `SET_CONFIGURATION`) and no wave device appeared.
 
-### 24.2 What the trace showed
+### 25.2 What the trace showed
 
 A trace build (`build.cmd wdmx86 trace`, test-only: every URB's submit
 and completion, written to QEMU's debug console port 0xE9 at an anomaly)
@@ -2423,7 +2423,7 @@ under its UHCI:
   later, so the start failed before the configuration was selected; the
   same as ME before its rule (16.5, the ME row).
 
-### 24.3 The change
+### 25.3 The change
 
 - **A URB failed whole is a lost interval.** A completion whose URB
   status is `USBD_STATUS_ISOCH_REQUEST_FAILED`, whose every packet
@@ -2477,7 +2477,7 @@ under its UHCI:
 - The trace flavour (`build.cmd <profile> trace`) is test-only and never
   released; a free or checked build compiles none of it.
 
-### 24.4 Not changed
+### 25.4 Not changed
 
 - Explicit `StartFrame` scheduling: the URBs after a lost one were placed
   by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays.
@@ -2492,7 +2492,7 @@ under its UHCI:
   with Windows' mixer (XP) that can be much later than the client's own
   close. Not changed here.
 
-### 24.5 Tests
+### 25.5 Tests
 
 - `test.cmd` (`watchtest.c`): `UacFeedbackStale` at the 200 ms and 1 s
   boundaries and never at 0; `UacFeedbackPacketUs` for each High Speed

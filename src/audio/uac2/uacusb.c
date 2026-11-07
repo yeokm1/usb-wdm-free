@@ -164,7 +164,7 @@ typedef struct USB_SLOT {
     PUCHAR Buffer;
     ULONG Packets, Bytes, BufferBytes, Sequence;
     LONG Phase; /* 0 idle,1 lower-owned,2 completed and caller-owned */
-    ULONG DoneStamp; /* section 24: the stream's completion count when it came back */
+    ULONG DoneStamp; /* section 25: the stream's completion count when it came back */
     BOOLEAN Feedback, CancelIssued, Used;
     NTSTATUS Status;
 } USB_SLOT;
@@ -203,10 +203,10 @@ struct UAC_USB {
     KEVENT Wake, Ready, Exited; /* Exited: the worker's last act */
     BOOLEAN Stop, ActiveAlt, WaitThread; /* WaitThread: WDM 1.10+ */
     ULONG NextSequence, CompletedSequence;
-    ULONG LostRun, LostLimit; /* section 24: lost data URBs in a row, and the most ridden out */
+    ULONG LostRun, LostLimit; /* section 25: lost data URBs in a row, and the most ridden out */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
-    ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 24: the deadline in bus time */
-    ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 24: completions, the last usable and the newest feedback's stamps */
+    ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 25: the deadline in bus time */
+    ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
     USB_SLOT Slot[SLOTS];
@@ -1107,7 +1107,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
     }
     KeReleaseSpinLock(&s->Lock, old);
     good = !stop && NT_SUCCESS(status) && USBD_SUCCESS(usbStatus);
-    /* Section 24: a URB the stack failed whole (every packet not accessed
+    /* Section 25: a URB the stack failed whole (every packet not accessed
      * or late, as a host controller that fell behind its schedule leaves
      * them) is a lost service interval, as a failed packet is: counted,
      * its time passed, the stream going on. Only a run of them covering
@@ -1161,7 +1161,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             }
         }
         if (lost) s->Rate_.BadFeedback += slot->Packets;
-        /* Section 24: the deadline counts the service time of the URBs
+        /* Section 25: the deadline counts the service time of the URBs
          * that came back with nothing usable, not the time since the last
          * usable packet: a time in which the stack held every URB and none
          * came back is not the device's. The feedback slots are retired by
@@ -1214,7 +1214,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
         }
         if (lost) s->LostRun++;
         else if (good) s->LostRun = 0;
-        /* Section 24: bus time since the last usable feedback, also while
+        /* Section 25: bus time since the last usable feedback, also while
          * feedback URBs are held or come back unusable. */
         if (s->Feedback && (good || lost) && UacFeedbackAfter(slot->DoneStamp, s->QuietFrom))
             s->FeedbackQuietUs = UacFeedbackAdd(s->FeedbackQuietUs, 1, s->TransferUs);
@@ -1269,7 +1269,7 @@ static VOID Worker(PVOID context)
     for (;;) {
         KeClearEvent(&s->Wake);
         /* Feedback first so newly prepared data uses the newest valid rate,
-         * in the order the feedback URBs came back (section 24: the oldest
+         * in the order the feedback URBs came back (section 25: the oldest
          * stamp first). Data completions are retired in sequence even if
          * callbacks reorder. */
         do {
@@ -1316,7 +1316,7 @@ static VOID Worker(PVOID context)
             }
         }
         if (stop && !pending) break;
-        /* The deadline is in bus time (section 24), never system time:
+        /* The deadline is in bus time (section 25), never system time:
          * NTP or SetSystemTime must not create a feedback loss or hide one. */
         if (!stop && s->Feedback &&
             UacFeedbackStaleBus(s->FeedbackUnusableUs, s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
@@ -1398,7 +1398,7 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *de
      * Windows' own 9x stack, UHCI or OHCI without USB 2.0, where a device
      * runs at Full Speed. NUSB's EHCI stack and xHCI98 give version 1. On
      * 2000 the same holds only under its own USB 1.1 hub driver (UHCI and
-     * OHCI; docs/design/uac2.md section 24). Otherwise, on 2000 and later,
+     * OHCI; docs/design/uac2.md section 25). Otherwise, on 2000 and later,
      * it is still refused: the speed is not guessed there. */
     if (status == STATUS_NOT_SUPPORTED && (!IoIsWdmVersionAvailable(1, 0x10) || usb11)) {
         high = FALSE;

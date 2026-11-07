@@ -157,7 +157,7 @@ unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int que
                           unsigned int capacity, unsigned long ringBytes,
                           unsigned int *packets, unsigned long *spanUs);
 
-/* A lost service interval (docs/design/uac2.md section 24). Windows'
+/* A lost service interval (docs/design/uac2.md section 25). Windows'
  * USB stack completes an isochronous URB whose every packet failed with
  * USBD_STATUS_ISOCH_REQUEST_FAILED (usb.h: "returned by HCD if all packets
  * in an iso transfer complete with an error"), each packet carrying its
@@ -173,7 +173,7 @@ unsigned int UacPlanIsoLost(unsigned long urbStatus, unsigned int packets, unsig
 #define UAC_LOST_LIMIT_MS 1000U
 unsigned int UacPlanLostLimit(unsigned long spanUs);
 
-/* Section 24: 1 when a device's PDO belongs to Windows 2000's USB 1.1
+/* Section 25: 1 when a device's PDO belongs to Windows 2000's USB 1.1
  * hub driver, whose devices run at Full or Low Speed: the driver object's
  * name (count UTF-16 units, no terminator needed) is "\Driver\usbhub",
  * compared without case, whole. 2000's USB 2.0 hub driver is usbhub20. */

@@ -1925,7 +1925,10 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
 
     for (i = 0; i < 6; i++) params->Mac[i] = s->Mac[i];
     params->RxSize = RxBuffer(s);
-    params->RxCount = 4;
+    /* Eight bulk-IN transfers outstanding (owner, 2026-11-06; four before):
+     * the chip keeps filling while completions are serviced. Linux keeps
+     * ten; Realtek's Windows 10 driver was seen with five. */
+    params->RxCount = 8;
     params->TxSize = TX_BUFFER;
     params->TxSlots = 4;
     params->TxBatch = 32;
@@ -2038,6 +2041,19 @@ static long RtlSetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *mul
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
+/* The PHY powered down (MII control bit 11) after the sleep steps, so a
+ * halted, disabled or suspended adapter drops its link instead of keeping
+ * it up at full speed; this core sets no wake-up source. Owner,
+ * 2026-11-06: as Realtek's Windows 10 driver does on disable (a capture
+ * of it on an RTL8157); Linux leaves the PHY up. Every setup table clears
+ * the bit again (PHY_TRIM MII_CONTROL POWERDOWN), and Resume runs the
+ * whole setup. Best effort: a failed access before it leaves it undone. */
+static void PhyDown(RTL_STATE *s, NET_IO *io)
+{
+    nc_u16 v = PhyGet(s, io, MII(MII_CONTROL));
+    if (io->Status >= 0) PhyPut(s, io, MII(MII_CONTROL), (nc_u16)(v | MIICTL_POWERDOWN));
+}
+
 static long RtlStop(void *chip, NET_IO *io)
 {
     RTL_STATE *s = chip;
@@ -2045,6 +2061,7 @@ static long RtlStop(void *chip, NET_IO *io)
     s->Carrier = 0;
     Run(s, io, SeqFor(s, R_SLEEP));
     Run(s, io, SeqFor(s, R_DETACH));
+    PhyDown(s, io);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
@@ -2054,6 +2071,7 @@ static long RtlSuspend(void *chip, NET_IO *io)
     if (!s->Id) return NC_OK;
     s->Carrier = 0;
     Run(s, io, SeqFor(s, R_SLEEP));
+    PhyDown(s, io);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 

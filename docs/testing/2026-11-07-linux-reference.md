@@ -103,8 +103,8 @@ this branch.
   and the makers' drivers ask with wLength 1); answers `GET_PORTCONFIG`
   (0x370C: 13, 15 or 0x49 bytes on the CP2104, CP2105, CP2108) with zeros
   and the CP2105's `GET_DEVICEMODE` (0x3711) with modem mode (INFERRED);
-  and takes `EMBED_EVENTS` (0x15): the escape character is doubled in
-  echoed data and a looped break comes back as escape, 01, the break status
+  and takes `EMBED_EVENTS` (0x15): each escape character in echoed data
+  is sent as escape, 00, and a looped break comes back as escape, 01, the break status
   (0x10) and its NUL. Disabling the interface, a reset or a configuration
   ends event insertion.
 - Host tests for each change (`sr9simtest.py`, `axsimtest.py`,

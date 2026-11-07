@@ -2971,7 +2971,9 @@ the other direction's running stream.
 carry it (terminal, channels, subslot and bits; `UacUsbRatesFor`) and
 that one of them can carry (`UacPlanPick`: listed, and within its
 packet), up to 32, so neither another format's rates nor rates no
-alternate runs crowd a runnable rate out of the list.
+alternate runs crowd a runnable rate out of the list. The pin's 32 data ranges
+take each format's rates in turn (48 and 44.1 kHz first for playback), so
+no format's rates crowd another format out of them.
 
 **Adaptive sources.** An adaptive IN endpoint whose `bSynchAddress`
 names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is

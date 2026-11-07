@@ -925,10 +925,20 @@ private:
     }
     static void BuildRanges(UAC_DIR_FORMATS *f, BOOLEAN capture) {
         f->Ranges = 0;
+#ifdef UAC_V1
+        /* UAC 1.0 keeps up to 32 rates per format: the ranges take each
+         * format's rates in turn, so no format's rates crowd another
+         * format out of the table. */
+        for (ULONG pass = 0; pass < 3; pass++)
+            for (ULONG k = 0; k < UAC_USB_RATES; k++)
+            for (ULONG i = 0; i < f->Count && f->Ranges < UAC_RANGES; i++) {
+                if (k >= f->RateCount[i] || RateRank(capture, f->Rate[i][k]) != pass) continue;
+#else
         for (ULONG i = 0; i < f->Count; i++)
             for (ULONG pass = 0; pass < 3; pass++)
             for (ULONG k = 0; k < f->RateCount[i] && f->Ranges < UAC_RANGES; k++) {
                 if (RateRank(capture, f->Rate[i][k]) != pass) continue;
+#endif
                 KSDATARANGE_AUDIO *r = &f->Range[f->Ranges];
                 RtlZeroMemory(r, sizeof(*r));
                 r->DataRange.FormatSize = sizeof(KSDATARANGE_AUDIO);

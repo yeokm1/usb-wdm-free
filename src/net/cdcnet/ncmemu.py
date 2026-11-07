@@ -23,10 +23,17 @@ Options shape what cdcnet must cope with: --caps (bmNetworkCapabilities),
 --out-remainder/--out-alignment (the host's transmit layout), --in-layout
 front|end|split (where the device puts its NDP16s), --mc-filters
 (wNumberMCFilters), --flap-after/--flap-for (NETWORK_CONNECTION 0 then 1),
---speed high|full. Behind the function sits the same SIMULATED host as
-rtlemu.py (192.168.77.1: ARP, ICMP echo, DHCP). Every NTB the host sends
+--speed high|full. Behind the function sits the SIMULATED host of
+axemu.py (192.168.77.1: ARP, ICMP echo, DHCP; it reassembles a fragmented
+request and fragments a long answer, which rtlemu.py's host, used here
+before, did not: Linux's cdc_ncm and cdcnet on 98 SE saw a 4000-byte echo
+answered with its first 1472 bytes only). Every NTB the host sends
 is checked against NCM 1.0's rules and the advertised parameters; a
-violation is logged as ntb_out_bad with its reason.
+violation is logged as ntb_out_bad with its reason. The datagram
+alignment is taken for the datagram or for its payload after the
+Ethernet header (Linux's cdc_ncm reads it so), and the totals say which.
+An NTB that comes a packet at a time (UHCI) is joined up until its short
+or zero-length packet, or dwNtbOutMaxSize.
 """
 import argparse
 import collections
@@ -39,8 +46,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'rtl815x'))
-from rtlemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ax88179'))
+from axemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
 
 CAP_VERSION, CAP_EP_MAX, CAP_ID64, CAP_BULK32 = 1, 4, 5, 6
 CAPS = (1 << CAP_VERSION) | (1 << CAP_EP_MAX) | (1 << CAP_ID64) | (1 << CAP_BULK32)
@@ -128,9 +135,13 @@ def build_ntb(frames, sequence, layout='front', divisor=4):
     return bytes(out)
 
 
-def parse_out_ntb(b, f):
+def parse_out_ntb(b, f, placement=None):
     """Check a host NTB16 against NCM 1.0 and the advertised parameters.
-    Returns (datagrams, problems)."""
+    Returns (datagrams, problems). wNdpOutDivisor/wNdpOutPayloadRemainder
+    are read two ways, both accepted: for the datagram's first byte (as
+    cdcnet places it) or for its payload after the 14-byte Ethernet header
+    (Linux's cdc_ncm, "according to NCM specification", 6.12
+    cdc_ncm_check_tx_max); placement, a Counter if given, counts which."""
     problems = []
     if len(b) < 12 or struct.unpack_from('<I', b)[0] != NTH16:
         return [], ['NTH16 signature']
@@ -160,8 +171,15 @@ def parse_out_ntb(b, f):
             if at + n > len(b) or not 14 <= n <= 1514:
                 problems.append('datagram %d+%d out of bounds' % (at, n))
                 continue
-            if at % f.out_divisor != f.out_remainder:
+            if at % f.out_divisor == f.out_remainder:
+                way = 'datagram'
+            elif (at + 14) % f.out_divisor == f.out_remainder:
+                way = 'payload'
+            else:
+                way = None
                 problems.append('datagram at %d not %d mod %d' % (at, f.out_remainder, f.out_divisor))
+            if way and placement is not None:
+                placement['tx_aligned_' + way] += 1
             if ndp <= at < ndp + nlen or at <= ndp < at + n:
                 problems.append('datagram overlaps NDP16')
             datagrams.append(bytes(b[at:at + n]))
@@ -181,7 +199,7 @@ class Model:
         self.f = function or Function()
         self.speed = self.f.speed
         self.in_layout, self.flap_after, self.flap_for = in_layout, flap_after, flap_for
-        self.net = Network(self.log)
+        self.net = Network(self.log, now=self.now)
         self.peer_caps = 0
         self.config = self.alt = 0
         self.interrupt = False
@@ -191,7 +209,21 @@ class Model:
         self.totals = collections.Counter()
         self.reset_function()
 
+    def receive_out(self, data):
+        """One bulk-OUT packet or transfer. An NTB ends with a short packet,
+        a zero-length one, or at dwNtbOutMaxSize, so one that comes a packet
+        at a time (UHCI at Full Speed) is joined up here first."""
+        if not data:
+            self.totals['tx_zlp'] += 1
+        self.tx_buf += data
+        if data and len(data) % self.f.bulk == 0 and len(self.tx_buf) < self.f.out_max:
+            return
+        whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        if whole:
+            self.transmit(whole)
+
     def reset_function(self):
+        self.tx_buf = bytearray()
         self.ntb_format = 0
         self.in_size = self.f.in_max
         self.max_datagram = 1514
@@ -314,7 +346,7 @@ class Model:
             self.log('ntb_in', length=len(ntb), datagrams=len(frames), layout=self.in_layout)
 
     def transmit(self, data):
-        datagrams, problems = parse_out_ntb(data, self.f)
+        datagrams, problems = parse_out_ntb(data, self.f, self.totals)
         self.totals['tx_ntbs'] += 1
         if problems:
             self.totals['tx_bad'] += 1
@@ -448,6 +480,7 @@ class Model:
             if kind == 9 and ok and interface == 1:
                 self.cancel_all()
                 self.rx.clear()
+                self.tx_buf = bytearray()                   # an NTB cut off by the restart is dropped
                 self.alt = alternate
                 self.info()
                 self.log('alternate', interface=1, alternate=alternate)
@@ -491,10 +524,7 @@ class Model:
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
-                else:
-                    self.totals['tx_zlp'] += 1
+                self.receive_out(data)
                 self.drain()
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:

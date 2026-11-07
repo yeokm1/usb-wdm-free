@@ -153,6 +153,44 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(self.tx(frame[:-1])), 63)        # 61 bytes: no boundary, no pad
         self.assertEqual(self.m.totals['tx_padded'], 1)
 
+    def test_packet_at_a_time(self):
+        """A host that sends one 64-byte packet at a time (UHCI): the
+        transfer is joined up until its short packet."""
+        self.up()
+        sent = []
+        real = self.m.transmit
+        self.m.transmit = lambda data: sent.append(data) or real(data)
+        for size in (61, 62, 63, 200):                # 62 + 2 = 64: the pad byte goes alone
+            frame = s.HOST_MAC + s.MODEL_MAC + b'\x88\xb5' + b'\x5a' * (size - 14)
+            out = (c.c_ubyte * (2 + 1514 + 1))()
+            self.chip.TxHeader(self.state, out, len(frame), self.probe.OutMax, 1)
+            c.memmove(c.byref(out, 2), frame, len(frame))
+            total = c.c_ulong(2 + len(frame))
+            self.assertEqual(self.chip.TxEnd(self.state, out, c.byref(total), len(out), self.probe.OutMax), 0)
+            data = bytes(out)[:total.value]
+            for at in range(0, len(data), 64):
+                piece = data[at:at + 64]
+                self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, len(piece), 0, 0) + piece)
+            if len(data) % 64 == 0:
+                self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, 0, 0, 0))
+            self.assertEqual(sent[-1], data, size)
+        self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (4, 1))
+        with self.assertRaises(ValueError):           # a full packet past the header's length
+            self.m.receive_out(struct.pack('<H', 30) + bytes(62))
+
+    def test_interface_reselection_drops_a_cut_off_transfer(self):
+        self.up()
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, 64, 0, 0) + struct.pack('<H', 200) + bytes(62))
+        self.m.handle(9, 4, b'\0\0')
+        self.tx(t.arp_request(s.MODEL_MAC))
+        self.assertEqual(self.m.totals['tx_frames'], 1)
+        frame = t.arp_request(s.MODEL_MAC) + bytes(40)            # 82 bytes: two packets
+        data = struct.pack('<H', len(frame)) + frame
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, 64, 0, 0) + data[:64])
+        self.m.handle(9, 5, b'\0\1')                                # refused: the transfer stays
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, len(data) - 64, 0, 0) + data[64:])
+        self.assertEqual(self.m.totals['tx_frames'], 2)
+
     def test_status_and_flap(self):
         self.assertEqual(self.setup(flap_after=2, flap_for=2), 0)
         self.m.handle(15, 1, bytes((s.EP_INT,)))

@@ -227,6 +227,38 @@ class ChipTests(unittest.TestCase):
         self.control(m, 0x41, 0x13, 0, 1, 16, block)
         self.assertFalse(m.fns[1].rts)
 
+    def test_linux_driver_requests(self):
+        """What Linux 6.12's pl2303 and cp210x sent (docs/testing/2026-11-07-linux-reference.md)."""
+        p = self.model('pl2303hx')
+        status, line = self.control(p, 0xA1, 0x21, 0, 0, 7)                # GET_LINE_CODING first
+        self.assertEqual((status, line), (0, struct.pack('<IBBB', 9600, 0, 0, 8)))
+        c = self.model('cp2102')
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370B, 0, 2)[0], 4)   # the two-byte quirk probe
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370B, 0, 1), (0, b'\x02'))
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370C, 0, 13)[0], 4)  # no GPIO on a CP2102
+        self.control(c, 0x41, 0x00, 1, 0)                                # IFC_ENABLE
+        self.assertEqual(self.control(c, 0x41, 0x15, 0xEC, 0)[0], 0)        # EMBED_EVENTS, escape EC
+        self.bulk_out(c, c.fns[0].out, b'A\xecB')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=33), b'A\xec\x00B')
+        self.control(c, 0x41, 0x05, 1, 0)                                # break: looped back
+        self.control(c, 0x41, 0x05, 0, 0)
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=34), b'\xec\x01\x10\x00')
+        self.control(c, 0x41, 0x15, 0, 0)                                # events off: as before
+        self.bulk_out(c, c.fns[0].out, b'\xec')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=35), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then disabled
+        self.control(c, 0x41, 0x00, 0, 0)
+        self.control(c, 0x41, 0x00, 1, 0)
+        self.bulk_out(c, c.fns[0].out, b'\xec')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=36), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then a reset
+        c.handle(3, 50, b'')
+        self.assertEqual(c.fns[0].esc, 0)
+        for part, size in (('cp2104', 13), ('cp2105', 15), ('cp2108', 0x49)):
+            g = self.model(part)
+            self.assertEqual(self.control(g, 0xC0, 0xFF, 0x370C, 0, size), (0, bytes(size)))
+            self.assertEqual(self.control(g, 0xC0, 0xFF, 0x3711, 0, 2)[0], 0 if part == 'cp2105' else 4)
+
     def test_maker_driver_requests(self):
         # What the makers' own drivers sent in the 2026-11-06 reference runs.
         for part in ('ft232am', 'ft232bm', 'ft2232c', 'cp2101', 'cp2102', 'cp2103', 'cp2104'):

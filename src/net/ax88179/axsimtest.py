@@ -358,6 +358,47 @@ class Tests(CoreCase):
         with self.assertRaises(ValueError):           # so is a missing padding flag
             self.m.transmit(struct.pack('<II', 504, 0) + bytes(504))
 
+    def test_linux_pad_byte_and_packet_at_a_time(self):
+        """Linux's usbnet adds one zero byte when header and frame end on a
+        packet boundary; a Full Speed host on UHCI sends a packet at a time."""
+        self.up('high')
+        frame, _ = echo_request(a.MODEL_MAC, 512 - 8 - 14 - 20 - 8)
+        self.m.transmit(struct.pack('<II', len(frame), a.TX_PAD) + frame + b'\0')
+        self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (1, 1))
+        with self.assertRaises(ValueError):           # a pad byte where there is no boundary
+            self.m.transmit(struct.pack('<II', len(frame) - 1, 0) + frame[:-1] + b'\0')
+        self.up('full')
+        for size in (64 - 8 - 14 - 20 - 8, 100, 1000):
+            frame, _ = echo_request(a.MODEL_MAC, size)
+            pad = (len(frame) + 8) % 64 == 0
+            data = struct.pack('<II', len(frame), a.TX_PAD if pad else 0) + frame + (b'\0' if pad else b'')
+            for at in range(0, len(data), 64):
+                piece = data[at:at + 64]
+                self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(piece), 0, 0) + piece)
+        self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (3, 1))
+        self.assertEqual(self.m.net.refused, 0)
+
+    def test_interface_reselection_drops_a_cut_off_transfer(self):
+        self.up('full')
+        frame, _ = echo_request(a.MODEL_MAC, 150)
+        data = struct.pack('<II', len(frame), 0) + frame
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + data[:64])
+        self.m.handle(9, 4, b'\0\0')
+        self.assertEqual(self.wire.take(11)[-1][2][0], 0)
+        small, _ = echo_request(a.MODEL_MAC, 10)
+        self.tx(small)
+        self.assertEqual(self.m.totals['tx_frames'], 1)
+
+    def test_joined_transfer_is_bounded(self):
+        self.up('full')
+        packet = struct.pack('<II', 0x80000000 | 1000, 0) + bytes(56)
+        with self.assertRaises(ValueError):
+            for _ in range(a.TX_JOIN_MAX // 64 + 2):
+                self.m.receive_out(packet if not self.m.tx_buf else bytes(64))
+        self.up('full')
+        with self.assertRaises(ValueError):          # a Linux-form length no frame has
+            self.m.receive_out(struct.pack('<II', 0x7fffffff, 0) + bytes(56))
+
     def test_corrupted_requests_get_no_answer(self):
         self.up()
         ping, icmp = echo_request(a.MODEL_MAC, 32)

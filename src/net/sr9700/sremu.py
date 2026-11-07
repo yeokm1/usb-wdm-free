@@ -32,9 +32,17 @@ share passes here, so the real chip stays owed to the bench.
   the address, broadcast, all multicast when bit 3, everything when bit 1.
 - Transmit (sr9700_tx_fixup, usbnet): a 2-byte length, then the frame;
   when header and frame end on a packet boundary the length is one more
-  and a zero byte follows. A header that does not give the transfer's
-  length, or a transfer that ends on a packet boundary, is a fatal error
-  in the trace.
+  and a zero byte follows. A transfer ends with a packet shorter than 64
+  bytes, so one that comes a packet at a time (UHCI) is joined up first.
+  A header that does not give the transfer's length, or a transfer that
+  ends on a packet boundary, is a fatal error in the trace.
+- From Linux 6.12's sr9700 (Debian 13) run against this model
+  (docs/testing/2026-11-07-linux-reference.md): that version still reads
+  PHY registers through EPCR/EPAR/EPDR (0x0B-0x0E), which v7.3 no longer
+  does; this model has no PHY behind them, so such a read returns the
+  last word written to EPDR (Linux 6.12 then reports 100 Mb/s full
+  duplex from its own advertisement). Not modelled: no fact gives the
+  chip's answer.
 
 Behind the adapter sits the SIMULATED network of axemu.py (one host,
 192.168.77.1: ARP, ICMP echo, DHCP offering 192.168.77.2).
@@ -143,6 +151,7 @@ class Model(ax7emu.Model):
         self.strings[2] = usb_string('SR9700 Ethernet - SIMULATED')
         self.bulk_max = 64
         self.ep_in, self.ep_out, self.ep_int = EP_IN, EP_OUT, EP_INT
+        self.tx_buf = bytearray()
 
     def descriptor(self, kind, number):
         if kind == 6:
@@ -222,6 +231,27 @@ class Model(ax7emu.Model):
     def reset_device(self):
         super().reset_device()
         self.rx_packets.clear()
+        self.tx_buf = bytearray()
+
+    def receive_out(self, data):
+        """One bulk-OUT packet or transfer from the host. The chip sees
+        packets: a transfer ends with a packet shorter than 64 bytes (a
+        zero-length one included), so a host that sends one packet at a
+        time (UHCI) is joined up here before the frame is taken."""
+        if len(self.tx_buf) + len(data) > 2 + 1514 + 1:
+            raise ValueError('bulk-OUT transfer longer than a header, a frame and the pad byte')
+        self.tx_buf += data
+        if data and len(data) % self.bulk_max == 0:
+            if len(self.tx_buf) >= 2:
+                length = struct.unpack_from('<H', self.tx_buf)[0]
+                if len(self.tx_buf) == length + 2:
+                    raise ValueError('a transfer on a packet boundary without the length bump and pad byte')
+                if len(self.tx_buf) > length + 2:
+                    raise ValueError('transmit header %d, transfer %d or more' % (length, len(self.tx_buf)))
+            return
+        whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        if whole:
+            self.transmit(whole)
 
     def transmit(self, data):
         """One frame after its 2-byte length. A transfer that would end on a
@@ -252,6 +282,8 @@ class Model(ax7emu.Model):
         return frame
 
     def handle(self, kind, ident, packet):
+        if kind == 9 and self.config and packet == b'\0\0':
+            self.tx_buf = bytearray()                 # SET_INTERFACE(0, 0): a transfer cut off is dropped
         if kind in (15, 16):
             if len(packet) != 1:
                 raise ValueError('interrupt header')
@@ -274,8 +306,7 @@ class Model(ax7emu.Model):
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
+                self.receive_out(data)
                 self.drain()
                 return
         super().handle(kind, ident, packet)

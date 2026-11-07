@@ -2,8 +2,8 @@
 # read by release\release.ps1: release 0.1.8 plus
 # - uac2 0.1.10.0: Full Speed explicit feedback in 4 bytes as well as 3 (design
 #   23) and SetupPreferredAudioDevices in both INFs (design 22);
-# - rtl815x 0.2.1.0: the net core fixes, the RTL8157 hardware changes and
-#   0BDA:8056; staged on 98 SE, ME, 2000, XP and XP x64 (owner, 2026-11-06);
+# - rtl815x 0.2.1.0: the net core fixes, the RTL8157 hardware changes,
+#   0BDA:8056 and the Realtek-listed ids (owner, 2026-11-07); staged on 98 SE, ME, 2000, XP and XP x64 (owner, 2026-11-06);
 # - ax88179 0.1.3.0: the net core fixes;
 # - xpad98 0.1.1.0: SurpriseRemovalOK;
 # - new packages: ax88772 (AX88772B/C on 98 SE and ME, the SR9800 on 98 SE to
@@ -178,24 +178,24 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL81598.INF' = 'out\net\rtl815x\ndis5\free\RTL81598.INF' }
-                   Stage = @{ 'RTL81598.INF' = @('STAGE', 'W98SE WME', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0 and, on 98 SE, NUSB EHCI; 0.2.1.0: the net core fixes and the RTL8157 changes, the RTL8157 on real hardware (record 2026-11-07)') } }
+                   Stage = @{ 'RTL81598.INF' = @('STAGE', 'W98SE WME', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0 and, on 98 SE, NUSB EHCI; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 (record 2026-11-07) passed on XP, and on 98 SE sustained TCP still stalls or faults (cause open); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL815X.INF' = 'out\net\rtl815x\ndis5\free\RTL815X.INF' }
-                   Stage = @{ 'RTL815X.INF' = @('STAGE', 'W2K', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes, the RTL8157 on real hardware (record 2026-11-07)') } }
+                   Stage = @{ 'RTL815X.INF' = @('STAGE', 'W2K', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 passed on XP (record 2026-11-07); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 # XP to 7 (owner, 2026-10-27): the new chips only, one INF with a models
                 # section per system (ethernet.md section 7.6).
                 @{ Name = 'wxp'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('STAGE', 'WXP', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes, the RTL8157 on real hardware (record 2026-11-07)') } }
+                   Stage = @{ 'RTLXP7.INF' = @('STAGE', 'WXP', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 passed on XP (record 2026-11-07); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis5\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA W7', 'copy only (owner, 2026-11-06): simulator legs only') } }
+                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA W7', 'copy only (owner, 2026-11-06): simulator legs only; the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
                    Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wxp-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('STAGE', 'WXP64', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes, the RTL8157 on real hardware (record 2026-11-07)') } }
+                   Stage = @{ 'RTLXP7.INF' = @('STAGE', 'WXP64', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 passed on XP (record 2026-11-07); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
                    Files = @{ 'RTL815X.SYS' = 'x64:rtl815x.wv-7-x64.RTL815X.SYS'; 'RTLXP7.INF' = 'out\net\rtl815x\ndis51\free\RTLXP7.INF' }
-                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only (owner, 2026-11-06): simulator legs only; test-signed') } }
+                   Stage = @{ 'RTLXP7.INF' = @('COPY', 'WVISTA64 W7X64', 'copy only (owner, 2026-11-06): simulator legs only; the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen); test-signed') } }
             )
         }
         @{

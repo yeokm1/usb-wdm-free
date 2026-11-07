@@ -48,8 +48,8 @@ With Realtek's driver bound, the diagnostic lists the adapter. Its pages:
 The Diagnostics tests were not run on the real RTL8157: the session's
 permission check refused that step, as a write test on real hardware.
 They were run against the simulated RTL8156 instead: Register, MAC
-Loopback, PHY Loopback and FIFO each passed once ("No hardware errors
-occur."). The model's Cable page reads 0 m per pair and its EEE page no
+Loopback, PHY Loopback and FIFO each passed once, and the utility
+reported no hardware error. The model's Cable page reads 0 m per pair and its EEE page no
 partner ability, where the device read 5 m and 1000/100. Those values
 come from PHY registers the model does not fill in. They are left as they
 are.
@@ -81,7 +81,12 @@ unplug and replug, and `rtl815x` 0.2.1.0 on XP. From them `rtlemu.py`'s
   bytes read with their byte lane enabled count (the device returns stale
   data in the others), and only where two Realtek driver runs read the
   same. They are the state left by earlier drivers, not a cold reset,
-  which could not be done.
+  which could not be done. Three are overridden on purpose so that a
+  driver must still clear them, as on the other newer profiles: the
+  transmit signature check (USB `0xd4ae` bit 1), the U2P3 bit of IP
+  `0xc2c0` (bit 29) and the receive zero-length bit of BMU `0x2300`
+  (bit 3). The device read them clear because earlier drivers had cleared
+  them; Realtek's driver and `rtl815x` both clear them.
 - Bits that clear themselves after a write sets them: MAC `0xdc6a` bit 4,
   MAC `0xe800` bit 0, USB `0xd4e8` bit 2, `0xe434` bit 4, `0xd437` bits 0-1,
   the ADV window's whole command word, and BMU `0x0050`, `0x2350` and

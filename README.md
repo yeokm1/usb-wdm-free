@@ -179,7 +179,7 @@ Do not plug the device in before step 3: Windows 2000's audio driver
 takes it and can stop Windows. If that happens, restart without the
 device and do the steps. The edited INF no longer matches `SHA256.TXT`.
 
-`uac2` and `usbmidi`: On Windows 98 SE, Setup may ask for KS files such as `ksclockf.ax` or `ks.cat`; choose Skip File, as Windows already has them.
+`uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
 
 `usbprn` on 98 SE and ME: plug the printer in, point the wizard at
 `free/print/usbprn/w98se/` or `wme/`, then add the printer with Add

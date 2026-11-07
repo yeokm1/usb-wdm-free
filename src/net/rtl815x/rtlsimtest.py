@@ -210,13 +210,19 @@ class CoreCase(unittest.TestCase):
 class Tests(CoreCase):
     def test_probe_and_bring_up_every_chip(self):
         for chip, speed, version, mbps in (('8153', 'high', 0x5c10, 1000), ('8152', 'high', 0x4c10, 100),
-                                           ('8153b', 'high', 0x6010, 1000), ('8153', 'full', 0x5c10, 1000)):
+                                           ('8153b', 'high', 0x6010, 1000), ('8153', 'full', 0x5c10, 1000),
+                                           ('8152-4c00', 'high', 0x4c00, 100), ('8152-4800', 'high', 0x4800, 100),
+                                           ('8153-5c00', 'high', 0x5c00, 1000), ('8153-5c20', 'high', 0x5c20, 1000),
+                                           ('8153-5c30', 'high', 0x5c30, 1000), ('8153b-6000', 'high', 0x6000, 1000),
+                                           ('8153c', 'high', 0x6400, 1000)):
             with self.subTest(chip=chip, speed=speed):
                 self.assertEqual(self.setup(chip, speed), 0)
                 p = self.probe
                 self.assertEqual((p.In, p.Out, p.Interrupt, p.Product, p.Speed),
                                  (0x81, 0x02, 0x83, self.m.chip.pid, 2 if speed == 'high' else 1))
-                self.assertEqual(bytes(self.params.Mac), r.BACKUP_MAC)
+                # The 4C00 keeps its address in MR_NODE_ID (rtlchip.c K_4C00).
+                mac = bytes(self.m.chip.pla[r.MR_NODE_ID:r.MR_NODE_ID + 6]) if version == 0x4c00 else r.BACKUP_MAC
+                self.assertEqual(bytes(self.params.Mac), mac)
                 self.assertEqual(self.params.Version, version)
                 self.assertEqual((self.params.TxHeader, self.params.TxAlign), (8, 4))
                 self.assertEqual(self.io.Status, 0)
@@ -526,7 +532,8 @@ class NewerModelTests(unittest.TestCase):
         return reply[3], reply[10:]
 
     def test_identity_and_descriptors(self):
-        ids = {'8153d': (0x7420, 0x8053, 0x0300), '8156': (0x7030, 0x8156, 0x0300),
+        ids = {'8153d': (0x7420, 0x8053, 0x0300), '8153d-8153': (0x7420, 0x8153, 0x0300),
+               '8156': (0x7030, 0x8156, 0x0300),
                '8156-7020': (0x7020, 0x8156, 0x0300), '8156b': (0x7410, 0x8156, 0x0300),
                '8156b-7400': (0x7400, 0x8156, 0x0300),
                '8156b-8056': (0x7410, 0x8056, 0x0300), '8157': (0x1030, 0x8157, 0x0320),
@@ -542,12 +549,14 @@ class NewerModelTests(unittest.TestCase):
                 self.assertEqual(struct.unpack('<BBBBHH', connect[:8]), (3, 0, 0, 0, 0x0bda, pid))
                 status, dev = self.descriptor(1)
                 self.assertEqual(status, 0)
-                self.assertEqual(struct.unpack_from('<HBBBBHH', dev, 2)[0:7],
-                                 (bcd, 0, 0, 0, 9, 0x0bda, pid))
+                self.assertEqual(struct.unpack_from('<HBBBBHHH', dev, 2)[0:8],
+                                 (bcd, 0, 0, 0, 9, 0x0bda, pid, r.CHIPS[chip].bcd))
                 status, cfg = self.descriptor(2)
                 iclass, eps = parse_config(cfg)
                 self.assertEqual(iclass, 0xff)
-                self.assertEqual([(a, t, s) for a, t, s, _ in eps], [(0x81, 2, 1024), (0x02, 2, 1024), (0x83, 3, 2)])
+                isize = r.REAL[chip]['int_size'] if chip in r.REAL else 2
+                self.assertEqual([(a, t, s) for a, t, s, _ in eps],
+                                 [(0x81, 2, 1024), (0x02, 2, 1024), (0x83, 3, isize)])
                 self.assertTrue(all(comp for *_, comp in eps))
                 status, bos = self.descriptor(15)
                 self.assertEqual(status, 0)
@@ -559,6 +568,7 @@ class NewerModelTests(unittest.TestCase):
                 # configuration choice reads it first).
                 tcr = Regs(m).get(MAC, r.MR_TX_CONFIG, 4)
                 self.assertEqual(tcr >> 16 & 0x7cf0, cid)
+                self.assertEqual(tcr >> 16, r.REAL[chip]['tcr'] if chip in r.REAL else cid)
                 self.assertTrue(tcr & r.TXC_EMPTY)
                 # High Speed: a USB 2.1 device with 512-byte bulk packets and a
                 # BOS of the USB 2.0 extension only.
@@ -582,7 +592,8 @@ class NewerModelTests(unittest.TestCase):
         # --serial: index 3 and the string; --serial-stall: its first N reads
         # STALL, then it answers, and the other strings never STALL.
         self.make('8157', serial='000334C8D6B113C7', serial_stall=2)
-        self.assertEqual(self.m.device[16], 3)
+        self.assertEqual(self.m.device[16], 7)                    # the real RTL8157's index
+        self.m.strings[3] = self.m.strings.pop(7)                 # the reads below use index 3
         self.assertEqual(self.string(1)[0], 0)
         self.assertEqual(self.string(3)[0], 4)
         self.assertEqual(self.string(3)[0], 4)
@@ -593,8 +604,12 @@ class NewerModelTests(unittest.TestCase):
         self.assertEqual([x['left'] for x in stalls if x['event'] == 'serial_stalled'], [1, 0])
         # --serial-skip: the first K reads answer, then the STALLs, then it
         # answers again.
-        self.make('8157', serial='S1', serial_stall=1, serial_skip=2)
+        self.make('8156b', serial='S1', serial_stall=1, serial_skip=2)
+        self.assertEqual(self.m.device[16], 3)
         self.assertEqual([self.string(3)[0] for _ in range(4)], [0, 0, 4, 0])
+        # 'mac': the real RTL8157's form.
+        self.make('8157', serial='mac')
+        self.assertEqual(self.string(7), (0, r.usb_string('0003' + r.BACKUP_MAC.hex().upper())))
 
     @staticmethod
     def walk(bos):
@@ -622,6 +637,8 @@ class NewerModelTests(unittest.TestCase):
         g.phy(r.PR_SRAM2_DATA, (value & 0x00ff) | 0xe600)
         self.assertEqual(self.m.chip.sram2[0x8647], 0xe6ab)
         g.phy(r.PR_SRAM_ADDR, 0x8011)
+        self.assertEqual(g.phy(r.PR_SRAM_DATA), r.REAL8157['sram'][0x8011])   # as a real one read
+        g.phy(r.PR_SRAM_ADDR, 0x8013)
         self.assertEqual(g.phy(r.PR_SRAM_DATA), 0)
 
     def test_polled_bits_complete(self):
@@ -630,8 +647,13 @@ class NewerModelTests(unittest.TestCase):
                 g = self.make(chip)
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_LAN_ON)
                 self.assertTrue(g.get(MAC, r.MR_BOOT) & r.BOOT_LOADED)
-                self.assertTrue(g.get(MAC, r.MR_GPHY_FLASH) & r.GPHY_HAS_FLASH)
-                self.assertTrue(g.get(USB, r.UR_GPHY) & r.GPHY_LOADED)
+                if chip in r.REAL:
+                    # The real RTL8157 showed no PHY flash and no load bit.
+                    self.assertFalse(g.get(MAC, r.MR_GPHY_FLASH) & r.GPHY_HAS_FLASH)
+                    self.assertFalse(g.get(USB, r.UR_GPHY) & r.GPHY_LOADED)
+                else:
+                    self.assertTrue(g.get(MAC, r.MR_GPHY_FLASH) & r.GPHY_HAS_FLASH)
+                    self.assertTrue(g.get(USB, r.UR_GPHY) & r.GPHY_LOADED)
                 self.assertFalse(g.get(USB, r.UR_MISC0) & r.PCUT_SEEN)
                 self.assertTrue(g.get(MAC, 0xe000) & 0x0100)
                 self.assertEqual(g.get(MAC, r.MR_OOB, 1) & 0x32, 0x32)
@@ -648,6 +670,72 @@ class NewerModelTests(unittest.TestCase):
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_POWER_DOWN)
                 g.phy(r.PR_MII, r.MIICTL_AN_ENABLE)
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_LAN_ON)
+
+    def test_phy_ocp_window(self):
+        # The RTL8157's PHY through USB D630/D634, as Realtek's driver used it
+        # on a real one: address and data at D630, command 1 (read) or 3
+        # (write) in D634's low word; done at once.
+        g = self.make('8157')
+        def ocp(addr, data=None):
+            g.put(USB, r.UR_OCP_ADDR, 4, addr | (data or 0) << 16)
+            g.put(USB, r.UR_OCP_CMD, 2, 1 if data is None else 3)
+            self.assertEqual(g.get(USB, r.UR_OCP_CMD), 0)
+            return g.get(USB, r.UR_OCP_ADDR, 4) >> 16
+        self.assertEqual(ocp(r.PR_STATE) & 7, r.PHYST_LAN_ON)
+        self.assertEqual(g.get(USB, r.UR_OCP_ADDR), 1)
+        self.assertEqual(ocp(r.PR_MII), r.REAL8157['phy'][r.PR_MII])
+        restarts = self.m.chip.autoneg
+        ocp(r.PR_MII, r.MIICTL_AN_ENABLE | r.MIICTL_AN_RESTART)
+        self.assertEqual(self.m.chip.autoneg, restarts + 1)
+        self.assertEqual(ocp(r.PR_MII), r.MIICTL_AN_ENABLE)              # the restart bit clears itself
+        ocp(r.PR_SRAM_ADDR, 0x801e)
+        ocp(r.PR_SRAM_DATA, 0x0014)
+        self.assertEqual(self.m.chip.sram[0x801e], 0x0014)
+        self.assertEqual(g.phy(r.PR_MII), r.MIICTL_AN_ENABLE)    # one PHY, two windows
+        # Other chips: plain registers.
+        g = self.make('8156b')
+        g.put(USB, r.UR_OCP_ADDR, 4, r.PR_STATE)
+        g.put(USB, r.UR_OCP_CMD, 2, 1)
+        self.assertEqual(g.get(USB, r.UR_OCP_CMD), 1)
+
+    def test_ids_overridden_and_bcd_per_chip(self):
+        want = {'8152': 0x2000, '8153': 0x3000, '8153b': 0x3100, '8153c': 0x3200, '8153d': 0x3300,
+                '8156': 0x3000, '8156b': 0x3100, '8156b-8056': 0x3100, '8157': 0x3000, '8159': 0x3000}
+        for chip, bcd in want.items():
+            self.assertEqual(r.CHIPS[chip].bcd, bcd)
+        wire = Wire()
+        m = r.Model(wire, io.StringIO(), '8153', 'high', vid=0x2357, pid=0x0604, bcd_device=0x3011)
+        self.assertEqual(struct.unpack_from('<HHH', m.device, 8), (0x2357, 0x0604, 0x3011))
+        m.peer_caps = r.CAPS & ~(1 << r.CAP_ID64)
+        m.connect()
+        connect = [x for x in wire.messages if x[0] == 1][0][2]
+        self.assertEqual(struct.unpack('<BBBBHHH', connect[:10])[4:], (0x2357, 0x0604, 0x3011))
+        self.assertEqual(Regs(m).get(MAC, r.MR_TX_CONFIG, 4) >> 16 & 0x7cf0, 0x5c10)
+
+    def test_u1u2_status_and_the_real_8157_shape(self):
+        g = self.make('8157')
+        def status():
+            self.m.control(1, struct.pack('<BBBBHHH', 0x80, 0, 0x80, 0, 0, 0, 2))
+            return struct.unpack('<H', self.wire.messages.pop()[2][10:12])[0]
+        self.assertEqual(status(), 0)
+        for feature in (48, 49):
+            self.m.control(1, struct.pack('<BBBBHHH', 0, 3, 0, 0, feature, 0, 0))
+        self.assertEqual(status(), 0x0c)
+        self.m.control(1, struct.pack('<BBBBHHH', 0, 1, 0, 0, 48, 0, 0))
+        self.assertEqual(status(), 0x08)
+        cfg = self.m.config_desc
+        self.assertEqual((cfg[7], cfg[8]), (0x80, 0x44))
+        iclass, eps = parse_config(cfg)
+        self.assertEqual([e[3][2] if e[3] else None for e in eps][:2], [7, 7])   # bMaxBurst
+        # Every interrupt poll is answered, about every 128 ms, link or not.
+        self.m.handle(15, 3, bytes((r.EP_INT,)))
+        self.wire.take(17)
+        for _ in range(10):
+            self.clock.t += 0.05
+            self.m.pump()
+        irqs = self.wire.take(103)
+        self.assertGreaterEqual(len(irqs), 3)
+        self.assertEqual(irqs[-1][2][4:], r.REAL8157['irq_down'])
 
     def test_powered_down_phy_has_no_link(self):
         g = self.make('8156b')
@@ -681,8 +769,9 @@ class NewerModelTests(unittest.TestCase):
         for chip in ('8157', '8159'):
             with self.subTest(chip=chip):
                 g = self.make(chip)
-                self.assertEqual(g.adv(True, r.IR_U2P3), r.U2P3_V2_ON)
-                self.assertEqual(g.adv(False, r.BR_RX_ZLP), r.BMU_RX_ZLP)
+                # (the 8157 also has the other bits a real one read)
+                self.assertTrue(g.adv(True, r.IR_U2P3) & r.U2P3_V2_ON)
+                self.assertTrue(g.adv(False, r.BR_RX_ZLP) & r.BMU_RX_ZLP)
                 g.adv(True, r.IR_U2P3, 0x12345678)
                 self.assertEqual(g.adv(True, r.IR_U2P3), 0x12345678)
                 self.assertEqual(g.adv(False, r.IR_U2P3), 0)                 # the BMU space is apart
@@ -711,10 +800,11 @@ class NewerModelTests(unittest.TestCase):
                     self.wire.messages.clear()
                     self.advertise(g, top)
                     self.assertFalse(g.get(MAC, r.MR_LINK) & r.LNK_UP)
-                    self.settle(1.1)
+                    self.settle(1.3)          # the 8157's reports show the link one poll late
                     want = min(5000 if chip == '8159' and not patched else top, partner)
                     word = g.get(MAC, r.MR_LINK)
-                    self.assertEqual(word, 0x02 | 0x01 | 0x60 | bits[want])
+                    real = r.REAL[chip]['link_bits'] if chip in r.REAL else 0     # bit 7, as a real 8157
+                    self.assertEqual(word, 0x02 | 0x01 | 0x60 | bits[want] | real)
                     self.assertEqual(self.m.link_mbps, want)
                     self.assertTrue(g.phy(r.PR_MII + 2) & r.MIIST_LINK)
                     xgst = g.phy(r.PR_XG_STAT)
@@ -916,6 +1006,7 @@ class NewerDriverTests(CoreCase):
     def drive(self, chip):
         kind = r.CHIPS[chip]
         wide = kind.family == 'c'
+        lag = 0.3 if chip in r.REAL else 0      # its reports show the link one poll (128 ms) late
         self.assertEqual(self.setup(chip, 'super', flap_after=3.0, flap_for=1.0), 0)
         p = self.probe
         self.assertEqual((p.In, p.Out, p.Interrupt, p.Product, p.Speed, p.InMax),
@@ -934,7 +1025,7 @@ class NewerDriverTests(CoreCase):
             self.assertFalse(chipm.adv['bmu'][r.BR_RX_ZLP] & r.BMU_RX_ZLP)
         # Link at the chip's top speed (the partner offers 10G).
         self.m.handle(15, 3, bytes((r.EP_INT,)))
-        self.settle(1.1)
+        self.settle(1.1 + lag)
         irqs = self.wire.take(103)
         self.assertTrue(irqs)
         data = irqs[-1][2][4:]
@@ -959,25 +1050,25 @@ class NewerDriverTests(CoreCase):
         self.assertEqual(frames[1][14 + 28:14 + 20 + len(icmp)], icmp[8:])
         self.assertEqual(self.m.totals['rx_request_below_early_size'], 0)
         # Cable out and in: the interrupt report and the link state follow.
-        self.settle(3.1)
+        self.settle(3.1 + lag)
         data = self.wire.take(103)[-1][2][4:]
         self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 0)
         self.assertFalse(self.link().Up)
-        self.settle(1.1)
+        self.settle(1.1 + lag)
         data = self.wire.take(103)[-1][2][4:]
         self.assertEqual(self.chip.Status(self.state, buf(data), len(data)), 1)
         self.assertEqual(self.link().Mbps, top)
         # The 8159 above 5 Gb/s, as if its PHY patch had been loaded.
         if chip == '8159':
             self.assertEqual(self.setup(chip, 'super', phy_patch=True), 0)
-            self.settle(1.1)
+            self.settle(1.1 + lag)
             self.assertEqual(self.link().Mbps, 10000)
         # A 1000 Mb/s partner, and High Speed (no 2.5G-10G advertised there).
         self.assertEqual(self.setup(chip, 'super', partner=1000), 0)
-        self.settle(1.1)
+        self.settle(1.1 + lag)
         self.assertEqual(self.link().Mbps, 1000)
         self.assertEqual(self.setup(chip, 'high'), 0)
-        self.settle(1.1)
+        self.settle(1.1 + lag)
         self.assertEqual((self.link().Mbps, self.m.totals['multigig_below_superspeed']), (1000, 0))
         self.assertEqual(self.chip.Stop(self.state, c.byref(self.io)), 0)
         self.assertFalse(self.m.chip.receiving())

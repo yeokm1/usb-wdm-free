@@ -395,15 +395,29 @@ def audio_function1(config):
     return ac, entities, alts
 
 
+def patch_refresh(config, refresh):
+    """The configuration with every sync endpoint's bRefresh set to
+    `refresh` (a rig option for a replay: QEMU drops the stream of an iso
+    IN endpoint the guest polls only every 32 frames or more, so a sync
+    endpoint with bRefresh 5 never reaches the guest there)."""
+    out, off = bytearray(config), 9
+    sync = {d['synch'] for a in audio_function1(config)[2].values() for d in a['endpoints'] if d['synch']}
+    while off < len(out):
+        if out[off + 1] == 5 and out[off] >= 9 and out[off + 2] in sync:
+            out[off + 7] = refresh
+        off += out[off]
+    return bytes(out)
+
+
 class Profile1:
     """A UAC 1.0 profile in the shape uacemu.Model reads (uacemu.Profile)."""
     uac = 1
 
-    def __init__(self, name='headset', vid=None, pid=None, speed=None, sync_attr=0x01, refresh=2,
+    def __init__(self, name='headset', vid=None, pid=None, speed=None, sync_attr=0x01, refresh=None,
                  strict_volume=False):
         name = ALIASES.get(name, name)
         if name not in PROFILE_NAMES or speed not in (None, 'full', 'high') or \
-                sync_attr not in (0x01, 0x05, 0x11) or not 1 <= refresh <= 9:
+                sync_attr not in (0x01, 0x05, 0x11) or not (refresh is None or 1 <= refresh <= 9):
             raise ValueError('profile')
         if speed and name in ('hs', 'cammic', 'dual') and speed != 'high':
             raise ValueError('profile is High Speed only')
@@ -415,6 +429,8 @@ class Profile1:
             r = REPLAY[name]
             base = TESTDATA / r['dir']
             self.speed, self.config = 'full', (base / r['config']).read_bytes()
+            if refresh is not None:
+                self.config = patch_refresh(self.config, refresh)
             self.fu_ranges, self.mx_ranges = dict(r['fu']), {}
             self.stall_units = tuple(r['stall_units'])
             device = bytearray((base / r['device']).read_bytes())
@@ -436,7 +452,7 @@ class Profile1:
                 consumer_report(next(iter(hid.values()))) if hid else None
         else:
             self.speed, self.config, self.fu_ranges, self.mx_ranges, self.hid_report, iad = \
-                build1(name, speed, sync_attr, refresh)
+                build1(name, speed, sync_attr, 2 if refresh is None else refresh)
             self.vid, self.pid = vid or 0xffff, pid or BASE_PID + PROFILE_NAMES.index(name)
             high = self.speed == 'high'
             cls = (0xef, 2, 1) if iad else (0, 0, 0)
@@ -914,8 +930,9 @@ def main():
     ap.add_argument('--speed', choices=('full', 'high'))
     ap.add_argument('--vid', type=lambda s: int(s, 16))
     ap.add_argument('--pid', type=lambda s: int(s, 16))
-    ap.add_argument('--refresh', type=int, default=2, choices=range(1, 10), metavar='1..9',
-                    help='async: the sync endpoint bRefresh (polled every 2^N ms)')
+    ap.add_argument('--refresh', type=int, choices=range(1, 10), metavar='1..9',
+                    help='bRefresh of the sync endpoints (polled every 2^N ms): async default 2; '
+                         'on play2 it replaces the captured 5 (a rig option)')
     ap.add_argument('--sync-attr', type=lambda s: int(s, 16), default=0x01,
                     help='async: the sync endpoint bmAttributes, 01 (UAC 1.0), 05 or 11 (USB 2.0 feedback)')
     ap.add_argument('--fb-at-refresh', action='store_true',

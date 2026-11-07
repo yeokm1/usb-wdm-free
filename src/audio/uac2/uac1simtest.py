@@ -551,6 +551,13 @@ class Play2Test(Base):
         self.assertEqual(len(sent), 64)
         self.assertEqual(set(sent), {b'\x00\x00\x0c'})                  # 48.0 in 10.14
 
+    def test_refresh_override_is_a_rig_option(self):
+        p = uac1emu.Profile1('play2', refresh=3)
+        self.assertEqual(p.stream_alt(2, 1)['feedback']['refresh'], 3)
+        diff = [i for i, (a, b) in enumerate(zip(p.config, self.p.config)) if a != b]
+        self.assertEqual(len(diff), 1)                                  # only that byte
+        self.assertEqual(self.p.stream_alt(2, 1)['feedback']['refresh'], 5)
+
     def test_feedback_at_refresh_and_lead_empty(self):
         self.model.fb_at_refresh = True
         self.model.fb_lead_empty = 1

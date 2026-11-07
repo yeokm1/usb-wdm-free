@@ -52,6 +52,20 @@ each fact comes from:
 - Power-up values the facts do not give are this model's: the MAC
   00:0e:c6:77:00:02 in NODE_ID, the PHY's BMCR 1140 (autonegotiation on),
   EEPROM word 0x43 0x0000 (no auto-detach), the FIFO never full.
+- From ASIX's own XP driver 1.4.2.0 run against this model on XP SP3
+  (its USB traffic, docs/testing/2026-11-06-reference-drivers.md): it
+  polls PHY register 2 until it is not 0 (this model answers 0283:BC30,
+  INFERRED), reads the eFuse (request 0x05, wIndex 0x20, 64 bytes; this
+  model's is blank, INFERRED) and EEPROM words 0x3c and 0x05 (unprogrammed
+  words read FFFF here, INFERRED), writes requests 0x06 and 0x91 with no
+  data (accepted, no effect, INFERRED); it writes RX_CTL without IPE
+  (0x0200), and only with IPE do the two padding bytes precede each
+  frame; it lost every reply whose transfer held an even number of
+  records until the header array was padded to 8 bytes, so a transfer is
+  always a multiple of 8 (the trailer still gives the offset Linux
+  reads); and it sends its own transmit form: bit 31 set in the first
+  header dword, each frame padded to 4 bytes, and several such records in
+  one bulk-OUT transfer, all accepted here beside Linux's exact form.
 
 Link: the PHY is up when PHYPWR_RSTCTL holds IPRL and CLK_SELECT both
 clocks; it links (1000 Mb/s full duplex, or --mbps) --link-after seconds
@@ -87,11 +101,15 @@ TESTDATA = Path(__file__).resolve().parent / 'testdata' / 'ax179'
 VENDOR, PRODUCT, RELEASE = 0x0b95, 0x1790, 0x0100
 EP_INT, EP_IN, EP_OUT = 0x81, 0x82, 0x03
 ACCESS_MAC, ACCESS_PHY, ACCESS_EEPROM, FIFO_STATUS = 0x01, 0x02, 0x04, 0x81
+ACCESS_EFUSE = 0x05
 PHY_ID = 0x03
+PHY_ID1, PHY_ID2 = 0x02, 0x03
+MODEL_PHY_ID = (0x0283, 0xbc30)          # INFERRED: any id other than 0 (see the header)
 R_LINK_STATUS, R_RX_CTL, R_NODE_ID, R_MULTI = 0x02, 0x0b, 0x10, 0x16
 R_MEDIUM, R_PHYPWR, R_QCTRL, R_CLK = 0x22, 0x26, 0x2e, 0x33
 USB_SS, USB_HS = 0x04, 0x02
 RX_START, RX_AP, RX_AM, RX_AB, RX_AMALL, RX_PRO = 0x0080, 0x0020, 0x0010, 0x0008, 0x0002, 0x0001
+RX_IPE = 0x0200
 MEDIUM_RECEIVE = 0x0100
 PHYPWR_IPRL = 0x0020
 CLK_BCS, CLK_ACS = 0x01, 0x02
@@ -116,6 +134,7 @@ class Chip:
         self.pages = {0: [0] * 32}
         self.pages[0][BMCR] = 0x1140
         self.pages[0][BMSR] = 0x7949
+        self.pages[0][PHY_ID1], self.pages[0][PHY_ID2] = MODEL_PHY_ID
         self.mmd = {}
         self.mmd_ctrl = 0
         self.mbps = mbps
@@ -193,10 +212,15 @@ class Chip:
             self.reads += 1
             return struct.pack('<H', self.phy_read(index))
         if request == ACCESS_EEPROM:
-            if index != 1 or length != 2 or value not in EEPROM:
+            if index != 1 or length != 2 or value > 0xff:
                 return None
             self.reads += 1
-            return struct.pack('<H', EEPROM[value])
+            return struct.pack('<H', EEPROM.get(value, 0xffff))    # INFERRED: other words unprogrammed
+        if request == ACCESS_EFUSE:
+            if value or index != 0x20 or length != 64:
+                return None
+            self.reads += 1
+            return b'\xff' * 64                     # INFERRED: a blank eFuse
         if request == FIFO_STATUS:
             if value != 0x8c or index or length != 4:
                 return None
@@ -220,6 +244,9 @@ class Chip:
                 return False
             self.writes += 1
             self.phy_write(index, struct.unpack('<H', data)[0])
+            return True
+        if request in (0x06, 0x91) and not data:
+            self.writes += 1                       # ASIX's XP driver sends these; INFERRED: no effect
             return True
         return False
 
@@ -591,11 +618,13 @@ class Model:
         """One bulk-IN transfer: records (2 padding bytes + frame [+ FCS],
         padded to 8), one header dword per record, the trailer dword."""
         records, headers = bytearray(), []
+        lead = b'\0\0' if self.chip.word(R_RX_CTL) & RX_IPE else b''    # IPE: the 2 alignment bytes
         while self.rx:
             frame = self.rx[0]
-            body = b'\0\0' + frame + (struct.pack('<I', zlib.crc32(frame)) if self.fcs else b'')
+            body = lead + frame + (struct.pack('<I', zlib.crc32(frame)) if self.fcs else b'')
             padded = (len(body) + 7) & ~7
-            if len(records) + padded + 4 * (len(headers) + 1) + 4 > length:
+            n = len(headers) + 1
+            if len(records) + padded + 4 * n + (4 if n % 2 == 0 else 0) + 4 > length:
                 break
             self.rx.popleft()
             records += body + bytes(padded - len(body))
@@ -603,7 +632,8 @@ class Model:
             self.totals['rx_frames'] += 1
         if not headers:
             return b''
-        return bytes(records) + struct.pack('<%dI' % len(headers), *headers) + \
+        pad = bytes(4 * (len(headers) % 2 == 0))   # the header array padded to 8 (see the header)
+        return bytes(records) + struct.pack('<%dI' % len(headers), *headers) + pad + \
             struct.pack('<I', len(headers) | len(records) << 16)
 
     def drain(self):
@@ -621,16 +651,37 @@ class Model:
             self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
 
     def transmit(self, data):
-        """One bulk-OUT transfer: the 8-byte header and one frame."""
+        """One bulk-OUT transfer: the 8-byte header and one frame, exactly
+        (Linux's form, checked strictly); or ASIX's XP form (see the header):
+        records of header (bit 31 of the first dword set) and frame, each
+        padded to 4 bytes, one or more per transfer."""
         if len(data) < 8 + 14:
             raise ValueError('transmit transfer shorter than a header and a frame')
         length, flags = struct.unpack_from('<II', data)
-        if length != len(data) - 8:
-            raise ValueError('transmit header length %d, transfer %d' % (length, len(data)))
-        want = TX_PAD if (length + 8) % self.bulk_max == 0 else 0
-        if flags != want:
-            raise ValueError('transmit flags %08x, expected %08x' % (flags, want))
-        frame = data[8:]
+        if not length & 0x80000000:
+            if length != len(data) - 8:
+                raise ValueError('transmit header length %d, transfer %d' % (length, len(data)))
+            want = TX_PAD if (length + 8) % self.bulk_max == 0 else 0
+            if flags != want:
+                raise ValueError('transmit flags %08x, expected %08x' % (flags, want))
+            return self.transmit_frame(data[8:])
+        offset, frame = 0, b''
+        while offset < len(data):
+            if len(data) - offset < 8 + 14:
+                raise ValueError('transmit record at %d shorter than a header and a frame' % offset)
+            length, flags = struct.unpack_from('<II', data, offset)
+            if not length & 0x80000000 or flags not in (0, TX_PAD):
+                raise ValueError('transmit record at %d: header %08x %08x' % (offset, length, flags))
+            length &= 0x7fffffff
+            end = offset + 8 + ((length + 3) & ~3)
+            if length < 14 or end > len(data):
+                raise ValueError('transmit record at %d: length %d, transfer %d' % (offset, length, len(data)))
+            self.totals['tx_records_asix_form'] += 1
+            frame = self.transmit_frame(data[offset + 8:offset + 8 + length])
+            offset = end
+        return frame
+
+    def transmit_frame(self, frame):
         self.totals['tx_frames'] += 1
         self.log('tx_frame', length=len(frame), destination=frame[:6].hex(), ethertype=frame[12:14].hex())
         if self.chip.link:

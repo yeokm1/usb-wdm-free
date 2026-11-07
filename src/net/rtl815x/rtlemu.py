@@ -16,7 +16,11 @@ PATCH_GRANTED), the MAC address in MR_NODE_ID_SAVED (and MR_NODE_ID for the
 4C00), link in MR_LINK with an interrupt-IN report on each change (its
 IRQ_LINK bit is the link state: set up, clear down), receive framing (record header, frame length with FCS, alignment,
 several frames per bulk-IN transfer) and transmit framing. Register
-semantics follow rtltest.c's register-file model.
+semantics follow rtltest.c's register-file model. A write into the PHY
+window is one PHY write per word, whichever byte lanes carry it: Realtek's
+XP driver 5.23 asks for the PHY patch with the low byte of PR_PATCH_CMD
+alone (wIndex 0x0101) and, with no PATCH_GRANTED, reset the device in a
+loop (docs/testing/2026-11-06-reference-drivers.md).
 
 The newer chips (RTL8153D, RTL8156, RTL8156B, RTL8157, RTL8159) add, from
 the facts in docs/testing/2026-10-27-rtl815x-sim-newchips.md: the PHY SRAM
@@ -271,18 +275,22 @@ class Chip:
             return False
         self.writes += 1
         space = self.pla if index & RTL_SPACE_MAC else self.usb
+        words = {}                                   # PHY word -> its new value, in write order
         for k in range(length):
             a = value + k
             if byen != RTL_LANES_ALL and not byen & (1 << (k & 3)):
                 continue
             if index & RTL_SPACE_MAC and 0xb000 <= a < 0xc000:
                 pa = self.phy_address(a & ~1)
-                if a & 1:
-                    self.phy_written(pa, (self.phy[pa // 2] & 0x00ff) | data[k] << 8)
-                else:
-                    self.phy[pa // 2] = (self.phy[pa // 2] & 0xff00) | data[k]
+                w = words.get(pa, self.phy[pa // 2])
+                words[pa] = (w & 0x00ff) | data[k] << 8 if a & 1 else (w & 0xff00) | data[k]
                 continue
             space[a] = data[k]
+        # One PHY write per word touched, whichever of its bytes the lanes carry:
+        # Linux writes whole words; Realtek's XP driver also writes a low byte
+        # alone (PATCH_ASK into PR_PATCH_CMD with wIndex 0x0101).
+        for pa, w in words.items():
+            self.phy_written(pa, w)
         self.pla[MR_COMMAND] &= ~CMD_RESET & 0xff
         if self.wide and not index & RTL_SPACE_MAC and value <= UR_ADV_CMD < value + length:
             self.adv_command()

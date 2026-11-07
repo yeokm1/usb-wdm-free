@@ -423,6 +423,75 @@ class Tests(CoreCase):
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0][12:14], b'\x08\x06')
 
+    def test_vendor_requests_unconfigured(self):
+        """ASIX's XP driver 5.4.3.0 sets configuration 0 and then talks on
+        endpoint 0 (docs/testing/2026-11-06-reference-drivers.md): vendor
+        requests are answered in any state; bulk transfers still need a
+        configuration."""
+        self.setup()
+        self.m.handle(6, 2, b'\x00')
+        self.wire.messages.clear()
+        self.m.handle(100, 3, struct.pack('<BBBBHHH', 0x80, 0x09, 0xc0, 0, 0, 0, 1))
+        reply = self.wire.take(100)[-1][2]
+        self.assertEqual(reply[3], 0)                                 # status: answered
+        self.assertEqual(reply[10] & 0x70, a.CHIPCODE_772B)
+        self.m.handle(100, 4, struct.pack('<BBBBHHH', 0x00, 0x20, 0x40, 0, 0x48, 0, 0))
+        self.assertEqual(self.wire.take(100)[-1][2][3], 0)
+        self.m.handle(101, 5, struct.pack('<BBHIH', a.EP_IN, 0, 512, 0, 0))
+        self.assertEqual(self.wire.take(101)[-1][2][1], 4)            # no configuration: STALL
+
+    def test_reference_7_requests(self):
+        """What ASIX's 7 driver 5.12.12.0 reads and writes beyond Linux's set."""
+        self.setup()
+        chip = self.m.chip
+        self.assertEqual(a.Chip(0x003b1861).ipg, bytes((0x15, 0x0c, 0x12)))   # power-up
+        # ax7chip.c writes Linux's value (IPG0 | IPG1 = 0x1d, IPG2 0x12) at bring-up.
+        self.assertEqual(chip.read(a.READ_IPG012, 0, 0, 3), bytes((0x1d, 0x00, 0x12)))
+        self.assertTrue(chip.write(a.WRITE_IPG0, 0x0c15, 0x0e, b''))
+        self.assertEqual(chip.read(a.READ_IPG012, 0, 0, 3), bytes((0x15, 0x0c, 0x0e)))
+        self.assertTrue(chip.write(a.SW_PHY_SELECT, 0x0001, 0, b''))
+        self.assertEqual(chip.read(a.SW_PHY_STATUS, 0, 0, 1), b'\x01')
+        for request in (0x26, 0x2c, 0x2e):
+            self.assertTrue(chip.write(request, 0x0307, 0, b''))
+        self.assertTrue(chip.write(0x24, 0x0008, 0, bytes(4)))
+        self.assertEqual(chip.read(0x2d, 0, 0, 4), bytes(4))
+        self.assertIsNone(chip.read(0x2d, 0, 0, 2))
+
+    def test_reference_7_transmit_form(self):
+        """11-bit complement, flags in bits 11-15, several records in one
+        transfer on even offsets; a flagged IPv4 UDP record gets its checksum."""
+        self.up()
+        arp = arp_request(a.MODEL_MAC) + bytes(18)                    # 60 bytes
+        odd = arp + b'\0'                                             # 61 bytes
+        recs = b''
+        for frame, flags in ((arp, 0x8000), (odd, 0x4000), (arp, 0)):
+            n = len(frame)
+            recs += struct.pack('<I', ((n ^ 0x7ff) << 16) | flags | n) + frame + (b'\0' if n & 1 else b'')
+        self.m.transmit(recs)
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 3)
+        self.assertEqual(self.m.totals['tx_frames'], 3)
+        # A flagged IPv4 UDP record through the parser: the frame handed on carries
+        # a correct UDP checksum over UDP's own length, not the trailing bytes.
+        udp = a.ipv4(bytes((192, 168, 77, 2)), a.HOST_IP, 17,
+                     struct.pack('!HHHH', 68, 67, 12, 0x1234) + b'abcd' + b'zz')
+        frame = a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + udp
+        n = len(frame)
+        sent = []
+        self.m.transmit_frame, keep = (lambda f, p: sent.append(f) or f), self.m.transmit_frame
+        try:
+            self.m.transmit(struct.pack('<I', ((n ^ 0x7ff) << 16) | 0x4000 | n) + frame + (b'\0' if n & 1 else b''))
+        finally:
+            self.m.transmit_frame = keep
+        seg = sent[0][34:34 + 12]
+        pseudo = sent[0][26:34] + struct.pack('!BBH', 0, 17, 12)
+        self.assertEqual(a.checksum(pseudo + seg), 0)
+        self.assertEqual(a.checksum(sent[0][14:34]), 0)               # the IPv4 header too
+        # Truncated or non-IPv4 headers are left as sent.
+        bad = frame[:14] + bytes((0x4f,)) + frame[15:34]
+        self.assertEqual(self.m.fill_checksums(bad), bad)
+        with self.assertRaises(ValueError):                          # a broken complement
+            self.m.transmit(struct.pack('<I', (0x123 << 16) | 60) + arp)
+
 
 if __name__ == '__main__':
     unittest.main()

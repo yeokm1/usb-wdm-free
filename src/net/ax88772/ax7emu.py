@@ -33,7 +33,30 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   WRITE_MULTI_FILTER 16, READ_PHY_ID 19 (byte 1 the embedded PHY, 0x10),
   READ_MEDIUM_STATUS 1A, WRITE_MEDIUM_MODE 1B, WRITE_GPIOS 1F, SW_RESET
   20, SW_PHY_SELECT 22, QCTCTRL 2A. INFERRED: requests outside that set,
-  and wrong lengths, STALL.
+  and wrong lengths, STALL. Vendor requests are answered whether or not
+  the device is configured (INFERRED): ASIX's XP driver 5.4.3.0 (on XP SP3
+  against this model, docs/testing/2026-11-06-reference-drivers.md) sets
+  configuration 0 and then sends its whole bring-up on endpoint 0, which
+  suggests the chip answers them in the Address state; that run still
+  failed, so this is not shown. READ_IPG012 11 (asix.h;
+  three bytes, IPG0, IPG1, IPG2 as WRITE_IPG0 last set them, Linux's
+  defaults 15 0C 12 at power-up, INFERRED) is answered: ASIX's 7 driver
+  5.12.12.0 reads it right after writing them and stops when it STALLs.
+  SW_PHY_STATUS 21 (asix.h, one byte) answers the last SW_PHY_SELECT
+  value (INFERRED: asix.h gives the request, not its answer).
+  ASIX's drivers also send requests Linux does not name: writes 26, 2C
+  and 2E with no data and 24 with four bytes, and a four-byte read 2D;
+  they are accepted with no modelled effect and 2D reads zeros (INFERRED;
+  no specification or open driver gives their meaning). The transmit
+  header's complement is checked on the 11 length bits: Linux complements
+  all 16; ASIX's 7 driver only the 11, sets bits 11-15 of the length
+  half on some frames (06A9:4156 for 342 bytes, 07B1:804E), which this
+  model accepts and counts without a meaning (INFERRED), and packs several
+  such records into one bulk-OUT transfer, each starting on an even offset.
+  Its DHCP request in such a record left the UDP checksum to be filled in,
+  so for a record with flags this model inserts the IPv4 header and UDP or
+  TCP checksums, as checksum offload would (INFERRED: which flag asks for
+  which is not known).
 - The PHY (IEEE 802.3 clause 22; drivers/net/phy/ax88796b.c): id
   003B:1861 (AX88772B) or 003B:1881 (AX88772C); BMCR reset self-clears;
   autonegotiation completes --link-after seconds after a restart; the
@@ -90,6 +113,10 @@ SPEED_CODE = {'full': 1, 'high': 2}
 EP_INT, EP_IN, EP_OUT = 0x81, 0x82, 0x03
 SET_SW_MII, READ_MII, WRITE_MII, STATMNGSTS, SET_HW_MII = 0x06, 0x07, 0x08, 0x09, 0x0a
 READ_EEPROM, READ_RX_CTL, WRITE_RX_CTL, WRITE_IPG0 = 0x0b, 0x0f, 0x10, 0x12
+READ_IPG012, SW_PHY_STATUS = 0x11, 0x21
+# Requests ASIX's own drivers send that Linux does not name (their traffic on XP SP3 and 7 against this
+# model, docs/testing/2026-11-06-reference-drivers.md): accepted, with no modelled effect.
+ASIX_WRITES_NO_DATA, ASIX_WRITE_24, ASIX_READ_2D = (0x26, 0x2c, 0x2e), 0x24, 0x2d
 READ_NODE_ID, WRITE_NODE_ID, WRITE_MULTI, READ_PHY_ID = 0x13, 0x14, 0x16, 0x19
 READ_MEDIUM, WRITE_MEDIUM, WRITE_GPIOS, SW_RESET, SW_PHY_SELECT, QCTCTRL = 0x1a, 0x1b, 0x1f, 0x20, 0x22, 0x2a
 RX_SO, RX_AM, RX_AB, RX_AMALL, RX_PRO = 0x0080, 0x0010, 0x0008, 0x0002, 0x0001
@@ -117,6 +144,8 @@ class Chip:
         self.multi = bytearray(8)
         self.sw_mii = False
         self.qct = None
+        self.ipg = bytearray((0x15, 0x0c, 0x12))  # INFERRED power-up: Linux's AX88772_IPG0/1/2_DEFAULT
+        self.phy_select = 0x01                       # INFERRED power-up: the embedded PHY selected
         self.phy = [0] * 32
         self.phy[BMCR] = BMCR_ANENABLE
         self.phy[BMSR] = 0x7809
@@ -197,6 +226,12 @@ class Chip:
             return struct.pack('<H', self.rx_ctl)
         if request == READ_MEDIUM and length == 2:
             return struct.pack('<H', self.medium)
+        if request == READ_IPG012 and length == 3:     # ASIX's 7 driver reads it back (see the header)
+            return bytes(self.ipg)
+        if request == SW_PHY_STATUS and length == 1:
+            return bytes((self.phy_select,))
+        if request == ASIX_READ_2D and length == 4:      # INFERRED: see the header
+            return bytes(4)
         return None
 
     def write(self, request, value, index, data):
@@ -212,8 +247,14 @@ class Chip:
         elif request == WRITE_GPIOS and not data:
             if value & 0x80:                            # RSE: reload the EEPROM's MAC
                 self.node_id[:] = MODEL_MAC
-        elif request in (SW_RESET, SW_PHY_SELECT, WRITE_IPG0, LEDS_REQ) and not data:
+        elif request == WRITE_IPG0 and not data:
+            self.ipg[:] = bytes((value & 255, value >> 8, index & 255))
+        elif request == SW_PHY_SELECT and not data:
+            self.phy_select = value & 255
+        elif request in (SW_RESET, LEDS_REQ) and not data:
             pass
+        elif request in ASIX_WRITES_NO_DATA and not data or request == ASIX_WRITE_24 and len(data) == 4:
+            pass                                        # INFERRED: accepted, no effect (see the header)
         elif request == QCTCTRL and not data:
             self.qct = (value, index)
         elif request == WRITE_NODE_ID and len(data) == 6:
@@ -401,9 +442,15 @@ class Model:
         if len(data) < 4 + 14:
             raise ValueError('transmit transfer shorter than a header and a frame')
         word = struct.unpack_from('<I', data)[0]
-        length = word & 0xffff
-        if word >> 16 != length ^ 0xffff:
+        length = word & 0x7ff
+        # Linux complements all 16 bits; ASIX's 7 driver only the 11 length bits, with bits 11-15
+        # of the length half set on some frames (06A9:4156, 07B1:804E), all of which the chip takes
+        # (see the header): the 11-bit field and its complement are what is checked.
+        top, flags = word >> 27, word & 0xf800
+        if (word >> 16) & 0x7ff != length ^ 0x7ff or not ((top == 0x1f and flags == 0) or top == 0):
             raise ValueError('transmit header %08x: the complement does not agree' % word)
+        if top == 0:
+            return self.transmit_records(data)
         unit = self.bulk_max - 1 if self.sr9800 else self.bulk_max
         pad = (length + 4) % unit == 0
         want = 4 + length + (4 if pad else 0)
@@ -411,7 +458,64 @@ class Model:
             raise ValueError('transmit transfer %d bytes, expected %d (frame %d)' % (len(data), want, length))
         if pad and data[-4:] != b'\x00\x00\xff\xff':
             raise ValueError('transmit pad word %s' % data[-4:].hex())
-        frame = data[4:4 + length]
+        return self.transmit_frame(data[4:4 + length], pad)
+
+    def transmit_records(self, data):
+        """ASIX's 7 form (see the header): records of a 4-byte header (the
+        11-bit length, its 11-bit complement, flags in bits 11-15) and the
+        frame, back to back, several in one transfer; a last 4 bytes of
+        0xffff0000 are taken as Linux's pad word."""
+        offset, frame = 0, b''
+        while offset < len(data):
+            rest = len(data) - offset
+            if rest == 4 and offset and data[offset:] == b'\x00\x00\xff\xff':
+                self.totals['tx_padded'] += 1
+                break
+            if rest < 4 + 14:
+                raise ValueError('transmit record at %d: %d bytes left' % (offset, rest))
+            word = struct.unpack_from('<I', data, offset)[0]
+            length = word & 0x7ff
+            if word >> 27 or (word >> 16) & 0x7ff != length ^ 0x7ff or length < 14 or offset + 4 + length > len(data):
+                raise ValueError('transmit record at %d: header %08x' % (offset, word))
+            self.totals['tx_header_11bit_flags_%04x' % (word & 0xf800)] += 1
+            self.totals['tx_records_asix_form'] += 1
+            frame = data[offset + 4:offset + 4 + length]
+            if word & 0xf800:
+                frame = self.fill_checksums(frame)
+            frame = self.transmit_frame(frame, False)
+            offset += 4 + length + (length & 1)          # records start on even offsets
+        return frame
+
+    def fill_checksums(self, frame):
+        """INFERRED offload for a flagged record (see the header): the IPv4
+        header checksum and the UDP or TCP checksum, computed here as the chip
+        would insert them; anything else passes unchanged."""
+        if len(frame) < 34 or frame[12:14] != b'\x08\x00':
+            return frame
+        f = bytearray(frame)
+        ihl = (f[14] & 15) * 4
+        total = struct.unpack_from('!H', f, 16)[0]
+        if f[14] >> 4 != 4 or ihl < 20 or ihl > total or 14 + total > len(f) or \
+                struct.unpack_from('!H', f, 20)[0] & 0x3fff:
+            return frame                                 # not IPv4, short, or a fragment: left as sent
+        f[24:26] = b'\0\0'
+        f[24:26] = struct.pack('!H', checksum(bytes(f[14:14 + ihl])))
+        proto, l4 = f[23], 14 + ihl
+        at = {17: 6, 6: 16}.get(proto)
+        end = 14 + total
+        if proto == 17 and end >= l4 + 8:
+            udp_len = struct.unpack_from('!H', f, l4 + 4)[0]
+            end = l4 + udp_len if 8 <= udp_len <= total - ihl else 0    # UDP's own length
+        if at is not None and end >= l4 + at + 2:
+            seg = bytes(f[l4:end])
+            seg = seg[:at] + b'\0\0' + seg[at + 2:]
+            pseudo = bytes(f[26:34]) + struct.pack('!BBH', 0, proto, len(seg))
+            value = checksum(pseudo + seg) or (0xffff if proto == 17 else 0)
+            f[l4 + at:l4 + at + 2] = struct.pack('!H', value)
+        self.totals['tx_checksums_filled'] += 1
+        return bytes(f)
+
+    def transmit_frame(self, frame, pad):
         self.totals['tx_frames'] += 1
         if pad:
             self.totals['tx_padded'] += 1
@@ -451,10 +555,10 @@ class Model:
             status, data = 0, b'\0'
         elif request in (1, 3) and rt == 2 and value == 0:
             status = 0
-        elif rt == 0xc0 and self.config:
+        elif rt == 0xc0:                            # in any state (see the header)
             got = self.chip.read(request, value, index, length)
             status, data = (0, got) if got is not None else (4, b'')
-        elif rt == 0x40 and self.config:
+        elif rt == 0x40:
             status = 0 if self.chip.write(request, value, index, payload) else 4
             if not status and request == WRITE_RX_CTL and not value & RX_SO:
                 self.stream.clear()                 # INFERRED: receive off empties the buffer

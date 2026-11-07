@@ -6,7 +6,7 @@
  * two recorded devices (the Brio 100 microphone, the Logi USB Headset),
  * QEMU 11.1.0's usb-audio layout, an asynchronous headset, a MIDI-only
  * function, a mixed UAC 1.0 / 2.0 configuration and hostile variants.
- * usage: uac1test <brio100.bin> <logi0a64.bin>
+ * usage: uac1test <brio100.bin> <logi0a64.bin> <play2.bin>
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,8 +28,8 @@ static void Check(int ok, const char *expression, unsigned int line)
 
 static UAC1_DESC d;
 static UAC_DESC m;
-static unsigned char brio[4096], logi[4096], work[4096];
-static unsigned int brioLen, logiLen;
+static unsigned char brio[4096], logi[4096], play2[4096], work[4096];
+static unsigned int brioLen, logiLen, play2Len;
 
 static unsigned int Load(const char *path, unsigned char *buffer, unsigned int size)
 {
@@ -358,6 +358,32 @@ static void SelectorCycle(void)
     CHECK(m.AltCount == 1 && m.Alt[0].ChannelConfig == 0);
 }
 
+/* The owner's Sound Blaster Play! 2 (041E:323D, as read by uac1m):
+ * asynchronous playback with a 3-byte synch endpoint (bRefresh 5), IT 2 ->
+ * Mixer 9 -> FU 5 (master mute, volume per channel) -> OT 4 (speaker);
+ * stereo capture IT 1 -> FU 6 -> SU 10 -> OT 3. */
+static void Play2(void)
+{
+    unsigned int index;
+    UAC_VOL_MAP v;
+    const UAC_ALT *in, *out;
+    Model(play2, play2Len, 0, 0);
+    CHECK(m.AltCount == 2);
+    in = &m.Alt[0]; out = &m.Alt[1];
+    CHECK((in->DataEndpoint & 0x80) && in->Channels == 2 && in->Terminal == 3 && in->ChannelConfig == 3);
+    CHECK(out->DataEndpoint == 0x01 && out->FeedbackEndpoint == 0x83 && out->FeedbackMaxPacket == 3);
+    CHECK(UacPlanSync(out) == 1 && out->Terminal == 2 && out->ChannelConfig == 3 && out->RateCount == 2);
+    CHECK(out->EpControls == UAC_EP_SAMFREQ && in->EpControls == UAC_EP_SAMFREQ);
+    /* 48 kHz asynchronous: 49 frames of 4 bytes = 196 <= 200. */
+    CHECK(UacPlanPick(&m, 0, 2, 2, 2, 16, 3, 48000, 0, &index) == UAC_OK && index == 1);
+    CHECK(UacPlanPick(&m, 1, 3, 2, 2, 16, 3, 44100, 0, &index) == UAC_OK && index == 0);
+    CHECK(UacPlanPick(&m, 0, 2, 2, 2, 16, 3, 32000, 0, &index) == UAC_NO_AUDIO);
+    CHECK(UacVolFind(&m, 2, 2, &v) == 1 && v.Output == 4);
+    CHECK(v.MuteUnit == 5 && v.MuteMode == UAC_VOL_MASTER);
+    CHECK(v.VolumeUnit == 5 && v.VolumeMode == UAC_VOL_CHANNEL && v.VolumeChannels == 2);
+    CHECK(UacVolJack(&m, 0, 2) == 0x0301 && UacVolJack(&m, 1, 3) == 0x0201);
+}
+
 static void Unsupported(void)
 {
     unsigned int i, n;
@@ -419,10 +445,11 @@ static void Hostile(void)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) { printf("usage: uac1test <brio100.bin> <logi0a64.bin>\n"); return 2; }
+    if (argc != 4) { printf("usage: uac1test <brio100.bin> <logi0a64.bin> <play2.bin>\n"); return 2; }
     brioLen = Load(argv[1], brio, sizeof(brio));
     logiLen = Load(argv[2], logi, sizeof(logi));
-    Brio(); Logi(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); Hostile();
+    play2Len = Load(argv[3], play2, sizeof(play2));
+    Brio(); Logi(); Play2(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); Hostile();
     printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback)\n", checks);
     return 0;
 }

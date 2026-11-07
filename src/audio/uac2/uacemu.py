@@ -19,7 +19,8 @@ Profiles (--profile):
             every alternate functional: HID, CDC ACM and a UAC 2 function
             (playback 2/6/8 channels 16/24-bit, async with explicit
             feedback; 1-channel capture 16/24-bit); strings replaced by
-            SIMULATED labels, serial index zero.
+            SIMULATED labels, serial index zero. Its HID interface
+            answers as below; its CDC ACM pair is not modelled.
   hs24      High Speed, one programmable clock (44.1 to 192 kHz), playback
             2 channels 16/24/32-bit (subslots 2, 3, 4), capture 2 channels
             16/24-bit; async playback with explicit feedback.
@@ -47,7 +48,7 @@ Profiles (--profile):
             with 16/24/32-bit stereo alternates at the listed packet sizes
             (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
             not in that listing: 44.1 to 384 kHz, both families, assumed.
-            Its HID interface is not modelled.
+            Its HID interface is not in the descriptors.
   cx31993m  a user's CX31993 with a MAX97220 headphone amplifier
             (3302:12C3, testdata/cx31993m) replayed: its device and
             configuration descriptors as XHCITR printed them, strings
@@ -58,7 +59,7 @@ Profiles (--profile):
             volume RANGE and rate list are not in the report: --vol-range
             and --vol-cur (--vol-cur-at, --vol-cur-stall) set the one,
             the rates are cx31993's, assumed.
-            The HID interface answers nothing.
+            The HID interface answers as below.
   alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
             (docs/design/uac2.md section 15.4), not a capture: one
             programmable clock, three playback endpoints - 8-channel
@@ -73,7 +74,7 @@ Profiles (--profile):
             replaced by SIMULATED labels; adaptive playback on IF4 to IF6,
             async capture on IF1 to IF3, each terminal on its own clock
             (44.1 to 192 kHz; the headphones' to 384 kHz, as Linux listed).
-            The HID interface answers nothing.
+            The HID interface answers as below.
   uac3dual  two configurations, as USB Audio 3.0 section 3.3 requires of a
             3.0 device: configuration 1 (index 0) is hs24's UAC 2.0
             function, configuration 2 a USB Audio 3.0 function (IAD
@@ -88,6 +89,15 @@ Every profile answers the standard requests and the clock source
 requests of the entities its descriptors declare, read from the
 descriptors themselves. A SET_CUR is refused where the descriptor's
 bmaControls do not make the control read/write.
+
+A HID interface in a captured layout (x4, x4full, x1, cx31993m,
+alc4080cap) answers SET_IDLE and GET_DESCRIPTOR(Report) with a stand-in
+report descriptor (a vendor-page collection with one input byte, padded
+with Usage items to the length the interface's HID descriptor declares)
+and sends no reports: none of the captures holds the real report
+descriptor. Windows' HID driver resets the whole device when that
+request stalls, and a reset while Windows 10's own UAC 2.0 driver starts
+the audio function fails it (Code 10, docs/testing/2026-11-06-inbox-reference.md).
 
 Feature units of the built profiles (--fu): 'full' (master and every
 channel: mute and volume read/write, the default), 'master' (master
@@ -141,6 +151,36 @@ QUALIFIER = (FIXTURE / 'qualifier.bin').read_bytes()
 def usb_string(text):
     raw = text.encode('utf-16le')
     return bytes((len(raw) + 2, 3)) + raw
+
+
+def hid_interfaces(config):
+    """{interface number: report descriptor length} of every HID
+    interface (class 3) whose HID descriptor (HID 1.11 6.2.1) names a
+    report descriptor."""
+    found, current, off = {}, None, 9
+    while off + 2 <= len(config) and config[off] >= 2:
+        d = config[off:off + config[off]]
+        if d[1] == 4 and len(d) >= 9:
+            current = d[2] if d[5] == 3 else None
+        elif d[1] == 0x21 and current is not None and len(d) >= 9:
+            for k in range(d[5]):
+                if 6 + 3 * k + 3 <= len(d) and d[6 + 3 * k] == 0x22:
+                    found[current] = int.from_bytes(d[7 + 3 * k:9 + 3 * k], 'little')
+        off += config[off]
+    return found
+
+
+def hid_report(length):
+    """A stand-in report descriptor of exactly `length` bytes: Usage Page
+    FF00 (vendor), Usage 1, Collection (Application), one 8-bit input,
+    padded with Usage items inside the collection; None below 21 bytes."""
+    head = bytes.fromhex('0600ff 0901 a101 1500 26ff00 7508 9501')
+    tail = bytes.fromhex('0901 8102 c0')
+    pad = length - len(head) - len(tail)
+    if pad < 0 or pad == 1:
+        return None
+    fill = (b'\x0a\x01\x00' if pad % 2 else b'') + b'\x09\x01' * (pad // 2 - (1 if pad % 2 else 0))
+    return head + fill + tail
 
 
 STRINGS = {0: b'\x04\x03\x09\x04',
@@ -522,6 +562,7 @@ class Profile:
             if e['kind'] == 'cs':
                 self.rates.setdefault(cid, [48000])
         self.interfaces = sorted({i for i, _ in self.layout})
+        self.hid = hid_interfaces(self.config)
 
     def set_product(self, text):
         """iProduct's string: text (an empty string gives an empty
@@ -814,6 +855,11 @@ class Model:
             status, data = 0, bytes((self.alts[index],))
         elif request == 1 and rt == 2 and value == 0:
             status = 0
+        elif request == 6 and rt == 0x81 and value >> 8 == 0x22 and index in p.hid and self.config == 1:
+            data = hid_report(p.hid[index])
+            status, data = (0, data) if data is not None else (4, b'')
+        elif request == 0x0a and rt == 0x21 and index in p.hid and self.config == 1:
+            status = 0      # SET_IDLE (HID 1.11 7.2.4)
         elif rt in (0xa1, 0x21) and index & 255 == p.ac and self.config == 1:
             status, data = self.entity_request(request, rt == 0xa1, index >> 8, value >> 8,
                                                value & 255, payload)

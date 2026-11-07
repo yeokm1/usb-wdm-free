@@ -662,6 +662,35 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\5')[0], 4)   # 4 inputs
         self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x1a03, 1)[0], 4)
 
+    def test_hid_interfaces_answer(self):
+        # A captured layout's HID interface answers SET_IDLE and its report
+        # descriptor, at the length its HID descriptor declares: Windows'
+        # HID driver resets the whole device on a stall, which fails the
+        # audio function Windows 10's own UAC 2.0 driver is starting.
+        expect = {'x4': {0: 83}, 'x4full': {0: 83}, 'x1': {0: 83}, 'cx31993m': {2: 74}, 'alc4080cap': {7: 34}}
+        for name in uacemu.PROFILE_NAMES:
+            with self.subTest(profile=name):
+                m, _, _ = self.model(name)
+                self.assertEqual(m.p.hid, expect.get(name, {}))
+                for interface, length in m.p.hid.items():
+                    self.assertEqual(self.control(m, 6, 0x81, 0x2200, interface, length + 64)[0], 4)  # unconfigured
+                    m.handle(6, 1, b'\x01')
+                    self.assertEqual(self.control(m, 0x0a, 0x21, 0, interface, 0), (0, b''))
+                    status, data = self.control(m, 6, 0x81, 0x2200, interface, length + 64)
+                    self.assertEqual((status, len(data)), (0, length))
+                    self.assertEqual(data[:3], bytes.fromhex('0600ff'))
+                    self.assertEqual(data[-5:], bytes.fromhex('09018102c0'))
+                    # every item whole: short items only, sizes 0/1/2/4
+                    off = 0
+                    while off < len(data):
+                        off += 1 + (0, 1, 2, 4)[data[off] & 3]
+                    self.assertEqual(off, len(data))
+                    self.assertEqual(self.control(m, 6, 0x81, 0x2200, interface + 1, 64)[0], 4)
+        for length in [21] + list(range(23, 200)):
+            self.assertEqual(len(uacemu.hid_report(length)), length)
+        self.assertIsNone(uacemu.hid_report(20))
+        self.assertIsNone(uacemu.hid_report(22))
+
     def test_referenced_strings_answer(self):
         # Every iFunction (IAD) and iInterface a profile's descriptors name
         # has a string: Windows 10's own UAC 2.0 driver reads them and fails

@@ -13,14 +13,20 @@ and CTS, and a sent break comes back as a received one. The protocol facts
 are the ones the design takes from Linux v6.12 (facts only); no code was
 taken from anywhere. Nothing here touches a physical device: the strings say
 SIMULATED, and the ids are the parts' own only so that USBCOM.INF matches.
+The makers' own drivers were run against it in guests and what they asked
+for was added (docs/testing/2026-11-06-serial-reference.md): the FTDI
+EEPROM, latency timer and characters, and the CP210x properties, status,
+characters and settings taken before IFC_ENABLE.
 """
 import argparse
 import collections
 import hashlib
 import os
+import select
 import socket
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,6 +38,9 @@ FT_BI = 0x10
 
 # part: (family, vid, pid, bcdUSB, bcdDevice, device class, speed, ports, extra)
 PARTS = {
+    'ft232am':  ('ftdi', 0x0403, 0x6001, 0x0110, 0x0200, 0, 'full', 1, {}),
+    'ft232bm':  ('ftdi', 0x0403, 0x6001, 0x0200, 0x0400, 0, 'full', 1, {}),
+    'ft2232c':  ('ftdi', 0x0403, 0x6010, 0x0200, 0x0500, 0, 'full', 2, {}),
     'ftx':      ('ftdi', 0x0403, 0x6015, 0x0200, 0x1000, 0, 'full', 1, {}),
     'ft232h':   ('ftdi', 0x0403, 0x6014, 0x0200, 0x0900, 0, 'high', 1, {}),
     'ft4232h':  ('ftdi', 0x0403, 0x6011, 0x0200, 0x0800, 0, 'high', 4, {}),
@@ -41,6 +50,10 @@ PARTS = {
     'pl2303ta': ('pl2303', 0x067B, 0x2303, 0x0200, 0x0300, 0, 'full', 1, {'type': 'TA'}),
     'pl2303tb': ('pl2303', 0x067B, 0x2304, 0x0200, 0x0500, 0, 'full', 1, {'type': 'TB'}),
     'pl2303g':  ('pl2303', 0x067B, 0x23A3, 0x0200, 0x0100, 0, 'full', 1, {'type': 'G'}),
+    'cp2101':   ('cp210x', 0x10C4, 0xEA60, 0x0110, 0x0100, 0, 'full', 1, {'partnum': 1}),
+    'cp2102':   ('cp210x', 0x10C4, 0xEA60, 0x0110, 0x0100, 0, 'full', 1, {'partnum': 2}),
+    'cp2103':   ('cp210x', 0x10C4, 0xEA60, 0x0110, 0x0100, 0, 'full', 1, {'partnum': 3}),
+    'cp2104':   ('cp210x', 0x10C4, 0xEA60, 0x0200, 0x0100, 0, 'full', 1, {'partnum': 4}),
     'cp2105':   ('cp210x', 0x10C4, 0xEA70, 0x0200, 0x0100, 0, 'full', 2, {'partnum': 5}),
     'cp2108':   ('cp210x', 0x10C4, 0xEA71, 0x0200, 0x0100, 0, 'full', 4, {'partnum': 8}),
 }
@@ -104,6 +117,9 @@ class Port:
         self.notify_q = collections.deque()
         self.told_state = False
         self.last_state, self.sent_period = 0, False
+        self.latency = 16                       # FTDI latency timer, ms (16 at reset)
+        self.last_in = time.monotonic()         # FTDI: when a bulk IN last completed
+        self.chars = bytes(6)                   # CP210x SET_CHARS / GET_CHARS
         self.flow_block = bytearray(16)
         struct.pack_into('<IIII', self.flow_block, 0, 0x01, 0x40, 128, 128)
 
@@ -143,6 +159,7 @@ class ChipModel(acmemu.Model):
         self.regs = collections.defaultdict(int)  # PL2303 vendor registers
         self.pl_seq = []                          # PL2303 vendor reads and writes, in order
         self.pl_started = False                   # the start sequence ran (not G)
+        self.status_packets = 0                   # FTDI latency-timer status packets sent
 
     # ---- descriptors -----------------------------------------------------
     def device_desc(self):
@@ -154,7 +171,7 @@ class ChipModel(acmemu.Model):
         body = bytearray()
         for f in self.fns:
             neps = 3 if f.intr else 2
-            body += bytes([9, 4, f.comm, 0, neps, 0xFF, 0xFF, 0xFF, 2])
+            body += bytes([9, 4, f.comm, 0, neps, 0xFF, 0xFF, 0xFF, self.iface_string(f)])
             if f.intr:
                 body += bytes([7, 5, f.intr, 3, 10, 0, 1])
             body += bytes([7, 5, f.out, 2, bulk & 255, bulk >> 8, 0])
@@ -162,8 +179,17 @@ class ChipModel(acmemu.Model):
         total = 9 + len(body)
         return bytes([9, kind, total & 255, total >> 8, self.interfaces, 1, 0, 0x80, 50]) + bytes(body)
 
+    def iface_string(self, f):
+        """A CP210x with several interfaces names each in its own string, 3
+        up: Silicon Labs' driver reads string 3 + n for interface n and fails
+        the port's start if it stalls. Other parts: the product string."""
+        return 3 + f.comm if self.family == 'cp210x' and len(self.fns) > 1 else 2
+
     def strings(self, number):
         text = {1: 'usb-wdm-free simulation', 2: 'SIMULATED %s (usbcom test)' % self.part.upper()}
+        for f in self.fns:
+            if self.iface_string(f) > 2:
+                text[self.iface_string(f)] = 'SIMULATED %s interface %d' % (self.part.upper(), f.comm)
         if number == 0:
             return b'\x04\x03\x09\x04'
         return acmemu.string(text[number]) if number in text else None
@@ -229,7 +255,7 @@ class ChipModel(acmemu.Model):
         return s0
 
     # ---- bulk IN with the part's framing ---------------------------------
-    def drain_fn(self, f):
+    def drain_fn(self, f, periodic=False):
         while True:
             oldest = next(((i, v) for i, v in self.pending.items() if v[0] == f.inp), None)
             if oldest is None:
@@ -256,6 +282,10 @@ class ChipModel(acmemu.Model):
                     f.echo.appendleft(b'')
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(endpoint, 0, len(data)) + data)
+            f.last_in = time.monotonic()
+            if self.family == 'ftdi' and len(data) == 2 and periodic:
+                self.status_packets += 1                  # counted, not logged one by one
+                continue
             self.log('bulk_in', ident=ident, requested=length, length=len(data),
                      sha256=hashlib.sha256(data).hexdigest(), function=f.index)
 
@@ -289,6 +319,19 @@ class ChipModel(acmemu.Model):
         f.status_due = len(out) % self.bulk_max == 0      # end on a short packet next
         return bytes(out)
 
+    def latency_tick(self):
+        """An FTDI part answers a waiting bulk IN with its two status bytes
+        when its latency timer runs out, data or not, so the host hears from
+        it every few milliseconds (docs/testing/2026-10-29-usbcom-chips.md;
+        FTDI's 98 SE driver hung 98 SE once without it and not with it,
+        docs/testing/2026-11-06-serial-reference.md)."""
+        now = time.monotonic()
+        for f in self.fns:
+            if now - f.last_in >= f.latency / 1000 and \
+                    any(v[0] == f.inp for v in self.pending.values()):
+                f.status_due = True
+                self.drain_fn(f, periodic=True)
+
     # ---- control ---------------------------------------------------------
     def control(self, ident, packet):
         if len(packet) < 10:
@@ -319,8 +362,8 @@ class ChipModel(acmemu.Model):
                 result = b'\x00'
             else:
                 status = 4
-        elif self.config != 1:
-            status = 4
+        elif self.config != 1 and not (self.family == 'ftdi' and reqtype == 0xC0 and request == 0x90):
+            status = 4                                    # FTDI's 98 driver reads the EEPROM unconfigured
         else:
             handler = getattr(self, 'control_' + self.family)
             status, result, kick = handler(request, reqtype, value, index, length, payload)
@@ -335,8 +378,16 @@ class ChipModel(acmemu.Model):
 
     def control_ftdi(self, request, reqtype, value, index, length, payload):
         h_part = self.bcd_device in (0x0700, 0x0800, 0x0900)
+        if reqtype == 0xC0 and request == 0x90:
+            # READ_EEPROM: wIndex is the word address, two bytes back
+            # (ftdi_sio.c ftdi_read_eeprom). The model's EEPROM is blank
+            # (every word FFFF), as a part with none fitted or none written.
+            self.log('eeprom_read', word=index)
+            return 0, b'\xff\xff', None
         channel = index & 0xFF
         f = self.fns[channel - 1] if 1 <= channel <= len(self.fns) else None
+        if channel == 0 and len(self.fns) == 1:
+            f = self.fns[0]                               # a one-port part: 0 is its port too (FTDI's driver)
         if reqtype != 0x40 and not (reqtype == 0xC0 and request in (5, 0x0A)):
             return 4, b'', None
         if f is None:
@@ -375,7 +426,7 @@ class ChipModel(acmemu.Model):
             return 0, b'', None
         if request == 4:
             bits, parity, stop, brk = value & 0xFF, (value >> 8) & 7, (value >> 11) & 3, bool(value & 0x4000)
-            if bits not in (7, 8) or parity > 4 or stop not in (0, 2):
+            if bits not in (7, 8) or parity > 4 or stop > 2:      # stop 1: 1.5 (ftdi_sio.h)
                 return 4, b'', None
             f.framing = (bits, parity, stop)
             self.log('framing', bits=bits, parity=parity, stop=stop, brk=int(brk), function=f.index)
@@ -387,8 +438,20 @@ class ChipModel(acmemu.Model):
             return 0, b'', None
         if request == 5:
             return 0, bytes([self.ftdi_status(f), FT_IDLE1]), None
-        if request in (9, 0x0A):
-            return 0, b'\x10' if request == 0x0A else b'', None
+        if request in (9, 0x0A) and self.part == 'ft232am':
+            return 4, b'', None                           # the AM has no latency timer (Linux)
+        if request == 9:
+            f.latency = max(1, value & 0xFF)
+            self.log('latency', ms=f.latency, function=f.index)
+            return 0, b'', None
+        if request == 0x0A:
+            return 0, bytes([f.latency]), None
+        if request in (6, 7):
+            # SET_EVENT_CHAR, SET_ERROR_CHAR: bits 0-7 the character, bit 8
+            # enables it (ftdi_sio.h). Taken and logged; the echo ignores them.
+            self.log('event_char' if request == 6 else 'error_char', char=value & 0xFF,
+                     enabled=int(bool(value & 0x100)), function=f.index)
+            return 0, b'', None
         return 4, b'', None
 
     def control_pl2303(self, request, reqtype, value, index, length, payload):
@@ -405,7 +468,11 @@ class ChipModel(acmemu.Model):
         if reqtype == 0x40 and request in (0x01, 0x80):
             if (request == 0x80) != (kind == 'G'):
                 return 4, b'', None
-            self.regs[value] = index
+            # The register is the low seven bits on the older parts, as the
+            # reads take it: a write of 0x0404 is read back by 0x8484
+            # (pl2303.c's pairs; Prolific's driver writes 0x0606 and reads
+            # it back by 0x8686).
+            self.regs[value & 0x7F if request == 0x01 else value] = index
             self.log('vendor_write', reg=value, value=index)
             self.pl_seq.append(('w', value, index))
             if kind != 'G' and value == 2:
@@ -460,6 +527,24 @@ class ChipModel(acmemu.Model):
             return 0, b'', None
         return 4, b'', None
 
+    def cp_props(self, f):
+        """CP210x GET_PROPS: the 66-byte communication properties of AN571
+        (Table 7), laid out as a published dump of a CP2102N's answer
+        (linux-usb, 2021): wLength 66, bcdVersion 1.00, service mask 1, queue
+        sizes 640, the maximum rate with bit 28 set, subtype 1 (RS-232),
+        capabilities 13F, settable parameters 7F, settable rates 1007FFFF,
+        data bits 5-8, stop bits 1, 1.5 and 2 and every parity (1F07), but
+        8 bits, 1 stop bit and none, odd or even (0701) on the CP2101 and the
+        CP2105's interface 1, and a provider string at offset 60."""
+        part = self.extra['partnum']
+        top = {1: 921600, 2: 1000000, 3: 1000000}.get(part, 2000000)
+        data, stop_parity = 0x000F, 0x1F07
+        if part == 1 or (part == 5 and f.index == 1):
+            data, stop_parity = 0x0008, 0x0701               # 8 bits; 1 stop; none, odd, even
+            top = 921600
+        return struct.pack('<HHIIIIIIIIIHHIIII', 66, 0x0100, 1, 0, 640, 640, 0x10000000 | top, 1, 0x13F,
+                           0x7F, 0x1007FFFF, data, stop_parity, 640, 640, 0, 0) + '1.0'.encode('utf-16-le')
+
     def control_cp210x(self, request, reqtype, value, index, length, payload):
         if reqtype == 0xC0 and request == 0xFF:
             if value == 0x370B:
@@ -467,12 +552,17 @@ class ChipModel(acmemu.Model):
             if value == 0x000E:
                 return 0, b'\x01\x00\x00', None
             return 4, b'', None
+        if reqtype in (0x40, 0xC0):
+            reqtype |= 1                                  # Silicon Labs' driver sends some to the device
         if reqtype not in (0x41, 0xC1) or index >= len(self.fns):
             return 4, b'', None
         # Each request has one direction; the wrong one stalls.
-        if (reqtype == 0xC1) != (request in (0x04, 0x08, 0x14, 0x1D)):
+        if (reqtype == 0xC1) != (request in (0x04, 0x08, 0x0E, 0x0F, 0x10, 0x14, 0x1D)):
             return 4, b'', None
         f = self.fns[index]
+        if request == 0x0F:
+            # GET_PROPS, before IFC_ENABLE too (Silicon Labs' driver asks first).
+            return 0, self.cp_props(f), None
         if request == 0x00:
             f.enabled = bool(value & 1)
             self.log('ifc_enable', value=value, function=f.index)
@@ -481,8 +571,34 @@ class ChipModel(acmemu.Model):
                 f.queued = 0
             return 0, b'', None
         if not f.enabled and request != 0x12:
-            self.log('not_enabled', request=request, function=f.index)
-            return 4, b'', None
+            # Silicon Labs' driver sets the line, flow, characters and rate
+            # before IFC_ENABLE; the part takes them. Only data needs it.
+            self.log('before_enable', request=request, function=f.index)
+        if request == 0x19 and length == 6:
+            f.chars = bytes(payload)                      # SET_CHARS (cp210x_special_chars)
+            self.log('chars', chars=f.chars.hex(), function=f.index)
+            return 0, b'', None
+        if request == 0x0E:
+            return 0, f.chars, None
+        if request == 0x06:
+            # IMM_CHAR: a byte (a larger wValue is refused) that goes out at
+            # once, so the plug brings it back. The model keeps one queue for
+            # what was sent and what came back, so it queues behind both: a
+            # part sends it ahead of waiting output (not modelled).
+            if value > 0xFF:
+                return 4, b'', None
+            self.log('imm_char', char=value, function=f.index)
+            if f.enabled:
+                f.echo.append(bytes([value]))
+                f.queued += 1
+                self.drain_fn(f)
+            return 0, b'', None
+        if request == 0x10:
+            # GET_COMM_STATUS (cp210x_comm_status): no errors or hold reasons,
+            # and every byte the model holds counted as waiting for the host.
+            # The model keeps one queue for what was sent and what came back,
+            # so bytes CTS holds back are not told apart (not modelled).
+            return 0, struct.pack('<IIIIBBB', 0, 0, f.queued, 0, 0, 0, 0), None
         if request == 0x1E and length == 4:
             f.rate = struct.unpack('<I', payload)[0]
             self.log('rate', rate=f.rate, function=f.index)
@@ -491,10 +607,13 @@ class ChipModel(acmemu.Model):
             return 0, struct.pack('<I', f.rate), None
         if request == 0x03:
             bits, parity, stop = (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F
-            if bits not in (5, 6, 7, 8) or parity > 4 or stop not in (0, 2):
+            if bits not in (5, 6, 7, 8) or parity > 4 or stop > 2:  # stop 1: 1.5
                 return 4, b'', None
-            if self.extra['partnum'] == 5 and f.index == 1 and (bits != 8 or parity > 2 or stop != 0):
-                return 4, b'', None                       # the CP2105's second interface
+            if stop == 1 and bits != 5:
+                return 4, b'', None                       # 1.5 stop bits: 5 data bits only
+            narrow = self.extra['partnum'] == 1 or (self.extra['partnum'] == 5 and f.index == 1)
+            if narrow and (bits != 8 or parity > 2 or stop != 0):
+                return 4, b'', None                       # the CP2101, the CP2105's second interface
             f.framing = (bits, parity, stop)
             self.log('framing', bits=bits, parity=parity, stop=stop, function=f.index)
             return 0, b'', None
@@ -573,6 +692,11 @@ class ChipModel(acmemu.Model):
         self.log('connected', model='SIMULATED ' + self.part, vid='%04X' % self.vid, pid='%04X' % self.pid,
                  bcd_device='%04X' % self.bcd_device, speed=self.speed, ports=len(self.fns))
         while True:
+            if self.family == 'ftdi':
+                self.latency_tick()
+                wait = min(f.latency for f in self.fns) / 2000
+                if not select.select([self.connection], [], [], wait)[0]:
+                    continue
             if self.ids64:
                 kind, length, ident = struct.unpack('<IIQ', self.exact(16))
             else:
@@ -601,7 +725,7 @@ def main():
             try:
                 model.run()
             except (EOFError, ConnectionResetError, BrokenPipeError):
-                model.log('disconnected')
+                model.log('disconnected', status_packets=model.status_packets)
 
 
 if __name__ == '__main__':

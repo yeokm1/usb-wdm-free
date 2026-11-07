@@ -995,6 +995,15 @@ static void TaskOffload(void)
     LinkUp();
     SetFilter(NDIS_PACKET_TYPE_DIRECTED);
 
+    /* Discovery: listed last in the supported list here, and only here. */
+    {
+        NDIS_OID list[64];
+        ULONG k, found = 0;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS && w % sizeof(NDIS_OID) == 0);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) if (list[k] == OID_TCP_TASK_OFFLOAD) found++;
+        CHECK(found == 1);
+    }
     /* The query: the header back with a checksum task and a large-send task. */
     memset(&u, 0, sizeof(u));
     h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
@@ -1211,6 +1220,13 @@ static void TaskOffload(void)
     /* A chip with no offload, and 98 SE/ME: no task offload at all. */
     Fresh();
     CHECK(Init() == NDIS_STATUS_SUCCESS);
+    {
+        NDIS_OID list[64];
+        ULONG k;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) CHECK(list[k] != OID_TCP_TASK_OFFLOAD);
+    }
     CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
           NDIS_STATUS_NOT_SUPPORTED);
     Halt();
@@ -1224,6 +1240,13 @@ static void TaskOffload(void)
     CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
           NDIS_STATUS_NOT_SUPPORTED);
     CHECK(SetTaskList(1, 1, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
+    {
+        NDIS_OID list[64];
+        ULONG k;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) CHECK(list[k] != OID_TCP_TASK_OFFLOAD);
+    }
     Halt();
     Balanced();
 }

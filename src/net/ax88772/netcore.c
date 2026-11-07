@@ -270,7 +270,8 @@ static NDIS_OID supported[] = {
     OID_802_3_PERMANENT_ADDRESS, OID_802_3_CURRENT_ADDRESS, OID_802_3_MULTICAST_LIST,
     OID_802_3_MAXIMUM_LIST_SIZE, OID_802_3_RCV_ERROR_ALIGNMENT,
     OID_802_3_XMIT_ONE_COLLISION, OID_802_3_XMIT_MORE_COLLISIONS,
-    OID_PNP_CAPABILITIES, OID_PNP_QUERY_POWER, OID_PNP_SET_POWER
+    OID_PNP_CAPABILITIES, OID_PNP_QUERY_POWER, OID_PNP_SET_POWER,
+    OID_TCP_TASK_OFFLOAD            /* last: listed only where task offload is answered (QueryTasks) */
 };
 
 /* ---------------- callbacks from the lower edge ---------------- */
@@ -720,7 +721,11 @@ static NDIS_STATUS Query(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
     BOOLEAN counter = FALSE;
     *written = 0; *needed = 0;
     switch (oid) {
-    case OID_GEN_SUPPORTED_LIST: data = supported; size = sizeof(supported); break;
+    case OID_GEN_SUPPORTED_LIST:
+        data = supported;
+        size = sizeof(supported);
+        if (!a->PerPacket || !a->Start.Offload) size -= sizeof(NDIS_OID);
+        break;
     case OID_GEN_HARDWARE_STATUS: value = NdisHardwareStatusReady; break;
     case OID_GEN_MEDIA_SUPPORTED: case OID_GEN_MEDIA_IN_USE: value = NdisMedium802_3; break;
     case OID_GEN_MAXIMUM_LOOKAHEAD: case OID_GEN_MAXIMUM_FRAME_SIZE: value = 1500; break;

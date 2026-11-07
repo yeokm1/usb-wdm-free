@@ -2967,6 +2967,11 @@ is not carried (a hostile layout; no device read has one), so starting
 one direction never selects another alternate of the interface under
 the other direction's running stream.
 
+**Rates per format.** A format's rates are those of the alternates that
+carry it (terminal, channels, subslot and bits; `UacUsbRatesFor`), up to
+the 32 one alternate can list, so one format's rates never crowd
+another's out of the terminal's list.
+
 **Adaptive sources.** An adaptive IN endpoint whose `bSynchAddress`
 names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is
 read as a plain IN endpoint: the synch endpoint is selected with its

@@ -14,36 +14,43 @@ static void Clear(void *p, unsigned int n)
     while (n--) *b++ = 0;
 }
 
-static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth);
+/* Entity visits one layout lookup may make: a Selector Unit fans out, so
+ * cycles and shared inputs are bounded by work, not only by depth. */
+#define CLUSTER_BUDGET 256
+
+static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth,
+                            unsigned int *budget);
 
 /* A Selector Unit's output layout: its inputs' when they all agree;
  * otherwise it depends on the input selected (ADC-1 4.3.2.4 allows equal
  * channel counts in different positions), and none is named. */
-static unsigned int SelectorCluster(const UAC1_DESC *d, const unsigned char *p, unsigned int depth)
+static unsigned int SelectorCluster(const UAC1_DESC *d, const unsigned char *p, unsigned int depth,
+                                    unsigned int *budget)
 {
     unsigned int i, pins = p[4], first, c;
     if (p[0] < 6U + pins || !pins) return 0;
-    first = Cluster(d, p[5], depth + 1);
-    for (i = 1; i < pins; i++) {
-        c = Cluster(d, p[5 + i], depth + 1);
+    first = Cluster(d, p[5], depth + 1, budget);
+    for (i = 1; i < pins && *budget; i++) {
+        c = Cluster(d, p[5 + i], depth + 1, budget);
         if (c != first) return 0;
     }
-    return first;
+    return *budget ? first : 0;
 }
 
 /* The wChannelConfig of the cluster entity `id` outputs (ADC-1 3.7.2.3):
  * an Input Terminal, Mixer, Processing or Extension Unit states it; a
  * Feature Unit passes its source's, a Selector Unit its inputs' when they
  * agree, an Output Terminal its source's. 0 when there is none, the inputs
- * differ or the chain is malformed (bounded by depth). */
-static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth)
+ * differ, the chain is malformed or the work budget runs out. */
+static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth,
+                            unsigned int *budget)
 {
-    unsigned int hops;
     if (depth > 8) return 0;
-    for (hops = 0; hops < 64; hops++) {
+    for (;;) {
         const unsigned char *p = Uac1Entity(d, id);
         unsigned int n, pins;
-        if (!p) return 0;
+        if (!p || !*budget) return 0;
+        (*budget)--;
         n = p[0];
         switch (p[2]) {
         case UAC1_INPUT_TERMINAL:
@@ -56,17 +63,16 @@ static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int de
             pins = p[6];
             return n >= 10U + pins ? (unsigned int)p[8 + pins] | ((unsigned int)p[9 + pins] << 8) : 0;
         case UAC1_FEATURE_UNIT: id = p[4]; break;
-        case UAC1_SELECTOR_UNIT: return SelectorCluster(d, p, depth);
+        case UAC1_SELECTOR_UNIT: return SelectorCluster(d, p, depth, budget);
         case UAC1_OUTPUT_TERMINAL: id = n >= 9 ? p[7] : 0; break;
         default: return 0;
         }
     }
-    return 0;
 }
 
 int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
 {
-    unsigned int i, k;
+    unsigned int i, k, budget;
     if (!s || !d) return UAC1_BAD_DESCRIPTOR;
     Clear(d, sizeof(*d));
     d->Bytes = s->Bytes;
@@ -95,7 +101,8 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
         o->FeedbackInterval = (UAC_BYTE)(a->SyncEndpoint ? a->SyncInterval : 0);
         o->MaxPacket = a->MaxPacket;
         o->FeedbackMaxPacket = (UAC_WORD)(a->SyncEndpoint ? a->SyncMaxPacket : 0);
-        o->ChannelConfig = Cluster(s, a->Terminal, 0) & 0xfffU;
+        budget = CLUSTER_BUDGET;
+        o->ChannelConfig = Cluster(s, a->Terminal, 0, &budget) & 0xfffU;
         o->RateMin = (unsigned int)a->RateMin; o->RateMax = (unsigned int)a->RateMax;
         o->RateCount = a->RateCount > UAC1_RATES ? UAC1_RATES : a->RateCount;
         for (k = 0; k < o->RateCount; k++) o->Rate[k] = (unsigned int)a->Rate[k];

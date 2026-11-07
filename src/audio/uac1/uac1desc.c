@@ -184,10 +184,12 @@ static int Finish(UAC1_DESC *d, CANDIDATE *c, int highSpeed)
     a->EpControls = e->Controls;
     a->LockUnits = e->LockUnits;
     a->LockDelay = e->LockDelay;
-    /* Not carried in v1 (docs/design/uac2.md 24.3): an adaptive source needs the host
-     * to feed its synch OUT endpoint (ADC-1 3.7.2.2); a MaxPacketsOnly
-     * source's padding cannot be told from samples by a count rule. */
-    if (a->Capture && (a->Sync == UAC_SYNC_ADAPTIVE || (a->EpControls & UAC_EP_MAXPACKETSONLY)))
+    /* Not carried (docs/design/uac2.md 24.3): a MaxPacketsOnly source's
+     * padding cannot be told from samples by a count rule. An adaptive
+     * source is read as a plain IN endpoint and its synch OUT endpoint
+     * (ADC-1 3.7.2.2) is opened but sent nothing, as Windows' own driver
+     * does on XP (read with the simulator, 2026-11-07). */
+    if (a->Capture && (a->EpControls & UAC_EP_MAXPACKETSONLY))
         goto skip;
     /* An asynchronous sink has its synch IN endpoint (ADC-1 3.7.2.2);
      * implicit feedback is not supported in v1. */
@@ -196,12 +198,15 @@ static int Finish(UAC1_DESC *d, CANDIDATE *c, int highSpeed)
         EP *s = &c->Ep[sync];
         /* Table 4-22: 9 bytes, isochronous, synchronization type none,
          * bInterval 1 (Full Speed), bRefresh 1..9, bSynchAddress 0; it runs
-         * against the data direction. Only an asynchronous sink's is used. */
+         * against the data direction: an asynchronous sink's feedback IN
+         * endpoint, or an adaptive source's Ff OUT endpoint (kept only so
+         * the alternate's pipes are all selected). */
         if (s->Length < 9 || (s->Attributes & 3) != 1 || ((s->Attributes >> 2) & 3) ||
             ((s->Address ^ e->Address) & 0x80) == 0 || s->Synch ||
             !UacFmtCapacity(s->MaxPacket, highSpeed) || (s->MaxPacket & 0x7ff) < 3 ||
             !s->Refresh || s->Refresh > 9 || !s->Interval || s->Interval > (highSpeed ? 4 : 1) ||
-            a->Capture || a->Sync != UAC_SYNC_ASYNC || e->Synch != s->Address)
+            (a->Capture ? a->Sync != UAC_SYNC_ADAPTIVE : a->Sync != UAC_SYNC_ASYNC) ||
+            e->Synch != s->Address)
             goto skip;
         a->SyncEndpoint = s->Address;
         a->SyncMaxPacket = s->MaxPacket;

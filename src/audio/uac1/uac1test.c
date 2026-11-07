@@ -305,6 +305,59 @@ static void ManyRates(void)
     CHECK(UacPlanPick(&m, 0, 1, 2, 2, 16, 3, 48000, 0, &index) == UAC_OK);
 }
 
+/* An adaptive source: capture on an ADAPTIVE IN endpoint whose
+ * bSynchAddress names a synch OUT endpoint (ADC-1 3.7.2.2). */
+static const unsigned char adsrc[] = {
+    9, 2, 129, 0, 2, 1, 0, 0x80, 50,
+    9, 4, 0, 0, 0, 1, 1, 0, 0,
+    9, 0x24, 1, 0, 1, 50, 0, 1, 1,
+    12, 0x24, 2, 1, 0x01, 0x02, 0, 1, 0, 0, 0, 0,
+    12, 0x24, 2, 2, 0x03, 0x06, 0, 1, 0, 0, 0, 0,
+    8, 0x24, 5, 3, 2, 1, 2, 0,
+    9, 0x24, 3, 4, 0x01, 0x01, 0, 3, 0,
+    9, 4, 1, 0, 0, 1, 2, 0, 0,
+    9, 4, 1, 1, 2, 1, 2, 0, 0,
+    7, 0x24, 1, 4, 1, 1, 0,
+    11, 0x24, 2, 1, 1, 2, 16, 1, 0x80, 0xbb, 0,
+    9, 5, 0x81, 0x09, 0x62, 0, 1, 0, 0x02,
+    7, 0x25, 1, 0, 0, 0, 0,
+    9, 5, 0x02, 0x01, 3, 0, 1, 2, 0
+};
+
+static void Adaptive(void)
+{
+    unsigned int index;
+    CHECK(sizeof(adsrc) == 129);
+    Model(adsrc, sizeof(adsrc), 0, 0);
+    /* Read as a plain IN endpoint; the synch OUT endpoint is kept so the
+     * alternate's pipes are all selected, and is never fed. */
+    CHECK(m.AltCount == 1 && m.Alt[0].DataEndpoint == 0x81 && m.Alt[0].FeedbackEndpoint == 0x02);
+    CHECK(UacPlanSync(&m.Alt[0]) == 2);
+    CHECK(UacPlanPick(&m, 1, 4, 1, 2, 16, 0, 48000, 0, &index) == UAC_OK);
+}
+
+/* selcfg with SU 3 as 32 inputs that all name SU 3 itself: the layout
+ * lookup ends promptly (a work budget), with no layout. */
+static void SelectorCycle(void)
+{
+    unsigned int n = 0, i, k;
+    for (i = 0; i < sizeof(selcfg); i += selcfg[i]) {
+        if (selcfg[i + 1] == 0x24 && selcfg[i + 2] == 5) {
+            work[n++] = 38; work[n++] = 0x24; work[n++] = 5; work[n++] = 3; work[n++] = 32;
+            for (k = 0; k < 32; k++) work[n++] = 3;
+            work[n++] = 0;
+        } else {
+            memcpy(work + n, selcfg + i, selcfg[i]);
+            n += selcfg[i];
+        }
+    }
+    work[2] = (unsigned char)n; work[3] = 0;
+    work[18 + 5] = (unsigned char)(work[18 + 5] + 30);   /* AC header wTotalLength */
+    CHECK(n == 150);
+    Model(work, n, 0, 0);
+    CHECK(m.AltCount == 1 && m.Alt[0].ChannelConfig == 0);
+}
+
 static void Unsupported(void)
 {
     unsigned int i, n;
@@ -369,7 +422,7 @@ int main(int argc, char **argv)
     if (argc != 3) { printf("usage: uac1test <brio100.bin> <logi0a64.bin>\n"); return 2; }
     brioLen = Load(argv[1], brio, sizeof(brio));
     logiLen = Load(argv[2], logi, sizeof(logi));
-    Brio(); Logi(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Unsupported(); Hostile();
+    Brio(); Logi(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); Hostile();
     printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback)\n", checks);
     return 0;
 }

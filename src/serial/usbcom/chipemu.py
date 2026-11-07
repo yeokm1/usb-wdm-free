@@ -16,7 +16,13 @@ SIMULATED, and the ids are the parts' own only so that USBCOM.INF matches.
 The makers' own drivers were run against it in guests and what they asked
 for was added (docs/testing/2026-11-06-serial-reference.md): the FTDI
 EEPROM, latency timer and characters, and the CP210x properties, status,
-characters and settings taken before IFC_ENABLE.
+characters and settings taken before IFC_ENABLE. Linux 6.12's own pl2303,
+cp210x and ftdi_sio were run against it too
+(docs/testing/2026-11-07-linux-reference.md): the PL2303 now answers
+GET_LINE_CODING before any SET, and the CP210x refuses the two-byte part
+number probe, answers the GPIO configuration reads of the CP2104, CP2105
+and CP2108, and takes EMBED_EVENTS (escaped data, a looped break as an
+event).
 """
 import argparse
 import collections
@@ -35,6 +41,11 @@ import acmemu  # noqa: E402  (the usbredir framing and the Model base)
 FT_STATUS0 = 0x01          # FTDI status byte 0: the low nibble reads 1
 FT_IDLE1 = 0x60            # FTDI status byte 1: THRE and TEMT
 FT_BI = 0x10
+CP_LSR_BREAK = 0x10        # CP210x event insertion: the line status's break bit
+
+
+class Escaped(bytes):
+    """Echo bytes a CP210x in event-insertion mode has already escaped."""
 
 # part: (family, vid, pid, bcdUSB, bcdDevice, device class, speed, ports, extra)
 PARTS = {
@@ -118,6 +129,10 @@ class Port:
         self.told_state = False
         self.last_state, self.sent_period = 0, False
         self.latency = 16                       # FTDI latency timer, ms (16 at reset)
+        # PL2303 GET_LINE_CODING before any SET_LINE_CODING (Linux's
+        # pl2303_set_termios reads it first). INFERRED: 9600 8N1 at power-up.
+        self.line = struct.pack('<IBBB', 9600, 0, 0, 8)
+        self.esc = 0                            # CP210x EMBED_EVENTS escape character, 0 = off
         self.last_in = time.monotonic()         # FTDI: when a bulk IN last completed
         self.chars = bytes(6)                   # CP210x SET_CHARS / GET_CHARS
         self.flow_block = bytearray(16)
@@ -274,10 +289,15 @@ class ChipModel(acmemu.Model):
                 if not f.echo or (f.flow and not f.rts):
                     break                                 # CTS handshake: the plug holds it
                 frame = f.echo.popleft()
+                if self.family == 'cp210x' and f.esc and not isinstance(frame, Escaped):
+                    escaped = frame.replace(bytes([f.esc]), bytes([f.esc, 0]))
+                    f.queued += len(escaped) - len(frame)
+                    frame = Escaped(escaped)
                 data = frame[:length]
                 f.queued -= len(data)
                 if len(frame) > len(data):
-                    f.echo.appendleft(frame[len(data):])
+                    rest = frame[len(data):]
+                    f.echo.appendleft(Escaped(rest) if isinstance(frame, Escaped) else rest)
                 elif data and len(data) % self.bulk_max == 0:
                     f.echo.appendleft(b'')
             del self.pending[ident]
@@ -548,9 +568,26 @@ class ChipModel(acmemu.Model):
     def control_cp210x(self, request, reqtype, value, index, length, payload):
         if reqtype == 0xC0 and request == 0xFF:
             if value == 0x370B:
+                # Linux's cp2102_determine_quirks asks with wLength 2 and takes
+                # a one-byte answer for a part without event insertion
+                # (counterfeit CP2102s, its comment says). INFERRED: a genuine
+                # part refuses that form.
+                if length != 1:
+                    return 4, b'', None
                 return 0, bytes([self.extra['partnum']]), None
             if value == 0x000E:
                 return 0, b'\x01\x00\x00', None
+            # Linux's cp210x GPIO set-up (6.12 cp2104_gpioconf_init,
+            # cp2105_gpioconf_init, cp2108_gpio_init): GET_PORTCONFIG 0x370C
+            # (13, 15 or 0x49 bytes) and, on the CP2105, GET_DEVICEMODE
+            # 0x3711 (2 bytes). INFERRED: both interfaces in modem mode and a
+            # port configuration of zeros (no pin given an alternate use).
+            part = self.extra['partnum']
+            size = {4: 13, 5: 15, 8: 0x49}.get(part)
+            if value == 0x370C and size and length == size:
+                return 0, bytes(size), None
+            if value == 0x3711 and part == 5 and length == 2:
+                return 0, b'\0\0', None
             return 4, b'', None
         if reqtype in (0x40, 0xC0):
             reqtype |= 1                                  # Silicon Labs' driver sends some to the device
@@ -621,6 +658,19 @@ class ChipModel(acmemu.Model):
             self.log('break', duration=value, function=f.index)
             if value and self.extra['partnum'] == 5 and f.index == 1:
                 return 4, b'', None
+            if value and f.esc and f.enabled:
+                # The plug brings the break back: in event-insertion mode an
+                # escape, 01 (line status and data), the status with its break
+                # bit and the break's NUL (Linux 6.12 cp210x_process_char).
+                f.echo.append(Escaped(bytes([f.esc, 1, CP_LSR_BREAK, 0])))
+                f.queued += 4
+                self.drain_fn(f)
+            return 0, b'', None
+        if request == 0x15:
+            # EMBED_EVENTS (Linux's cp210x_enable_event_mode, for INPCK):
+            # wValue the escape character, 0 turns it off.
+            f.esc = value & 0xFF
+            self.log('embed_events', char=f.esc, function=f.index)
             return 0, b'', None
         if request == 0x07:
             lines = f.lines

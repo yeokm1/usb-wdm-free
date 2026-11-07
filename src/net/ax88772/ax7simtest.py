@@ -620,6 +620,74 @@ class Tests(CoreCase):
         self.assertEqual(answers[0][14 + 20 + 20:14 + 20 + 24], struct.pack('!BBH', 2, 4, 1460))
         self.assertEqual(self.events('tcp_open')[0]['port'], 7)
 
+    def packets(self, data, zlp=True):
+        """One transfer as a UHCI host at Full Speed passes it: a usbredir
+        packet per 64 bytes, and a zero-length one after a full last packet."""
+        for at in range(0, len(data), 64):
+            piece = data[at:at + 64]
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(piece), 0, 0) + piece)
+        if zlp and len(data) % 64 == 0:
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 0, 0, 0))
+
+    def driver_transfer(self, frame):
+        out = (c.c_ubyte * (4 + 1514 + 4))()
+        self.chip.TxHeader(self.state, out, len(frame), self.probe.OutMax, 1)
+        c.memmove(c.byref(out, 4), frame, len(frame))
+        total = c.c_ulong(4 + len(frame))
+        self.assertEqual(self.chip.TxEnd(self.state, out, c.byref(total), len(out), self.probe.OutMax), 0)
+        return bytes(out)[:total.value]
+
+    def test_full_speed_packet_at_a_time(self):
+        """ax772f's transfers a packet at a time (UHCI at Full Speed) are joined
+        up until the short packet; 60 bytes + 4 on a boundary carry the pad word."""
+        for chip in ('772b', 'sr9800'):
+            self.up('full', chip=chip)
+            sent = []
+            real = self.m.transmit
+            self.m.transmit = lambda data: sent.append(data) or real(data)
+            sizes = (60, 61, 124, 333, 1514)
+            for size in sizes:
+                frame = a.HOST_MAC + a.MODEL_MAC + b'\x88\xb5' + bytes((size & 255,)) * (size - 14)
+                data = self.driver_transfer(frame)
+                self.packets(data, zlp=False)
+                self.assertEqual(sent[-1], data, (chip, size))
+            self.assertEqual(self.m.totals['tx_frames'], len(sizes), chip)
+            self.assertEqual(bytes(self.m.tx_buf), b'')
+
+    def test_packet_join_asix_form_and_limits(self):
+        """The 7 driver's records a packet at a time, a ZLP after a full last
+        packet, a reselected interface dropping a part-joined transfer, a
+        refused one keeping it, and the bound."""
+        self.up('full')
+        arp = arp_request(a.MODEL_MAC) + bytes(18)                    # 60 bytes
+        recs = b''
+        for frame in (arp, arp):
+            n = len(frame)
+            recs += struct.pack('<I', ((n ^ 0x7ff) << 16) | 0x8000 | n) + frame
+        self.assertEqual(len(recs), 128)
+        self.packets(recs[:64], zlp=False)
+        self.assertEqual(self.m.totals['tx_frames'], 0)
+        self.packets(recs[64:], zlp=True)                             # full last packet, then a ZLP
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 2)
+        self.packets(recs[:64], zlp=False)
+        self.m.handle(9, 4, b'\0\1')                                 # refused: the transfer stays
+        self.packets(recs[64:])
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 4)
+        self.packets(recs[:64], zlp=False)
+        self.m.handle(9, 4, b'\0\0')                                 # accepted: it is dropped
+        self.assertEqual(bytes(self.m.tx_buf), b'')
+        self.tx(arp_request(a.MODEL_MAC))
+        self.assertEqual(self.m.totals['tx_frames'], 5)
+        n = 60
+        linux = struct.pack('<I', ((n ^ 0xffff) << 16) | n) + bytes(60)  # 64 bytes, then more: too long
+        self.packets(linux[:64], zlp=False)
+        with self.assertRaises(ValueError):
+            self.packets(bytes(64), zlp=False)
+        self.m.tx_buf = bytearray()
+        with self.assertRaises(ValueError):
+            for _ in range(a.TX_JOIN_MAX // 64 + 1):
+                self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + recs[:64])
+
 
 class TcpHostTests(unittest.TestCase):
     """tcphost.Host segment by segment: the recovery paths a guest leg seldom takes."""

@@ -102,7 +102,15 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   with the hash, AMALL, PRO).
 - Transmit (asix_tx_fixup): one record per bulk-OUT transfer, and the
   pad word 0xffff0000 after it exactly when header and frame end on a
-  packet boundary. Anything else is a fatal error in the trace.
+  packet boundary. Anything else is a fatal error in the trace. The chip
+  sees packets, and a transfer ends with a short packet (a zero-length one
+  included): a host that sends a transfer one packet at a time (UHCI at
+  Full Speed, as QEMU passes it) is joined up first, at most
+  TX_JOIN_MAX bytes; Linux's form also ends once its header's length is
+  in (sr9800's records need no pad on a packet boundary), and a joined
+  Linux-form transfer longer than its header allows is refused at once.
+  A part-joined transfer is dropped by a USB reset, a configuration or
+  an accepted SET_INTERFACE.
 
 --chip sr9800: the CoreChips SR9800 (0FE6:9800 unless --vid/--pid),
 from Linux sr9800.c and sr9800.h (GPL version 2 only: facts, no code):
@@ -150,6 +158,7 @@ ASIX_WRITES_NO_DATA, ASIX_WRITE_24, ASIX_READ_2D = (0x26,), 0x24, 0x2d
 WRITE_RXCOE, WRITE_TXCOE = 0x2c, 0x2e
 TXCOE_IP, TXCOE_TCP, TXCOE_UDP = 0x0001, 0x0002, 0x0004
 TX_NO_COE = 0x8000                 # transmit header bit 15: the record's checksums are left as sent
+TX_JOIN_MAX = 65536                # a bulk-OUT transfer joined from packets: at most this many bytes
 READ_NODE_ID, WRITE_NODE_ID, WRITE_MULTI, READ_PHY_ID = 0x13, 0x14, 0x16, 0x19
 READ_MEDIUM, WRITE_MEDIUM, WRITE_GPIOS, SW_RESET, SW_PHY_SELECT, QCTCTRL = 0x1a, 0x1b, 0x1f, 0x20, 0x22, 0x2a
 RX_SO, RX_AM, RX_AB, RX_AMALL, RX_PRO = 0x0080, 0x0010, 0x0008, 0x0002, 0x0001
@@ -397,6 +406,7 @@ class Model:
         self.flapped = False
         self.restarts_seen = 0
         self.irq = collections.deque()
+        self.tx_buf = bytearray()                  # a bulk-OUT transfer still coming a packet at a time
         self.totals = collections.Counter()
 
     def log(self, event, **fields):
@@ -442,6 +452,7 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 1, 0))
         self.pending.clear()
         self.clear_rx()
+        self.tx_buf = bytearray()
         self.config, self.interrupt = 0, False
 
     # -- link ----------------------------------------------------------------
@@ -540,6 +551,32 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
             self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+
+    def linux_want(self, word):
+        """The bytes a Linux-form transfer with this header has (record and
+        pad word), or None when the header is not Linux's form."""
+        length = word & 0x7ff
+        if word >> 27 != 0x1f or word & 0xf800 or (word >> 16) & 0x7ff != length ^ 0x7ff:
+            return None
+        unit = self.bulk_max - 1 if self.sr9800 else self.bulk_max
+        return 4 + length + (4 if (length + 4) % unit == 0 else 0)
+
+    def receive_out(self, data):
+        """One bulk-OUT packet or transfer from the host (see the header):
+        joined until a short packet ends it, then taken by transmit()."""
+        if len(self.tx_buf) + len(data) > TX_JOIN_MAX:
+            raise ValueError('bulk-OUT transfer longer than %d bytes' % TX_JOIN_MAX)
+        self.tx_buf += data
+        if data and len(data) % self.bulk_max == 0:
+            want = self.linux_want(struct.unpack_from('<I', self.tx_buf)[0]) if len(self.tx_buf) >= 4 else None
+            if want is None or len(self.tx_buf) < want:
+                self.totals['tx_joined_packets'] += 1
+                return
+            if len(self.tx_buf) > want:
+                raise ValueError('transmit transfer %d bytes or more, header gives %d' % (len(self.tx_buf), want))
+        whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        if whole:
+            self.transmit(whole)
 
     def transmit(self, data):
         """One bulk-OUT transfer: one record, and the pad word when it ends on a packet boundary."""
@@ -711,6 +748,8 @@ class Model:
             if len(packet) != (2 if kind == 9 else 1):
                 raise ValueError('alternate length')
             ok = self.config and packet[0] == 0 and (kind == 10 or packet[1] == 0)
+            if ok and kind == 9:
+                self.tx_buf = bytearray()            # SET_INTERFACE(0, 0): a part-joined transfer is dropped
             self.send(11, ident, bytes((0 if ok else 4, packet[0], 0)))
         elif kind in (15, 16):
             if len(packet) != 1:
@@ -743,8 +782,7 @@ class Model:
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
+                self.receive_out(data)
                 self.drain()
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:

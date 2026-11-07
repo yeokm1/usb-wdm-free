@@ -686,6 +686,10 @@ class NegativeFormatTest(Base):
         payload = struct.pack('<96f', *([float('inf'), float('-inf')] * 48))
         model.handle(102, 0, struct.pack('<BBH', 1, 0, len(payload)) + payload)
         self.assertAlmostEqual(model.levels()['received_peak_dbfs'][1], 0.0, 1)
+        # One NaN, then 96 infinities, of 192 samples: counted against the stream.
+        self.assertEqual((model.float_bad[1], model.float_samples[1]), (97, 192))
+        model.report('iso_out_totals')
+        self.assertEqual(json.loads(self.trace.getvalue().splitlines()[-1])['float_out_of_range'], {'01': [97, 192]})
 
     def test_adaptive_source_sync_out(self):
         p = uac1emu.Profile1('adsrc')

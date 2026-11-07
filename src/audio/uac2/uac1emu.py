@@ -555,6 +555,7 @@ class Model1(uacemu.Model):
         self.bind(self.p1)
         self.ostate = {}            # OUT endpoint: validation state of its running stream
         self.synch_out = {}         # sync OUT endpoint (adaptive source): what the host sent
+        self.float_bad, self.float_samples = {}, {}     # endpoint: float samples out of range, all
         self.closed = []            # verdicts of finished streams
 
     def bind(self, profile):
@@ -681,6 +682,9 @@ class Model1(uacemu.Model):
             fields['synch_out'] = {'%02x' % ep: dict(packets=s['packets'], empty=s['empty'],
                                                      values={str(k): v for k, v in sorted(s['values'].items())})
                                    for ep, s in sorted(self.synch_out.items())}
+        if event in ('iso_out_totals', 'iso_stop', 'disconnected') and getattr(self, 'float_samples', None):
+            fields['float_out_of_range'] = {'%02x' % (ep or 0): [self.float_bad.get(ep, 0), n]
+                                            for ep, n in sorted(self.float_samples.items(), key=lambda x: x[0] or 0)}
         super().log(event, **fields)
 
     def measure(self, payload, info, units, ep=None):
@@ -693,9 +697,16 @@ class Model1(uacemu.Model):
             pcm = [(b - 128) << 8 for b in payload]
         else:
             count = len(payload) // 4
+            values = struct.unpack('<%df' % count, payload[:4 * count])
+            # A float stream carries -1.0 to 1.0: NaN, infinities and values
+            # past full scale are counted (XP SP3's usbaudio sends 32-bit
+            # integer PCM into a float format, most of it out of range).
+            bad = sum(1 for v in values if v != v or abs(v) > 1.0)
+            if bad:
+                self.float_bad[ep] = self.float_bad.get(ep, 0) + bad
+            self.float_samples[ep] = self.float_samples.get(ep, 0) + count
             # Clamped as floats first (infinities included); NaN as silence.
-            pcm = [0 if v != v else int(max(-1.0, min(1.0, v)) * 32767)
-                   for v in struct.unpack('<%df' % count, payload[:4 * count])]
+            pcm = [0 if v != v else int(max(-1.0, min(1.0, v)) * 32767) for v in values]
         as16 = dict(info, subslot=2)
         return super().measure(struct.pack('<%dh' % len(pcm), *pcm), as16, units, ep)
 

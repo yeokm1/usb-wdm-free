@@ -34,7 +34,7 @@ typedef struct USB_SLOT {
     PIRP Irp;
     struct _URB_ISOCH_TRANSFER *Urb;
     PUCHAR Buffer;
-    ULONG Packets, Bytes, Sequence;
+    ULONG Packets, Bytes, BufferBytes, Sequence;
     LONG Phase; /* 0 idle,1 lower-owned,2 completed and caller-owned */
     BOOLEAN Feedback, CancelIssued, Used;
     NTSTATUS Status;
@@ -782,7 +782,7 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
         else n = UacRateNextBytes(&s->Rate_);
         /* A zero-length OUT packet is legal: a cadence below one frame per
          * service interval (8 kHz at High Speed) has empty intervals. */
-        if (n > (slot->Feedback ? s->FeedbackBytes : s->Capacity) || size > s->SlotBytes - n)
+        if (n > (slot->Feedback ? s->FeedbackBytes : s->Capacity) || size > slot->BufferBytes - n)
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         urb->IsoPacket[i].Offset = size;
         size += n;
@@ -892,7 +892,8 @@ static VOID FeedbackDiag(UAC_USB *s, USB_SLOT *slot, NTSTATUS status)
     for (i = 0; i < slot->Packets; i++) {
         PUSBD_ISO_PACKET_DESCRIPTOR packet = &slot->Urb->IsoPacket[i];
         if (!USBD_SUCCESS(packet->Status)) FbCount(s, (ULONG)packet->Status);
-        else if (packet->Length == s->FeedbackBytes) s->Stats.FbFourBytes++;
+        else if (packet->Length == 4 || (!s->Dev->HighSpeed && packet->Length == 3))
+            s->Stats.FbFourBytes++; /* a well-formed length; the name is older */
         else if (!packet->Length) s->Stats.FbZeroLength++;
         else FbCount(s, 0x40000000 | packet->Length);
     }
@@ -934,18 +935,26 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
                  * as a successful zero-length payload. It proves packet
                  * freshness only after a valid initial rate was received;
                  * it neither resets the planner nor invents a new value. */
-                if (USBD_SUCCESS(packet->Status) && !packet->Length && s->Rate_.FeedbackActive) {
+                if (!USBD_SUCCESS(packet->Status)) { s->Rate_.BadFeedback++; continue; }
+                /* The value is decoded by the length that came back (Full
+                 * Speed: 3 bytes 10.14 or 4 bytes 16.16), within the
+                 * packet's stride and the slot's allocation. */
+                switch (UacRateFeedbackPacket(&s->Rate_, slot->Buffer,
+                        slot->Bytes <= slot->BufferBytes ? slot->Bytes : slot->BufferBytes,
+                        packet->Offset, packet->Length, s->FeedbackBytes)) {
+                case UAC_FEEDBACK_KEEPALIVE:
                     valid = TRUE;
                     KeAcquireSpinLock(&s->Lock, &old);
                     s->Stats.FeedbackKeepalives++;
                     KeReleaseSpinLock(&s->Lock, old);
-                } else if (USBD_SUCCESS(packet->Status) && packet->Length == s->FeedbackBytes &&
-                    packet->Offset <= slot->Bytes - s->FeedbackBytes) {
-                    if (UacRateFeedback(&s->Rate_, slot->Buffer + packet->Offset, s->FeedbackBytes)) {
-                        valid = TRUE;
-                        s->LastFeedbackValueAt = KeQueryInterruptTime();
-                    }
-                } else s->Rate_.BadFeedback++;
+                    break;
+                case UAC_FEEDBACK_VALUE:
+                    valid = TRUE;
+                    s->LastFeedbackValueAt = KeQueryInterruptTime();
+                    break;
+                default:
+                    break;
+                }
             }
         }
         if (valid) s->LastFeedbackPacket = KeQueryInterruptTime();
@@ -1179,7 +1188,11 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     s->FrameBytes = (ULONG)a->Channels * a->Subslot;
     s->Capacity = UacPlanCapacity(a->MaxPacket);
     s->Feedback = !capture && UacPlanSync(a) == 1;
-    s->FeedbackBytes = d->HighSpeed ? 4 : 3;
+    /* Full Speed asks 4 bytes where the endpoint holds them, so a device
+     * sending 16.16 is read whole; a 3-byte 10.14 answer is a short
+     * packet and is decoded as such. */
+    s->FeedbackBytes = UacRateFeedbackStride(d->HighSpeed, UacPlanCapacity(a->FeedbackMaxPacket));
+    if (s->Feedback && !s->FeedbackBytes) { ExFreePool(s); return STATUS_NOT_SUPPORTED; }
     /* About 4 ms per data URB at High Speed bInterval 1-3 and at Full
      * Speed; 8 ms at bInterval 4, as High Speed packet counts stay a
      * multiple of 8 (one frame) for the older stacks. As many URBs as
@@ -1321,8 +1334,8 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         size = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) +
             slot->Packets * sizeof(USBD_ISO_PACKET_DESCRIPTOR);
         slot->Urb = ExAllocatePoolWithTag(NonPagedPool, size, TAG);
-        slot->Buffer = ExAllocatePoolWithTag(NonPagedPool,
-            slot->Feedback ? FEEDBACK_PACKETS * s->FeedbackBytes : s->SlotBytes, TAG);
+        slot->BufferBytes = slot->Feedback ? FEEDBACK_PACKETS * s->FeedbackBytes : s->SlotBytes;
+        slot->Buffer = ExAllocatePoolWithTag(NonPagedPool, slot->BufferBytes, TAG);
         if (!slot->Urb || !slot->Buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto done; }
     }
     s->NextSequence = s->CompletedSequence = 0;

@@ -401,7 +401,8 @@ The driver's rules:
 - **Explicit feedback** (USB 2.0 5.12.4.2): an isochronous IN endpoint whose
   `bmAttributes` usage type is 01b, in the same alternate setting as the
   data endpoint. Value: 10.14 in 3 bytes at Full Speed (samples per frame),
-  16.16 in 4 bytes at High Speed (samples per microframe). Linux detects
+  16.16 in 4 bytes at High Speed (samples per microframe); at Full Speed
+  `uac2` also takes 16.16 in 4 bytes, per frame (section 23). Linux detects
   devices that send the other format or a shifted value and corrects it
   ("Because the Audio Class 1 spec was written before USB 2.0, many high
   speed devices use a wrong interpretation ... we cannot predict what format
@@ -477,7 +478,8 @@ not:
 ### 4.7 Full-Speed UAC 2 devices
 
 UAC 2 permits Full Speed. Then packets are per 1 ms frame, feedback is
-10.14, and Microsoft's stacks accept only `bInterval` 1 for Full-Speed
+10.14 in 3 bytes or, from devices made for Windows, 16.16 in 4 (section
+23), and Microsoft's stacks accept only `bInterval` 1 for Full-Speed
 isochronous endpoints ("Microsoft USB stack only supports bInterval value of
 1 for full-speed isochronous endpoints", the isochronous how-to's sample).
 These devices are the only UAC 2 devices that can work on a stock 98 SE /
@@ -2307,3 +2309,68 @@ state; with that device on the released INF the user's choice came back
 after the start. So the change is not shown to make the move last; after
 updating the preferred device's driver on 98 SE the user may have to check
 the Multimedia panel. ME and 2000 not read.
+
+## 23. Full Speed feedback in 4 bytes (xHCI98 Phase 47, 2026-11-07)
+
+### 23.1 The reading
+
+USB Audio 2.0 section 3.16.2.2 takes the explicit feedback format from
+USB 2.0 section 5.12.4.2: at Full Speed 3 bytes, 10.14 samples per frame;
+at High Speed 4 bytes, 16.16 samples per microframe. Windows 10's own
+UAC 2.0 driver does not start a Full Speed device whose feedback endpoint
+is 3 bytes (Code 10 on the simulator's `fs` profile), and starts it when
+the endpoint is 4 bytes carrying 16.16 samples per frame (the simulator's
+`--fs-feedback 4`; xHCI98 Phase 47, the inbox reference runs). Devices
+made for Windows therefore send 4 bytes at Full Speed. Up to 0.1.9.0
+`uac2` asked 3 bytes per Full Speed feedback packet and decoded only 3, so
+such a device's feedback was too long for the request.
+
+### 23.2 The change
+
+- **Request.** Per feedback packet the driver asks 4 bytes at High Speed;
+  at Full Speed 4 bytes when the feedback endpoint's capacity
+  (`wMaxPacketSize` bits 10..0) is at least 4, else 3. The packet stride,
+  the request's length and the feedback slots' allocation all follow that
+  one value (`UacRateFeedbackStride`). An endpoint below 3 bytes at Full
+  Speed or 4 at High Speed is not runnable, as before (4.3).
+- **Decode by the length received.** A Full Speed packet of 3 bytes is
+  10.14, one of 4 bytes is 16.16, both in samples per frame; High Speed
+  takes 4 bytes 16.16 per microframe only, as before. Any other length, a
+  length above the stride, or a packet outside the slot's allocation is
+  rejected before the buffer is read (`UacRateFeedbackPacket`).
+- **Bounds unchanged.** A value is accepted only within 12.5% of the
+  nominal rate (the driver's policy, not the specification's) and only if
+  one service interval at that rate fits the data endpoint, both checked
+  before the value is multiplied. A rejected value leaves the last valid
+  cadence and does not count as feedback for the deadline (`uacwatch.h`:
+  1 s before the first valid value of a stream, 200 ms after); a
+  zero-length packet counts only once a valid value has arrived (4.5).
+- **Not taken:** a 4-byte Full Speed value in 10.14 (a device padding the
+  USB 2.0 form). It decodes to a quarter of the rate, is rejected by the
+  window, and the stream ends at the deadline as any device without
+  usable feedback does.
+
+### 23.3 Tests
+
+- `rtest.cmd`: Full Speed 3 and 4 bytes at 44.1 and 48 kHz, fractional
+  values in both forms giving the same cadence, a 4-byte value read up to
+  a guard page's edge, lengths 0 (before and after a valid value), 1, 2, 5
+  and above the stride, packets outside the buffer, values outside the
+  window or the endpoint, the stride per speed and capacity, and the High
+  Speed rules unchanged (3 bytes rejected there); with `uacwatch.h`'s
+  deadline, a stream fed only rejected packets is late at 1 s, and one
+  fed valid values and keepalives is not.
+- Legs on 98 SE and XP, under NUSB's or Windows' EHCI and under xHCI98
+  3.4.1.0, against the simulator's `fs` profile with 3-byte and with 4-byte
+  feedback: playback, recording, a rate change and unplug; the record says
+  which.
+
+Read 2026-11-07 ([uac2-fs-feedback](../testing/2026-11-07-uac2-fs-feedback.md)):
+on 98 SE under xHCI98 and under NUSB's stack (on UHCI: QEMU's EHCI takes
+no Full Speed device) and on XP under xHCI98, both endpoint sizes played,
+recorded, survived an unplug and played again, and the packets followed
+the feedback (49 frames in about 71% of the packets at 48 kHz with the
+device 1.5% fast); a device at 44.1 kHz likewise on 98 SE. The released
+0.1.8.26 fails the 4-byte endpoint. On XP's own UHCI playback fails with
+either size, and 0.1.8.26 fails the 3-byte case the same way; the cause
+is not settled.

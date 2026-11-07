@@ -35,9 +35,9 @@ int UacRateFeedback(UAC_RATE *s, const unsigned char *bytes, unsigned int length
 {
     unsigned int value, step, tolerance;
     if (!s || !s->Ready) return 0;
-    if (!bytes || length != (s->HighSpeed ? 4u : 3u)) goto bad;
+    if (!bytes || (length != 4u && (s->HighSpeed || length != 3u))) goto bad;
     value = bytes[0] | ((unsigned int)bytes[1] << 8) | ((unsigned int)bytes[2] << 16);
-    if (s->HighSpeed) value |= (unsigned int)bytes[3] << 24;
+    if (length == 4u) value |= (unsigned int)bytes[3] << 24;
     else value <<= 2; /*10.14 ->16.16*/
     tolerance = s->Nominal / 8;
     if (value < s->Nominal - tolerance || value > s->Nominal + tolerance) goto bad;
@@ -52,6 +52,31 @@ int UacRateFeedback(UAC_RATE *s, const unsigned char *bytes, unsigned int length
 bad:
     s->BadFeedback++;
     return 0;
+}
+
+unsigned int UacRateFeedbackStride(int highSpeed, unsigned int capacity)
+{
+    if (capacity >= 4u) return 4u;
+    if (!highSpeed && capacity == 3u) return 3u;
+    return 0;
+}
+
+int UacRateFeedbackPacket(UAC_RATE *s, const unsigned char *buffer,
+    unsigned int bufferBytes, unsigned int offset, unsigned int length,
+    unsigned int stride)
+{
+    if (!s || !s->Ready) return UAC_FEEDBACK_BAD;
+    /* The packet's whole stride lies in the buffer, whatever came back. */
+    if (!buffer || !stride || stride > bufferBytes || offset > bufferBytes - stride ||
+        length > stride) goto bad;
+    if (!length) {
+        if (s->FeedbackActive) return UAC_FEEDBACK_KEEPALIVE;
+        goto bad;
+    }
+    return UacRateFeedback(s, buffer + offset, length) ? UAC_FEEDBACK_VALUE : UAC_FEEDBACK_BAD;
+bad:
+    s->BadFeedback++;
+    return UAC_FEEDBACK_BAD;
 }
 
 unsigned int UacRateNextBytes(UAC_RATE *s)

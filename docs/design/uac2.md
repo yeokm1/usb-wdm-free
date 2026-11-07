@@ -2578,6 +2578,31 @@ under its UHCI:
   and not for `usbhub20`, a shorter or other name, or none.
 - Legs: [uac2-iso-ehci](../testing/2026-11-07-uac2-iso-ehci.md).
 
+### 25.6 Empty feedback before the first value (2026-11-08)
+
+On 98 SE under NUSB 3.3 with QEMU's EHCI, some plays stopped at the
+start deadline: the stream's stats (Uac2UsbStats, read from the
+registry after the play) showed every feedback packet of the stream
+successful and zero-length (6016 of them in its first second, no value),
+`LastStatus` `STATUS_IO_TIMEOUT`, while the device sent a value in every
+frame. NUSB polled the 1 ms feedback endpoint at every microframe, and
+the emulator's passthrough answered most polls empty; in the plays that
+went on, values came about one poll in 600. The start rule of 23.2
+counted those empty answers as bad; it does so in every build since 23,
+the deadline's form (25.3) only changed how soon.
+
+The change: before the first valid value of a stream, a successful
+zero-length feedback packet is `UAC_FEEDBACK_EMPTY` (`uacrate.c`): not
+counted as bad, and usable for the deadline, as a keepalive is after a
+value. The stream goes on at the nominal cadence until a value comes,
+as it does for the first second anyway. A device that answers its
+feedback endpoint only with empty packets now plays at the nominal rate
+instead of stopping after 1 s; one whose packets fail, or carry values
+outside the window, still stops at the deadline. `ratetest.c`: empty
+answers for 5 s keep the start deadline away and leave BadFeedback at 0,
+a value then makes the stream active and later empties keepalives; the
+start deadline still fires for rejected packets; `uac1test.c` likewise.
+
 ## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
 
 Status: design, 2026-11-07; the options of 26.5 and 26.6 are the

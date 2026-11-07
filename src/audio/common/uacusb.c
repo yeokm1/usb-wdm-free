@@ -1235,6 +1235,12 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
                     valid = TRUE;
                     s->LastFeedbackValueAt = KeQueryInterruptTime();
                     break;
+                case UAC_FEEDBACK_EMPTY:
+                    /* Section 25.6: before the first value, an empty answer
+                     * shows the endpoint serviced; the stream goes on at
+                     * the nominal cadence, as it does until a value. */
+                    valid = TRUE;
+                    break;
                 default:
                     /* 'F': a rejected feedback packet (A its first 4 bytes, B
                      * its length, C its offset, D the stride). */

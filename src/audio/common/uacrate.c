@@ -69,10 +69,7 @@ int UacRateFeedbackPacket(UAC_RATE *s, const unsigned char *buffer,
     /* The packet's whole stride lies in the buffer, whatever came back. */
     if (!buffer || !stride || stride > bufferBytes || offset > bufferBytes - stride ||
         length > stride) goto bad;
-    if (!length) {
-        if (s->FeedbackActive) return UAC_FEEDBACK_KEEPALIVE;
-        goto bad;
-    }
+    if (!length) return s->FeedbackActive ? UAC_FEEDBACK_KEEPALIVE : UAC_FEEDBACK_EMPTY;
     return UacRateFeedback(s, buffer + offset, length) ? UAC_FEEDBACK_VALUE : UAC_FEEDBACK_BAD;
 bad:
     s->BadFeedback++;

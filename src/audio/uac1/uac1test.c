@@ -205,7 +205,7 @@ static void Async(void)
      * nominal cadence goes on (QEMU's passthrough answers so at first). */
     CHECK(UacRateInitialize(&rate, 44100, 0, 1, 4, 200));
     memset(raw, 0, sizeof(raw));
-    CHECK(UacRateFeedbackPacket(&rate, raw, 3, 0, 0, 3) == UAC_FEEDBACK_BAD && !rate.FeedbackActive);
+    CHECK(UacRateFeedbackPacket(&rate, raw, 3, 0, 0, 3) == UAC_FEEDBACK_EMPTY && !rate.FeedbackActive);
     for (i = 0, sum = 0; i < 1000; i++) sum += UacRateNextBytes(&rate) / 4;
     CHECK(sum == 44100);
     /* Then 10.14: 44.1 samples per frame = 0x0B0666. */

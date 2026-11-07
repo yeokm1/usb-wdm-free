@@ -2374,3 +2374,56 @@ device 1.5% fast); a device at 44.1 kHz likewise on 98 SE. The released
 0.1.8.26 fails the 4-byte endpoint. On XP's own UHCI playback fails with
 either size, and 0.1.8.26 fails the 3-byte case the same way; the cause
 is not settled.
+
+## 24. 98 SE and ME: no KS file prompts (2026-11-07)
+
+Installing `uac2` on 98 SE asked for `ks.sys`, then `ksclockf.ax`, and
+neither was to be found on the Windows CD's `\WIN98` folder or in
+`C:\WINDOWS\OPTIONS\CABS` (owner, 2026-11-07). The record
+`docs/testing/2026-11-07-98se-ks-prompts.md` has the runs.
+
+**Cause.** The 9x section included Windows' `ks.inf` and `wdmaudio.inf`
+and needed their `KS.Registration` and `WDMAUDIO.Registration` sections.
+On 9x, Setup looks for the files those sections copy (`ks.sys`,
+`ksproxy.ax`, `ksclockf.ax` and the rest) and for the included INFs'
+catalogs (`ks.cat`, `wdmaudio.cat`) on this package's own disk: the
+prompt reads "The file 'ks.cat' on UAC2 experimental build folder cannot
+be found". The files are Windows' own and sit inside the CD's CAB files
+(`BASE4.CAB`, `BASE5.CAB`, `DRIVER11.CAB`, `CATALOG3.CAB`, ...), never
+loose, so pointing the prompt at the CD's `\WIN98` does not find them.
+Skipping them was harmless only because Windows brings the same files
+itself (below). Including `wdmaudio.inf` alone still asks for
+`wdmaudio.cat`.
+
+**What a clean 98 SE has.** Before any audio install: `ks.sys`,
+`portcls.sys`, `stream.sys`, `sysaudio.sys`, `kmixer.sys`, `swmidi.sys`,
+`wdmaud.sys`, `wdmaud.drv` and `ksuser.dll` are present; the DirectShow
+side of KS (`ksproxy.ax`, `ksclockf.ax`, `ksdata.ax`, `ksinterf.ax`,
+`ksvpintf.ax`), `mspclock.sys`, `mskssrv.sys` and the catalogs `ks.cat`
+and `wdmaudio.cat` are not, and no software device (SysAudio, KMixer,
+the synth, the streaming clock and service proxies) is installed.
+
+**What brings them.** `WDMAUDIO.Registration` copies nothing: it writes
+a RunOnce entry that has Windows install SysAudio's software device
+(SWENUM) from its own `wdmaudio.inf`, and that install, being Windows'
+own, copies the KS files from Windows' installation files (CAB-aware:
+silent when the `SourcePath` holds them, else Windows' own "Windows 98
+Second Edition CD-ROM" prompt, which the CD's `\WIN98` answers), runs
+`KS.Registration` and installs KMixer, the software synth and the KS
+clock and service proxies. 9x runs the entry at the end of the device's
+install.
+
+**Change.** The 9x section (`[UAC2]`) includes no Microsoft INF. It
+writes that RunOnce entry itself (`[SysAudio9x]`, value name
+`WDM_SYSAUDIO`, the name Windows' own audio INFs use, so the entry runs
+once when both write it), and its device loader is the pair every WDM
+audio device has on 9x, `*NTKERN,MMDEVLDR.VXD` (the earlier INF wrote
+`*NTKERN`, and `WDMAUDIO.Registration` overwrote it with the pair). The
+entry's parts are identifiers: SysAudio's software device id, the KS
+filter reference string, SysAudio's interface category, and the install
+section that `wdmaudio.inf` (98 SE and ME alike) gives for the device's
+interface. The NT sections are unchanged.
+
+On a system where some WDM audio device was installed before (Windows'
+own USB audio, for one), everything is already there and the install
+asks for nothing but this package's own file.

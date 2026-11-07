@@ -36,7 +36,8 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   and wrong lengths, STALL. Vendor requests are answered whether or not
   the device is configured (INFERRED): ASIX's XP driver 5.4.3.0 sets
   configuration 1, then 0, sends its bring-up on endpoint 0, and sets
-  configuration 1 again (docs/testing/2026-11-07-ax88772-model.md).
+  configuration 1 again (docs/testing/2026-11-07-ax88772-model.md; why a
+  2026-11-06 run ended at configuration 0 is not settled).
   READ_IPG012 11 (asix.h; three bytes, IPG0, IPG1, IPG2 as WRITE_IPG0 last
   set them, Linux's defaults 15 0C 12 at power-up, INFERRED) is answered:
   ASIX's 7 driver 5.12.12.0 reads it right after writing them and stops

@@ -6,6 +6,15 @@ Per package, newest first. A release is a commit and a tag
 
 ## Next release (after 0.1.8, not yet tagged)
 
+- **Known issue, Windows 2000, USB MIDI**: Windows 2000 has no USB MIDI
+  driver of its own. A class-compliant MIDI keyboard or interface that
+  also has an audio control interface (most do) goes to Windows' audio
+  driver, which can stop Windows. Install usbmidi before you plug in the
+  device: for such a device usbmidi takes over only if it lists it. Do
+  not plug such a device into Windows 2000 if usbmidi does not list it
+  and it has no driver of its own. README, Installing, says how to add
+  your device to usbmidi's list.
+  [Windows 2000 MIDI record](testing/2026-11-07-midi-2000.md).
 - **Signing**: every x64 image is signed with a new test certificate,
   `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
   `7A3C6E6289EC46E6E128D87BB54E87196B824959`, valid 2020-01-01 to

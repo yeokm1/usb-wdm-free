@@ -2968,9 +2968,10 @@ one direction never selects another alternate of the interface under
 the other direction's running stream.
 
 **Rates per format.** A format's rates are those of the alternates that
-carry it (terminal, channels, subslot and bits; `UacUsbRatesFor`), up to
-the 32 one alternate can list, so one format's rates never crowd
-another's out of the terminal's list.
+carry it (terminal, channels, subslot and bits; `UacUsbRatesFor`) and
+that one of them can carry (`UacPlanPick`: listed, and within its
+packet), up to 32, so neither another format's rates nor rates no
+alternate runs crowd a runnable rate out of the list.
 
 **Adaptive sources.** An adaptive IN endpoint whose `bSynchAddress`
 names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is

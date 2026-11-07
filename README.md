@@ -15,6 +15,7 @@ These drivers are experimental. They may not work with every device and can make
 
 | Driver | Device class | Windows |
 |---|---|---|
+| `uac1` | USB Audio Class 1.0, playback and recording, with volume and mute; instead of Windows' own driver | 98 SE |
 | `uac2` | USB Audio Class 2.0, playback and recording, with volume and mute | 98 SE to 8; x64 from XP |
 | `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
@@ -60,6 +61,7 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
+| `uac1` | Real device (VM); simulator (o) | - | - | - | - | - | - |
 | `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
@@ -149,7 +151,7 @@ without the co-installer; their x64 `pnputil` wants a signed catalog,
 which this package has none of
 ([release notes](docs/release-notes.md), 0.1.5).
 
-`uac2` and `usbmidi`: On Windows 98 SE, Setup may ask for KS files such as `ksclockf.ax` or `ks.cat`; choose Skip File, as Windows already has them.
+`uac1`, `uac2` and `usbmidi`: On Windows 98 SE, Setup may ask for KS files such as `ksclockf.ax` or `ks.cat`; choose Skip File, as Windows already has them.
 
 `usbprn` on 98 SE and ME: plug the printer in, point the wizard at
 `free/print/usbprn/w98se/` or `wme/`, then add the printer with Add

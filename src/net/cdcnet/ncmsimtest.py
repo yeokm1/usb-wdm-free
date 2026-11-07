@@ -288,8 +288,8 @@ class Tests(unittest.TestCase):
         """A ZLP ends an NTB on a packet boundary, dwNtbOutMaxSize ends one
         without it, and a data-interface restart drops a cut-off NTB."""
         m = self.model(speed='full', out_max=256)
-        m.handle(6, 1, b'')
-        m.handle(9, 3, b'')
+        m.handle(6, 1, b'\x01')
+        m.handle(9, 3, b'\x01\x01')
         got = []
         m.transmit = got.append
 

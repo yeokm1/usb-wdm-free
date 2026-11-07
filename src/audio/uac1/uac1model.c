@@ -14,14 +14,32 @@ static void Clear(void *p, unsigned int n)
     while (n--) *b++ = 0;
 }
 
+static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth);
+
+/* A Selector Unit's output layout: its inputs' when they all agree;
+ * otherwise it depends on the input selected (ADC-1 4.3.2.4 allows equal
+ * channel counts in different positions), and none is named. */
+static unsigned int SelectorCluster(const UAC1_DESC *d, const unsigned char *p, unsigned int depth)
+{
+    unsigned int i, pins = p[4], first, c;
+    if (p[0] < 6U + pins || !pins) return 0;
+    first = Cluster(d, p[5], depth + 1);
+    for (i = 1; i < pins; i++) {
+        c = Cluster(d, p[5 + i], depth + 1);
+        if (c != first) return 0;
+    }
+    return first;
+}
+
 /* The wChannelConfig of the cluster entity `id` outputs (ADC-1 3.7.2.3):
  * an Input Terminal, Mixer, Processing or Extension Unit states it; a
- * Feature Unit passes its source's, a Selector Unit its first input's
- * (all its inputs carry one cluster), an Output Terminal its source's.
- * 0 when there is none or the chain is malformed. */
-static unsigned int Cluster(const UAC1_DESC *d, unsigned int id)
+ * Feature Unit passes its source's, a Selector Unit its inputs' when they
+ * agree, an Output Terminal its source's. 0 when there is none, the inputs
+ * differ or the chain is malformed (bounded by depth). */
+static unsigned int Cluster(const UAC1_DESC *d, unsigned int id, unsigned int depth)
 {
     unsigned int hops;
+    if (depth > 8) return 0;
     for (hops = 0; hops < 64; hops++) {
         const unsigned char *p = Uac1Entity(d, id);
         unsigned int n, pins;
@@ -38,7 +56,7 @@ static unsigned int Cluster(const UAC1_DESC *d, unsigned int id)
             pins = p[6];
             return n >= 10U + pins ? (unsigned int)p[8 + pins] | ((unsigned int)p[9 + pins] << 8) : 0;
         case UAC1_FEATURE_UNIT: id = p[4]; break;
-        case UAC1_SELECTOR_UNIT: id = n >= 6 ? p[5] : 0; break;
+        case UAC1_SELECTOR_UNIT: return SelectorCluster(d, p, depth);
         case UAC1_OUTPUT_TERMINAL: id = n >= 9 ? p[7] : 0; break;
         default: return 0;
         }
@@ -77,7 +95,7 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
         o->FeedbackInterval = (UAC_BYTE)(a->SyncEndpoint ? a->SyncInterval : 0);
         o->MaxPacket = a->MaxPacket;
         o->FeedbackMaxPacket = (UAC_WORD)(a->SyncEndpoint ? a->SyncMaxPacket : 0);
-        o->ChannelConfig = Cluster(s, a->Terminal) & 0xfffU;
+        o->ChannelConfig = Cluster(s, a->Terminal, 0) & 0xfffU;
         o->RateMin = (unsigned int)a->RateMin; o->RateMax = (unsigned int)a->RateMax;
         o->RateCount = a->RateCount > UAC1_RATES ? UAC1_RATES : a->RateCount;
         for (k = 0; k < o->RateCount; k++) o->Rate[k] = (unsigned int)a->Rate[k];

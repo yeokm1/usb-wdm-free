@@ -251,6 +251,60 @@ static void Mixed(void)
 
 /* Layouts uac1 does not run: left out of the model (a null function when
  * nothing is left). */
+/* A capture path through a Selector Unit: IT 1 (front pair) and IT 2
+ * (another layout, byte 47) into SU 3, then OT 4 (USB streaming). */
+static unsigned char selcfg[] = {
+    9, 2, 120, 0, 2, 1, 0, 0x80, 50,
+    9, 4, 0, 0, 0, 1, 1, 0, 0,
+    9, 0x24, 1, 0, 1, 50, 0, 1, 1,
+    12, 0x24, 2, 1, 0x01, 0x02, 0, 2, 0x03, 0, 0, 0,
+    12, 0x24, 2, 2, 0x03, 0x06, 0, 2, 0x30, 0, 0, 0,
+    8, 0x24, 5, 3, 2, 1, 2, 0,
+    9, 0x24, 3, 4, 0x01, 0x01, 0, 3, 0,
+    9, 4, 1, 0, 0, 1, 2, 0, 0,
+    9, 4, 1, 1, 1, 1, 2, 0, 0,
+    7, 0x24, 1, 4, 1, 1, 0,
+    11, 0x24, 2, 1, 2, 2, 16, 1, 0x80, 0xbb, 0,
+    9, 5, 0x81, 0x05, 0xc8, 0, 1, 0, 0,
+    7, 0x25, 1, 0, 0, 0, 0
+};
+
+static void Selector(void)
+{
+    CHECK(sizeof(selcfg) == 120 && selcfg[47] == 0x30);
+    Model(selcfg, sizeof(selcfg), 0, 0);
+    /* The inputs' layouts differ: none is named. */
+    CHECK(m.AltCount == 1 && m.Alt[0].ChannelConfig == 0);
+    selcfg[47] = 0x03;
+    Model(selcfg, sizeof(selcfg), 0, 0);
+    CHECK(m.Alt[0].ChannelConfig == 3);
+    selcfg[47] = 0x30;
+}
+
+/* QEMU's layout with a 20-rate list, 48 kHz the 20th: every rate the
+ * parser keeps reaches the model. */
+static void ManyRates(void)
+{
+    unsigned int i, n = 0, o, k, index;
+    for (i = 0; i < sizeof(qemu); i += qemu[i]) {
+        if (qemu[i + 1] == 0x24 && qemu[i + 2] == 2 && qemu[i] == 11 && i > 60) {
+            memcpy(work + n, qemu + i, 8);
+            work[n] = 8 + 3 * 20; work[n + 7] = 20;
+            o = n + 8;
+            for (k = 0; k < 19; k++) { work[o++] = (unsigned char)(1000 + k); work[o++] = (unsigned char)((1000 + k) >> 8); work[o++] = 0; }
+            work[o++] = 0x80; work[o++] = 0xbb; work[o++] = 0;
+            n = o;
+        } else {
+            memcpy(work + n, qemu + i, qemu[i]);
+            n += qemu[i];
+        }
+    }
+    work[2] = (unsigned char)n; work[3] = (unsigned char)(n >> 8);
+    Model(work, n, 0, 0);
+    CHECK(m.Alt[0].RateCount == 20 && m.Alt[0].Rate[19] == 48000 && UacPlanHasRate(&m.Alt[0], 48000));
+    CHECK(UacPlanPick(&m, 0, 1, 2, 2, 16, 3, 48000, 0, &index) == UAC_OK);
+}
+
 static void Unsupported(void)
 {
     unsigned int i, n;
@@ -290,8 +344,10 @@ static void Hostile(void)
     n = Copy(); work[9 + 9 + 10 + 12 + 5] = 0;                     /* bControlSize 0 */
     CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_BAD_DESCRIPTOR);
     CHECK(Uac1Parse(logi, logiLen - 1, 0, 0, &d) == UAC1_BAD_DESCRIPTOR);
-    /* Every single-byte change inside the AC block fails or parses into a
-     * model the driver core walks without reading past the buffer. */
+    /* A sampled mutation smoke test: single-byte changes inside the AC
+     * block (16 values each) fail or parse into a model the driver core
+     * walks; not a memory-safety proof (the buffer is larger than the
+     * configuration). */
     for (i = 18; i < 18 + 103; i++) {
         unsigned int v;
         for (v = 0; v < 256; v += 17) {
@@ -313,7 +369,7 @@ int main(int argc, char **argv)
     if (argc != 3) { printf("usage: uac1test <brio100.bin> <logi0a64.bin>\n"); return 2; }
     brioLen = Load(argv[1], brio, sizeof(brio));
     logiLen = Load(argv[2], logi, sizeof(logi));
-    Brio(); Logi(); Qemu(); Async(); Midi(); Mixed(); Unsupported(); Hostile();
+    Brio(); Logi(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Unsupported(); Hostile();
     printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback)\n", checks);
     return 0;
 }

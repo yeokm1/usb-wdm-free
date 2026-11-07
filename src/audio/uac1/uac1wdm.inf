@@ -11,10 +11,14 @@ Provider=%Provider%
 DriverVer=11/07/2026,0.1.0.1
 
 [Manufacturer]
-%Provider%=Models
+%Provider%=Models,NTx86,NTamd64
 
-; Windows 98 SE only: no NT section, so 2000 and later find nothing to
-; install here. A USB Audio 1.0 function as a composite parent presents
+; Windows 98 SE only. XP and later read the decorated model sections,
+; which are empty here, so they never match. 2000 and ME read the
+; undecorated [Models] like 98 SE; nothing stages this INF there
+; (STAGE.TXT: 98 SE only) and its folder is the 98 SE one, so they meet it
+; only if a user points Update Driver at it, which is not supported.
+; A USB Audio 1.0 function as a composite parent presents
 ; it: by its AudioControl interface (01/01/00: the legacy grouping, or a
 ; MIDI-only AC+MS function, which starts as a null function), or by an IAD
 ; (bFunctionSubClass 00 or 02, protocol 00). These rank above
@@ -25,6 +29,10 @@ DriverVer=11/07/2026,0.1.0.1
 %Device%=UAC1,USB\Class_01&SubClass_01&Prot_00
 %Device%=UAC1,USB\Class_01&SubClass_00&Prot_00
 %Device%=UAC1,USB\Class_01&SubClass_02&Prot_00
+
+; XP and later: nothing.
+[Models.NTx86]
+[Models.NTamd64]
 
 [SourceDisksNames]
 1=%Disk%,,,

@@ -31,7 +31,7 @@ typedef struct UAC_ALT {
      * RateMax), and its class-specific endpoint bmAttributes (D0 Sampling
      * Frequency, D7 MaxPacketsOnly). ChannelConfig holds the stream's
      * cluster wChannelConfig. Entity offsets point at UAC 1.0 layouts. */
-#define UAC1_RATES 16
+#define UAC1_RATES 32   /* uacfmt.h UAC_FMT_MAX_RATES: every rate the parser keeps */
     unsigned int RateCount, RateMin, RateMax, Rate[UAC1_RATES];
     UAC_BYTE EpControls;
 #endif

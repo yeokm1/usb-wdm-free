@@ -13,7 +13,7 @@ try {
     $env:PATH="$(Split-Path $gcc);$saved"
     & $gcc --version | Set-Content "$dest/compiler.txt"
     if($LASTEXITCODE) {throw 'Cannot query GCC'}
-    $flags=@('-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-misleading-indentation')
+    $flags=@('-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',"-I$PSScriptRoot/../common")
     foreach($mode in @('normal','trap')) {
         $extra=@();if($mode -eq 'trap') {$extra=@('-fsanitize=undefined','-fsanitize-undefined-trap-on-error')}
         foreach($kind in @('control','mixer')) {

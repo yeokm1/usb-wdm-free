@@ -70,6 +70,16 @@ Profiles (--profile):
             kHz (768-byte packets) behind a 1-channel input terminal, mono
             capture 8 to 48 kHz, master-only units, a sidetone path through
             Mixer Unit 12 (which stalls), its HID report.
+Formats and synchronisation a UAC 1.0 driver may refuse (Full Speed; each
+otherwise like dacd or mic, Windows' own driver may still take them):
+  pcm8      playback only, one alternate: wFormatTag 2 (PCM8), bSubframeSize
+            1, bBitResolution 8 (unsigned), stereo 44.1/48 kHz, ADAPTIVE.
+  float     the same with wFormatTag 3 (IEEE_FLOAT), bSubframeSize 4,
+            bBitResolution 32.
+  adsrc     capture only: an ADAPTIVE IN data endpoint 0x81 whose
+            bSynchAddress names the sync OUT endpoint 0x01 (UAC 1.0 Table
+            4-22; 3 bytes, bRefresh 2), mono 16-bit 16/44.1/48 kHz. What the
+            host sends there is counted and logged (synch_out).
 Aliases (the names agent uac1 planned): headset1 = headset, speaker1 =
 dacd, mic1 = cammic.
 
@@ -132,7 +142,8 @@ TONE_RANGE = (-128, 127, 1)
 DELAY_RANGE = (0, 64 * 1000, 1)
 CHANNEL_CONFIG = {1: 0x0004, 2: 0x0003}
 SYNC = {'async': 0x04, 'adaptive': 0x08, 'sync': 0x0c}
-PROFILE_NAMES = ('headset', 'dacd', 'dacc', 'async', 'hs', 'mic', 'cammic', 'dual', 'play2', 'logi')
+PROFILE_NAMES = ('headset', 'dacd', 'dacc', 'async', 'hs', 'mic', 'cammic', 'dual', 'play2', 'logi',
+                 'pcm8', 'float', 'adsrc')
 # The names agent uac1's plan used, for the same models.
 ALIASES = {'headset1': 'headset', 'speaker1': 'dacd', 'mic1': 'cammic'}
 BASE_PID = 0x0300
@@ -178,19 +189,25 @@ class Builder1:
 
     # -- AudioStreaming (4.5, 4.6) -------------------------------------------
     def stream(self, terminal, direction, channels, formats, rates, sync, sync_attr=0x01, refresh=2,
-               freq_control=True):
+               freq_control=True, format_tag=0x0001):
         """formats: [(subframe, bits)], one alternate each; rates: a list
-        (discrete) or a (low, high) tuple (continuous)."""
+        (discrete) or a (low, high) tuple (continuous); format_tag: the AS
+        general descriptor's wFormatTag (Formats A.1.1: 1 PCM, 2 PCM8, 3
+        IEEE_FLOAT). An ASYNCHRONOUS OUT endpoint gets a sync IN endpoint
+        (feedback); an ADAPTIVE IN endpoint a sync OUT endpoint (UAC 1.0
+        Table 4-22: the host's synchronization data for an adaptive
+        source), on the OUT direction of the same endpoint number."""
         number = self.interfaces
         self.interfaces += 1
         self.collection.append(number)
         body = bytes((9, 4, number, 0, 0, 1, 2, 0, 0))
         ep = (0x80 if direction == 'in' else 0) | (number - self.first)
         fb = direction == 'out' and sync == 'async'
+        synch_out = direction == 'in' and sync == 'adaptive'
         top = rates[1] if isinstance(rates, tuple) else max(rates)
         for alt, (subframe, bits) in enumerate(formats, 1):
-            body += bytes((9, 4, number, alt, 2 if fb else 1, 1, 2, 0, 0))
-            body += bytes((7, 0x24, 0x01, terminal, 1)) + struct.pack('<H', 0x0001)
+            body += bytes((9, 4, number, alt, 2 if fb or synch_out else 1, 1, 2, 0, 0))
+            body += bytes((7, 0x24, 0x01, terminal, 1)) + struct.pack('<H', format_tag)
             if isinstance(rates, tuple):
                 table = bytes((0,)) + u24(rates[0]) + u24(rates[1])
             else:
@@ -200,13 +217,13 @@ class Builder1:
             if size > (1024 if self.speed == 'high' else 1023):
                 raise ValueError('alternate exceeds one transaction')
             interval = 4 if self.speed == 'high' else 1
-            body += bytes((9, 5, ep, 0x01 | SYNC[sync])) + struct.pack('<HBBB', size, interval, 0,
-                                                                     (0x80 | ep) if fb else 0)
+            synch = (0x80 | ep) if fb else (ep & 0x7f) if synch_out else 0
+            body += bytes((9, 5, ep, 0x01 | SYNC[sync])) + struct.pack('<HBBB', size, interval, 0, synch)
             body += bytes((7, 0x25, 0x01, 0x01 if freq_control else 0, 0, 0, 0))
-            if fb:
+            if fb or synch_out:
                 # 3 bytes 10.14 at Full Speed; at High Speed USB 2.0
                 # 5.12.4.2's 4 bytes 16.16 (what uacemu's feedback sends there).
-                body += bytes((9, 5, 0x80 | ep, sync_attr)) + struct.pack(
+                body += bytes((9, 5, synch, sync_attr)) + struct.pack(
                     '<HBBB', 4 if self.speed == 'high' else 3, interval, refresh, 0)
         self.streams.append(body)
 
@@ -302,6 +319,23 @@ def build1(name, speed=None, sync_attr=0x01, refresh=2):
         b.stream(1, 'out', 2, [(2, 16), (3, 24)], FS_RATES_44_48, 'adaptive')
         b.stream(5, 'in', 2, [(2, 16)], [48000], 'async')
         fu = {2: (-24576, 0, 256, 0)}
+    elif name in ('pcm8', 'float'):
+        # Formats document 2.2: Type I PCM8 (wFormatTag 2, unsigned 8-bit
+        # in a 1-byte subframe) or IEEE_FLOAT (3, 32-bit in 4 bytes).
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0101, 2); b.fu(2, 1, [0x03, 0, 0]); b.ot(3, 0x0301, 2)
+        if name == 'pcm8':
+            b.stream(1, 'out', 2, [(1, 8)], FS_RATES_44_48, 'adaptive', format_tag=0x0002)
+        else:
+            b.stream(1, 'out', 2, [(4, 32)], FS_RATES_44_48, 'adaptive', format_tag=0x0003)
+        fu = {2: (-24576, 0, 256, 0)}
+    elif name == 'adsrc':
+        # Capture from an ADAPTIVE source: the IN data endpoint's
+        # bSynchAddress names a sync OUT endpoint (UAC 1.0 Table 4-22).
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0201, 1); b.fu(2, 1, [0x03, 0]); b.ot(3, 0x0101, 2)
+        b.stream(3, 'in', 1, [(2, 16)], [16000, 44100, 48000], 'adaptive')
+        fu = {2: (-3072, 7680, 256, 0)}
     else:
         raise ValueError('profile')
     return b.speed, b.configuration(), fu, mx, hid, iad
@@ -485,7 +519,7 @@ class Profile1:
         fbs = [e for e in a['endpoints'][1:] if e['address'] == data['synch']]
         return dict(frame=a['channels'] * a['subslot'], channels=a['channels'], subslot=a['subslot'],
                     bits=a['bits'], clock=data['address'], data=data, feedback=fbs[0] if fbs else None,
-                    rates=a['rates'], sync=data['attributes'] & 0x0c)
+                    rates=a['rates'], sync=data['attributes'] & 0x0c, format_tag=a.get('format_tag', 1))
 
     def endpoint_rates(self, ep, alternate_info=None):
         """The rates an endpoint takes: its active alternate's, else every
@@ -520,6 +554,7 @@ class Model1(uacemu.Model):
         self.fb_lead_empty, self.fb_lead_left, self.lead_empty_sent = fb_lead_empty, 0, 0
         self.bind(self.p1)
         self.ostate = {}            # OUT endpoint: validation state of its running stream
+        self.synch_out = {}         # sync OUT endpoint (adaptive source): what the host sent
         self.closed = []            # verdicts of finished streams
 
     def bind(self, profile):
@@ -574,7 +609,14 @@ class Model1(uacemu.Model):
         super().start(ep, own)
         info = own[2]
         fb = info['feedback']
-        if fb and fb['address'] == ep:
+        if fb and fb['address'] == ep and not ep & 0x80:
+            # A sync OUT endpoint (an adaptive source's): the host sends,
+            # the model only counts what arrives (iso_out).
+            self.fb.pop(ep, None)
+            if not self.fb:
+                self.next_feedback = None
+            self.synch_out.setdefault(ep, dict(packets=0, empty=0, values=collections.Counter()))
+        elif fb and fb['address'] == ep:
             # A real device answers each poll of its sync endpoint (every
             # 2^bRefresh ms, UAC 1.0 3.7.2.2) at once. QEMU's usb-redir
             # holds iso IN data until a prefill target is buffered and
@@ -635,7 +677,26 @@ class Model1(uacemu.Model):
     def log(self, event, **fields):
         if event in ('iso_out_totals', 'iso_stop', 'disconnected') and getattr(self, 'ostate', None):
             fields['ostreams'] = [self.summary(ep, s) for ep, s in sorted(self.ostate.items())]
+        if event in ('iso_stop', 'disconnected') and getattr(self, 'synch_out', None):
+            fields['synch_out'] = {'%02x' % ep: dict(packets=s['packets'], empty=s['empty'],
+                                                     values={str(k): v for k, v in sorted(s['values'].items())})
+                                   for ep, s in sorted(self.synch_out.items())}
         super().log(event, **fields)
+
+    def measure(self, payload, info, units, ep=None):
+        """PCM8 (unsigned, offset 128) and IEEE_FLOAT samples measured as
+        16-bit PCM of the same level; PCM as uacemu does."""
+        tag = info.get('format_tag', 1)
+        if tag not in (2, 3):
+            return super().measure(payload, info, units, ep)
+        if tag == 2:
+            pcm = [(b - 128) << 8 for b in payload]
+        else:
+            count = len(payload) // 4
+            pcm = [0 if v != v else max(-32768, min(32767, int(v * 32767)))
+                   for v in struct.unpack('<%df' % count, payload[:4 * count])]
+        as16 = dict(info, subslot=2)
+        return super().measure(struct.pack('<%dh' % len(pcm), *pcm), as16, units, ep)
 
     def iso_out(self, packet):
         if len(packet) < 4:
@@ -645,6 +706,23 @@ class Model1(uacemu.Model):
         if own is None or len(packet) - 4 != length:
             raise ValueError('OUT iso framing/state')
         info = own[2]
+        if info['feedback'] and info['feedback']['address'] == ep:
+            # Synchronization data from the host to an adaptive source:
+            # 10.14 samples a frame in 3 bytes at Full Speed (16.16 in 4 at
+            # High Speed), counted and logged.
+            sync = self.synch_out.setdefault(ep, dict(packets=0, empty=0, values=collections.Counter()))
+            sync['packets'] += 1
+            payload = packet[4:]
+            if not payload:
+                sync['empty'] += 1
+            else:
+                scale = 65536 if len(payload) >= 4 else 16384
+                value = int.from_bytes(payload[:4], 'little') / scale
+                if len(sync['values']) < 32 or value in sync['values']:
+                    sync['values'][round(value, 4)] += 1
+                if sync['packets'] <= 4:
+                    self.log('synch_out', endpoint=ep, length=length, value=round(value, 4))
+            return
         s = self.ostate.get(ep)
         if length > info['data']['max'] * info['data']['mult'] or length % info['frame']:
             # Counted against the driver, not fatal.

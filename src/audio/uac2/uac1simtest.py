@@ -107,7 +107,7 @@ class DescriptorTest(unittest.TestCase):
                 for (i, a), alt in p.alts.items():
                     info = p.stream_alt(i, a)
                     self.assertIsNotNone(info)
-                    self.assertEqual(alt['format_tag'], 1)
+                    self.assertEqual(alt['format_tag'], {'pcm8': 2, 'float': 3}.get(name, 1))
                     data = info['data']
                     self.assertEqual(data['attributes'] & 3, 1)
                     self.assertEqual(data['interval'], 4 if p.speed == 'high' else 1)
@@ -117,6 +117,10 @@ class DescriptorTest(unittest.TestCase):
                     if data['attributes'] & 0x0c == 0x04 and not data['address'] & 0x80:
                         self.assertEqual(info['feedback']['address'], data['synch'])
                         self.assertEqual(info['feedback']['max'], 3)
+                    elif data['attributes'] & 0x0c == 0x08 and data['address'] & 0x80:
+                        # An adaptive source: its sync endpoint is OUT.
+                        self.assertEqual(info['feedback']['address'], data['synch'])
+                        self.assertFalse(data['synch'] & 0x80)
                     else:
                         self.assertIsNone(info['feedback'])
                 for d in descriptors:
@@ -637,6 +641,71 @@ class DualDescriptorTest(Base):
         self.assertEqual(before, after)
         self.assertEqual(after[0][17], 2)
         self.assertEqual((after[1][5], after[2][5]), (1, 2))
+
+
+class NegativeFormatTest(Base):
+    """uac1's G3 fixtures: formats a driver must refuse, which Windows'
+    own driver may still play."""
+    profile = 'pcm8'
+
+    def general_and_format(self, p):
+        d = walk(p.config)
+        general = [x for x in d if x[1] == 0x24 and x[2] == 1 and len(x) == 7]
+        fmt = [x for x in d if x[1] == 0x24 and x[2] == 2 and len(x) >= 8 and x[3] == 1]
+        return general[0], fmt[-1]          # the AS format
+
+    def test_pcm8(self):
+        general, fmt = self.general_and_format(self.p)
+        self.assertEqual(struct.unpack('<H', general[5:7])[0], 2)            # wFormatTag PCM8
+        self.assertEqual((fmt[4], fmt[5], fmt[6]), (2, 1, 8))               # 2 channels, 1 byte, 8 bits
+        self.assertEqual(self.p.stream_alt(1, 1)['data']['max'], 49 * 2)
+        self.configure()
+        self.alt(1, 1)
+        self.model.handle(12, 3, bytes((1, 8, 4)))
+        payload = bytes([128 + 64, 128 - 64] * 48)                         # half scale, unsigned
+        self.model.handle(102, 0, struct.pack('<BBH', 1, 0, len(payload)) + payload)
+        self.assertAlmostEqual(self.model.levels()['received_peak_dbfs'][0], -6.02, 1)
+        self.assertEqual(self.model.ostate[1]['frames'], 48)
+
+    def test_float(self):
+        p = uac1emu.Profile1('float')
+        general, fmt = self.general_and_format(p)
+        self.assertEqual(struct.unpack('<H', general[5:7])[0], 3)            # wFormatTag IEEE_FLOAT
+        self.assertEqual((fmt[4], fmt[5], fmt[6]), (2, 4, 32))
+        self.assertEqual(p.stream_alt(1, 1)['data']['max'], 49 * 8)
+        model = uac1emu.Model1(self.wire, self.trace, lambda: self.time, profile=p)
+        model.peer_caps = uacemu.CAPS
+        model.handle(6, 1, b'\x01')
+        model.handle(9, 2, b'\x01\x01')
+        model.handle(12, 3, bytes((1, 8, 4)))
+        payload = struct.pack('<96f', *([0.25, -0.25] * 47 + [float('nan'), 0.0]))
+        model.handle(102, 0, struct.pack('<BBH', 1, 0, len(payload)) + payload)
+        self.assertAlmostEqual(model.levels()['received_peak_dbfs'][0], -12.04, 1)
+        self.assertEqual(model.ostate[1]['frames'], 48)
+
+    def test_adaptive_source_sync_out(self):
+        p = uac1emu.Profile1('adsrc')
+        eps = [x for x in walk(p.config) if x[1] == 5]
+        self.assertEqual((eps[0][2], eps[0][3] & 0x0c, eps[0][8]), (0x81, 0x08, 0x01))   # ADAPTIVE IN, synch 01
+        self.assertEqual((eps[1][2], eps[1][3], eps[1][4], eps[1][7]), (0x01, 0x01, 3, 2))  # sync OUT, bRefresh 2
+        model = uac1emu.Model1(self.wire, self.trace, lambda: self.time, profile=p)
+        model.peer_caps = uacemu.CAPS
+        model.handle(6, 1, b'\x01')
+        model.handle(9, 2, b'\x01\x01')
+        model.handle(12, 3, bytes((0x81, 8, 4)))
+        model.handle(12, 4, bytes((0x01, 8, 4)))
+        self.assertEqual(model.fb, {})                    # the model sends nothing on a sync OUT endpoint
+        model.capture()
+        sent = [m for m in self.wire.messages if m[0] == 102]
+        self.assertEqual(struct.unpack('<BBH', sent[-1][2][:4]), (0x81, 0, 96))
+        for value in (b'\x00\x00\x0c', b'\x66\x06\x0c', b''):
+            model.handle(102, 0, struct.pack('<BBH', 0x01, 0, len(value)) + value)
+        sync = model.synch_out[0x01]
+        self.assertEqual((sync['packets'], sync['empty']), (3, 1))
+        self.assertEqual(sorted(sync['values']), [48.0, round(0x0c0666 / 16384, 4)])
+        model.handle(13, 5, b'\x81')
+        stop = [json.loads(l) for l in self.trace.getvalue().splitlines() if '"iso_stop"' in l][-1]
+        self.assertEqual(stop['synch_out']['01']['packets'], 3)
 
 
 class SocketTest(unittest.TestCase):

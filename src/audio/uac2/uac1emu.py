@@ -29,7 +29,7 @@ Profiles (--profile):
   async     Full Speed playback-only, ASYNCHRONOUS OUT with its sync
             (feedback) endpoint: the data endpoint's bSynchAddress names it,
             it carries 3 bytes 10.14 (USB 2.0 5.12.4.2; UAC 1.0 3.7.2.2),
-            bRefresh --refresh (default 2, every 4 ms) and bmAttributes
+            bRefresh --refresh (default 2: polled every 4 ms) and bmAttributes
             --sync-attr (default 0x01, the UAC 1.0 form; 0x11 marks it a
             USB 2.0 feedback endpoint). Alternate 1 16-bit, alternate 2
             24-bit (3-byte subframe), 44.1/48 kHz. Its Feature Unit has
@@ -57,9 +57,25 @@ Profiles (--profile):
             and UAC 2.0 alternates on one interface (the AudioControl
             interface fixes the function's class version), so none is
             modelled.
+  play2     the owner's Creative Sound Blaster Play! 2 (041E:323D,
+            testdata/play2) replayed: its device, configuration and HID
+            report descriptors as read, strings replaced by SIMULATED
+            labels, serial index zero; Full Speed, stereo capture and
+            playback 16-bit 44.1/48 kHz, ASYNCHRONOUS OUT with its 3-byte
+            sync endpoint (bRefresh 5), and the answers the unit gave
+            Windows' own driver (volume ranges; Selector Unit 12 and Mixer
+            Unit 9 stall).
+  logi      the owner's Logi USB Headset (046D:0A64, testdata/logi0a64)
+            replayed the same way: ADAPTIVE OUT 2 channels at 8 to 192
+            kHz (768-byte packets) behind a 1-channel input terminal, mono
+            capture 8 to 48 kHz, master-only units, a sidetone path through
+            Mixer Unit 12 (which stalls), its HID report.
+Aliases (the names agent uac1 planned): headset1 = headset, speaker1 =
+dacd, mic1 = cammic.
 
---speed full|high moves a Full Speed profile to High Speed (bInterval 4,
-a device qualifier) or back.
+--speed full|high moves a built Full Speed profile to High Speed
+(bInterval 4, a device qualifier) or back; a replayed device keeps its
+speed.
 
 Requests (UAC 1.0 5.2): SET_CUR 01h, GET_CUR 81h, GET_MIN 82h, GET_MAX 83h,
 GET_RES 84h; SET_MIN/MAX/RES and GET_MEM/STAT stall. Feature Unit (wIndex
@@ -96,10 +112,13 @@ import json
 import math
 import socket
 import struct
+import sys
 import time
 from pathlib import Path
 
-import uacemu
+# uacemu.py sits beside this file; found even under python -I.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import uacemu  # noqa: E402
 
 # UAC 1.0 A.9 request codes.
 SET_CUR, GET_CUR, GET_MIN, GET_MAX, GET_RES = 0x01, 0x81, 0x82, 0x83, 0x84
@@ -113,7 +132,9 @@ TONE_RANGE = (-128, 127, 1)
 DELAY_RANGE = (0, 64 * 1000, 1)
 CHANNEL_CONFIG = {1: 0x0004, 2: 0x0003}
 SYNC = {'async': 0x04, 'adaptive': 0x08, 'sync': 0x0c}
-PROFILE_NAMES = ('headset', 'dacd', 'dacc', 'async', 'hs', 'mic', 'cammic', 'dual')
+PROFILE_NAMES = ('headset', 'dacd', 'dacc', 'async', 'hs', 'mic', 'cammic', 'dual', 'play2', 'logi')
+# The names agent uac1's plan used, for the same models.
+ALIASES = {'headset1': 'headset', 'speaker1': 'dacd', 'mic1': 'cammic'}
 BASE_PID = 0x0300
 
 
@@ -283,6 +304,30 @@ def build1(name, speed=None, sync_attr=0x01, refresh=2):
     return b.speed, b.configuration(), fu, mx, hid, iad
 
 
+TESTDATA = Path(__file__).resolve().parent / 'testdata'
+# Replayed captures of real devices (testdata/<dir>/README.md): descriptors
+# as read, strings replaced by SIMULATED labels, serial index zero; the
+# class-request answers the device gave Windows' own driver.
+REPLAY = {
+    'play2': dict(dir='play2', config='config0.bin', device='device.bin', hid='hidreport.bin',
+                  fu={6: (-3840, 3840, 192, 0), 5: (-13312, 0, 256, -2048)}, stall_units=(9, 12),
+                  strings={}),
+    'logi': dict(dir='logi0a64', config='CONFIG.BIN', device='DEVICE.BIN', hid='HIDREPORT.BIN',
+                 fu={2: (-7680, 0, 256, -3838), 5: (-12800, 0, 256, -4352), 11: (-14592, -3072, 384, -8832)},
+                 stall_units=(12,), strings={6: 'Sidetone'}),
+}
+
+
+def consumer_report(length):
+    """HID_CONSUMER padded to `length` bytes with Usage items inside its
+    collection (a stand-in where the real report was not captured)."""
+    pad = length - len(HID_CONSUMER)
+    if pad < 0 or pad == 1:
+        return None
+    fill = (b'\x0a\x01\x00' if pad % 2 else b'') + b'\x09\x01' * (pad // 2 - (1 if pad % 2 else 0))
+    return HID_CONSUMER[:-1] + fill + HID_CONSUMER[-1:]
+
+
 def audio_function1(config):
     """The UAC 1.0 entities and streaming alternates of a configuration
     (framing already checked by uacemu.layout()): the AudioControl
@@ -353,22 +398,50 @@ class Profile1:
 
     def __init__(self, name='headset', vid=None, pid=None, speed=None, sync_attr=0x01, refresh=2,
                  strict_volume=False):
+        name = ALIASES.get(name, name)
         if name not in PROFILE_NAMES or speed not in (None, 'full', 'high') or \
                 sync_attr not in (0x01, 0x05, 0x11) or not 1 <= refresh <= 9:
             raise ValueError('profile')
         if speed and name in ('hs', 'cammic', 'dual') and speed != 'high':
             raise ValueError('profile is High Speed only')
+        if speed and name in REPLAY and speed != 'full':
+            raise ValueError('a replayed device keeps its speed')
         self.name, self.fu, self.strict_volume = name, 'uac1', strict_volume
-        self.speed, self.config, self.fu_ranges, self.mx_ranges, self.hid_report, iad = \
-            build1(name, speed, sync_attr, refresh)
-        self.vid, self.pid = vid or 0xffff, pid or BASE_PID + PROFILE_NAMES.index(name)
-        high = self.speed == 'high'
-        cls = (0xef, 2, 1) if iad else (0, 0, 0)
-        self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x200 if high else 0x110, *cls, 64,
-                                  self.vid, self.pid, 0x0100, 1, 2, 0, 2 if name == 'dual' else 1)
-        self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, *cls, 64, 1, 0) if high else None
-        self.strings = {0: b'\x04\x03\x09\x04', 1: uacemu.usb_string('usb-wdm-free SIMULATED'),
-                        2: uacemu.usb_string('UAC1 %s - SIMULATED' % name)}
+        self.stall_units = ()
+        if name in REPLAY:
+            r = REPLAY[name]
+            base = TESTDATA / r['dir']
+            self.speed, self.config = 'full', (base / r['config']).read_bytes()
+            self.fu_ranges, self.mx_ranges = dict(r['fu']), {}
+            self.stall_units = tuple(r['stall_units'])
+            device = bytearray((base / r['device']).read_bytes())
+            self.vid = vid or int.from_bytes(device[8:10], 'little')
+            self.pid = pid or int.from_bytes(device[10:12], 'little')
+            device[8:12] = struct.pack('<HH', self.vid, self.pid)
+            device[16] = 0                      # no serial number
+            self.device = bytes(device)
+            self.qualifier = None               # Full Speed only: the real ones stall it
+            self.strings = {0: b'\x04\x03\x09\x04'}
+            if device[14]:
+                self.strings[device[14]] = uacemu.usb_string('usb-wdm-free SIMULATED')
+            if device[15]:
+                self.strings[device[15]] = uacemu.usb_string('UAC1 %s layout - SIMULATED' % name)
+            for index, text in r['strings'].items():
+                self.strings[index] = uacemu.usb_string(text)
+            hid = uacemu.hid_interfaces(self.config)
+            self.hid_report = (base / r['hid']).read_bytes() if r['hid'] else \
+                consumer_report(next(iter(hid.values()))) if hid else None
+        else:
+            self.speed, self.config, self.fu_ranges, self.mx_ranges, self.hid_report, iad = \
+                build1(name, speed, sync_attr, refresh)
+            self.vid, self.pid = vid or 0xffff, pid or BASE_PID + PROFILE_NAMES.index(name)
+            high = self.speed == 'high'
+            cls = (0xef, 2, 1) if iad else (0, 0, 0)
+            self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x200 if high else 0x110, *cls, 64,
+                                      self.vid, self.pid, 0x0100, 1, 2, 0, 2 if name == 'dual' else 1)
+            self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, *cls, 64, 1, 0) if high else None
+            self.strings = {0: b'\x04\x03\x09\x04', 1: uacemu.usb_string('usb-wdm-free SIMULATED'),
+                            2: uacemu.usb_string('UAC1 %s - SIMULATED' % name)}
         self.config2 = None
         if name == 'dual':
             # Configuration 2: uacemu's hs24 UAC 2.0 function, bConfigurationValue 2.
@@ -420,11 +493,12 @@ class Model1(uacemu.Model):
     sampling rates and OUT stream validation."""
 
     def __init__(self, connection, trace, now=time.monotonic, pcm=None, profile=None, fifo_ms=4.0,
-                 fb_every_frame=False, **kw):
+                 fb_at_refresh=False, fb_lead_empty=0, **kw):
         self.p1 = profile or Profile1('headset')
         super().__init__(connection, trace, now, pcm=pcm, profile=self.p1, **kw)
         self.cfg_value = 0
-        self.fifo_ms, self.fb_every_frame = fifo_ms, fb_every_frame
+        self.fifo_ms, self.fb_at_refresh = fifo_ms, fb_at_refresh
+        self.fb_lead_empty, self.fb_lead_left, self.lead_empty_sent = fb_lead_empty, 0, 0
         self.bind(self.p1)
         self.ostate = {}            # OUT endpoint: validation state of its running stream
         self.closed = []            # verdicts of finished streams
@@ -481,14 +555,28 @@ class Model1(uacemu.Model):
         super().start(ep, own)
         info = own[2]
         fb = info['feedback']
-        if fb and fb['address'] == ep and fb.get('refresh') and self.p.speed == 'full' and \
-                not self.fb_every_frame:
-            # UAC 1.0 3.7.2.2: the host polls a sync endpoint every 2^bRefresh ms.
-            self.fb[ep]['period'] = 0.001 * (1 << fb['refresh'])
+        if fb and fb['address'] == ep:
+            # A real device answers each poll of its sync endpoint (every
+            # 2^bRefresh ms, UAC 1.0 3.7.2.2) at once. QEMU's usb-redir
+            # holds iso IN data until a prefill target is buffered and
+            # answers the polls before that with zero bytes, so the model
+            # sends a value every frame (the endpoint's bInterval);
+            # --fb-at-refresh sends one every 2^bRefresh ms instead.
+            if self.fb_at_refresh and fb.get('refresh') and self.p.speed == 'full':
+                self.fb[ep]['period'] = 0.001 * (1 << fb['refresh'])
+            self.fb_lead_left = self.fb_lead_empty
         if not ep & 0x80 and info['data']['address'] == ep:
             self.ostate[ep] = dict(info=info, started=False, packets=0, frames=0, hist=collections.Counter(),
                                    outside=0, zero=0, lead_zero=0, under=0, over=0, misframed=0,
                                    level=0.0, expected=0.0, low=None, high=None)
+
+    def feedback_value(self, info):
+        if self.fb_lead_left > 0:
+            # --fb-lead-empty: the first packets of a stream carry nothing.
+            self.fb_lead_left -= 1
+            self.lead_empty_sent += 1
+            return b''
+        return super().feedback_value(info)
 
     def stop(self, ep):
         s = self.ostate.pop(ep, None)
@@ -632,6 +720,10 @@ class Model1(uacemu.Model):
             answer = (0, p.hid_report) if self.config else (4, b'')
         elif request == 6 and rt == 0x81 and value >> 8 == 0x21 and index in p.hid:
             answer = self.hid_descriptor(index)
+        elif request == 0x09 and rt == 0x21 and index in p.hid and self.config:
+            # SET_REPORT (HID 1.11 7.2.2): an output report (LEDs) taken and logged.
+            self.log('hid_set_report', interface=index, report=value, data=payload.hex())
+            answer = 0, b''
         elif self.uac1 and self.config and rt in (0x21, 0xa1) and index & 255 == p.ac:
             answer = self.entity_request1(request, rt == 0xa1, index >> 8, value >> 8, value & 255, payload)
         elif self.uac1 and self.config and rt in (0x22, 0xa2):
@@ -698,6 +790,10 @@ class Model1(uacemu.Model):
 
     def entity_request1(self, request, get, entity, selector, channel, payload):
         e = self.p.entities.get(entity)
+        if entity in self.p.stall_units:
+            # The real device answers nothing for this unit.
+            self.log('unit_stalled', entity=entity, request=request, selector=selector, channel=channel)
+            return 4, b''
         if e is None or (get and request not in (GET_CUR, GET_MIN, GET_MAX, GET_RES)) or \
                 (not get and request != SET_CUR):
             return 4, b''
@@ -808,8 +904,10 @@ def main():
                     help='async: the sync endpoint bRefresh (polled every 2^N ms)')
     ap.add_argument('--sync-attr', type=lambda s: int(s, 16), default=0x01,
                     help='async: the sync endpoint bmAttributes, 01 (UAC 1.0), 05 or 11 (USB 2.0 feedback)')
-    ap.add_argument('--fb-every-frame', action='store_true',
-                    help='send a feedback packet every frame instead of every 2^bRefresh ms')
+    ap.add_argument('--fb-at-refresh', action='store_true',
+                    help='send a feedback packet every 2^bRefresh ms instead of every frame')
+    ap.add_argument('--fb-lead-empty', type=int, default=0, metavar='N',
+                    help='the first N feedback packets of each stream are zero-length')
     ap.add_argument('--fb-ppm', type=float, default=0.0, help='feedback offset from the rate, ppm')
     ap.add_argument('--fb-zero-every', type=int, default=0)
     ap.add_argument('--fb-stop-after', type=float)
@@ -835,7 +933,8 @@ def main():
             connection.settimeout(3)
             pcm = args.pcm.open('xb') if args.pcm else None
             model = Model1(connection, trace, pcm=pcm, profile=profile, fifo_ms=args.fifo_ms,
-                           fb_every_frame=args.fb_every_frame, fb_ppm=args.fb_ppm,
+                           fb_at_refresh=args.fb_at_refresh, fb_lead_empty=args.fb_lead_empty,
+                           fb_ppm=args.fb_ppm,
                            fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after,
                            pcm_max=args.pcm_max, vol_stall=args.vol_cur_stall)
             model.log('profile', uac=1, name=profile.name, speed=profile.speed,

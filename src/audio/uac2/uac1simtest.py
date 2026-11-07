@@ -75,9 +75,12 @@ class Base(unittest.TestCase):
             self.time += step
 
 
+BUILT = [n for n in uac1emu.PROFILE_NAMES if n not in uac1emu.REPLAY]
+
+
 class DescriptorTest(unittest.TestCase):
     def test_every_profile_is_well_formed_uac1(self):
-        for name in uac1emu.PROFILE_NAMES:
+        for name in BUILT:
             with self.subTest(profile=name):
                 p = uac1emu.Profile1(name)
                 descriptors = walk(p.config)
@@ -122,7 +125,7 @@ class DescriptorTest(unittest.TestCase):
     def test_feature_units_cover_their_cluster(self):
         # UAC 1.0 4.3.2.5: bmaControls(0) master, then one per channel of the
         # cluster the unit takes.
-        for name in uac1emu.PROFILE_NAMES:
+        for name in BUILT:
             p = uac1emu.Profile1(name)
             m = uac1emu.Model1(Wire(), io.StringIO(), profile=p)
             for uid, e in p.entities.items():
@@ -370,6 +373,7 @@ class AsyncTest(Base):
         self.assertEqual(d[0][3] & 0x0c, 0x04)
         self.assertEqual(d[0][8], 0x81)                  # bSynchAddress
         self.assertEqual((d[1][2], d[1][3], d[1][4], d[1][7]), (0x81, 0x01, 3, 2))   # bRefresh 2
+        self.model.fb_at_refresh = True
         self.configure()
         self.control(0x01, 0x22, 0x0100, 0x0001, 3, uac1emu.u24(44100))
         self.alt(1, 1)
@@ -387,7 +391,6 @@ class AsyncTest(Base):
         self.assertEqual(len([m for m in self.wire.messages if m[0] == 102]), before + 1)
 
     def test_feedback_every_frame_and_ppm(self):
-        self.model.fb_every_frame = True
         self.model.fb_ppm = 10000.0
         self.configure()
         self.alt(1, 2)
@@ -494,6 +497,100 @@ class DualTest(Base):
         self.configure(1)
         self.assertEqual(self.control(0x81, 0xa2, 0x0100, 0x0001, 3)[2], uac1emu.u24(48000))
         self.assertEqual([e['value'] for e in self.events('set_configuration')], [1, 2, 1])
+
+
+class Play2Test(Base):
+    profile = 'play2'
+
+    def test_replayed_identity(self):
+        self.assertEqual(self.p.config, (uac1emu.TESTDATA / 'play2/config0.bin').read_bytes())
+        self.assertEqual(len(self.p.config), 273)
+        self.assertEqual(self.p.device[8:12], b'\x1e\x04\x3d\x32')
+        self.assertEqual(self.p.device[16], 0)                          # serial index zero
+        self.assertEqual(self.control(6, 0x80, 0x0303, 0x409, 255)[0], 4)
+        self.assertIn('SIMULATED', self.control(6, 0x80, 0x0302, 0x409, 255)[2][2:].decode('utf-16le'))
+        self.assertEqual(self.control(6, 0x80, 0x0600, 0, 10)[0], 4)   # qualifier: stall, as the device
+        self.assertEqual(self.control(6, 0x80, 0x03ee, 0, 18)[0], 4)   # OS string: stall, as the device
+
+    def test_answers_as_captured(self):
+        self.configure()
+        # FU 6 (capture) master volume: F100 / 0F00 / 00C0 / 0000.
+        self.assertEqual([self.control(r, 0xa1, 0x0200, 0x0600, 2)[2] for r in (0x82, 0x83, 0x84, 0x81)],
+                         [b'\x00\xf1', b'\x00\x0f', b'\xc0\x00', b'\x00\x00'])
+        # FU 5 (speaker) channel volume: CC00 / 0000 / 0100 / F800; master mute.
+        self.assertEqual([self.control(r, 0xa1, 0x0201, 0x0500, 2)[2] for r in (0x82, 0x83, 0x84, 0x81)],
+                         [b'\x00\xcc', b'\x00\x00', b'\x00\x01', b'\x00\xf8'])
+        self.assertEqual(self.control(0x81, 0xa1, 0x0100, 0x0500, 1)[2], b'\0')
+        self.assertEqual(self.control(0x81, 0xa1, 0x0000, 0x0a00, 1)[2], b'\1')   # selector 10
+        self.assertEqual(self.control(0x81, 0xa1, 0x0000, 0x0c00, 1)[0], 4)        # selector 12 stalls
+        self.assertEqual(self.control(0x81, 0xa1, 0x0101, 0x0900, 2)[0], 4)        # mixer 9 stalls
+        self.assertEqual(self.control(0x01, 0x22, 0x0100, 0x0001, 3, uac1emu.u24(48000))[0], 0)
+        self.assertEqual(self.control(0x01, 0x22, 0x0100, 0x0081, 3, uac1emu.u24(44100))[0], 0)
+        self.assertEqual(self.control(6, 0x81, 0x2200, 3, 0xad)[2],
+                         (uac1emu.TESTDATA / 'play2/hidreport.bin').read_bytes())
+        self.assertEqual(self.control(0x09, 0x21, 0x0202, 3, 2, b'\x02\x00')[0], 0)  # SET_REPORT, as 10 sent
+        self.assertEqual(len(self.events('unit_stalled')), 2)
+
+    def feedback_run(self, frames):
+        self.configure()
+        self.alt(2, 1)
+        self.model.handle(12, 3, bytes((0x83, 8, 4)))
+        self.model.handle(12, 4, bytes((1, 8, 4)))
+        for _ in range(frames):
+            self.model.feedback()
+            self.time += 0.001
+        return [m[2][4:] for m in self.wire.messages if m[0] == 102]
+
+    def test_feedback_every_frame_by_default(self):
+        fb = self.p.stream_alt(2, 1)['feedback']
+        self.assertEqual((fb['address'], fb['attributes'], fb['max'], fb['refresh']), (0x83, 0x01, 3, 5))
+        sent = self.feedback_run(64)
+        self.assertEqual(len(sent), 64)
+        self.assertEqual(set(sent), {b'\x00\x00\x0c'})                  # 48.0 in 10.14
+
+    def test_feedback_at_refresh_and_lead_empty(self):
+        self.model.fb_at_refresh = True
+        self.model.fb_lead_empty = 1
+        sent = self.feedback_run(64)
+        self.assertEqual(sent, [b'', b'\x00\x00\x0c'])                  # every 32 ms, the first empty
+        self.assertEqual(self.model.lead_empty_sent, 1)
+
+
+class LogiTest(Base):
+    profile = 'logi'
+
+    def test_replayed_quirks(self):
+        self.assertEqual(self.p.config, (uac1emu.TESTDATA / 'logi0a64/CONFIG.BIN').read_bytes())
+        self.assertEqual(self.p.device[4:7], b'\xef\x02\x01')           # IAD class codes, no IAD
+        self.assertEqual(self.p.entities[4]['channels'], 1)             # input terminal: 1 channel
+        self.assertEqual(self.p.alts[(2, 1)]['channels'], 2)            # its format: 2
+        self.assertEqual(self.p.entities[2]['controls'], [0x43])        # mono unit: master only
+        self.assertEqual(self.p.alts[(2, 1)]['rates'][-1], 192000)
+        self.assertEqual(self.p.stream_alt(2, 1)['data']['max'], 768)
+        self.configure()
+        self.assertEqual(self.control(6, 0x80, 0x0306, 0x409, 255)[2][2:].decode('utf-16le'), 'Sidetone')
+        self.assertEqual(self.control(0x81, 0xa1, 0x0200, 0x0200, 2)[2], struct.pack('<h', -3838))
+        self.assertEqual(self.control(0x84, 0xa1, 0x0200, 0x0b00, 2)[2], struct.pack('<h', 384))
+        self.assertEqual(self.control(0x83, 0xa1, 0x0200, 0x0b00, 2)[2], struct.pack('<h', -3072))
+        self.assertEqual(self.control(0x81, 0xa1, 0x0700, 0x0200, 1)[2], b'\0')
+        self.assertEqual(self.control(0x81, 0xa1, 0x0101, 0x0c00, 2)[0], 4)
+        self.assertEqual(len(self.control(6, 0x81, 0x2200, 3, 206)[2]), 142)
+
+    def test_192k_fills_the_packet(self):
+        self.configure()
+        self.alt(2, 1)
+        self.assertEqual(self.control(0x01, 0x22, 0x0100, 0x0001, 3, uac1emu.u24(192000))[0], 0)
+        self.model.handle(12, 3, bytes((1, 8, 4)))
+        self.out(1, 192, 4, count=10)
+        self.out(1, 193, 4, count=1)                                    # 772 bytes: over wMaxPacketSize
+        s = self.model.ostate[1]
+        self.assertEqual((s['packets'], s['misframed'], s['outside']), (10, 1, 0))
+
+
+class AliasTest(unittest.TestCase):
+    def test_uac1_plan_names(self):
+        for alias, name in uac1emu.ALIASES.items():
+            self.assertEqual(uac1emu.Profile1(alias).name, name)
 
 
 class SocketTest(unittest.TestCase):

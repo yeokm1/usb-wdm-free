@@ -158,7 +158,37 @@ without the co-installer; their x64 `pnputil` wants a signed catalog,
 which this package has none of
 ([release notes](docs/release-notes.md), 0.1.5).
 
-`uac1`, `uac2` and `usbmidi`: On Windows 98 SE, Setup may ask for KS files such as `ksclockf.ax` or `ks.cat`; choose Skip File, as Windows already has them.
+`usbmidi` on 2000: Windows 2000 gives a class-compliant MIDI keyboard
+or interface to its own audio driver, which can stop Windows. `usbmidi`
+takes such a device over only if its INF lists it. To add yours, before
+you plug it into the 2000 PC:
+
+1. On a PC with Windows XP or later, plug the device in. In Device
+   Manager, under Sound, video and game controllers, open it (on XP:
+   "USB Audio Device"), Details, Hardware Ids. Copy the line of the form
+   `USB\VID_xxxx&PID_yyyy&MI_nn` (the one without `REV_`). If no line
+   has `&MI_`, these steps do not apply to the device.
+2. Copy `free/audio/usbmidi/w2k/` to the 2000 PC, say to `C:\USBMIDI`.
+   In its `usbmidi.inf`, under `[Models]`, add your line after the
+   UM-ONE line, in this form:
+
+   ```
+   %UmOneTab%=UM,USB\VID_0582&PID_0168&MI_00
+   %Manual%=UM,USB\VID_xxxx&PID_yyyy&MI_nn
+   ```
+
+3. Put the folder on `DevicePath`: run `regedt32` (not Regedit, which
+   can change the value's type), open
+   `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion` and
+   add `;C:\USBMIDI` to the end of `DevicePath`, keeping what is there.
+4. Plug the device in. Answer Yes to the signature question, and
+   restart if Windows asks.
+
+Do not plug the device in before step 3: Windows 2000's audio driver
+takes it and can stop Windows. If that happens, restart without the
+device and do the steps. The edited INF no longer matches `SHA256.TXT`.
+
+`uac1`, `uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
 
 `uac1` on 98 SE is optional. Without it, Windows' own USB audio driver
 keeps every USB Audio 1.0 device, as before. To use `uac1`, point the

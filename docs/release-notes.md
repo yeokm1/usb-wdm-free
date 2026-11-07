@@ -6,6 +6,33 @@ Per package, newest first. A release is a commit and a tag
 
 ## Next release (after 0.1.8, not yet tagged)
 
+- **uac2 and usbmidi on 98 SE and ME, no more prompts for KS files**:
+  installing `uac2` or `usbmidi` on 98 SE made Setup ask for files such
+  as `ks.sys`, `ksclockf.ax` and `ks.cat`, which the Windows 98 Second
+  Edition CD does not hold as loose files. The 98 SE and ME part of both
+  INFs no longer includes Windows' own `ks.inf` and `wdmaudio.inf`; it
+  has Windows set up its own audio components once instead. On a 98 SE
+  with no WDM sound device installed before, Windows may then ask for
+  the Windows 98 Second Edition CD-ROM: point it at the CD's `\WIN98`
+  folder.
+  - The INFs keep 0.1.8's version. A 98 SE system that already has
+    0.1.8's `uac2` keeps it when the device is plugged in again. To
+    take the new INF, remove the device in Device Manager (Remove),
+    then plug it in again: Windows installs the new INF without a
+    prompt. This was run with `uac2`; `usbmidi`'s 98 SE and ME INF has
+    the same change and had no run on a guest.
+  - [uac2 design, section 25](design/uac2.md),
+    [usbmidi design, section 19](design/usbmidi.md),
+    [98 SE KS prompts record](testing/2026-11-07-98se-ks-prompts.md).
+- **Known issue, Windows 2000, USB MIDI**: Windows 2000 has no USB MIDI
+  driver of its own. A class-compliant MIDI keyboard or interface that
+  also has an audio control interface (most do) goes to Windows' audio
+  driver, which can stop Windows. Install usbmidi before you plug in the
+  device: for such a device usbmidi takes over only if it lists it. Do
+  not plug such a device into Windows 2000 if usbmidi does not list it
+  and it has no driver of its own. README, Installing, says how to add
+  your device to usbmidi's list.
+  [Windows 2000 MIDI record](testing/2026-11-07-midi-2000.md).
 - **Signing**: every x64 image is signed with a new test certificate,
   `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
   `7A3C6E6289EC46E6E128D87BB54E87196B824959`, valid 2020-01-01 to

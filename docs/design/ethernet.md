@@ -440,10 +440,7 @@ NDIS 5 completion routine, including on stop or removal.
   r8152 and AX88179: the chips' 64-bit hash tables (from the Linux drivers'
   `set_rx_mode` routines).
 - **MTU**: 1500 only. No jumbo frames, no VLAN tags, in v1 or planned.
-- **Offload**: none in v1. NDIS 5 task offload (`OID_TCP_TASK_OFFLOAD`) is a
-  2000-and-later feature whose use by 98 SE's stack was not checked; the
-  r8152 and AX88179 checksum offloads are a later, optional step on 2000
-  only.
+- **Offload**: section 4.9 (2000 and later, the RTL8157 and RTL8159 only).
 
 ### 4.7 Power and removal
 
@@ -569,6 +566,77 @@ Order of preference:
 
 Docks' "MAC address pass-through" (r8152's ACPI-driven Lenovo/Dell feature)
 is not in scope.
+
+### 4.9 Transmit by bytes and task offload (2026-11-07)
+
+Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
+
+- **Transmit transfers are filled by bytes.** `TxTake` takes queued sends
+  in order while each fits the transfer buffer: at the next multiple of
+  the chip's alignment, behind its header, padded to 60 bytes. The chip's
+  `TxBatch` caps the count (`NET_TX_BATCH`, 64, at most). The first send
+  always goes; `SendPackets` admits none longer than a buffer holds. Before,
+  the count was the buffer divided by a full frame, so a 16 KiB buffer
+  carried at most 10 frames even when they were 60-byte ACKs. Linux
+  `r8152_tx_agg_fill` fills by bytes too. A send's length is kept in the
+  second slot of `MiniportReserved` while it is queued.
+- **Task offload, from the 2000 DDK network guide chapter 9**
+  (`209offl_54dj.htm` 9.1 to `209offl_0353.htm` 9.7, `105nstru_3f5e.htm`,
+  `105nstru_7c36.htm`). NT only (2000, XP, XP x64 and later): on 98 SE and
+  ME the core reads no per-packet information and answers
+  `OID_TCP_TASK_OFFLOAD` with `NDIS_STATUS_NOT_SUPPORTED`, as it does for a
+  chip that reports no offload (`NET_PARAMS.Offload` 0: every chip but the
+  RTL8157 and RTL8159 today).
+  - The query is answered for IPv4 over Ethernet II
+    (`IEEE_802_3_Encapsulation`, header 14) with the tasks the chip has:
+    checksums (TCP, UDP and IPv4 header on transmit; all three checked on
+    receive, IP and TCP options allowed) and the large send.
+    `MaxOffLoadSize` is the largest large send (one transmit buffer less
+    its header) less 134 bytes of Ethernet, IP and TCP headers with
+    options; `MinSegmentCount` 2.
+  - A set enables what it lists and only what was offered; a header with
+    no task turns all off. Every set is taken, not only the first: TCP/IP
+    turns offload off and on again around IP security (9.8).
+  - Transmit: a send's large-send value (an MSS) or its checksum request
+    is checked against its own IPv4 and TCP headers. A request the adapter
+    cannot do (not enabled, not IPv4, the wrong protocol) fails that send;
+    nothing is sent wrong. A large send's value becomes its TCP payload
+    bytes once it is in a transfer, and 0 if that transfer fails (9.7).
+  - A frame with an offload is not padded to 60 bytes: the chip pads it,
+    as Linux leaves it to. Padded, a TCP ACK with a checksum request left
+    a real RTL8157 with a bad checksum (the peer dropped the ACKs and
+    receives stalled at 0.44 Mb/s on XP).
+  - Receive: the chip's verdicts (`RxChecksum`), masked by what TCP/IP
+    enabled, set the `...Succeeded` bits of the packet's checksum
+    information. A failure is never reported: TCP/IP checks such a frame
+    itself, as Linux leaves it to its stack (`CHECKSUM_NONE`).
+- **The chip interface** (`netchip.h`) gains `NET_PARAMS.Offload` and
+  `LsoMax` and two optional routines after `RxReset`: `TxOffload` (marks a
+  header `TxHeader` wrote) and `RxChecksum` (reads the receive header
+  before a frame `RxParse` emitted). The other packages leave them out.
+- **RTL8157 and RTL8159** (`rtlchip.c`): 32 KiB transmit buffers, as
+  Realtek's Windows driver sends 32848-byte transfers to the RTL8157, and
+  the transmit checksums. The descriptor bits are Linux `r8152.c`'s
+  (`tx_desc`, `rx_desc_v2`), and a real RTL8157 under Realtek's driver
+  10.68.20 used the same ones (usbmon, Windows 10 x64).
+- **The large send is not offered** (2026-11-07). With it offered (up to
+  32752 bytes), 2000 SP4 and XP SP3 enabled it but never handed the
+  driver one, also with `MaxOffLoadSize` 64 KiB; so it never ran on the
+  chip, and it is left out until a system that uses it is tested. The
+  core's large-send path, `RtlTxOffload`'s large-send bits and the model's
+  segmentation stay, covered by the host and simulator tests. Realtek's
+  driver leaves a large send's TCP header offset 0, where Linux gives it;
+  the core gives it, as Linux. The first format (RTL8152 to RTL8156B) keeps 16 KiB and no
+  offload: its bits are Linux's too, but were not checked on hardware here.
+- **The receive checksums are not offered** (2026-11-07). Offered, 2000
+  SP4 enabled them and received slower in interleaved runs (median 153
+  against 161 Mb/s, mean 151 against 176): TCP/IP kept the checked
+  packets, the 64-packet receive pool ran down to 9 free and 27% of the
+  frames went up as copies. XP showed no gain. `RtlRxChecksum` and the
+  core's reporting stay, covered by the host and simulator tests.
+- **The model** (`rtlemu.py`) segments a large send and computes the
+  checksums asked for on the RTL8157/8159, and writes the receive checksum
+  bits as the real RTL8157 did; what was not seen is marked inferred there.
 
 ## 5. USB side: binding and configuration
 

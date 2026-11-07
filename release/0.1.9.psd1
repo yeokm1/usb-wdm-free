@@ -1,7 +1,10 @@
 # Release definition for usb-wdm-free 0.1.9 (docs/design/build.md section 7),
 # read by release\release.ps1: release 0.1.8 plus
 # - uac2 0.1.10.0: Full Speed explicit feedback in 4 bytes as well as 3 (design
-#   23) and SetupPreferredAudioDevices in both INFs (design 22);
+#   23), SetupPreferredAudioDevices in both INFs (design 22) and no KS file
+#   prompts on 98 SE (design 24);
+# - usbmidi: the 98 SE and ME INFs from out\ (mkinf), with the same 9x change
+#   (usbmidi design 19); its images are 0.1.8's, from the tree;
 # - rtl815x 0.2.1.0: the net core fixes, the RTL8157 hardware changes,
 #   0BDA:8056 and the Realtek-listed ids (owner, 2026-11-07); staged on 98 SE, ME, 2000, XP and XP x64 (owner, 2026-11-06);
 # - ax88179 0.1.3.0: the net core fixes;
@@ -61,7 +64,7 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf' }
-                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', '0.1.10.0: Full Speed 3- and 4-byte feedback on 98 SE under xHCI98 3.4.1.0 and NUSB on UHCI (simulator): played, recorded, survived an unplug, followed the feedback; the INF change (SetupPreferredAudioDevices): a new device takes playback and recording on 98 SE under xHCI98 3.4.1.0 and NUSB EHCI (simulators); 0.1.8.26: names on 98 SE (simulator, xHCI98 3.4.0.0); the queue and the real-time worker on 98 SE and ME (simulator, builds 20 to 24, paired CPU-load sets); ME: the release kit by Update Driver (Have Disk) from 0.1.6.0, a cold start, then the product name shown, a play and WorkerPriority 16 (simulator, xHCI98 3.4.0.0); 0.1.6.0: the play position is the fetch cursor (the seek fix; its legs on XP, 2000 and 7, none on 98 SE or ME); 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98') } }
+                   Stage = @{ 'uac2wdm.inf' = @('STAGE', 'W98SE WME', '0.1.10.0: no KS file prompts: Windows installs its own audio components (play and record on a clean 98 SE, over 0.1.8 after Device Manager Remove and a replug, and on ME; record 2026-11-07 98se-ks-prompts); Full Speed 3- and 4-byte feedback on 98 SE under xHCI98 3.4.1.0 and NUSB on UHCI (simulator): played, recorded, survived an unplug, followed the feedback; the INF change (SetupPreferredAudioDevices): a new device takes playback and recording on 98 SE under xHCI98 3.4.1.0 and NUSB EHCI (simulators); 0.1.8.26: names on 98 SE (simulator, xHCI98 3.4.0.0); the queue and the real-time worker on 98 SE and ME (simulator, builds 20 to 24, paired CPU-load sets); ME: the release kit by Update Driver (Have Disk) from 0.1.6.0, a cold start, then the product name shown, a play and WorkerPriority 16 (simulator, xHCI98 3.4.0.0); 0.1.6.0: the play position is the fetch cursor (the seek fix; its legs on XP, 2000 and 7, none on 98 SE or ME); 0.1.5.0: playback, capture and ramp on ME with Windows own UHCI (simulator, Full Speed); 98 SE own UHCI: plays and records, known issue: the first start can hang (use NUSB or xHCI98); earlier: every simulator profile under xHCI98') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
                    Files = @{ 'uac2wdm.sys' = 'out\audio\uac2\wdmx86\free\uac2wdm.sys'; 'uac2wdm.inf' = 'out\audio\uac2\wdmx86\free\uac2wdm.inf'; 'UACCI1.DLL' = 'tree:free\audio\uac2\w2k-xp\UACCI1.DLL'; 'UACCI.INF' = 'tree:src\audio\uac2\uacci.inf' }
                    Stage = @{ 'uac2wdm.inf' = @('STAGE', 'WXP', '0.1.10.0: Full Speed 3- and 4-byte feedback on XP under xHCI98 3.4.1.0 (simulator); known issue: plays under XP own UHCI fail at Full Speed, cause open; no 2000 leg of 0.1.10.0; 0.1.8.26: the release kit by Have Disk on 2000 (from 0.1.6.0; the restart asked, then a cold start) and XP x86 (from 0.1.8.0, no restart), then the product name shown, a play and WorkerPriority 16 (simulator, xHCI98 3.4.0.0); the volume top and the names passed on XP x64 (simulator, the same code); the queue and the real-time worker on XP and 2000 (simulator, 2026-11-04); 0.1.6.0: the seek fix passed on XP under Windows EHCI and xHCI98 and on 2000 (simulator); 2000 asks for a restart at install, so Update Driver from Windows USB Audio Device no longer stops it, and XP installs with no restart (simulator); 0.1.5.0 on XP under xHCI98: ALC4080 capture replayed (three outputs, three inputs, play/rec/ramp each), X4 gate (simulated and real X4 via VM); 2000: co-installer leg only')
@@ -98,11 +101,11 @@
             Services = @('usbmidi')
             Folders = @(
                 @{ Name = 'w98se'; Arch = 'x86'
-                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\w98se\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\w98se\usbmidi.inf' }
-                   Stage = @{ 'usbmidi.inf' = @('STAGE', 'W98SE', 'UHCI, xHCI98 and NUSB EHCI legs passed') } }
+                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\w98se\usbmidi.sys'; 'usbmidi.inf' = 'out\audio\usbmidi\wdmx86\free\inf\w98se\usbmidi.inf' }
+                   Stage = @{ 'usbmidi.inf' = @('STAGE', 'W98SE', '0.1.9: the 9x INF has Windows install its own audio components (no KS file prompts), the same change as uac2, no usbmidi guest leg (record 2026-11-07 98se-ks-prompts); UHCI, xHCI98 and NUSB EHCI legs passed') } }
                 @{ Name = 'wme'; Arch = 'x86'
-                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wme\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\wme\usbmidi.inf' }
-                   Stage = @{ 'usbmidi.inf' = @('COPY', 'WME', 'by-hand INF (USBMIDI_BY_HAND only); Windows usbaudio serves the rest') } }
+                   Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wme\usbmidi.sys'; 'usbmidi.inf' = 'out\audio\usbmidi\wdmx86\free\inf\wme\usbmidi.inf' }
+                   Stage = @{ 'usbmidi.inf' = @('COPY', 'WME', '0.1.9: the 9x INF change of uac2 (no KS file prompts); by-hand INF (USBMIDI_BY_HAND only); Windows usbaudio serves the rest') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\w2k\usbmidi.sys'; 'usbmidi.inf' = 'tree:free\audio\usbmidi\w2k\usbmidi.inf' }
                    Stage = @{ 'usbmidi.inf' = @('STAGE', 'W2K', 'UHCI, EHCI and xHCI98 legs passed') } }

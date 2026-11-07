@@ -11,7 +11,7 @@ Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/05/2026,0.1.8.26
+DriverVer=11/06/2026,0.1.9.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86
@@ -85,6 +85,10 @@ HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
 HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
+; Windows makes the device the preferred one for playback, recording and
+; MIDI when it installs it, as Windows' own USB audio INF does; 2 so that
+; Vista, which takes an odd value, keeps its own choice (docs/design/uac2.md 22)
+HKR,,SetupPreferredAudioDevices,3,02,00,00,00
 
 ; Uac2QueueMs (docs/design/uac2.md 19.3): the milliseconds of audio each
 ; stream keeps queued to the USB stack, 16 to 128, default 32. Written at

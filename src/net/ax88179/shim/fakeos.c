@@ -30,6 +30,7 @@ static __declspec(thread) long held;
 static __declspec(thread) long depth;
 static __declspec(thread) long completing;   /* in a USB completion routine */
 static __declspec(thread) long timing;       /* in the NDIS timer's routine */
+static __declspec(thread) PNDIS_MINIPORT_TIMER running;   /* the timer whose routine runs */
 static void *timerLock;
 static void *account;
 
@@ -308,9 +309,17 @@ NDIS_STATUS NdisAllocateMemory(PVOID *p, UINT length, UINT flags, NDIS_PHYSICAL_
 void NdisFreeMemory(PVOID p, UINT length, UINT flags)
 {
     (void)flags;
-    if (Fake.Timer && (UCHAR *)Fake.Timer >= (UCHAR *)p && (UCHAR *)Fake.Timer < (UCHAR *)p + length) {
-        if (Fake.Timer->Set) FakeViolation("memory holding a set NDIS timer freed");
-        Fake.Timer = NULL;
+    {
+        int i;
+        for (i = 0; i < 4; i++) {
+            PNDIS_MINIPORT_TIMER t = Fake.Timers[i];
+            if (t && (UCHAR *)t >= (UCHAR *)p && (UCHAR *)t < (UCHAR *)p + length) {
+                if (t->Set) FakeViolation("memory holding a set NDIS timer freed");
+                Fake.Timers[i] = NULL;
+            }
+        }
+        if (Fake.Timer && (UCHAR *)Fake.Timer >= (UCHAR *)p && (UCHAR *)Fake.Timer < (UCHAR *)p + length)
+            Fake.Timer = NULL;
     }
     free(p);
     Account(&Fake.NdisMemory, -1);
@@ -479,15 +488,27 @@ void NdisMInitializeTimer(PNDIS_MINIPORT_TIMER t, NDIS_HANDLE h, PNDIS_TIMER_FUN
     t->Context = context;
     t->Set = 0;
     Fake.Timer = t;
+    {
+        int i;
+        for (i = 0; i < 4 && Fake.Timers[i] && Fake.Timers[i] != t; i++) { }
+        if (i < 4) Fake.Timers[i] = t;
+        else FakeViolation("more than four NDIS timers");
+    }
 }
 
 void NdisMSetTimer(PNDIS_MINIPORT_TIMER t, UINT ms)
 {
     (void)ms;
-    if (Fake.Timer != t) { FakeViolation("NdisMSetTimer on an uninitialised timer"); return; }
+    {
+        int i, known = 0;
+        for (i = 0; i < 4; i++) if (Fake.Timers[i] == t) known = 1;
+        if (!known) { FakeViolation("NdisMSetTimer on an uninitialised timer"); return; }
+    }
     FwLock(timerLock);
     if (t->Set) FakeViolation("NdisMSetTimer on a timer already set (the core arms it once)");
+    if (timing && running == t) FakeViolation("NdisMSetTimer from inside the timer's own routine");
     t->Set = 1;
+    Fake.Timer = t;                   /* the one set last */
     FwUnlock(timerLock);
     Account(&Fake.TimerSets, 1);
 }
@@ -496,7 +517,7 @@ void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled)
 {
     NoLock("NdisMCancelTimer");
     FwLock(timerLock);
-    Fake.TimerSetAtCancel = t->Set;
+    if (t->Set) Fake.TimerSetAtCancel = 1;
     if (Fake.TimerCancelFails && t->Set) {
         *cancelled = FALSE;           /* stays set: FakeRunTimer runs it */
         FwUnlock(timerLock);
@@ -511,17 +532,20 @@ void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled)
 
 int FakeRunTimer(void)
 {
-    PNDIS_MINIPORT_TIMER t = Fake.Timer;
-    int run;
-    if (!t || !timerLock) return 0;
+    PNDIS_MINIPORT_TIMER t = NULL, outer;
+    int i;
+    if (!timerLock) return 0;
     FwLock(timerLock);
-    run = t->Set;
-    t->Set = 0;
+    for (i = 0; i < 4 && !t; i++) if (Fake.Timers[i] && Fake.Timers[i]->Set) t = Fake.Timers[i];
+    if (t) t->Set = 0;
     FwUnlock(timerLock);
-    if (!run) return 0;
+    if (!t) return 0;
     Account(&Fake.TimerRuns, 1);
     timing++;
+    outer = running;
+    running = t;
     t->Function(NULL, t->Context, NULL, NULL);
+    running = outer;
     timing--;
     return 1;
 }

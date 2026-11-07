@@ -862,6 +862,26 @@ are used (GPL-2.0-only), restated as this core's own step tables.
   `0BDA:8156` [linux] lines 10402-10403 to the ids they had; the core
   takes the chip from its id register, so any listed id serves any of
   these chips. Linux's table does not say which id an RTL8153D uses.
+- **Whose driver serves what** (2026-11-06, xHCI98 task 47.25): Realtek's
+  own drivers cover the RTL8156 and RTL8156B on 7 only (its 7 7.61.20 INF,
+  in `usb-wdm-nonfree`). Its XP 5.23 and Vista 6.27 INFs do not list
+  `0BDA:8156`, and Realtek offers nothing for 98 SE, ME or 2000 (its
+  download list, read 2026-11-06). `rtl815x` therefore serves both
+  chips on 98 SE, ME, 2000, XP, XP x64 and Vista, and leaves 7 to
+  Realtek (section 7.6). The legs ran under xHCI98 3.4.1.0 on 98 SE,
+  ME, 2000, XP and XP x64, at 2.5 Gb/s at SuperSpeed and at 1 Gb/s at
+  High Speed, and under NUSB's EHCI on 98 SE. Every leg used the simulator
+  ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)).
+  `0BDA:8056` is not in Linux's table. Realtek's 7 INF lists it in its
+  RTL8156B sections. Owner, 2026-11-06: `RTL81598.INF`, `RTL815X.INF` and
+  `RTLXP7.INF`'s XP, XP x64 and Vista sections list it too, taking the id
+  only from that INF. No device on it has been seen. The chip core reads
+  the chip from `MR_TX_CONFIG` and never from the USB product id, so the
+  id needs no chip path of its own. The simulator presents it as
+  `--chip 8156b-8056` (chip id `7410`, the model's inference), and an XP
+  leg passed. 7 stays Realtek's.  Owner, 2026-11-06: `STAGE.TXT` stages
+  `rtl815x` on 98 SE, ME, 2000, XP and XP x64 on these simulator legs;
+  Vista and 7 stay copy-only.
 
 #### 6.4.1 RTL8157 (5G) and RTL8159 (10G)
 
@@ -1130,14 +1150,15 @@ Owner, 2026-10-27 (xHCI98 roadmap 44.70): `rtl815x` serves XP to 7 for
 the chips Realtek's own XP to 7 drivers in `usb-wdm-nonfree` do not list,
 and never for those they do. One INF, `RTLXP7.INF`, has one models
 section per system, so each Windows sees exactly its set. The ids are
-Linux `r8152.c`'s for these chips. Linux names no rebrand's chip, so no
-rebrand is listed.
+Linux `r8152.c`'s for these chips, with one exception: `0BDA:8056`, from
+Realtek's 7 INF (owner, 2026-11-06; below). Linux names no rebrand's
+chip, so no rebrand is listed.
 
 | Models section | Systems | Ids |
 |---|---|---|
 | `[Models]` | 2000, which ignores decorations (`RTL815X.INF` serves it) | none |
-| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
-| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same four |
+| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8056` (RTL8156B, from 2026-11-06), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
+| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same five |
 | `NTx86.6.1`, `NTamd64.6.1` | 7 x86 and x64 | `0BDA:8157`, `0BDA:815A` |
 | `NTx86.6.2`, `NTamd64.6.2` | 8 and later | none: no NDIS 5 there (section 4.1) |
 
@@ -1156,10 +1177,13 @@ serves it, and Realtek's XP and Vista INFs do not list that id.
 
 The x86 folders take the NDIS 5.0 binary, the x64 folders the NDIS 5.1
 build of section 4.2 (`build.cmd ndis51`, as `cdcnet`'s), with the
-release's embedded test signature (section 7.3). Every line is copy-only
-in `STAGE.TXT` while the legs are simulator legs. The legs (XP to 7, x86 and x64,
-simulated chips at High Speed) are in
-[testing/2026-10-27-rtl815x-xp7.md](../testing/2026-10-27-rtl815x-xp7.md).
+release's embedded test signature (section 7.3). In `STAGE.TXT` the XP
+and XP x64 lines are STAGE on simulator legs (owner, 2026-11-06); the Vista
+and 7 lines stay copy-only. The legs (XP to 7, x86 and x64, simulated chips
+at High Speed) are in
+[testing/2026-10-27-rtl815x-xp7.md](../testing/2026-10-27-rtl815x-xp7.md),
+and those under xHCI98 on XP and XP x64 (2.5 Gb/s) in
+[testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md).
 
 ## 8. Build toolchain
 

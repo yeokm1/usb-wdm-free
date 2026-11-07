@@ -528,7 +528,8 @@ class NewerModelTests(unittest.TestCase):
     def test_identity_and_descriptors(self):
         ids = {'8153d': (0x7420, 0x8053, 0x0300), '8156': (0x7030, 0x8156, 0x0300),
                '8156-7020': (0x7020, 0x8156, 0x0300), '8156b': (0x7410, 0x8156, 0x0300),
-               '8156b-7400': (0x7400, 0x8156, 0x0300), '8157': (0x1030, 0x8157, 0x0320),
+               '8156b-7400': (0x7400, 0x8156, 0x0300),
+               '8156b-8056': (0x7410, 0x8056, 0x0300), '8157': (0x1030, 0x8157, 0x0320),
                '8159': (0x2020, 0x815a, 0x0320)}
         self.assertEqual(set(ids), set(r.NEWER))
         for chip, (cid, pid, bcd) in sorted(ids.items()):

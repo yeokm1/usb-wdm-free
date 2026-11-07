@@ -15,6 +15,11 @@
 ; The driver tells the chips apart by the chip id they report, not by
 ; these ids: an id here carrying a chip it does not serve is refused at
 ; start (unknown chip version), with an event-log entry.
+; 0BDA:8056 is the one id here not from Linux: Realtek's own Windows 7
+; INF (rtump62x86sta.INF 7.61.20, in usb-wdm-nonfree) lists it in its
+; RTL8156B sections (owner, 2026-11-06; the id only is taken). No device
+; on it has been seen. It needs no chip path of its own: the chip is read
+; from its id register, as for every id here.
 ; 0BDA:8153 moves here from CDCNET.INF's 98 SE/ME/2000 models when this
 ; package ships (owner decision, ethernet.md 6.5).
 
@@ -61,6 +66,7 @@ DriverVer=10/27/2026,0.2.0.0
 %D29%=RTL,USB\VID_20F4&PID_E02C
 %D30%=RTL,USB\VID_0BDA&PID_8155
 %D31%=RTL,USB\VID_0BDA&PID_8156
+%D31%=RTL,USB\VID_0BDA&PID_8056
 %D32%=RTL,USB\VID_0BDA&PID_8157
 %D33%=RTL,USB\VID_0BDA&PID_815A
 

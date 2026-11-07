@@ -128,6 +128,10 @@ CHIPS = {
     '8156-7020': Kind(0x7020, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156'),
     '8156b': Kind(0x7410, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156B'),
     '8156b-7400': Kind(0x7400, 0x8156, 'b', 2500, 0x0300, 8, 49152, 'RTL8156B'),
+    # 0BDA:8056: not in Linux's table; Realtek's own Windows 7 INF lists it in its
+    # RTL8156B sections (the id only; owner, 2026-11-06). That the chip behind it
+    # reports 7410 is this model's inference: no such device has been seen.
+    '8156b-8056': Kind(0x7410, 0x8056, 'b', 2500, 0x0300, 8, 49152, 'RTL8156B'),
     '8157': Kind(0x1030, 0x8157, 'c', 5000, 0x0320, 16, 32768, 'RTL8157'),
     '8159': Kind(0x2020, 0x815a, 'c', 10000, 0x0320, 16, 49152, 'RTL8159'),
 }

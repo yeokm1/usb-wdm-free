@@ -409,6 +409,7 @@ class Model:
         self.restarts_seen = 0
         self.irq = collections.deque()
         self.tx_buf = bytearray()                  # a bulk-OUT transfer still coming a packet at a time
+        self.tx_pad_may_follow = False             # ASIX records taken on a full packet: a pad word may follow
         self.totals = collections.Counter()
 
     def log(self, event, **fields):
@@ -454,7 +455,7 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 1, 0))
         self.pending.clear()
         self.clear_rx()
-        self.tx_buf = bytearray()
+        self.tx_buf, self.tx_pad_may_follow = bytearray(), False
         self.config, self.interrupt = 0, False
 
     # -- link ----------------------------------------------------------------
@@ -595,12 +596,20 @@ class Model:
                 if not self.records_whole(self.tx_buf):
                     self.totals['tx_joined_packets'] += 1
                     return
+                # taken on its last packet: Linux's pad word may still follow on its own
+                whole, self.tx_buf, self.tx_pad_may_follow = bytes(self.tx_buf), bytearray(), True
+                self.transmit(whole)
+                return
             elif len(self.tx_buf) < want:
                 self.totals['tx_joined_packets'] += 1
                 return
             elif len(self.tx_buf) > want:
                 raise ValueError('transmit transfer %d bytes or more, header gives %d' % (len(self.tx_buf), want))
         whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        follow, self.tx_pad_may_follow = self.tx_pad_may_follow, False
+        if follow and whole == b'\x00\x00\xff\xff':
+            self.totals['tx_padded'] += 1          # the pad word of the records taken just before
+            return
         if whole:
             self.transmit(whole)
 
@@ -775,7 +784,7 @@ class Model:
                 raise ValueError('alternate length')
             ok = self.config and packet[0] == 0 and (kind == 10 or packet[1] == 0)
             if ok and kind == 9:
-                self.tx_buf = bytearray()            # SET_INTERFACE(0, 0): a part-joined transfer is dropped
+                self.tx_buf, self.tx_pad_may_follow = bytearray(), False   # SET_INTERFACE(0, 0): dropped
             self.send(11, ident, bytes((0 if ok else 4, packet[0], 0)))
         elif kind in (15, 16):
             if len(packet) != 1:

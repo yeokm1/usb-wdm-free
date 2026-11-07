@@ -710,6 +710,22 @@ class Tests(CoreCase):
         self.assertEqual(self.m.totals['tx_records_asix_form'], 200)
         self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(two) - 512, 0, 0) + two[512:])
         self.assertEqual(self.m.totals['tx_records_asix_form'], 202)
+        pad = b'\x00\x00\xff\xff'
+        for size in (512, 64):                                      # 512 + 4 at High Speed, 64 + 4 at Full
+            if size == 64:
+                self.up('full')
+            k = size - 4
+            r = struct.pack('<I', ((k ^ 0x7ff) << 16) | 0x8000 | k) + frame[:k]
+            before = self.m.totals['tx_records_asix_form'], self.m.totals['tx_padded']
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, size, 0, 0) + r)
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 4, 0, 0) + pad)
+            self.assertEqual((self.m.totals['tx_records_asix_form'], self.m.totals['tx_padded']),
+                             (before[0] + 1, before[1] + 1), size)
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, size, 0, 0) + r)   # no pad: fine too
+            self.assertEqual(self.m.totals['tx_records_asix_form'], before[0] + 2)
+        self.tx(arp_request(a.MODEL_MAC))                           # another transfer in between
+        with self.assertRaises(ValueError):                         # then a pad word alone
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 4, 0, 0) + pad)
 
 
 class TcpHostTests(unittest.TestCase):

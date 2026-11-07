@@ -8,6 +8,7 @@ model's usbredir control, bulk and interrupt paths, as axsimtest.py does
 for ax88179. No physical USB device.
 Run: python -B ax7simtest.py
 """
+import collections
 import ctypes as c
 import io
 import json
@@ -459,8 +460,10 @@ class Tests(CoreCase):
 
     def test_reference_7_transmit_form(self):
         """11-bit complement, flags in bits 11-15, several records in one
-        transfer on even offsets; a flagged IPv4 UDP record gets its checksum."""
+        transfer on even offsets; with TXCOE set, a record without bit 15
+        gets its IPv4 and UDP checksums."""
         self.up()
+        self.assertTrue(self.m.chip.write(a.WRITE_TXCOE, 0x0307, 0, b''))
         arp = arp_request(a.MODEL_MAC) + bytes(18)                    # 60 bytes
         odd = arp + b'\0'                                             # 61 bytes
         recs = b''
@@ -488,9 +491,133 @@ class Tests(CoreCase):
         self.assertEqual(a.checksum(sent[0][14:34]), 0)               # the IPv4 header too
         # Truncated or non-IPv4 headers are left as sent.
         bad = frame[:14] + bytes((0x4f,)) + frame[15:34]
-        self.assertEqual(self.m.fill_checksums(bad), bad)
+        self.assertEqual(self.m.fill_checksums(bad, 0x0307), bad)
         with self.assertRaises(ValueError):                          # a broken complement
             self.m.transmit(struct.pack('<I', (0x123 << 16) | 60) + arp)
+
+    def reference_rx(self, rx_ctl, qct):
+        """The receive settings ASIX's drivers write, then two pings' replies
+        (one fragmented) as the bulk-IN transfers a 32 KiB request gets."""
+        self.up()
+        self.assertTrue(self.m.chip.write(a.WRITE_RX_CTL, rx_ctl, 0, b''))
+        self.assertTrue(self.m.chip.write(a.QCTCTRL, qct[0], qct[1], b''))
+        self.tx(arp_request(a.MODEL_MAC))
+        self.tx(icmp_echo(a.MODEL_MAC, 32, 2))
+        frame = icmp_echo(a.MODEL_MAC, 3000, 3)
+        out = []
+        for ip in a.ipv4_fragments(bytes((192, 168, 77, 2)), a.HOST_IP, 1, frame[34:], 0x99):
+            out.append(frame[:14] + ip)
+        for f in out:
+            self.m.transmit_frame(f, False)
+        transfers = []
+        while True:
+            self.m.handle(101, 9, struct.pack('<BBHIH', a.EP_IN, 0, 32768, 0, 0))
+            replies = self.wire.take(101)
+            if not replies:
+                self.m.handle(21, 9, b'')
+                self.wire.take(101)
+                return transfers
+            transfers.append(replies[-1][2][10:])
+
+    def test_reference_receive_extension(self):
+        """RX_CTL bit 9 (RH2M) adds 2 zero bytes after the length word; with
+        QCTCTRL wValue bit 15 clear each transfer holds one whole record."""
+        transfers = self.reference_rx(0x0398, (0x008f, 0xb500))
+        self.assertEqual(len(transfers), 5)                         # ARP, echo, three fragments
+        for data in transfers:
+            n = struct.unpack_from('<H', data)[0] & 0x7ff
+            self.assertEqual(struct.unpack_from('<H', data, 2)[0] & 0x7ff, n ^ 0x7ff)
+            self.assertEqual(data[4:6], b'\0\0')
+            self.assertEqual(len(data), 6 + n + (n & 1))
+        self.assertEqual(self.m.records, collections.deque())
+
+    def test_rh1m_alone_and_linux_bursts(self):
+        """RH1M alone (sr9800's default) keeps the 4-byte header, and QCTCTRL
+        0x8000 keeps Linux's 2 KiB bursts that cut records."""
+        transfers = self.reference_rx(0x0188, (0x8000, 0x8001))
+        self.assertTrue(all(len(d) <= 2048 for d in transfers))
+        stream = b''.join(transfers)
+        offset, frames = 0, 0
+        while offset < len(stream):
+            n = struct.unpack_from('<H', stream, offset)[0] & 0x7ff
+            self.assertEqual(struct.unpack_from('<H', stream, offset + 2)[0] & 0x7ff, n ^ 0x7ff)
+            offset += 4 + n + (n & 1)
+            frames += 1
+        self.assertEqual((offset, frames), (len(stream), 5))
+        self.assertTrue(any(struct.unpack_from('<H', d)[0] & 0x7ff != len(d) - 4 for d in transfers))
+
+    def test_bmcr_reports_resolved_mode(self):
+        """After autonegotiation BMCR reads with the resolved speed and duplex;
+        before it, and with autonegotiation off, as written."""
+        self.setup()
+        chip = self.m.chip
+        chip.sw_mii = True
+        self.assertEqual(chip.phy_read(a.BMCR) & 0x2100, 0)
+        self.settle(1.1)
+        self.assertTrue(chip.link)
+        self.assertEqual(chip.phy_read(a.BMCR) & 0x2100, 0x2100)
+        chip.half = True
+        self.assertEqual(chip.phy_read(a.BMCR) & 0x2100, 0x2000)
+        chip.mbps, chip.half = 10, False
+        self.assertEqual(chip.phy_read(a.BMCR) & 0x2100, 0x0100)
+        chip.phy[a.BMCR] = 0x0100                                   # forced 10 full
+        self.assertEqual(chip.phy_read(a.BMCR), 0x0100)
+
+    def test_transmit_offload(self):
+        """Without bit 15 a record gets the checksums TXCOE asks for (a
+        fragment only its IPv4 header); bit 15, TXCOE 0 and Linux's form
+        leave it as sent."""
+        self.up()
+        udp = a.ipv4(bytes((192, 168, 77, 2)), a.HOST_IP, 17, struct.pack('!HHHH', 68, 67, 12, 0x1234) + b'abcd')
+        frame = bytearray(a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + udp)
+        frame[24:26] = b'\x12\x34'                                   # a wrong IPv4 header checksum
+        frame = bytes(frame)
+        frag = bytearray(frame)
+        frag[20:22] = b'\x20\x00'                                    # MF: a first fragment
+
+        def sent(data, flags, coe):
+            self.m.chip.txcoe = coe
+            got = []
+            self.m.transmit_frame, keep = (lambda f, p: got.append(f) or f), self.m.transmit_frame
+            try:
+                n = len(data)
+                self.m.transmit(struct.pack('<I', ((n ^ 0x7ff) << 16) | flags | n) + data + (b'\0' if n & 1 else b''))
+            finally:
+                self.m.transmit_frame = keep
+            return a.checksum_state(got[0])
+        self.assertEqual(sent(frame, 0, 0x0307), 'ip-ok-l4-ok')
+        self.assertEqual(sent(frame, 0x4000, 0x0307), 'ip-ok-l4-ok')
+        self.assertEqual(sent(frame, 0, 0x0001), 'ip-ok-l4-bad')
+        self.assertEqual(sent(frame, 0x8000, 0x0307), 'ip-bad-l4-bad')
+        self.assertEqual(sent(frame, 0, 0), 'ip-bad-l4-bad')
+        self.assertEqual(sent(bytes(frag), 0, 0x0307), 'ip-ok')
+        self.assertEqual(self.m.totals['tx_as_sent_8000_ip-bad-l4-bad'], 1)
+
+    def test_tcp_host(self):
+        """The simulated host's TCP through the model: a SYN to the echo port
+        is answered SYN-ACK with MSS 1460; another port answers RST."""
+        self.up()
+        guest = bytes((192, 168, 77, 2))
+
+        def syn(port):
+            head = struct.pack('!HHIIBBHHH', 4000, port, 100, 0, 6 << 4, 0x02, 65535, 0, 0) + \
+                struct.pack('!BBH', 2, 4, 1460)
+            pseudo = guest + a.HOST_IP + struct.pack('!BBH', 0, 6, len(head))
+            head = head[:16] + struct.pack('!H', a.checksum(pseudo + head)) + head[18:]
+            return a.HOST_MAC + a.MODEL_MAC + b'\x08\x00' + a.ipv4(guest, a.HOST_IP, 6, head)
+        answers = []
+        self.m.deliver, keep = (lambda f: answers.append(f)), self.m.deliver
+        try:
+            self.m.transmit_frame(syn(7), False)
+            self.m.transmit_frame(syn(23), False)
+        finally:
+            self.m.deliver = keep
+        self.assertEqual(len(answers), 2)
+        flags = [f[14 + 20 + 13] for f in answers]
+        self.assertEqual(flags, [0x12, 0x14])
+        self.assertEqual(struct.unpack_from('!I', answers[0], 14 + 20 + 8)[0], 101)
+        self.assertEqual(answers[0][14 + 20 + 20:14 + 20 + 24], struct.pack('!BBH', 2, 4, 1460))
+        self.assertEqual(self.events('tcp_open')[0]['port'], 7)
 
 
 if __name__ == '__main__':

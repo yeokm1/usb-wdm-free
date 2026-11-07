@@ -284,6 +284,31 @@ class Tests(unittest.TestCase):
         bad = [json.loads(x) for x in self.trace.getvalue().splitlines() if '"ntb_out_bad"' in x]
         self.assertEqual((bad, m.totals['tx_ntbs'], m.totals['tx_datagrams']), ([], 1, 4))
 
+    def test_packet_joining_ends(self):
+        """A ZLP ends an NTB on a packet boundary, dwNtbOutMaxSize ends one
+        without it, and a data-interface restart drops a cut-off NTB."""
+        m = self.model(speed='full', out_max=256)
+        m.handle(6, 1, b'')
+        m.handle(9, 3, b'')
+        got = []
+        m.transmit = got.append
+
+        def out(data):
+            m.handle(101, 7, struct.pack('<BBHIH', n.EP_OUT, 0, len(data), 0, 0) + data)
+        out(bytes(64))
+        out(bytes(64))
+        self.assertEqual(got, [])
+        out(b'')
+        self.assertEqual([len(x) for x in got], [128])
+        for _ in range(4):
+            out(bytes(64))
+        self.assertEqual([len(x) for x in got], [128, 256])
+        out(b'\1' * 64)
+        m.handle(9, 4, b'\x01\x00')
+        m.handle(9, 5, b'\x01\x01')
+        out(b'\2' * 10)
+        self.assertEqual(got[-1], b'\2' * 10)
+
     def test_arp_icmp_dhcp_round_trip(self):
         m = self.model(caps=0x21)
         p = self.bring_up(m)

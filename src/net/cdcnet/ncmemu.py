@@ -477,6 +477,7 @@ class Model:
             if kind == 9 and ok and interface == 1:
                 self.cancel_all()
                 self.rx.clear()
+                self.tx_buf = bytearray()                   # an NTB cut off by the restart is dropped
                 self.alt = alternate
                 self.info()
                 self.log('alternate', interface=1, alternate=alternate)

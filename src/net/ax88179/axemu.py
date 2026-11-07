@@ -752,9 +752,11 @@ class Model:
         if not length & 0x80000000:
             boundary = (length + 8) % self.bulk_max == 0
             if len(data) == length + 8 or (boundary and len(data) == length + 9 and data[-1] == 0):
-                want = TX_PAD if boundary else 0
-                if flags != want:
-                    raise ValueError('transmit flags %08x, expected %08x' % (flags, want))
+                # On a packet boundary Linux and ax179f send 0x80008000; the
+                # drivers' padded form sends 0 for a record that is 4-aligned
+                # and fills the packet (504 bytes at High Speed), so both pass.
+                if flags not in ((TX_PAD, 0) if boundary else (0,)):
+                    raise ValueError('transmit flags %08x on a %s' % (flags, 'boundary' if boundary else 'frame'))
                 if len(data) == length + 9:
                     self.totals['tx_padded'] += 1
                 return self.transmit_frame(self.insert_checksums(data[8:8 + length]))

@@ -355,8 +355,12 @@ class Tests(CoreCase):
         self.assertEqual(self.m.totals['tx_frames'], 1)
         with self.assertRaises(ValueError):           # a wrong length in the header is refused
             self.m.transmit(struct.pack('<II', 100, 0) + bytes(60))
-        with self.assertRaises(ValueError):           # so is a missing padding flag
-            self.m.transmit(struct.pack('<II', 504, 0) + bytes(504))
+        with self.assertRaises(ValueError):           # flags other than 0 or the padding flag
+            self.m.transmit(struct.pack('<II', 504, 0x1234) + bytes(504))
+        frame, _ = echo_request(a.MODEL_MAC, 504 - 14 - 20 - 8)     # an unmarked 4-aligned record
+        before = self.m.totals['tx_frames']                          # that fills a packet, flags 0
+        self.m.handle(101, 8, struct.pack('<BBHIH', a.EP_OUT, 0, 512, 0, 0) + struct.pack('<II', 504, 0) + frame)
+        self.assertEqual(self.m.totals['tx_frames'], before + 1)
 
     def test_linux_pad_byte_and_packet_at_a_time(self):
         """Linux's usbnet adds one zero byte when header and frame end on a

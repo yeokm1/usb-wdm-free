@@ -31,13 +31,16 @@ shaped like the device families named; strings say SIMULATED):
               Barrel Switch, Eraser, Invert, X 0..20000, Y 0..15000, Tip
               Pressure 0..1023 (FFFF:0037)
   penpartner  the Wacom PenPartner as QEMU's usb-wacom-tablet models it
-              (056A:0000, interface 03/01/02, QEMU's report descriptor; HID
-              mode sends 4-byte relative mouse reports with no report ID;
-              a SET_REPORT of feature report 2 with value 2 switches to the
-              tablet mode (a GET_REPORT returns the current input report,
-              as QEMU's model does), whose 7-byte reports are 02, X (le16,
-              0..5040), Y (le16, 0..3780), status (0x20 eraser, 0x40 side
-              switch), pressure (signed, -127 = none)), the protocol Linux's
+              (056A:0000, interface 03/01/02, QEMU's report descriptor; in
+              its first mode report 1 as that descriptor declares it, a
+              relative mouse the pen moves (INFERRED; QEMU's model sent four
+              bytes without the report ID, which no HID parser takes, and
+              no movement); a SET_REPORT of feature report 2 with value 2
+              switches to the tablet mode (a GET_REPORT returns the current
+              input report, as QEMU's model does), whose reports are 02, X
+              (le16, 0..5040), Y (le16, 0..3780), status (0x20 eraser, 0x40
+              side switch), pressure (signed, -127 = none), and a 00 to the
+              descriptor's length), the protocol Linux's
               wacom_penpartner_irq reads (drivers/hid/wacom_wac.c)
 
 Input is driven over a second TCP port (--ctl), one JSON object a line:
@@ -153,6 +156,8 @@ PENPARTNER = h('05 01 09 02 a1 01 85 01 09 01 a1 00 05 09 19 01 29 03 15 00 25 0
                '75 08 95 07 81 02 c0 09 01 85 63 95 07 81 02 09 01 85 02 95 01 b1 02 09 01 85 03 '
                '95 01 b1 02 c0')
 
+PP_MOUSE_DIV = 4                          # INFERRED: PenPartner mouse mode, tablet units per count
+
 PROFILES = {
     'tablet': dict(pid=0x0030, desc=TABLET, packet=8, product='Absolute mouse (KVM shape)'),
     'kvm16': dict(pid=0x0031, desc=KVM16, packet=8, product='Absolute mouse, 0..65535'),
@@ -218,8 +223,9 @@ def finger(s):
     return struct.pack('<BHH', bits, scale(s['x'], 4095), scale(s['y'], 4095))
 
 
-def reports(profile, s, state):
-    """The interrupt IN packets for one state."""
+def reports(profile, s, state, advance=True):
+    """The interrupt IN packets for one state (advance False: a GET_REPORT,
+    which reports the state without using up the PenPartner's motion)."""
     if profile in ('tablet', 'pointer'):
         return [mouse_report(s, 'xy15')]
     if profile == 'kvm16':
@@ -240,14 +246,35 @@ def reports(profile, s, state):
         return [struct.pack('<BHHH', bits, scale(s['x'], 20000), scale(s['y'], 15000),
                             scale(s['pressure'] if s['tip'] else 0, 1023))]
     if profile == 'penpartner':
+        x, y = scale(s['x'], 5040), scale(s['y'], 3780)
         if state['mode'] != 2:
-            return [bytes([s['buttons'] & 7, 0, 0, 0])]      # QEMU's HID mode: relative, no movement
+            # Before a mode switch, report 1 as the report descriptor declares
+            # it: the report ID, three buttons, relative X, Y and wheel, and
+            # three constant bytes (QEMU's model sent four bytes without the
+            # ID, which a HID parser drops). INFERRED: the pen moves it as a
+            # mouse, the change in tablet units divided by PP_MOUSE_DIV, in
+            # steps of at most 127; the tip is the left button.
+            buttons = (s['buttons'] | (1 if s['tip'] else 0)) & 7
+            px, py = state.get('px', x), state.get('py', y)
+            dx, dy = (x - px) // PP_MOUSE_DIV, (y - py) // PP_MOUSE_DIV
+            if advance:
+                state['px'], state['py'] = px + dx * PP_MOUSE_DIV, py + dy * PP_MOUSE_DIV
+            out = []
+            while True:
+                sx, sy = clamp(dx, -127, 127), clamp(dy, -127, 127)
+                out.append(struct.pack('<BBbbb3x', 1, buttons, sx, sy, 0))
+                dx, dy = dx - sx, dy - sy
+                if not (dx or dy) or not advance:
+                    return out
         status = (0x20 if s['eraser'] else 0) | (0x40 if s['barrel'] else 0)
         if s['tip']:
             press = clamp(int(round(-127 + s['pressure'] * 254)), -126, 127)
         else:
             press = -127
-        return [struct.pack('<BHHBb', 2, scale(s['x'], 5040), scale(s['y'], 3780), status, press)]
+        # Report 2 is declared with seven data bytes after its ID; Linux's
+        # wacom_penpartner_irq reads the first six (WACOM_PKGLEN_PENPRTN 7
+        # with the ID), so the seventh is sent as 00.
+        return [struct.pack('<BHHBbx', 2, x, y, status, press)]
     raise ValueError(profile)
 
 
@@ -376,11 +403,11 @@ class Model:
                 # input report, whatever report was asked for (dev-wacom.c,
                 # HID_GET_REPORT); its "00 mode" answer is for the vendor
                 # request 21 01 only.
-                result = reports(self.profile, self.s, self.state)[0]
+                result = reports(self.profile, self.s, self.state, advance=False)[0]
             elif self.profile == 'mtouch' and rtype == 3 and rid == 2:
                 result = bytes([2, 2])
             else:
-                r = reports(self.profile, self.s, self.state)[0]
+                r = reports(self.profile, self.s, self.state, advance=False)[0]
                 result = r
             self.log('get_report', type=rtype, id=rid, length=length)
         else:

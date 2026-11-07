@@ -191,6 +191,34 @@ class Tests(unittest.TestCase):
         self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, len(data) - 64, 0, 0) + data[64:])
         self.assertEqual(self.m.totals['tx_frames'], 2)
 
+    def test_link_at_power_on_and_transfer_limit(self):
+        """CoreChips' driver writes no 0x1F and waits for the link; a receive
+        transfer holds whole packets up to RX_TRANSFER_MAX bytes."""
+        wire, clock = t.Wire(), t.Clock()
+        m = s.Model(wire, io.StringIO(), now=clock)
+        m.peer_caps = s.CAPS & ~(1 << s.ax7emu.CAP_ID64)
+        m.connect()
+        m.handle(6, 1, b'\x01')
+        for _ in range(30):
+            clock.t += 0.05
+            m.pump()
+        self.assertTrue(m.chip.link)                                     # no PHY reset needed
+        m.chip.write(s.WRITE1, 1, s.REG_PHYRST, b'')                     # sr9700f's and Linux's reset
+        m.pump()
+        self.assertFalse(m.chip.link)
+        m.chip.write(s.WRITE1, 0, s.REG_PHYRST, b'')
+        for _ in range(30):
+            clock.t += 0.05
+            m.pump()
+        self.assertTrue(m.chip.link)
+        m.chip.regs[s.REG_RXCTL] = s.RX_ON | s.RX_PROMISC
+        for _ in range(5):
+            m.deliver(bytes(14) + bytes(1500))
+        wire.messages.clear()
+        m.handle(101, 9, struct.pack('<BBHIH', s.EP_IN, 0, 16384 & 0xffff, 0, 0))
+        got = wire.take(101)[-1][2][10:]
+        self.assertEqual(len(got), 2 * (3 + 1514 + 4))                  # two whole packets, not five
+
     def test_status_and_flap(self):
         self.assertEqual(self.setup(flap_after=2, flap_for=2), 0)
         self.m.handle(15, 1, bytes((s.EP_INT,)))

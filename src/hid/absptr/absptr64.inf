@@ -3,7 +3,6 @@
 ; Windows' own HID support does not map to the pointer (docs/design/
 ; absptr.md sections 1, 3, 8).
 ; Copyright (C) 2026 Yeo Kheng Meng
-; Experimental build; not released.
 ;
 ; Each system gets only what its own HID, pen and touch support does not
 ; handle (design section 3). XP x64 ([Models.NTamd64.5.2]) as absptr2k.inf

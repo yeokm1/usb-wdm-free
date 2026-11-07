@@ -9,7 +9,6 @@
 ; Masahiko Morii's x360c and the keyboards/keypads marked XP_F_NOINF in
 ; devtab.c. infchk.ps1 checks them against devtab.c.
 ; Copyright (C) 2026 Yeo Kheng Meng
-; Experimental build; not released, not tested on a guest.
 [Version]
 Signature="$Windows NT$"
 Class=HIDClass

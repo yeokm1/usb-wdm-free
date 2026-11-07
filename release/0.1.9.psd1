@@ -13,7 +13,9 @@
 # 7A3C6E62... (release\usb-wdm-free-test-sha1.cer, -Certificate): the new
 # builds from out\, the images of unchanged packages (usbmidi, cdcnet,
 # UACCI1.DLL) as strip: entries. Every other x86 file is 0.1.8's, from the tree.
-# The STAGE/COPY choices of the new packages are proposals awaiting the owner.
+# absptr's and xpad98's INFs come from src\ (their "Experimental build" comment
+# removed after the build, owner 2026-11-07); their images from out\.
+# The new packages are staged on the systems their legs ran on (owner, 2026-11-07).
 #
 # Per package: Class/Name, Kind (CLASS or DEVICE: bound by class ids or by
 # VID/PID), Desc (the STAGE.TXT PACKAGE words), DeviceIds (whole-device
@@ -225,22 +227,22 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'AX772F.SYS' = 'out\net\ax88772\ndis5\free\ax772f.sys'; 'AX772F98.INF' = 'out\net\ax88772\ndis5\free\AX772F98.INF' }
-                   Stage = @{ 'AX772F98.INF' = @('COPY', 'W98SE WME', 'proposed copy only (owner to decide): simulator legs only (AX88772B/C and SR9800 on 98 SE and ME, records 2026-11-06 ax88772-sim and sr98xx-sim)') } }
+                   Stage = @{ 'AX772F98.INF' = @('STAGE', 'W98SE WME', 'staged (owner, 2026-11-07): simulator legs: AX88772B/C and SR9800 on 98 SE and ME under xHCI98, the SR9800 on 98 SE under NUSB EHCI too (records 2026-11-06 ax88772-sim and sr98xx-sim)') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'AX772F.SYS' = 'out\net\ax88772\ndis5\free\ax772f.sys'; 'AX772F.INF' = 'out\net\ax88772\ndis5\free\AX772F.INF' }
-                   Stage = @{ 'AX772F.INF' = @('COPY', 'W2K', 'proposed copy only (owner to decide): SR9800 simulator legs under xHCI98') } }
+                   Stage = @{ 'AX772F.INF' = @('STAGE', 'W2K', 'staged (owner, 2026-11-07): SR9800 simulator legs (record 2026-11-06 sr98xx-sim)') } }
                 @{ Name = 'wxp'; Arch = 'x86'
                    Files = @{ 'AX772F.SYS' = 'out\net\ax88772\ndis5\free\ax772f.sys'; 'AX772F.INF' = 'out\net\ax88772\ndis5\free\AX772F.INF' }
-                   Stage = @{ 'AX772F.INF' = @('COPY', 'WXP', 'proposed copy only (owner to decide): SR9800 simulator legs under xHCI98') } }
+                   Stage = @{ 'AX772F.INF' = @('STAGE', 'WXP', 'staged (owner, 2026-11-07): SR9800 simulator legs (record 2026-11-06 sr98xx-sim)') } }
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
                    Files = @{ 'AX772F.SYS' = 'out\net\ax88772\ndis5\free\ax772f.sys'; 'AX772F.INF' = 'out\net\ax88772\ndis5\free\AX772F.INF' }
-                   Stage = @{ 'AX772F.INF' = @('COPY', 'WVISTA W7', 'proposed copy only (owner to decide): SR9800 simulator legs on 7 x86 under xHCI98; no Vista x86 leg') } }
+                   Stage = @{ 'AX772F.INF' = @('STAGE', 'W7', 'staged (owner, 2026-11-07): SR9800 simulator legs on 7 x86; Vista x86 has no leg, so its line is 7 only') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
                    Files = @{ 'AX772F.SYS' = 'x64:ax88772.wxp-x64.AX772F.SYS'; 'AX772F.INF' = 'out\net\ax88772\ndis51\free\AX772F.INF' }
-                   Stage = @{ 'AX772F.INF' = @('COPY', 'WXP64', 'proposed copy only (owner to decide): SR9800 simulator legs on XP x64 (the owner-signed f45732b image, record 2026-11-06 sha1-cert)') } }
+                   Stage = @{ 'AX772F.INF' = @('STAGE', 'WXP64', 'staged (owner, 2026-11-07): SR9800 simulator legs on XP x64 (the owner-signed f45732b image, record 2026-11-06 sha1-cert)') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
                    Files = @{ 'AX772F.SYS' = 'x64:ax88772.wv-7-x64.AX772F.SYS'; 'AX772F.INF' = 'out\net\ax88772\ndis51\free\AX772F.INF' }
-                   Stage = @{ 'AX772F.INF' = @('COPY', 'WVISTA64 W7X64', 'proposed copy only (owner to decide): SR9800 simulator legs on Vista x64 and 7 x64 (the owner-signed f45732b image); test-signed') } }
+                   Stage = @{ 'AX772F.INF' = @('STAGE', 'WVISTA64 W7X64', 'staged (owner, 2026-11-07): SR9800 simulator legs on Vista x64 SP2 and 7 x64 (the owner-signed f45732b image, SHA-1 certificate); test-signed') } }
             )
         }
         @{
@@ -252,22 +254,22 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'SR9700F.SYS' = 'out\net\sr9700\ndis5\free\sr9700f.sys'; 'SR970098.INF' = 'out\net\sr9700\ndis5\free\SR970098.INF' }
-                   Stage = @{ 'SR970098.INF' = @('COPY', 'W98SE WME', 'proposed copy only (owner to decide): simulator legs under xHCI98 on 98 SE and ME (record 2026-11-06 sr98xx-sim)') } }
+                   Stage = @{ 'SR970098.INF' = @('STAGE', 'W98SE WME', 'staged (owner, 2026-11-07): simulator legs under xHCI98 on 98 SE and ME (record 2026-11-06 sr98xx-sim); a USB 1.1 device, which NUSB EHCI does not take') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'SR9700F.SYS' = 'out\net\sr9700\ndis5\free\sr9700f.sys'; 'SR9700F.INF' = 'out\net\sr9700\ndis5\free\SR9700F.INF' }
-                   Stage = @{ 'SR9700F.INF' = @('COPY', 'W2K', 'proposed copy only (owner to decide): simulator legs under xHCI98') } }
+                   Stage = @{ 'SR9700F.INF' = @('STAGE', 'W2K', 'staged (owner, 2026-11-07): simulator legs (record 2026-11-06 sr98xx-sim)') } }
                 @{ Name = 'wxp'; Arch = 'x86'
                    Files = @{ 'SR9700F.SYS' = 'out\net\sr9700\ndis5\free\sr9700f.sys'; 'SR9700F.INF' = 'out\net\sr9700\ndis5\free\SR9700F.INF' }
-                   Stage = @{ 'SR9700F.INF' = @('COPY', 'WXP', 'proposed copy only (owner to decide): simulator legs under xHCI98') } }
+                   Stage = @{ 'SR9700F.INF' = @('STAGE', 'WXP', 'staged (owner, 2026-11-07): simulator legs (record 2026-11-06 sr98xx-sim)') } }
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
                    Files = @{ 'SR9700F.SYS' = 'out\net\sr9700\ndis5\free\sr9700f.sys'; 'SR9700F.INF' = 'out\net\sr9700\ndis5\free\SR9700F.INF' }
-                   Stage = @{ 'SR9700F.INF' = @('COPY', 'WVISTA W7', 'proposed copy only (owner to decide): simulator legs on 7 x86 under xHCI98; no Vista x86 leg') } }
+                   Stage = @{ 'SR9700F.INF' = @('STAGE', 'W7', 'staged (owner, 2026-11-07): simulator legs on 7 x86; Vista x86 has no leg, so its line is 7 only') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
                    Files = @{ 'SR9700F.SYS' = 'x64:sr9700.wxp-x64.SR9700F.SYS'; 'SR9700F.INF' = 'out\net\sr9700\ndis51\free\SR9700F.INF' }
-                   Stage = @{ 'SR9700F.INF' = @('COPY', 'WXP64', 'proposed copy only (owner to decide): simulator legs on XP x64 (the owner-signed f45732b image)') } }
+                   Stage = @{ 'SR9700F.INF' = @('STAGE', 'WXP64', 'staged (owner, 2026-11-07): simulator legs on XP x64 (the owner-signed f45732b image, record 2026-11-06 sha1-cert)') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
                    Files = @{ 'SR9700F.SYS' = 'x64:sr9700.wv-7-x64.SR9700F.SYS'; 'SR9700F.INF' = 'out\net\sr9700\ndis51\free\SR9700F.INF' }
-                   Stage = @{ 'SR9700F.INF' = @('COPY', 'WVISTA64 W7X64', 'proposed copy only (owner to decide): simulator legs on Vista x64 and 7 x64 (the owner-signed f45732b image); test-signed') } }
+                   Stage = @{ 'SR9700F.INF' = @('STAGE', 'WVISTA64 W7X64', 'staged (owner, 2026-11-07): simulator legs on Vista x64 SP2 and 7 x64 (the owner-signed f45732b image, SHA-1 certificate); test-signed') } }
             )
         }
         @{
@@ -278,22 +280,22 @@
             Services = @('xpad98')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xp98me.inf' = 'out\hid\xpad98\wdmx86\free\xp98me.inf' }
+                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xp98me.inf' = 'tree:src\hid\xpad98\xp98me.inf' }
                    Stage = @{ 'xp98me.inf' = @('STAGE', 'W98SE WME', '0.1.1.0: SurpriseRemovalOK (2000); xHCI98, UHCI and NUSB EHCI legs passed (simulated pads)') } }
                 @{ Name = 'w2k'; Arch = 'x86'
-                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xp2k.inf' = 'out\hid\xpad98\wdmx86\free\xp2k.inf' }
+                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xp2k.inf' = 'tree:src\hid\xpad98\xp2k.inf' }
                    Stage = @{ 'xp2k.inf' = @('COPY', 'W2K', '0.1.1.0: install and JOYTEST under xHCI98 3.4.1.0, no unsafe-removal dialog at unplug (simulated pad); EHCI legs passed; copy only while it shares 045E:028F with the non-free x360wc staged on 2000') } }
                 @{ Name = 'wxp'; Arch = 'x86'
-                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xpxpv.inf' = 'out\hid\xpad98\wdmx86\free\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xpxpv.inf' = 'tree:src\hid\xpad98\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WXP', 'EHCI Xbox One leg passed') } }
                 @{ Name = 'wv-x86'; Arch = 'x86'
-                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xpxpv.inf' = 'out\hid\xpad98\wdmx86\free\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'out\hid\xpad98\wdmx86\free\xpad98.sys'; 'xpxpv.inf' = 'tree:src\hid\xpad98\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WVISTA', 'EHCI Xbox One leg passed') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wxp-x64.xpad98.sys'; 'xpxpv.inf' = 'out\hid\xpad98\wdm64\free\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wxp-x64.xpad98.sys'; 'xpxpv.inf' = 'tree:src\hid\xpad98\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WXP64', 'EHCI Xbox One leg passed') } }
                 @{ Name = 'wv-x64'; Arch = 'x64'
-                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wv-x64.xpad98.sys'; 'xpxpv.inf' = 'out\hid\xpad98\wdm64\free\xpxpv.inf' }
+                   Files = @{ 'xpad98.sys' = 'x64:xpad98.wv-x64.xpad98.sys'; 'xpxpv.inf' = 'tree:src\hid\xpad98\xpxpv.inf' }
                    Stage = @{ 'xpxpv.inf' = @('STAGE', 'WVISTA64', 'EHCI Xbox One leg passed with test signing (owner, 2026-10-24); test-signed') } }
             )
         }
@@ -307,14 +309,14 @@
             Services = @('absptr')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'absptr.sys' = 'out\hid\absptr\wdmx86\free\absptr.sys'; 'absptr.inf' = 'out\hid\absptr\wdmx86\free\absptr.inf' }
-                   Stage = @{ 'absptr.inf' = @('COPY', 'W98SE WME', 'proposed copy only (owner to decide): on 98 SE under xHCI98 3.4.1.0 and NUSB EHCI the PenPartner, touch, pen and absolute-mouse simulators and QEMU tablet passed (record 2026-11-06 absptr); ME: an earlier build only') } }
+                   Files = @{ 'absptr.sys' = 'out\hid\absptr\wdmx86\free\absptr.sys'; 'absptr.inf' = 'tree:src\hid\absptr\absptr.inf' }
+                   Stage = @{ 'absptr.inf' = @('STAGE', 'W98SE WME', 'staged (owner, 2026-11-07): on 98 SE under xHCI98 3.4.1.0 and NUSB EHCI the PenPartner, touch, pen and absolute-mouse simulators and the QEMU tablet passed (record 2026-11-06 absptr); ME: an earlier build (final2)') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
-                   Files = @{ 'absptr.sys' = 'out\hid\absptr\wdmx86\free\absptr.sys'; 'absptr2k.inf' = 'out\hid\absptr\wdmx86\free\absptr2k.inf' }
-                   Stage = @{ 'absptr2k.inf' = @('COPY', 'W2K WXP', 'proposed copy only (owner to decide): 2000 under xHCI98 3.4.1.0 (QEMU tablet, touch simulator) passed; 32-bit XP: an earlier build') } }
+                   Files = @{ 'absptr.sys' = 'out\hid\absptr\wdmx86\free\absptr.sys'; 'absptr2k.inf' = 'tree:src\hid\absptr\absptr2k.inf' }
+                   Stage = @{ 'absptr2k.inf' = @('STAGE', 'W2K WXP', 'staged (owner, 2026-11-07): 2000 under xHCI98 3.4.1.0 (QEMU tablet, touch simulator) passed; 32-bit XP: an earlier build (final2)') } }
                 @{ Name = 'xp-7-x64'; Arch = 'x64'
-                   Files = @{ 'absptr.sys' = 'x64:absptr.xp-7-x64.absptr.sys'; 'absptr64.inf' = 'out\hid\absptr\wdm64\free\absptr64.inf' }
-                   Stage = @{ 'absptr64.inf' = @('COPY', 'WXP64 WVISTA64 W7X64', 'proposed copy only (owner to decide): XP x64, Vista x64 and 7 x64 legs with unsigned builds (record 2026-11-06 absptr); test-signed') } }
+                   Files = @{ 'absptr.sys' = 'x64:absptr.xp-7-x64.absptr.sys'; 'absptr64.inf' = 'tree:src\hid\absptr\absptr64.inf' }
+                   Stage = @{ 'absptr64.inf' = @('STAGE', 'WXP64 WVISTA64 W7X64', 'staged (owner, 2026-11-07): XP x64, Vista x64 and 7 x64 legs with unsigned builds (record 2026-11-06 absptr); test-signed') } }
             )
         }
         @{

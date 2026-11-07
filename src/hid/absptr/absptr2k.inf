@@ -3,7 +3,6 @@
 ; own HID support does not map to the pointer (docs/design/absptr.md
 ; sections 1, 8).
 ; Copyright (C) 2026 Yeo Kheng Meng
-; Experimental build; not released.
 ;
 ; Only what Windows' own HID driver cannot use: the Wacom PenPartner
 ; (USB\VID_056A&PID_0000) and HID touch screens by id, each group with its

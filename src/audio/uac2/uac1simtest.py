@@ -682,6 +682,10 @@ class NegativeFormatTest(Base):
         model.handle(102, 0, struct.pack('<BBH', 1, 0, len(payload)) + payload)
         self.assertAlmostEqual(model.levels()['received_peak_dbfs'][0], -12.04, 1)
         self.assertEqual(model.ostate[1]['frames'], 48)
+        # Infinities clamp to full scale instead of ending the model.
+        payload = struct.pack('<96f', *([float('inf'), float('-inf')] * 48))
+        model.handle(102, 0, struct.pack('<BBH', 1, 0, len(payload)) + payload)
+        self.assertAlmostEqual(model.levels()['received_peak_dbfs'][1], 0.0, 1)
 
     def test_adaptive_source_sync_out(self):
         p = uac1emu.Profile1('adsrc')

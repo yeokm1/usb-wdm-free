@@ -693,7 +693,8 @@ class Model1(uacemu.Model):
             pcm = [(b - 128) << 8 for b in payload]
         else:
             count = len(payload) // 4
-            pcm = [0 if v != v else max(-32768, min(32767, int(v * 32767)))
+            # Clamped as floats first (infinities included); NaN as silence.
+            pcm = [0 if v != v else int(max(-1.0, min(1.0, v)) * 32767)
                    for v in struct.unpack('<%df' % count, payload[:4 * count])]
         as16 = dict(info, subslot=2)
         return super().measure(struct.pack('<%dh' % len(pcm), *pcm), as16, units, ep)

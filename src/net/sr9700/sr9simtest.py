@@ -184,6 +184,12 @@ class Tests(unittest.TestCase):
         self.m.handle(9, 4, b'\0\0')
         self.tx(t.arp_request(s.MODEL_MAC))
         self.assertEqual(self.m.totals['tx_frames'], 1)
+        frame = t.arp_request(s.MODEL_MAC) + bytes(40)            # 82 bytes: two packets
+        data = struct.pack('<H', len(frame)) + frame
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, 64, 0, 0) + data[:64])
+        self.m.handle(9, 5, b'\0\1')                                # refused: the transfer stays
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, len(data) - 64, 0, 0) + data[64:])
+        self.assertEqual(self.m.totals['tx_frames'], 2)
 
         self.assertEqual(self.setup(flap_after=2, flap_for=2), 0)
         self.m.handle(15, 1, bytes((s.EP_INT,)))

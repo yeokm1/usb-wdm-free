@@ -149,6 +149,8 @@ without the co-installer; their x64 `pnputil` wants a signed catalog,
 which this package has none of
 ([release notes](docs/release-notes.md), 0.1.5).
 
+`uac2` and `usbmidi`: On Windows 98 SE, Setup may ask for KS files such as `ksclockf.ax` or `ks.cat`; choose Skip File, as Windows already has them.
+
 `usbprn` on 98 SE and ME: plug the printer in, point the wizard at
 `free/print/usbprn/w98se/` or `wme/`, then add the printer with Add
 Printer: its model and the port `USB001` (`USB002` for a second one).

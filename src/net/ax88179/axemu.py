@@ -815,6 +815,8 @@ class Model:
             if len(packet) != (2 if kind == 9 else 1):
                 raise ValueError('alternate length')
             ok = self.config and packet[0] == 0 and (kind == 10 or packet[1] == 0)
+            if ok and kind == 9:
+                self.tx_buf, self.tx_pad_next = bytearray(), False   # a transfer cut off is dropped
             self.send(11, ident, bytes((0 if ok else 4, packet[0], 0)))
         elif kind in (15, 16):
             if len(packet) != 1:

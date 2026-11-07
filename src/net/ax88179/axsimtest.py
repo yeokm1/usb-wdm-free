@@ -378,7 +378,17 @@ class Tests(CoreCase):
         self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (3, 1))
         self.assertEqual(self.m.net.refused, 0)
 
-    def test_corrupted_requests_get_no_answer(self):
+    def test_interface_reselection_drops_a_cut_off_transfer(self):
+        self.up('full')
+        frame, _ = echo_request(a.MODEL_MAC, 150)
+        data = struct.pack('<II', len(frame), 0) + frame
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + data[:64])
+        self.m.handle(9, 4, b'\0\0')
+        self.assertEqual(self.wire.take(11)[-1][2][0], 0)
+        small, _ = echo_request(a.MODEL_MAC, 10)
+        self.tx(small)
+        self.assertEqual(self.m.totals['tx_frames'], 1)
+
         self.up()
         ping, icmp = echo_request(a.MODEL_MAC, 32)
         bad_ip = bytearray(ping)

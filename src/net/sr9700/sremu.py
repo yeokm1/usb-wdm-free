@@ -272,6 +272,8 @@ class Model(ax7emu.Model):
         return frame
 
     def handle(self, kind, ident, packet):
+        if kind == 9 and self.config:
+            self.tx_buf = bytearray()                 # SET_INTERFACE: a transfer cut off is dropped
         if kind in (15, 16):
             if len(packet) != 1:
                 raise ValueError('interrupt header')

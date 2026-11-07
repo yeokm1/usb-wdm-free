@@ -178,7 +178,13 @@ class Tests(unittest.TestCase):
         with self.assertRaises(ValueError):           # a full packet past the header's length
             self.m.receive_out(struct.pack('<H', 30) + bytes(62))
 
-    def test_status_and_flap(self):
+    def test_interface_reselection_drops_a_cut_off_transfer(self):
+        self.up()
+        self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, 64, 0, 0) + struct.pack('<H', 200) + bytes(62))
+        self.m.handle(9, 4, b'\0\0')
+        self.tx(t.arp_request(s.MODEL_MAC))
+        self.assertEqual(self.m.totals['tx_frames'], 1)
+
         self.assertEqual(self.setup(flap_after=2, flap_for=2), 0)
         self.m.handle(15, 1, bytes((s.EP_INT,)))
         self.settle(1.1)

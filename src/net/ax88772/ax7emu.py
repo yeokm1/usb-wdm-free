@@ -106,8 +106,10 @@ fact comes from (Linux drivers/net/usb at v7.3, GPL-2.0-or-later):
   sees packets, and a transfer ends with a short packet (a zero-length one
   included): a host that sends a transfer one packet at a time (UHCI at
   Full Speed, as QEMU passes it) is joined up first, at most
-  TX_JOIN_MAX bytes; Linux's form also ends once its header's length is
-  in (sr9800's records need no pad on a packet boundary), and a joined
+  TX_JOIN_MAX bytes. A full last packet also ends it when the bytes so
+  far end a record: Linux's form once its header's length is in (sr9800's
+  records need no pad on a packet boundary), ASIX's form at a record's
+  end (a whole High Speed transfer of 512 bytes with no ZLP). A joined
   Linux-form transfer longer than its header allows is refused at once.
   A part-joined transfer is dropped by a USB reset, a configuration or
   an accepted SET_INTERFACE.
@@ -561,6 +563,26 @@ class Model:
         unit = self.bulk_max - 1 if self.sr9800 else self.bulk_max
         return 4 + length + (4 if (length + 4) % unit == 0 else 0)
 
+    @staticmethod
+    def records_whole(data):
+        """ASIX's form (see transmit_records) on a packet boundary: True when
+        the bytes end with a whole record (or Linux's pad word after one), as
+        a chip walking the records would see it; False when one is cut off.
+        A header that is not a record also says True: transmit refuses it."""
+        offset = 0
+        while offset < len(data):
+            rest = len(data) - offset
+            if rest == 4 and offset and data[offset:] == b'\x00\x00\xff\xff':
+                return True
+            if rest < 4:
+                return False
+            word = struct.unpack_from('<I', data, offset)[0]
+            length = word & 0x7ff
+            if word >> 27 or (word >> 16) & 0x7ff != length ^ 0x7ff:
+                return True
+            offset += 4 + length + (length & 1)
+        return offset == len(data)
+
     def receive_out(self, data):
         """One bulk-OUT packet or transfer from the host (see the header):
         joined until a short packet ends it, then taken by transmit()."""
@@ -569,10 +591,14 @@ class Model:
         self.tx_buf += data
         if data and len(data) % self.bulk_max == 0:
             want = self.linux_want(struct.unpack_from('<I', self.tx_buf)[0]) if len(self.tx_buf) >= 4 else None
-            if want is None or len(self.tx_buf) < want:
+            if want is None:
+                if not self.records_whole(self.tx_buf):
+                    self.totals['tx_joined_packets'] += 1
+                    return
+            elif len(self.tx_buf) < want:
                 self.totals['tx_joined_packets'] += 1
                 return
-            if len(self.tx_buf) > want:
+            elif len(self.tx_buf) > want:
                 raise ValueError('transmit transfer %d bytes or more, header gives %d' % (len(self.tx_buf), want))
         whole, self.tx_buf = bytes(self.tx_buf), bytearray()
         if whole:

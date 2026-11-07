@@ -659,34 +659,57 @@ class Tests(CoreCase):
         packet, a reselected interface dropping a part-joined transfer, a
         refused one keeping it, and the bound."""
         self.up('full')
-        arp = arp_request(a.MODEL_MAC) + bytes(18)                    # 60 bytes
+        arp = arp_request(a.MODEL_MAC) + bytes(18)                    # 60 bytes: a 64-byte record
+        long = arp + bytes(64)                                        # 124 bytes: a 128-byte record
         recs = b''
-        for frame in (arp, arp):
+        for frame in (arp, long):
             n = len(frame)
             recs += struct.pack('<I', ((n ^ 0x7ff) << 16) | 0x8000 | n) + frame
-        self.assertEqual(len(recs), 128)
-        self.packets(recs[:64], zlp=False)
-        self.assertEqual(self.m.totals['tx_frames'], 0)
-        self.packets(recs[64:], zlp=True)                             # full last packet, then a ZLP
+        self.assertEqual(len(recs), 192)
+        self.packets(recs[:64], zlp=False)                            # a whole record: taken at once
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 1)
+        self.packets(recs[64:128], zlp=False)                         # half a record: joined
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 1)
+        self.packets(recs[128:], zlp=True)                            # its end, then a ZLP
         self.assertEqual(self.m.totals['tx_records_asix_form'], 2)
-        self.packets(recs[:64], zlp=False)
+        self.assertEqual(bytes(self.m.tx_buf), b'')
+        self.packets(recs[64:128], zlp=False)
         self.m.handle(9, 4, b'\0\1')                                 # refused: the transfer stays
-        self.packets(recs[64:])
-        self.assertEqual(self.m.totals['tx_records_asix_form'], 4)
-        self.packets(recs[:64], zlp=False)
+        self.packets(recs[128:])
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 3)
+        self.packets(recs[64:128], zlp=False)
         self.m.handle(9, 4, b'\0\0')                                 # accepted: it is dropped
         self.assertEqual(bytes(self.m.tx_buf), b'')
         self.tx(arp_request(a.MODEL_MAC))
-        self.assertEqual(self.m.totals['tx_frames'], 5)
+        self.assertEqual(self.m.totals['tx_frames'], 4)
         n = 60
         linux = struct.pack('<I', ((n ^ 0xffff) << 16) | n) + bytes(60)  # 64 bytes, then more: too long
         self.packets(linux[:64], zlp=False)
         with self.assertRaises(ValueError):
             self.packets(bytes(64), zlp=False)
-        self.m.tx_buf = bytearray()
-        with self.assertRaises(ValueError):
-            for _ in range(a.TX_JOIN_MAX // 64 + 1):
-                self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + recs[:64])
+        self.m.tx_buf = bytearray(a.TX_JOIN_MAX - 32)
+        with self.assertRaises(ValueError):                          # the bound
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + recs[:64])
+
+    def test_high_speed_whole_transfers_on_a_boundary(self):
+        """At High Speed each transfer comes whole: an ASIX-form transfer of
+        exactly 512 bytes with no ZLP is taken at once, again and again."""
+        self.up()
+        n = 508
+        frame = a.HOST_MAC + a.MODEL_MAC + b'\x88\xb5' + bytes(n - 14)
+        rec = struct.pack('<I', ((n ^ 0x7ff) << 16) | 0x8000 | n) + frame
+        self.assertEqual(len(rec), 512)
+        for i in range(200):
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(rec), 0, 0) + rec)
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 200)
+        self.assertEqual(bytes(self.m.tx_buf), b'')
+        m = 300
+        short = struct.pack('<I', ((m ^ 0x7ff) << 16) | 0x8000 | m) + frame[:m]
+        two = short + rec                                           # 304 + 512: cut at 512, wait
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 512, 0, 0) + two[:512])
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 200)
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(two) - 512, 0, 0) + two[512:])
+        self.assertEqual(self.m.totals['tx_records_asix_form'], 202)
 
 
 class TcpHostTests(unittest.TestCase):

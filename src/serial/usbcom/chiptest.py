@@ -246,6 +246,14 @@ class ChipTests(unittest.TestCase):
         self.control(c, 0x41, 0x15, 0, 0)                                # events off: as before
         self.bulk_out(c, c.fns[0].out, b'\xec')
         self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=35), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then disabled
+        self.control(c, 0x41, 0x00, 0, 0)
+        self.control(c, 0x41, 0x00, 1, 0)
+        self.bulk_out(c, c.fns[0].out, b'\xec')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=36), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then a reset
+        c.handle(3, 50, b'')
+        self.assertEqual(c.fns[0].esc, 0)
         for part, size in (('cp2104', 13), ('cp2105', 15), ('cp2108', 0x49)):
             g = self.model(part)
             self.assertEqual(self.control(g, 0xC0, 0xFF, 0x370C, 0, size), (0, bytes(size)))

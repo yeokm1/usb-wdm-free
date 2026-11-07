@@ -606,6 +606,7 @@ class ChipModel(acmemu.Model):
             if not f.enabled:
                 f.echo.clear()
                 f.queued = 0
+                f.esc = 0                                 # INFERRED: disabling ends event insertion
             return 0, b'', None
         if not f.enabled and request != 0x12:
             # Silicon Labs' driver sets the line, flow, characters and rate
@@ -712,6 +713,8 @@ class ChipModel(acmemu.Model):
         if kind in (3, 6):
             self.pl_started = False
             self.pl_seq = []
+            for f in self.fns:
+                f.esc = 0                                 # a reset or configuration ends event insertion
         if kind == 101 and self.family == 'cp210x' and len(packet) >= 8:
             endpoint = packet[0]
             f = self.fn_by('out', endpoint)

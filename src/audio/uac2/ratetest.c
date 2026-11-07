@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "uacrate.h"
+/* uacwatch.h is a header of static helpers; this test uses only the
+ * wall-clock ones (watchtest.c covers the bus-time ones), so MSVC 6.0
+ * /W4 would refuse the unused rest (C4505). */
+#pragma warning(disable: 4505)
 #include "uacwatch.h"
 
 static unsigned int checks;

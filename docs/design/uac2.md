@@ -2805,3 +2805,86 @@ Risks:
   and count the loss (the 2026-10-23 rule for `uac1`).
 - **U5. The xHCI98 installer row's words** (option A): "USB audio
   (uac2): USB Audio Class 1.0 and 2.0 sound cards, headsets and DACs".
+
+### 24.10 The owner's decisions (2026-11-07)
+
+- **U1: B**, a separate driver, `uac1`, built from source shared with
+  `uac2`, not the `uac1-prior` copies; `uac2`'s behaviour unchanged, shown
+  by its build (24.11) and its host tests and regression legs.
+- **Scope: Windows 98 SE only.** One x86 package; no ME, 2000, XP, Vista
+  to 10 package, no by-hand models there, no x64 image. ME keeps Windows'
+  `usbaudio`, which xHCI98 `3.4.2.0`'s option B fixed for the unplug.
+- **U2/U2a: 98 SE automatic by class, only if G1 to G3 pass**; otherwise
+  option d (the devices read, by hardware id) and nothing by class.
+- **U4: the stream ends at `uacwatch.h`'s deadline** when feedback stops,
+  as for UAC 2.0.
+- **MIDI-only functions** (coordinator for the owner, 2026-11-07): 98 SE's
+  `usbaudio` has no USB MIDI ("Support for MIDI devices was added in
+  Windows Me", Microsoft Learn, "USB Audio Class System Driver
+  (Usbaudio.sys)"; `usbmidi.md` 3.1), so a MIDI-only (AC + MS) function
+  loses no working MIDI to `uac1`. `uac1` starts such a function as a
+  null function (no Code 10, the reason recorded); `usbmidi` keeps the
+  devices it lists by hardware id, which outranks a class id, and its
+  by-hand model (`USBMIDI_BY_HAND`) serves the rest. No MIDI engine in
+  `uac1`. G3 carries the MIDI-only case.
+- **Installer row**: "USB audio (uac1, Windows 98 SE): USB Audio Class 1.0
+  sound cards, headsets and microphones" (xHCI98 revives
+  `free:audio/uac1`; its `EXCLUDES` against `usbmidi` becomes `COEXISTS` on
+  98 SE, by the reasons above).
+
+### 24.11 As built (uac1 0.1.0.1)
+
+**Sharing.** `uac2`'s driver sources moved to `src/audio/common/`
+(`uacwdm.cpp` is the former `uac2wdm.cpp`; `uacdesc`, `uacusb`,
+`uacstream.h`, `uacplan`, `uacvol`, `uacctl`, `uacrate`, `uacwatch.h`,
+`uactopo`), compiled into each package by its own `build.cmd`. Every UAC
+1.0 difference is under `#ifdef UAC_V1`, which only `uac1`'s build
+defines, so `uac2`'s compiler input is its old one with the files in
+another folder. The check: `uac2wdm.sys` x64 is byte-identical to the
+image built before the move (time stamp and checksum aside); x86 is
+identical but for the order of six compiler-generated adjustor thunks
+(the same six, each jumping to the same function, and the vtable entries
+that name them) - MSVC 6.0 orders them by where its headers were found.
+`uac2`'s x64 include path takes `common` last, so the WDK's own
+`punknown.h` (and with it its `IID_IUnknown`) is the one used, as before.
+`uac2`'s host tests (`test.cmd`, `rtest.cmd`, `ctest.cmd`,
+`mtest.cmd`) pass from the new paths.
+
+**What `UAC_V1` changes** (`src/audio/common/`):
+
+| File | UAC 1.0 |
+|---|---|
+| `uacdesc.h` | `UAC_ALT` gains the alternate's rates (`RateCount`, `RateMin`, `RateMax`, `Rate[16]`) and the class-specific endpoint `bmAttributes` (`EpControls`); `UAC_DESC` gains `Speed` |
+| `uacplan.c` | `UacPlanHasRate`; `UacPlanPick` takes only an alternate that lists the rate |
+| `uacusb.c` | `UacUsbRates` from the alternates' lists; no clock walk; the rate set by the endpoint's `SET_CUR` after `SELECT_INTERFACE` (`EndpointRate`, `GET_CUR` advisory, its answer in `ClockHz`); the speed from `UAC_DESC.Speed`; `UacUsbBusSpeed` for the parse; the diagnostic Feature Unit read skipped |
+| `uacvol.c` | UAC 1.0 entity layouts: Output Terminal 9 bytes, Processing 7 and Extension 8, Feature Unit `bControlSize` bitmaps one bit per control |
+| `uacwdm.cpp` | Feature Unit requests `SET_CUR`/`GET_CUR`/`GET_MIN`/`GET_MAX`/`GET_RES`; the volume range from MIN/MAX/RES under `UacVolRange`'s rules; one pair; the UAC 1.0 parse in `ParseDevice`; a null start (stages `0x40`, `0x41`) for a function with no alternate the driver runs; `Uac2Build` holds `uac1`'s build number, `NameFallback` is `uac1`'s |
+
+**`src/audio/uac1/`**: `uac1desc.c` and `uacfmt.c` (the `uac1-prior`
+parser, its SPDX line now GPL-2.0-or-later; its review notes left out),
+`uac1model.c` (the parse as the shared model: PCM with 2- to 4-byte
+subframes; each alternate's cluster `wChannelConfig`; an OUT alternate
+with MaxPacketsOnly is not carried in 0.1.0.1, a G3 layout like PCM8 and
+float), `uac1test.c` with `test.cmd` (the Brio 100 and Logi captures,
+QEMU's layout, an asynchronous headset, a MIDI-only function, a mixed UAC
+1.0 / 2.0 configuration, the unsupported layouts, hostile variants; built
+with `UAC_V1` against the shared core), `build.cmd` (`wdmx86` only),
+`uac1wdm.inf`, `uac1wdm.rc`.
+
+**The speed.** The bus's answer (`USB_BUS_INTERFACE_USBDI_V1`: xHCI98, NUSB);
+without one, the speed the function's descriptors alone fit
+(`Uac1GuessSpeed`); else Full Speed, the only one 98 SE's own stack has.
+
+**Registry values.** `uac1` reads the core's values under `uac2`'s names
+(`Uac2QueueMs`, `Uac2Realtime`, `Uac2VolAboveZero`, `Uac2Level`) in its
+own driver key; its INF writes the same defaults. The diagnostics
+(`Uac2M0Stage`, `Uac2M0Parse`, `Uac2UsbStats`, `Uac2Build`) keep their
+names too. In `Uac2M0Parse` the second word is the view (1 AudioControl, 2
+AudioStreaming, 3 MIDIStreaming) with the speed (1 Full, 2 High) in bits
+8 to 15, the third the alternates carried with the skipped ones in the
+high half.
+
+**INF.** `uac1wdm.inf`, undecorated `[Models]` only (no NT section):
+`USB\Class_01&SubClass_01&Prot_00`, `&SubClass_00&Prot_00` and
+`&SubClass_02&Prot_00`; a function whose PDO names an AudioStreaming
+interface starts as a null function.

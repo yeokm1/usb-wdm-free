@@ -366,6 +366,26 @@ the class interface for the particular bus at its lower edge."
   on 98, `NDIS.VXD` presents it to NDIS 3 protocols such as the 98 TCP/IP
   stack. How it does so (copying through lookahead or not) was not read and
   bears on 98 SE throughput; measured in M2.
+- **Upcalls on 98 SE and ME** (section 6.4.2; record
+  `docs/testing/2026-11-07-98se-tcp.md`). In the shared core
+  (`netcore.c`, x86 NDIS 5.0 build only) no receive indication and no
+  send completion is made from a USB completion routine when
+  `IoIsWdmVersionAvailable(1, 0x10)` fails (98 SE and ME): `Receive` and
+  `TxDone` queue the packet (a ring of receive packets, a list of
+  completed sends through `MiniportReserved`) and set an NDIS miniport
+  timer with no delay; its routine, `Upcalls`, completes the sends and
+  indicates the receives, in order, outside the lock. Every deferred
+  receive goes with `NDIS_STATUS_SUCCESS`. `MiniportHalt` stops the timer,
+  waits for a routine already due, completes the queued sends and puts
+  the unindicated receives back in the pool. Made straight from the USB
+  completions, the same calls stalled the 98 TCP/IP within seconds of
+  sustained TCP, and on the real RTL8157 faulted it (exceptions 0E in
+  `MSTCP`), with the core's own state intact; from the timer they ran
+  clean (simulated chips; the real RTL8157 was not retested). Why the completion context is unsafe there was not read (no
+  Microsoft binary is read); the record holds the evidence. NT keeps the
+  direct calls, and the NDIS 5.1 (x64) build has none of this code.
+  Status indications and OID and reset completions, made from the
+  passive worker, are not deferred.
 
 ### 4.5 OIDs
 
@@ -1029,10 +1049,12 @@ to QEMU guests and cabled to a 10GbE port; record
 - **Not done**: checksum offload (later); a larger receive pool for the
   fast chips on NT (an experiment, adopted only if it clearly helps).
 
-Still open on 98 SE: sustained TCP in either direction stalls after
+Found after it on 98 SE: sustained TCP in either direction stalled after
 10-100 MB, once with a corrupted 17512-byte region of the stream, and the
-98 TCP/IP (`MSTCP`) faults with exceptions 0E; the receive pool stays
-whole when it happens. XP never showed it (1.4 GB both ways).
+98 TCP/IP (`MSTCP`) faulted with exceptions 0E; the receive pool stayed
+whole when it happened. XP never showed it (1.4 GB both ways). Cause and
+fix: section 4.4, "Upcalls on 98 SE and ME" (record
+`docs/testing/2026-11-07-98se-tcp.md`).
 
 ### 6.5 Interaction with the RTL8153's ECM mode
 

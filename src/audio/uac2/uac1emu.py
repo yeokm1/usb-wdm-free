@@ -204,7 +204,10 @@ class Builder1:
                                                                      (0x80 | ep) if fb else 0)
             body += bytes((7, 0x25, 0x01, 0x01 if freq_control else 0, 0, 0, 0))
             if fb:
-                body += bytes((9, 5, 0x80 | ep, sync_attr)) + struct.pack('<HBBB', 3, interval, refresh, 0)
+                # 3 bytes 10.14 at Full Speed; at High Speed USB 2.0
+                # 5.12.4.2's 4 bytes 16.16 (what uacemu's feedback sends there).
+                body += bytes((9, 5, 0x80 | ep, sync_attr)) + struct.pack(
+                    '<HBBB', 4 if self.speed == 'high' else 3, interval, refresh, 0)
         self.streams.append(body)
 
     def vendor(self, number):
@@ -715,6 +718,17 @@ class Model1(uacemu.Model):
         answer = None
         if request == 8 and rt == 0x80:
             answer = 0, bytes((self.cfg_value,))
+        elif request == 6 and rt == 0x80:
+            # Device-level descriptors are the device's, whichever
+            # configuration is active (dual: configuration 2 is a UAC 2.0
+            # function, its descriptors still the same device's).
+            kind, number, d = value >> 8, value & 255, self.p1
+            data = d.device if kind == 1 and number == 0 else \
+                d.config if kind == 2 and number == 0 else \
+                d.config2 if kind == 2 and number == 1 and d.config2 else \
+                d.qualifier if kind == 6 and number == 0 else \
+                d.strings.get(number) if kind == 3 else None
+            answer = (0, data) if data is not None else (4, b'')
         elif request == 6 and rt == 0x81 and value >> 8 == 0x22 and index in p.hid and \
                 getattr(p, 'hid_report', None):
             answer = (0, p.hid_report) if self.config else (4, b'')
@@ -896,7 +910,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', type=int, default=44414)
     ap.add_argument('--log', type=Path, required=True)
-    ap.add_argument('--profile', choices=PROFILE_NAMES, default='headset')
+    ap.add_argument('--profile', choices=PROFILE_NAMES + tuple(ALIASES), default='headset')
     ap.add_argument('--speed', choices=('full', 'high'))
     ap.add_argument('--vid', type=lambda s: int(s, 16))
     ap.add_argument('--pid', type=lambda s: int(s, 16))

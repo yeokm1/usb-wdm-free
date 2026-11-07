@@ -8,8 +8,11 @@ import io
 import json
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import unittest
+from pathlib import Path
 
 import uac1emu
 import uacemu
@@ -591,6 +594,42 @@ class AliasTest(unittest.TestCase):
     def test_uac1_plan_names(self):
         for alias, name in uac1emu.ALIASES.items():
             self.assertEqual(uac1emu.Profile1(alias).name, name)
+
+    def test_cli_takes_the_aliases(self):
+        # mic1 (cammic) is High Speed only: the refusal comes from the
+        # profile, so the alias passed the command line's choices.
+        script = str(Path(uac1emu.__file__).resolve())
+        run = subprocess.run([sys.executable, '-I', '-B', script, '--log', 'unused', '--profile', 'mic1',
+                              '--speed', 'full'], capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 2)
+        self.assertIn('High Speed only', run.stderr)
+
+
+class HighSpeedAsyncTest(Base):
+    profile = 'async'
+    kw = dict(speed='high')
+
+    def test_feedback_four_bytes(self):
+        fb = self.p.stream_alt(1, 1)['feedback']
+        self.assertEqual((fb['max'], fb['interval']), (4, 4))
+        self.configure()
+        self.alt(1, 1)
+        self.model.handle(12, 3, bytes((0x81, 8, 4)))
+        self.model.feedback()
+        sent = [m for m in self.wire.messages if m[0] == 102]
+        self.assertEqual(sent[-1][2], struct.pack('<BBHI', 0x81, 0, 4, 6 << 16))   # 6.0 a microframe
+
+
+class DualDescriptorTest(Base):
+    profile = 'dual'
+
+    def test_device_descriptors_survive_configuration_2(self):
+        before = [self.control(6, 0x80, v, 0, 4096)[2] for v in (0x0100, 0x0200, 0x0201, 0x0600, 0x0302)]
+        self.configure(2)
+        after = [self.control(6, 0x80, v, 0, 4096)[2] for v in (0x0100, 0x0200, 0x0201, 0x0600, 0x0302)]
+        self.assertEqual(before, after)
+        self.assertEqual(after[0][17], 2)
+        self.assertEqual((after[1][5], after[2][5]), (1, 2))
 
 
 class SocketTest(unittest.TestCase):

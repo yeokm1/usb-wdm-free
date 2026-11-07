@@ -10,6 +10,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* The trace flavour only (build.cmd trace): one line to QEMU's debug
+ * console port 0xE9 (uacusb.c). UAC_TRACE((tag, a, b, c)). */
+#if defined(UAC_TRACE_E9)
+void UacTrace(const char *tag, ULONG a, ULONG b, ULONG c);
+#define UAC_TRACE(x) UacTrace x
+#else
+#define UAC_TRACE(x)
+#endif
 typedef struct UAC_DEV UAC_DEV;
 typedef struct UAC_USB UAC_USB;
 /* Playback: fill exactly bytes (silence is valid). Capture: bytes of whole

@@ -24,6 +24,11 @@ cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\cdctest.exe" "%SRC%cdcdesc.c" "%SRC%cdc
 if errorlevel 1 goto fail
 "%OUT%\cdctest.exe" > test.log 2>&1
 if errorlevel 1 goto fail
+rem cdccore: cdcnet.c, unchanged, on the shared core's fake backend (shim\), /W3 as the driver build
+cl /nologo /W3 /WX /MD /Od /Zi /DDBG=0 /I"%SRC%shim" /I"%SRC%." /Fe"%OUT%\cdccore.exe" "%SRC%cdcnet.c" "%SRC%shim\fakeos.c" "%SRC%shim\fakewin.c" "%SRC%cdccore.c" >> build.log 2>&1
+if errorlevel 1 goto fail
+"%OUT%\cdccore.exe" >> test.log 2>&1
+if errorlevel 1 goto fail
 type test.log
 echo PASS cdcnet host > PASS.TXT
 popd

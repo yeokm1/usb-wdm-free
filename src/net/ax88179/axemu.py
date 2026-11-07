@@ -123,6 +123,7 @@ PHY_ID1, PHY_ID2 = 0x02, 0x03
 MODEL_PHY_ID = (0x0283, 0xbc30)          # INFERRED: any id other than 0 (see the header)
 R_LINK_STATUS, R_RX_CTL, R_NODE_ID, R_MULTI = 0x02, 0x0b, 0x10, 0x16
 R_MEDIUM, R_PHYPWR, R_QCTRL, R_CLK = 0x22, 0x26, 0x2e, 0x33
+R_TXCOE = 0x35                           # Linux's AX_TXCOE_CTL
 USB_SS, USB_HS = 0x04, 0x02
 RX_START, RX_AP, RX_AM, RX_AB, RX_AMALL, RX_PRO = 0x0080, 0x0020, 0x0010, 0x0008, 0x0002, 0x0001
 RX_IPE = 0x0200
@@ -712,6 +713,8 @@ class Model:
                 self.tx_pad_next = True
             elif len(self.tx_buf) < 8 + length:
                 return                             # more of the frame to come
+            elif len(self.tx_buf) > 8 + length + 1 and not self.records_whole(self.tx_buf):
+                return                             # the drivers' padded form, a record still to come
             else:
                 self.tx_pad_next = len(self.tx_buf) == 8 + length
         whole, self.tx_buf = bytes(self.tx_buf), bytearray()
@@ -720,54 +723,115 @@ class Model:
 
     @staticmethod
     def records_whole(data):
-        """Whether data is a whole number of ASIX XP-form records (8-byte
-        header with bit 31 set, the frame padded to 4 bytes), so a transfer
-        on a packet boundary can be taken without waiting for more."""
+        """Whether data is a whole number of records padded to 4 bytes (8-byte
+        header, bit 31 set or not, the frame), so a transfer on a packet
+        boundary can be taken without waiting for more."""
         offset = 0
         while offset < len(data):
             if len(data) - offset < 8:
                 return False
-            length = struct.unpack_from('<I', data, offset)[0]
-            if not length & 0x80000000:
+            length = struct.unpack_from('<I', data, offset)[0] & 0x7fffffff
+            if length > TX_JOIN_MAX:
                 return True                        # not a record: transmit() refuses it
-            offset += 8 + (((length & 0x7fffffff) + 3) & ~3)
+            offset += 8 + ((length + 3) & ~3)
         return offset == len(data)
 
     def transmit(self, data):
         """One bulk-OUT transfer: the 8-byte header and one frame (Linux's
         form, checked strictly: when header and frame end on a packet
         boundary the flags are 0x80008000, and usbnet's one zero pad byte
-        may follow); or ASIX's XP form (see the header): records of header
-        (bit 31 of the first dword set) and frame, each padded to 4 bytes,
-        one or more per transfer."""
+        may follow); or records of header and frame, each padded to 4 bytes,
+        one or more per transfer: ASIX's XP form (bit 31 of the first dword
+        set on every record) and the form of ASIX's 7 and 3.20/4.20 drivers
+        and Windows 10's own (bit 31 set on some records only, ARP and some
+        IPv6, clear on the IPv4 ones). A record without bit 31 has its
+        checksums inserted as TXCOE asks (see insert_checksums)."""
         if len(data) < 8 + 14:
             raise ValueError('transmit transfer shorter than a header and a frame')
         length, flags = struct.unpack_from('<II', data)
         if not length & 0x80000000:
             boundary = (length + 8) % self.bulk_max == 0
-            if len(data) != length + 8 and not (boundary and len(data) == length + 9 and data[-1] == 0):
+            if len(data) == length + 8 or (boundary and len(data) == length + 9 and data[-1] == 0):
+                # On a packet boundary Linux and ax179f send 0x80008000; the
+                # drivers' padded form sends 0 for a record that is 4-aligned
+                # and fills the packet (504 bytes at High Speed), so both pass.
+                if flags not in ((TX_PAD, 0) if boundary else (0,)):
+                    raise ValueError('transmit flags %08x on a %s' % (flags, 'boundary' if boundary else 'frame'))
+                if len(data) == length + 9:
+                    self.totals['tx_padded'] += 1
+                return self.transmit_frame(self.insert_checksums(data[8:8 + length]))
+            if len(data) < 8 + ((length + 3) & ~3):
                 raise ValueError('transmit header length %d, transfer %d' % (length, len(data)))
-            want = TX_PAD if boundary else 0
-            if flags != want:
-                raise ValueError('transmit flags %08x, expected %08x' % (flags, want))
-            if len(data) == length + 9:
-                self.totals['tx_padded'] += 1
-            return self.transmit_frame(data[8:8 + length])
         offset, frame = 0, b''
         while offset < len(data):
             if len(data) - offset < 8 + 14:
                 raise ValueError('transmit record at %d shorter than a header and a frame' % offset)
             length, flags = struct.unpack_from('<II', data, offset)
-            if not length & 0x80000000 or flags not in (0, TX_PAD):
+            if flags not in (0, TX_PAD):
                 raise ValueError('transmit record at %d: header %08x %08x' % (offset, length, flags))
+            marked = bool(length & 0x80000000)
             length &= 0x7fffffff
             end = offset + 8 + ((length + 3) & ~3)
-            if length < 14 or end > len(data):
+            if length < 14 or offset + 8 + length > len(data):
                 raise ValueError('transmit record at %d: length %d, transfer %d' % (offset, length, len(data)))
-            self.totals['tx_records_asix_form'] += 1
-            frame = self.transmit_frame(data[offset + 8:offset + 8 + length])
-            offset = end
+            self.totals['tx_records_asix_form' if marked else 'tx_records_padded_unmarked'] += 1
+            frame = data[offset + 8:offset + 8 + length]
+            frame = self.transmit_frame(frame if marked else self.insert_checksums(frame))
+            offset = min(end, len(data))
         return frame
+
+    def insert_checksums(self, frame):
+        """Transmit checksum offload: with TXCOE (0x35) bits set, the chip
+        writes the IPv4 header checksum (bit 0), TCP and UDP over IPv4 (bits
+        1, 2) and over IPv6 (bits 5, 6) (Linux's AX_TXCOE_* names; it sets
+        them and leaves those checksums to the chip, as ASIX's 7 and 3.20/4.20
+        drivers and Windows 10's own do with 0x67 or 0x27). INFERRED: a
+        record with bit 31 set gets none (only ARP and some IPv6 records
+        carry it); fragments get the IPv4 header checksum only; IPv6 with
+        extension headers is left as it is. ax179f writes TXCOE 0."""
+        coe = self.chip.mac_regs[R_TXCOE]
+        if not coe or len(frame) < 14 + 20:
+            return frame
+        f = bytearray(frame)
+        ethertype = f[12:14]
+        if ethertype == b'\x08\x00' and f[14] >> 4 == 4:
+            ihl = (f[14] & 15) * 4
+            total = struct.unpack_from('!H', f, 16)[0]
+            if ihl < 20 or total < ihl or 14 + total > len(f):
+                return frame
+            if coe & 0x01:
+                f[24:26] = b'\0\0'
+                f[24:26] = struct.pack('!H', checksum(bytes(f[14:14 + ihl])))
+                self.totals['tx_csum_ip'] += 1
+            fragment = struct.unpack_from('!H', f, 20)[0] & 0x3fff
+            proto, l4 = f[23], 14 + ihl
+            bit = {6: 0x02, 17: 0x04}.get(proto, 0)
+            if bit & coe and not fragment:
+                self.fill_l4(f, l4, 14 + total, proto, bytes(f[26:34]), False)
+        elif ethertype == b'\x86\xdd' and len(f) >= 14 + 40 and f[14] >> 4 == 6:
+            proto, plen = f[20], struct.unpack_from('!H', f, 18)[0]
+            bit = {6: 0x20, 17: 0x40}.get(proto, 0)
+            if bit & coe and 14 + 40 + plen <= len(f):
+                self.fill_l4(f, 54, 54 + plen, proto, bytes(f[22:54]), True)
+        return bytes(f)
+
+    def fill_l4(self, f, start, end, proto, addresses, v6):
+        """The TCP or UDP checksum of the segment from start to end (UDP: to
+        its own length, when that is shorter than the IP payload)."""
+        at = start + (16 if proto == 6 else 6)
+        if end - start < (20 if proto == 6 else 8):
+            return
+        if proto == 17:
+            ulen = struct.unpack_from('!H', f, start + 4)[0]
+            if not 8 <= ulen <= end - start:
+                return                                   # a UDP length no datagram has: left as sent
+            end = start + ulen
+        n = end - start
+        pseudo = addresses + (struct.pack('!IxxxB', n, proto) if v6 else struct.pack('!BBH', 0, proto, n))
+        f[at:at + 2] = b'\0\0'
+        value = checksum(pseudo + bytes(f[start:end]))
+        f[at:at + 2] = struct.pack('!H', value or (0xffff if proto == 17 else 0))
+        self.totals['tx_csum_tcp' if proto == 6 else 'tx_csum_udp'] += 1
 
     def transmit_frame(self, frame):
         self.totals['tx_frames'] += 1

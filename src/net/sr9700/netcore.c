@@ -80,6 +80,8 @@ typedef struct ADAPTER {
     BOOLEAN UpcallArmed;           /* the timer is set and its routine has not started */
     BOOLEAN UpcallRunning;         /* Upcalls is running */
     BOOLEAN UpcallStop;            /* Halt: the timer is never set again */
+    BOOLEAN UpcallPaused;          /* asleep (D1-D3): no timer, nothing indicated */
+    BOOLEAN SleepPending;          /* a sleep request Upcalls completes when it ends */
     NDIS_MINIPORT_TIMER UpcallTimer;
     PNDIS_PACKET RxPend[RX_PACKETS];
     ULONG RxPendHead, RxPendCount;
@@ -111,7 +113,7 @@ typedef struct ADAPTER {
  * with the lock held. */
 static void ArmUpcalls(ADAPTER *a)
 {
-    if (a->UpcallArmed || a->UpcallStop) return;
+    if (a->UpcallArmed || a->UpcallStop || a->UpcallPaused) return;
     a->UpcallArmed = TRUE;
     NdisMSetTimer(&a->UpcallTimer, 0);
 }
@@ -153,7 +155,7 @@ static void Deliver(ADAPTER *a, BOOLEAN indicate)
 static VOID Upcalls(PVOID s1, PVOID context, PVOID s2, PVOID s3)
 {
     ADAPTER *a = context;
-    BOOLEAN indicate;
+    BOOLEAN indicate, sleep;
     UNREFERENCED_PARAMETER(s1);
     UNREFERENCED_PARAMETER(s2);
     UNREFERENCED_PARAMETER(s3);
@@ -161,11 +163,76 @@ static VOID Upcalls(PVOID s1, PVOID context, PVOID s2, PVOID s3)
     a->UpcallArmed = FALSE;
     a->UpcallRunning = TRUE;
     a->UpcallRuns++;
-    indicate = !a->Halting;
+    indicate = !a->Halting && !a->UpcallPaused;
     CoreUnlock(a);
     Deliver(a, indicate);
     CoreLock(a);
     a->UpcallRunning = FALSE;
+    sleep = a->SleepPending && !a->UpcallArmed;
+    if (sleep) a->SleepPending = FALSE;
+    CoreUnlock(a);
+    if (sleep) {
+        /* The sleep request Set pended for this routine (SleepNow). */
+        Deliver(a, FALSE);
+        NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
+    }
+}
+
+/* Halt (halt TRUE), or a sleep request before it completes: the timer is
+ * cancelled, as the 2000 DDK's OID_PNP_SET_POWER page asks before a sleep
+ * state, and never set again until ResumeUpcalls; a routine already
+ * started or due runs to its end, indicating nothing once Halting or
+ * UpcallPaused is set; then the queued sends complete and the unindicated
+ * receives go back to the pool. PASSIVE_LEVEL (Halt, the worker). */
+static void StopUpcalls(ADAPTER *a, BOOLEAN halt)
+{
+    BOOLEAN cancelled = FALSE, busy;
+    ULONG waited = 0;
+    CoreLock(a);
+    if (halt) a->UpcallStop = TRUE; else a->UpcallPaused = TRUE;
+    CoreUnlock(a);
+    NdisMCancelTimer(&a->UpcallTimer, &cancelled);
+    CoreLock(a);
+    if (cancelled) a->UpcallArmed = FALSE;
+    busy = a->UpcallArmed || a->UpcallRunning;
+    CoreUnlock(a);
+    while (busy) {
+        NdisMSleep(1000);
+        if (++waited % 5000 == 0) NetTrace("upcall routine still due");
+        CoreLock(a);
+        busy = a->UpcallArmed || a->UpcallRunning;
+        CoreUnlock(a);
+    }
+    Deliver(a, FALSE);
+}
+
+/* A sleep request Set completes itself (the request could not be queued
+ * to the worker, so there is no passive context to wait in): delivery
+ * stops as in StopUpcalls. TRUE when a routine already started or due
+ * must end first: Set then pends the request and that routine completes
+ * it (Upcalls); FALSE when it is done here. */
+static BOOLEAN SleepNow(ADAPTER *a)
+{
+    BOOLEAN cancelled = FALSE, busy;
+    CoreLock(a);
+    a->UpcallPaused = TRUE;
+    CoreUnlock(a);
+    NdisMCancelTimer(&a->UpcallTimer, &cancelled);
+    CoreLock(a);
+    if (cancelled) a->UpcallArmed = FALSE;
+    busy = a->UpcallArmed || a->UpcallRunning;
+    if (busy) a->SleepPending = TRUE;
+    CoreUnlock(a);
+    if (!busy) Deliver(a, FALSE);
+    return busy;
+}
+
+/* Back at D0: deferred delivery again, for anything queued meanwhile. */
+static void ResumeUpcalls(ADAPTER *a)
+{
+    CoreLock(a);
+    a->UpcallPaused = FALSE;
+    if (a->RxPendCount || a->DoneHead) ArmUpcalls(a);
     CoreUnlock(a);
 }
 #endif
@@ -347,7 +414,10 @@ static void TxDone(void *context, void **packets, nc_u32 count, int success)
         CoreLock(a);
         if (success) { a->TxOk++; a->TxBytes += size; } else a->TxError++;
 #if NET_DEFER
-        if (a->Defer) {
+        /* Queued for Upcalls, except asleep: no USB completion runs then
+         * (the worker drained them), so a send SendPackets or a flush
+         * fails completes at once, below. */
+        if (a->Defer && !a->UpcallPaused) {
             NEXT(p) = NULL;
             DONE_STATUS(p) = success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
             if (a->DoneTail) NEXT(a->DoneTail) = p; else a->DoneHead = p;
@@ -406,6 +476,11 @@ static void TaskDone(void *context, int request, long status)
         NdisMResetComplete(a->Handle, NDIS_STATUS_SUCCESS, FALSE);
         return;
     }
+#if NET_DEFER
+    /* 98 SE and ME: before a sleep request completes, nothing may be left
+     * for the timer to indicate (D0 resumed in Set, before the worker). */
+    if (a->Defer && request == NET_REQ_POWER && a->PowerState != NdisDeviceStateD0) StopUpcalls(a, FALSE);
+#endif
     /* A filter the device refused still stands in the software filter,
      * which keeps delivery correct; a power change always completes, the
      * adapter recovering or reporting itself gone. */
@@ -521,8 +596,19 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
         }
         if (oid == OID_PNP_SET_POWER) {
             a->PowerState = value;
-            if (a->Gone || !NetUsbRequest(a->Usb, NET_REQ_POWER, value == NdisDeviceStateD0 ? 1 : 0, NULL, 0))
+#if NET_DEFER
+            /* 98 SE and ME: deferred delivery is back before the worker
+             * reopens the device, so no USB completion of the restart
+             * reaches NDIS directly. */
+            if (a->Defer && value == NdisDeviceStateD0) ResumeUpcalls(a);
+#endif
+            if (a->Gone || !NetUsbRequest(a->Usb, NET_REQ_POWER, value == NdisDeviceStateD0 ? 1 : 0, NULL, 0)) {
+#if NET_DEFER
+                /* Completed here, or by a routine still due (SleepNow). */
+                if (a->Defer && value != NdisDeviceStateD0 && SleepNow(a)) return NDIS_STATUS_PENDING;
+#endif
                 return NDIS_STATUS_SUCCESS;
+            }
             return NDIS_STATUS_PENDING;
         }
         if (value & ~(NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST |
@@ -620,27 +706,7 @@ static VOID Halt(NDIS_HANDLE context)
     Flush(a);
 #if NET_DEFER
     if (a->Defer) {
-        /* No timer after this; a routine already started or due runs to
-         * its end (it indicates nothing once Halting is set), then what is
-         * left is completed here. */
-        BOOLEAN cancelled = FALSE, busy;
-        CoreLock(a);
-        a->UpcallStop = TRUE;
-        CoreUnlock(a);
-        NdisMCancelTimer(&a->UpcallTimer, &cancelled);
-        CoreLock(a);
-        if (cancelled) a->UpcallArmed = FALSE;
-        busy = a->UpcallArmed || a->UpcallRunning;
-        CoreUnlock(a);
-        while (busy) {
-            NdisMSleep(1000);
-            if (++waited % 5000 == 0) NetTrace("halt: upcall routine still due");
-            CoreLock(a);
-            busy = a->UpcallArmed || a->UpcallRunning;
-            CoreUnlock(a);
-        }
-        waited = 0;
-        Deliver(a, FALSE);
+        StopUpcalls(a, TRUE);
         NetTrace("halt: %u upcall runs", a->UpcallRuns);
     }
 #endif

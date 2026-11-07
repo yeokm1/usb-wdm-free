@@ -102,6 +102,7 @@ struct CDC_DEV {
     UCHAR ReqData[32 * 6];
     BOOLEAN ResetPending;
     ULONG IdleTicks;
+    ULONG ProbeTicks;             /* quiet worker ticks, for the departure probe */
     BOOLEAN Connected;
     ULONG Speed;
 
@@ -248,7 +249,10 @@ static NTSTATUS Sync(CDC_DEV *d, PURB urb, ULONG timeoutMs)
         status = irp->IoStatus.Status;
     }
     IoFreeIrp(irp);
-    if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status)) status = STATUS_UNSUCCESSFUL;
+    /* A failure whose URB says the device is gone reads as gone. */
+    if (!NT_SUCCESS(status) && urb->UrbHeader.Status == USBD_STATUS_DEVICE_GONE) status = STATUS_DEVICE_NOT_CONNECTED;
+    if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status))
+        status = urb->UrbHeader.Status == USBD_STATUS_DEVICE_GONE ? STATUS_DEVICE_NOT_CONNECTED : STATUS_UNSUCCESSFUL;
     return status;
 }
 
@@ -283,6 +287,18 @@ static NTSTATUS ClassRequest(CDC_DEV *d, BOOLEAN in, UCHAR request, USHORT value
     status = Sync(d, (PURB)&urb, CTRL_TIMEOUT);
     if (actual) *actual = NT_SUCCESS(status) ? urb.TransferBufferLength : 0;
     return status;
+}
+
+/* GET_STATUS to the device: two bytes into d->Ctrl. Worker context. */
+static NTSTATUS DeviceStatus(CDC_DEV *d)
+{
+    struct _URB_CONTROL_GET_STATUS_REQUEST urb;
+    RtlZeroMemory(&urb, sizeof(urb));
+    urb.Hdr.Length = sizeof(urb);
+    urb.Hdr.Function = URB_FUNCTION_GET_STATUS_FROM_DEVICE;
+    urb.TransferBuffer = d->Ctrl;
+    urb.TransferBufferLength = 2;
+    return Sync(d, (PURB)&urb, CTRL_TIMEOUT);
 }
 
 static NTSTATUS PipeRequest(CDC_DEV *d, USHORT function, USBD_PIPE_HANDLE pipe)
@@ -599,17 +615,14 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
         }
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (!NT_SUCCESS(status)) Fault(d, status, usb);
         else d->Recoveries = 0;
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
     } else {
         void *packets[CDC_TX_BATCH];
         ULONG count = 0;
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (NT_SUCCESS(status) && d->TxStage == TX_DATA && d->TxZlp && d->Open) {
             d->TxStage = TX_ZLP_READY;   /* the ZLP before any later payload */
         } else {
@@ -620,15 +633,34 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
             if (!NT_SUCCESS(status)) Fault(d, status, usb);
             else d->Recoveries = 0;
         }
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
         if (count) d->Cb.TxDone(d->Cb.Context, packets, count, NT_SUCCESS(status));
     }
     Pump(d);
+    /* The IRP stays counted until here, its slot free since above (as in
+     * the shared core's netusb.c): Quiesce - so a sleep request, a
+     * recovery and the free in CdcUsbStop - waits for this routine's
+     * callbacks (Receive, TxDone) and its pump to end. Nothing touches d
+     * after the lock. */
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Outstanding--;
+    CheckDrained(d);
+    KeReleaseSpinLock(&d->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* Close the gate and drain every data IRP. PASSIVE_LEVEL. */
+static void ReportGone(CDC_DEV *d);
+
+/* ABORT_PIPE; a device-gone answer marks the device gone. */
+static void AbortPipe(CDC_DEV *d, USBD_PIPE_HANDLE pipe)
+{
+    if (DeviceGone(PipeRequest(d, URB_FUNCTION_ABORT_PIPE, pipe), 0)) d->Gone = TRUE;
+}
+
+/* Close the gate and drain every data IRP. PASSIVE_LEVEL. A departure
+ * known before or found during the drain is reported first, from the
+ * worker (not from CdcUsbStop, which runs after the worker has ended): its
+ * sends are released then, which no drain may wait for (ReleaseGone). */
 static void Quiesce(CDC_DEV *d)
 {
     KIRQL old;
@@ -649,15 +681,20 @@ static void Quiesce(CDC_DEV *d)
         Sleep(1);
     }
     for (;;) {
+        if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
         KeAcquireSpinLock(&d->Lock, &old);
         idle = !d->Outstanding;
         if (!idle) KeClearEvent(&d->Drained);
         KeReleaseSpinLock(&d->Lock, old);
         if (idle) break;
         if (!(waits++ % 4)) {
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->In);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Out);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Int);
+            /* A departure found by the abort before is reported before
+             * the next one (a synchronous request; see ReleaseGone). */
+            AbortPipe(d, d->In);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Out);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Int);
             if (waits > 1) CdcTrace("quiesce: %u still outstanding", d->Outstanding);
         }
         (void)Wait(&d->Drained, 500);
@@ -1006,6 +1043,58 @@ static NTSTATUS Bringup(CDC_DEV *d, CDC_START *start)
  * request rather than a data transfer); a send left in flight would hold
  * NDIS's unbind, which waits for every send to complete, so the miniport is
  * never halted and the device's removal never finishes. */
+/* The device has left. A host controller driver may hold a departed
+ * device's transfers until its pipes are aborted or the device is removed
+ * (xHCI98 parks them on the device), while the protocols above do not let
+ * the adapter be removed - so halted - before every send they made has
+ * completed. So the gate closes and the frames the transmit slot holds are
+ * completed now, failed: their data was copied into the slot, which stays
+ * busy until its IRP ends. The pipes are aborted after the report
+ * (AbortGone); CdcUsbStop's quiesce waits for the IRPs themselves. */
+static void ReleaseGone(CDC_DEV *d)
+{
+    KIRQL old;
+    BOOLEAN idle;
+    void *packets[CDC_TX_BATCH];
+    ULONG count = 0;
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Open = FALSE;
+    KeReleaseSpinLock(&d->Lock, old);
+    for (;;) {
+        KeAcquireSpinLock(&d->Lock, &old);
+        idle = !d->PumpActive;
+        KeReleaseSpinLock(&d->Lock, old);
+        if (idle) break;
+        Sleep(1);
+    }
+    KeAcquireSpinLock(&d->Lock, &old);
+    if (d->TxStage != TX_IDLE && d->TxCount) {
+        count = d->TxCount;
+        RtlCopyMemory(packets, d->TxPackets, count * sizeof(void *));
+        d->TxCount = 0;
+    }
+    KeReleaseSpinLock(&d->Lock, old);
+    if (count) d->Cb.TxDone(d->Cb.Context, packets, count, 0);
+}
+
+/* After the upper edge has been told: the pipes aborted once, so a host
+ * controller driver that holds the transfers lets them go now. These are
+ * synchronous requests, so they come after the report, which nothing may
+ * delay. */
+static void AbortGone(CDC_DEV *d)
+{
+    KIRQL old;
+    ULONG outstanding;
+    KeAcquireSpinLock(&d->Lock, &old);
+    outstanding = d->Outstanding;
+    KeReleaseSpinLock(&d->Lock, old);
+    if (!outstanding) return;
+    AbortPipe(d, d->In);
+    AbortPipe(d, d->Out);
+    AbortPipe(d, d->Int);
+    CdcTrace("gone: %u of %u transfers still outstanding after the abort", d->Outstanding, outstanding);
+}
+
 static void ReportGone(CDC_DEV *d)
 {
     KIRQL old;
@@ -1016,10 +1105,10 @@ static void ReportGone(CDC_DEV *d)
     KeReleaseSpinLock(&d->Lock, old);
     if (report) {
         CdcTrace("device gone: %u transfers outstanding", d->Outstanding);
-        Quiesce(d);
-        CdcTrace("device gone: drained");
+        ReleaseGone(d);
         d->Connected = FALSE;
         d->Cb.Link(d->Cb.Context, -1, d->Speed);
+        AbortGone(d);
         CdcTrace("device gone: reported");
     }
 }
@@ -1027,7 +1116,12 @@ static void ReportGone(CDC_DEV *d)
 static void Recover(CDC_DEV *d)
 {
     NTSTATUS status = STATUS_SUCCESS;
+    /* Down for the upper edge while the pipes recover: its queue is
+     * failed and no send is taken in, however long the drain waits; the
+     * device's last reported link state stands again after the reopen. */
+    d->Cb.Link(d->Cb.Context, 0, d->Speed);
     Quiesce(d);
+    d->Cb.Link(d->Cb.Context, 0, d->Speed);   /* again once drained, as in Power */
     if (d->Gone || d->Suspended) { ReportGone(d); return; }
     if (++d->Recoveries > 30) {
         CdcTrace("recover: giving up after %u attempts", d->Recoveries);
@@ -1048,6 +1142,9 @@ static void Recover(CDC_DEV *d)
             return;
         }
     }
+    /* The cached link before the reopen, while no notification can
+     * race it (Notification runs only with the gate open). */
+    d->Cb.Link(d->Cb.Context, d->Connected ? 1 : 0, d->Speed);
     Reopen(d);
 }
 
@@ -1055,8 +1152,15 @@ static long Power(CDC_DEV *d, BOOLEAN on)
 {
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL old;
+    BOOLEAN was;
     if (!on) {
+        /* Down for the upper edge first: its queue is failed and no send
+         * is taken in until the resume reports the link again. */
+        d->Cb.Link(d->Cb.Context, 0, d->Speed);
         Quiesce(d);
+        /* Again once drained: a notification admitted before the gate
+         * closed may have reported the link up meanwhile. */
+        d->Cb.Link(d->Cb.Context, 0, d->Speed);
         d->Notify.Held = 0;                  /* the device may lose power: no fragment survives */
         KeAcquireSpinLock(&d->Lock, &old);
         d->Suspended = TRUE;
@@ -1064,8 +1168,10 @@ static long Power(CDC_DEV *d, BOOLEAN on)
         return STATUS_SUCCESS;
     }
     KeAcquireSpinLock(&d->Lock, &old);
+    was = d->Suspended;
     d->Suspended = FALSE;
     KeReleaseSpinLock(&d->Lock, old);
+    if (!was) return STATUS_SUCCESS;        /* D0 while awake: nothing to resume */
     if (d->Gone) return STATUS_SUCCESS;
     /* The device may have lost power: run the protocol's bring-up again,
      * then restore the cached filter and multicast list. */
@@ -1078,6 +1184,7 @@ static long Power(CDC_DEV *d, BOOLEAN on)
         return STATUS_SUCCESS;   /* the adapter still exists; traffic recovers or not */
     }
     d->Recoveries = 0;
+    d->Cb.Link(d->Cb.Context, d->Connected ? 1 : 0, d->Speed);   /* before Reopen, as in Recover */
     Reopen(d);
     return STATUS_SUCCESS;
 }
@@ -1168,6 +1275,17 @@ static void Worker(PVOID context)
 #else
         UNREFERENCED_PARAMETER(status);
 #endif
+        /* A departed device whose transfers the host controller driver
+         * holds (xHCI98 parks them on the device) completes nothing, and
+         * ECM and NCM send no control request of their own: ask the device
+         * every 2 s of a quiet worker; a device-gone answer reports it. */
+        if (status == STATUS_TIMEOUT && !d->Gone && !d->Suspended && d->Open && (++d->ProbeTicks % 2) == 0) {
+            NTSTATUS probe = DeviceStatus(d);
+            if (DeviceGone(probe, 0)) {
+                CdcTrace("probe: device gone (%x)", probe);
+                d->Gone = TRUE;
+            }
+        }
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */
     }

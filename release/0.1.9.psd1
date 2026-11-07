@@ -180,7 +180,7 @@
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL81598.INF' = 'out\net\rtl815x\ndis5\free\RTL81598.INF' }
-                   Stage = @{ 'RTL81598.INF' = @('STAGE', 'W98SE WME', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0 and, on 98 SE, NUSB EHCI; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 (record 2026-11-07) passed on XP, and on 98 SE sustained TCP still stalls or faults (cause open); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
+                   Stage = @{ 'RTL81598.INF' = @('STAGE', 'W98SE WME', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0 and, on 98 SE, NUSB EHCI; 0.2.1.0: the net core fixes and the RTL8157 changes; the 98 SE and ME upcalls from an NDIS timer (record 2026-11-07 98se-tcp); the real RTL8157 passed on XP (record 2026-11-07) and on 98 SE with that fix: 300 s TCP both ways, unplug and replug (record 2026-11-07 realtek-diagnostic); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }
                 @{ Name = 'w2k'; Arch = 'x86'
                    Files = @{ 'RTL815X.SYS' = 'out\net\rtl815x\ndis5\free\rtl815x.sys'; 'RTL815X.INF' = 'out\net\rtl815x\ndis5\free\RTL815X.INF' }
                    Stage = @{ 'RTL815X.INF' = @('STAGE', 'W2K', 'staged on simulator legs (owner, 2026-11-06): the RTL8156 and 8156B under xHCI98 3.4.1.0; 0.2.1.0: the net core fixes and the RTL8157 changes; the real RTL8157 passed on XP (record 2026-11-07); the ids Realtek INFs list added (owner, 2026-11-07; no device on them seen)') } }

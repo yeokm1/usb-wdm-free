@@ -49,6 +49,7 @@ typedef struct FAKE {
     PNDIS_MINIPORT_TIMER Timer;
     long TimerSets, TimerRuns, TimerCancels;
     int TimerSetAtCancel;
+    int TimerCancelFails;             /* NdisMCancelTimer fails on a set timer: its DPC is due */
 } FAKE;
 
 extern FAKE Fake;

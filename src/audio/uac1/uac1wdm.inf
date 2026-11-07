@@ -41,15 +41,19 @@ uac1wdm.sys=1
 [DestinationDirs]
 Driver.Copy=10,system32\drivers
 
+; No Include= or Needs=: 98 SE's Setup looks for an included INF's files
+; and catalogs (ks.sys, the KS filters, ks.cat, wdmaudio.cat) on this
+; driver's disk, not in Windows' CABs, and asks for them. The device
+; loader pair is written here instead, and SysAudio9x has Windows install
+; SysAudio from its own wdmaudio.inf at the end of the install (as
+; uac2wdm.inf, docs/design/uac2.md 24).
 [UAC1]
-Include=ks.inf,wdmaudio.inf
-Needs=KS.Registration,WDMAUDIO.Registration
 CopyFiles=Driver.Copy
-AddReg=Loader,AudioSupport,Queue9x
+AddReg=Loader,AudioSupport,Queue9x,SysAudio9x
 [Driver.Copy]
 uac1wdm.sys
 [Loader]
-HKR,,DevLoader,,*NTKERN
+HKR,,DevLoader,,"*NTKERN,MMDEVLDR.VXD"
 HKR,,NTMPDriver,,uac1wdm.sys
 [AudioSupport]
 ; As uac2wdm.inf: the published PortCls multimedia registration contract;
@@ -77,6 +81,8 @@ HKR,,SetupPreferredAudioDevices,3,02,00,00,00
 HKR,,Uac2QueueMs,0x00000003,20,00,00,00
 HKR,,Uac2Realtime,0x00000003,01,00,00,00
 HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00
+[SysAudio9x]
+HKLM,%RunOnceKey%,WDM_SYSAUDIO,,"rundll32.exe /N streamci.dll,StreamingDeviceSetup %SysAudioDev%,%KsFilterRef%,%SysAudioCat%,%17%\wdmaudio.inf,WDM_SYSAUDIO.Interface.Install"
 
 ; RENDER and CAPTURE come from the wave filter (PcRegisterSubdevice
 ; registers the categories its descriptor lists), as in uac2wdm.inf.
@@ -102,3 +108,7 @@ Disk="UAC1 experimental build folder"
 Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 Topology="{DDA54A40-1E4C-11D1-A050-405705C10000}"
 Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+RunOnceKey="Software\Microsoft\Windows\CurrentVersion\RunOnce"
+SysAudioDev="{A7C7A5B0-5AF3-11D1-9CED-00A024BF0407}"
+KsFilterRef="{9B365890-165F-11D0-A195-0020AFD156E4}"
+SysAudioCat="{A7C7A5B1-5AF3-11D1-9CED-00A024BF0407}"

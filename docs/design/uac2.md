@@ -2603,6 +2603,16 @@ answers for 5 s keep the start deadline away and leave BadFeedback at 0,
 a value then makes the stream active and later empties keepalives; the
 start deadline still fires for rejected packets; `uac1test.c` likewise.
 
+Known, not changed (pre-existing in every build): on 98 SE under NUSB's
+UHCI, about 1 play in 20 in the legs ended when one feedback URB came
+back with `USBD_STATUS_BAD_START_FRAME`, after a guest stall: every URB
+status other than the whole-URB failure of 25.3 still ends the stream
+(`STATUS_DEVICE_DATA_ERROR`). Riding out an ASAP URB that fails so
+(resubmitted, bounded like the lost-URB run) is a planned follow-up for
+0.1.10 (branch `w47-u2nusb-d`, its design 25.7);
+`usb.h` notes the stall bit is set with that status, so it needs its own
+legs.
+
 ## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
 
 Status: design, 2026-11-07; the options of 26.5 and 26.6 are the

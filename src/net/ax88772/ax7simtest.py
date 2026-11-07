@@ -685,6 +685,8 @@ class TcpHostTests(unittest.TestCase):
         self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.ACK)
         self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.FIN | tcphost.ACK)
         self.assertEqual(len(self.h.conns), 0)
+        self.assertEqual(self.seg(tcphost.HTTP, 1000, 0, tcphost.SYN), [])       # a delayed duplicate SYN
+        self.assertEqual(len(self.h.conns), 0)
         again = self.seg(tcphost.HTTP, seq, fin_seq + 1, tcphost.FIN | tcphost.ACK)   # its ACK was lost
         self.assertEqual([(o[0], o[1], o[3]) for o in again], [(fin_seq + 1, seq + 1, tcphost.ACK)])
         self.t[0] += tcphost.TIME_WAIT_S + 1

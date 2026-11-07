@@ -168,7 +168,13 @@ class Host(Network):
                 return [self.segment(ghost, ACK, wait[1])]
             return []
         if conn is None and wait:
+            # RFC 9293 3.6.1 / RFC 6191: a SYN reopens the pair only when it starts beyond the old
+            # connection; an older one (a delayed duplicate) leaves TIME-WAIT as it was
+            if flags & ACK or not seq_lt((wait[2] - 1) % MOD, seq):
+                return []
             del self.closed[key]
+            if not seq_lt(wait[1], (self.isn + 0x10000) % MOD):
+                self.isn = wait[1]                 # the new ISN (below: + 0x10000) lies beyond the old snd_nxt
         if conn is None:
             if flags & SYN and not flags & ACK and port in (ECHO, DISCARD, SOURCE, HTTP):
                 mss = self.peer_mss(seg[20:hlen])

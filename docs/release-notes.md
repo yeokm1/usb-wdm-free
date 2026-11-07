@@ -19,8 +19,15 @@ Per package, newest first. A release is a commit and a tag
     0.1.8's `uac2` keeps it when the device is plugged in again. To
     take the new INF, remove the device in Device Manager (Remove),
     then plug it in again: Windows installs the new INF without a
-    prompt. This was run with `uac2`; `usbmidi`'s 98 SE and ME INF has
-    the same change and had no run on a guest.
+    prompt. This was run with `uac2`.
+  - On Windows 98 SE, usbmidi's new INF was run with a simulated MIDI
+    device on Windows' own USB 1.1 stack: a clean install asked for no
+    KS file, and over an installed 0.1.8 (Device Manager > Remove, plug
+    the device in again, restart) the new INF took over without
+    prompts; the MIDI loopback test passed in both. On ME it was not
+    run.
+  - If Windows' own request for the Windows 98 SE CD-ROM is cancelled,
+    the device lists no ports until it is removed and plugged in again.
   - [uac2 design, section 24](design/uac2.md),
     [usbmidi design, section 19](design/usbmidi.md),
     [98 SE KS prompts record](testing/2026-11-07-98se-ks-prompts.md).

@@ -197,7 +197,11 @@ What A2 and A3 showed, and what changed:
 ## Not run, and what is left
 
 - ASIX AX88772B/C (A2, A3): the remaining gaps above. A real adapter's
-  traffic under A3 would settle them.
+  traffic under A3 would settle them. Followed up on 2026-11-07
+  (`2026-11-07-ax88772-model.md`): the receive header's extension, one
+  record per transfer, BMCR's resolved mode and transmit offload; A2 and
+  A3 then pass DHCP, ping and TCP, and A3's Code 43 is its own check
+  ("Non-authentic ASIX product."), not imitated.
 - Realtek R3 with the RTL8156B: the Code 10 cause.
 - Our drivers against the changed models under xHCI98, on ME, and on 2000
   were not rerun. Most of the model changes are paths our drivers do not

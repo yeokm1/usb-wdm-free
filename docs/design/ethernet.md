@@ -615,12 +615,18 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
   header `TxHeader` wrote) and `RxChecksum` (reads the receive header
   before a frame `RxParse` emitted). The other packages leave them out.
 - **RTL8157 and RTL8159** (`rtlchip.c`): 32 KiB transmit buffers, as
-  Realtek's Windows driver sends 32848-byte transfers to the RTL8157; a
-  large send up to 32752 bytes. The descriptor bits are Linux `r8152.c`'s
+  Realtek's Windows driver sends 32848-byte transfers to the RTL8157, and
+  the checksums both ways. The descriptor bits are Linux `r8152.c`'s
   (`tx_desc`, `rx_desc_v2`), and a real RTL8157 under Realtek's driver
-  10.68.20 used the same ones (usbmon, Windows 10 x64). That driver leaves
-  a large send's TCP header offset 0, where Linux gives it; the core gives
-  it, as Linux. The first format (RTL8152 to RTL8156B) keeps 16 KiB and no
+  10.68.20 used the same ones (usbmon, Windows 10 x64).
+- **The large send is not offered** (2026-11-07). With it offered (up to
+  32752 bytes), 2000 SP4 and XP SP3 enabled it but never handed the
+  driver one, also with `MaxOffLoadSize` 64 KiB; so it never ran on the
+  chip, and it is left out until a system that uses it is tested. The
+  core's large-send path, `RtlTxOffload`'s large-send bits and the model's
+  segmentation stay, covered by the host and simulator tests. Realtek's
+  driver leaves a large send's TCP header offset 0, where Linux gives it;
+  the core gives it, as Linux. The first format (RTL8152 to RTL8156B) keeps 16 KiB and no
   offload: its bits are Linux's too, but were not checked on hardware here.
 - **The model** (`rtlemu.py`) segments a large send and computes the
   checksums asked for on the RTL8157/8159, and writes the receive checksum

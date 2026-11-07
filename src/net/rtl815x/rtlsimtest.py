@@ -619,8 +619,8 @@ class OffloadCoreTests(CoreCase):
         for name in ('8157', '8159'):
             with self.subTest(chip=name):
                 self.assertEqual(self.setup(name, 'super'), 0)
-                self.assertEqual(self.params.Offload, 0x1f)
-                self.assertEqual(self.params.LsoMax, 32768 - 16)
+                self.assertEqual(self.params.Offload, 0x17)              # no large send offered
+                self.assertEqual(self.params.LsoMax, 0)
                 info = (c.c_ulong * 3)(8, 1460, 34)                # NC_TX_LSO4, MSS, TCP header
                 payload = bytes(range(256)) * 12
                 frame = tcp_frame(payload)

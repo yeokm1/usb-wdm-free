@@ -585,9 +585,13 @@ class NewerModelTests(unittest.TestCase):
         return reply[3], reply[10:]
 
     def test_serial_and_its_stall(self):
-        # No serial by default: iSerialNumber 0 and no string 3.
+        # No serial by default: iSerialNumber 0 and no string 7 (3 on the
+        # others; on the 8157 string 3 is its CDC configurations' address).
         self.make('8157')
         self.assertEqual(self.m.device[16], 0)
+        self.assertEqual(self.string(7)[0], 4)
+        self.assertEqual(self.string(3), (0, r.usb_string(r.BACKUP_MAC.hex().upper())))
+        self.make('8156b')
         self.assertEqual(self.string(3)[0], 4)
         # --serial: index 3 and the string; --serial-stall: its first N reads
         # STALL, then it answers, and the other strings never STALL.
@@ -714,6 +718,19 @@ class NewerModelTests(unittest.TestCase):
 
     def test_u1u2_status_and_the_real_8157_shape(self):
         g = self.make('8157')
+        # Three configurations at SuperSpeed, as on a real one: 2 (NCM) and 3
+        # (ECM) are described, and only 1 can be set.
+        self.assertEqual(self.m.device[17], 3)
+        for number, subclass in ((1, 0x0d), (2, 0x06)):
+            self.m.control(1, struct.pack('<BBBBHHH', 0x80, 6, 0x80, 0, 0x0200 | number, 0, 255))
+            reply = self.wire.messages.pop()[2]
+            cfg = reply[10:]
+            self.assertEqual((reply[3], cfg[5], len(cfg), struct.unpack_from('<H', cfg, 2)[0]),
+                             (0, number + 1, len(cfg), len(cfg)))
+            self.assertEqual((cfg[9 + 5], cfg[9 + 6]), (2, subclass))
+        self.m.handle(6, 2, b'\x02')
+        self.assertEqual(self.wire.messages.pop()[2], bytes((4, 1)))
+        self.assertEqual(r.Model(Wire(), io.StringIO(), '8157', 'high').device[17], 1)
         def status():
             self.m.control(1, struct.pack('<BBBBHHH', 0x80, 0, 0x80, 0, 0, 0, 2))
             return struct.unpack('<H', self.wire.messages.pop()[2][10:12])[0]

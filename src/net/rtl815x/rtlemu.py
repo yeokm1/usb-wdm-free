@@ -242,8 +242,23 @@ REAL8157 = {
     # (0x04) set or clear: these were the device's words.
     'irq_up': bytes((0xec, 0x12)), 'irq_down': bytes((0xea, 0x12)),
     'link_bits': 0x0080, 'link_high': 0x0009,
+    # Its other two configurations at SuperSpeed, as xHCI98 read them on XP:
+    # 2 CDC NCM, 3 CDC ECM (each with iMACAddress 3). The model describes them
+    # but runs only the vendor configuration 1 (SET_CONFIGURATION 2 or 3
+    # STALLs); string 3 is the model's address in hex, as that field asks.
+    'configs': (
+        '09026800020200a0440904000001020d0005052400100105240600010d240f031f503100ee0500800006241a00012b07058303'
+        '10000a06300000080009040100000a00010009040101020a00010407058102000400063007000000070502020004000630'
+        '07000000',
+        '09026200020300a044090400000102060005052400100105240600010d240f031f503100ee050080000705830310000b0630'
+        '0000080009040100000a00000009040101020a0000040705810200040006300700000007050202000400063007000000'),
 }
 REAL = {'8157': REAL8157}
+# The bits the real RTL8157 cleared at once that Realtek's driver also sets
+# and waits for on the RTL8156B (10.68.20 reset the device in a loop while
+# MAC 0xdc6a bit 4 stayed set, and never took the link while USB 0xd4e8
+# bit 2 did): inferred for the other newer chips from the RTL8157's.
+NEWER_SELF_CLEAR = (('pla', 0xdc6a, 0x10), ('usb', 0xd4e8, 0x04))
 NEWER = sorted(k for k, v in CHIPS.items() if v.family != 'a')
 PARTNERS = (10, 100, 1000, 2500, 5000, 10000)
 BACKUP_MAC = bytes.fromhex('00e04c770002')
@@ -433,8 +448,9 @@ class Chip:
         for pa, w in words.items():
             self.phy_written(pa, w)
         self.pla[MR_COMMAND] &= ~CMD_RESET & 0xff
-        if self.real:
-            for name, addr, mask in self.real['self_clear']:
+        clears = self.real['self_clear'] if self.real else NEWER_SELF_CLEAR if self.newer else ()
+        if clears:
+            for name, addr, mask in clears:
                 if (name == 'pla') == bool(index & RTL_SPACE_MAC) and value <= addr < value + length:
                     space[addr] &= ~mask & 0xff
         if self.wide and not index & RTL_SPACE_MAC and value <= UR_ADV_CMD < value + length:
@@ -683,12 +699,12 @@ class Network:
         return [self.frame(b'\xff' * 6, 0x0800, ipv4(HOST_IP, b'\xff' * 4, 17, udp))]
 
 
-def device_descriptor(kind, speed, serial=0, vid=0x0bda, pid=None, bcd_device=None):
+def device_descriptor(kind, speed, serial=0, vid=0x0bda, pid=None, bcd_device=None, configs=1):
     """serial: the serial number's string index (0: none)."""
     bcd = kind.usb3 if speed == 'super' else 0x0210 if speed == 'high' else 0x0200
     return struct.pack('<BBHBBBBHHHBBBB', 18, 1, bcd, 0, 0, 0, 9 if speed == 'super' else 64,
                        vid, kind.pid if pid is None else pid, kind.bcd if bcd_device is None else bcd_device,
-                       1, 2, serial, 1)
+                       1, 2, serial, configs)
 
 
 def bulk_size(speed):
@@ -761,8 +777,11 @@ class Model:
         self.serial_index = (real['serial_index'] if real else 3) if serial is not None else 0
         if serial == 'mac':                          # as the real RTL8157's: 0003 and the address
             serial = '0003' + self.chip.mac.hex().upper()
+        # The real RTL8157's CDC configurations, at SuperSpeed only (only
+        # those were read from it).
+        self.more_configs = [bytes.fromhex(x) for x in real['configs']] if real and self.speed == 'super' else []
         self.device = device_descriptor(kind, self.speed, self.serial_index, self.vid, self.chip.pid,
-                                        self.bcd_device)
+                                        self.bcd_device, 1 + len(self.more_configs))
         self.config_desc = config_descriptor(self.speed, real=real)
         # The interrupt endpoint as the descriptor gives it: QEMU ends an
         # interrupt transfer on a packet shorter than this, so a 2-byte report
@@ -774,6 +793,8 @@ class Model:
         self.bos = bos_descriptor(kind, self.speed, real)
         self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('usb-wdm-free SIMULATED'),
                         2: usb_string('%s Ethernet - SIMULATED' % kind.name)}
+        if self.more_configs:
+            self.strings[3] = usb_string(self.chip.mac.hex().upper())   # their iMACAddress
         if serial is not None:
             self.strings[self.serial_index] = usb_string(serial)
         self.serial_stall = serial_stall           # serial string reads still to STALL
@@ -1030,6 +1051,8 @@ class Model:
                 self.log('serial_stalled', left=self.serial_stall)
                 return None
             return self.strings.get(number)
+        if kind == 2 and 0 < number <= len(self.more_configs):
+            return self.more_configs[number - 1]
         if number:
             return None
         if kind == 6 and self.speed != 'super':

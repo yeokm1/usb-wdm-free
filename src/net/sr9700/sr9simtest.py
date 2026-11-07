@@ -191,6 +191,7 @@ class Tests(unittest.TestCase):
         self.m.handle(101, 7, struct.pack('<BBHIH', s.EP_OUT, 0, len(data) - 64, 0, 0) + data[64:])
         self.assertEqual(self.m.totals['tx_frames'], 2)
 
+    def test_status_and_flap(self):
         self.assertEqual(self.setup(flap_after=2, flap_for=2), 0)
         self.m.handle(15, 1, bytes((s.EP_INT,)))
         self.settle(1.1)

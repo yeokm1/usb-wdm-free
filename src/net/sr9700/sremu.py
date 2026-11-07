@@ -234,6 +234,8 @@ class Model(ax7emu.Model):
         packets: a transfer ends with a packet shorter than 64 bytes (a
         zero-length one included), so a host that sends one packet at a
         time (UHCI) is joined up here before the frame is taken."""
+        if len(self.tx_buf) + len(data) > 2 + 1514 + 1:
+            raise ValueError('bulk-OUT transfer longer than a header, a frame and the pad byte')
         self.tx_buf += data
         if data and len(data) % self.bulk_max == 0:
             if len(self.tx_buf) >= 2:

@@ -389,6 +389,17 @@ class Tests(CoreCase):
         self.tx(small)
         self.assertEqual(self.m.totals['tx_frames'], 1)
 
+    def test_joined_transfer_is_bounded(self):
+        self.up('full')
+        packet = struct.pack('<II', 0x80000000 | 1000, 0) + bytes(56)
+        with self.assertRaises(ValueError):
+            for _ in range(a.TX_JOIN_MAX // 64 + 2):
+                self.m.receive_out(packet if not self.m.tx_buf else bytes(64))
+        self.up('full')
+        with self.assertRaises(ValueError):          # a Linux-form length no frame has
+            self.m.receive_out(struct.pack('<II', 0x7fffffff, 0) + bytes(56))
+
+    def test_corrupted_requests_get_no_answer(self):
         self.up()
         ping, icmp = echo_request(a.MODEL_MAC, 32)
         bad_ip = bytearray(ping)

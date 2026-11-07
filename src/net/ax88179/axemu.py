@@ -136,6 +136,7 @@ PHYSR_SPEED = {1000: 0x8000, 100: 0x4000, 10: 0x0000}
 INT_LINK = 0x00010000
 FIFO_FULL = 0x40000000
 TX_PAD = 0x80008000
+TX_JOIN_MAX = 0x10000                    # this model's bound on one joined bulk-OUT transfer
 MODEL_MAC = bytes.fromhex('000ec6770002')
 EEPROM = {0x43: 0x0000}
 
@@ -683,11 +684,15 @@ class Model:
             self.totals['tx_padded'] += 1
             return
         self.tx_pad_next = False
+        if len(self.tx_buf) + len(data) > TX_JOIN_MAX:
+            raise ValueError('bulk-OUT transfer past %d bytes without a short packet' % TX_JOIN_MAX)
         self.tx_buf += data
         if data and len(data) % self.bulk_max == 0:
             if len(self.tx_buf) < 8:
                 return
             length = struct.unpack_from('<I', self.tx_buf)[0]
+            if not length & 0x80000000 and length > TX_JOIN_MAX - 9:
+                raise ValueError('transmit header length %d' % length)
             if length & 0x80000000 or len(self.tx_buf) < 8 + length:
                 return                             # ASIX's XP form, or more of the frame to come
             self.tx_pad_next = len(self.tx_buf) == 8 + length

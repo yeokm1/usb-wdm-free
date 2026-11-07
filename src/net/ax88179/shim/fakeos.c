@@ -496,8 +496,14 @@ void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled)
 {
     NoLock("NdisMCancelTimer");
     FwLock(timerLock);
-    *cancelled = (BOOLEAN)(t->Set != 0);
     Fake.TimerSetAtCancel = t->Set;
+    if (Fake.TimerCancelFails && t->Set) {
+        *cancelled = FALSE;           /* stays set: FakeRunTimer runs it */
+        FwUnlock(timerLock);
+        Account(&Fake.TimerCancels, 1);
+        return;
+    }
+    *cancelled = (BOOLEAN)(t->Set != 0);
     t->Set = 0;
     FwUnlock(timerLock);
     Account(&Fake.TimerCancels, 1);

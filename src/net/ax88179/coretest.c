@@ -1038,6 +1038,43 @@ static void PowerAndReset(void)
     Balanced();
 }
 
+/* 98 SE and ME: a receive queued for the timer when a sleep request
+ * comes is taken back, never indicated, and the timer cancelled, before
+ * the request completes; at D0 the timer serves again. */
+static void Power98(void)
+{
+    UCHAR b[64];
+    int done;
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 0 && Fake.Timer->Set);
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD3) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    CHECK(!Fake.Timer->Set && Fake.TimerSetAtCancel);
+    CHECK(FakeRunTimer() == 0 && nd.Received == 0);   /* taken back, not indicated */
+    {
+        /* A send while asleep fails at once, from SendPackets itself. */
+        static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+        PNDIS_PACKET one = MakePacket(30, 10, peer);
+        Fake.Chars.SendPacketsHandler(ctx, &one, 1);
+        CHECK(tp[30].Completions == 1 && tp[30].Status == NDIS_STATUS_FAILURE);
+    }
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD0) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    UNTIL(Queued(P_IN) == 4 && Queued(P_INT) == 1, 3000);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 0 && Fake.Timer->Set);
+    CHECK(FakeRunTimer() == 1 && nd.Received == 1);
+    Halt();
+    Balanced();
+}
+
 static void SurpriseRemoval(void)
 {
     PNDIS_PACKET list[4];
@@ -1175,6 +1212,7 @@ int main(void)
     DeferredHalt98(64);
     ZeroLengthPackets();
     PowerAndReset();
+    Power98();
     SurpriseRemoval();
     Addresses();
     Failures();

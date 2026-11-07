@@ -377,7 +377,12 @@ the class interface for the particular bus at its lower edge."
   indicates the receives, in order, outside the lock. Every deferred
   receive goes with `NDIS_STATUS_SUCCESS`. `MiniportHalt` stops the timer,
   waits for a routine already due, completes the queued sends and puts
-  the unindicated receives back in the pool. Made straight from the USB
+  the unindicated receives back in the pool; a sleep request does the
+  same before it completes (NDIS timers are cancelled before a sleep
+  state), and a D0 request turns delivery back on before the device
+  restarts, so no completion of the restart reaches NDIS directly.
+  While asleep a send that fails at once completes at once. Made
+  straight from the USB
   completions, the same calls stalled the 98 TCP/IP within seconds of
   sustained TCP, and on the real RTL8157 faulted it (exceptions 0E in
   `MSTCP`), with the core's own state intact; from the timer they ran

@@ -168,3 +168,52 @@ the device's loader is `*NTKERN,MMDEVLDR.VXD`, written by the new INF.
 h2 is one of two clean installs with the new INF (h3 passed three times)
 and was not repeated in the time box; its cause is not read. ME was not
 run: its `wme` INF has only the by-hand model.
+
+### h2 settled: seven more clean installs (2026-11-07, late evening)
+
+Same rig and base (rebuilt the same way), each leg on a fresh overlay,
+new INF and 0.1.8 alternating, run two at a time (n1 with o1, n2 with
+o2, n3 with o3, then n4). Each leg: plug `lone`, answer the package's
+own file prompt, skip whatever is asked from the package's disk, answer
+Windows' "Windows 98 Second Edition CD-ROM" prompt with `E:\WIN98`, wait
+60 s, `MIDITEST list`, then `MIDITEST 0 0` three times.
+
+| Leg | INF | Prompts from the package's disk | MIDITEST 0 0 |
+|---|---|---|---|
+| n1 | new | none | PASS, PASS, PASS |
+| o1 | 0.1.8 | the 8 KS files | PASS, PASS, PASS |
+| n2 | new | none | PASS, PASS, PASS |
+| o2 | 0.1.8 | the 8 KS files | PASS, PASS, PASS |
+| n3 | new | none | PASS, PASS, PASS |
+| o3 | 0.1.8 | the 8 KS files | PASS, PASS, PASS |
+| n4 | new | none | PASS, PASS, PASS |
+
+No fatal exception and no stopped guest in these seven. All clean installs
+together: new INF 6 installs (h2, h3, n1 to n4), 16 first-session
+loopbacks, 15 PASS, 1 fatal exception (h2); 0.1.8 5 installs (h1, h4, o1
+to o3), 13 loopbacks, 13 PASS.
+
+**Timing of SysAudio's install.** The RunOnce install of SysAudio runs
+at the end of the device's install and stops at Windows' CD prompt until
+that is answered. In h2 the prompt was answered at 20:09:20; the desktop
+was idle at 20:10:18; the simulator saw the first MIDI data at 20:11:43,
+and the fatal exception was on screen at 20:15:23 (data until 20:15:37).
+In n1 to n4 the loopbacks started 80 s after the answer. A further leg
+(r1, new INF) ran `MIDITEST` while Windows' CD prompt was still open:
+WinMM listed no MIDI port at all, so a MIDI open cannot happen before
+SysAudio is installed. In r1 the harness's keys reached that prompt and
+cancelled it; SysAudio was then never installed (the RunOnce entry was
+used up, the MEDIA class held only the MIDI device) and WinMM still
+listed no MIDI port after the prompt was gone. The old INF writes the
+same RunOnce entry (through `WDMAUDIO.Registration`), so cancelling
+Windows' prompt leaves both INFs the same way; removing the device and
+plugging it in again installs it once more.
+
+**Verdict.** h2's fatal exception, VMM(01)+000094B0, did not come back in
+four more new-INF installs. The INF change cannot race the first MIDI
+open with SysAudio's setup, as MIDI ports appear only after that setup.
+The evidence does not tie the fault to the new INF; it stands as a 98 SE
+intermittent, cause not read, on Windows' own USB 1.1 stack, where
+`uac2` stopped a guest at install with its old INF as well (u4, above).
+It is not the stopped-guest signature (no answer, no exception screen):
+it was an exception screen, and the guest went on after a key.

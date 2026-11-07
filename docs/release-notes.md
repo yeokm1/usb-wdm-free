@@ -23,6 +23,37 @@ Per package, newest first. A release is a commit and a tag
     change. The x86 images are unsigned, as always.
   - XP x64 does not enforce kernel-mode signing; its Setup still warns
     about an unsigned package ("Continue Anyway").
+- **uac1 0.1.0.1, new**: USB Audio Class 1.0 sound cards, headsets and
+  microphones on Windows 98 SE (`free/audio/uac1/w98se/`), in place of
+  Windows' own USB audio driver. Playback and recording in the formats
+  and rates the device lists (16- to 32-bit PCM), with volume and mute.
+  It is built from the driver core `uac2` shares; `uac2` behaves as
+  before.
+  - Optional: Windows' own USB audio driver stays the default. Once you
+    install `uac1` (its folder given to the wizard, or to Update Driver),
+    USB Audio 1.0 devices plugged in for the first time get it, except
+    those Windows' own USB audio INF or `usbmidi` lists by name. xHCI98's
+    installer offers it unticked.
+  - A device Windows' own driver already has keeps it until you choose
+    Update Driver and point it at `w98se\`.
+  - A device in a format `uac1` does not play (8-bit or floating-point
+    samples) gets no sound device and no error; Update Driver back to
+    Windows' own driver for it. A USB MIDI device's audio function gets
+    no driver either: `usbmidi` serves the MIDI devices it lists.
+  - Setup asks for no KS files: the INF includes no Windows INF on 98 SE,
+    and Windows sets up its own audio components itself, asking for the
+    Windows 98 Second Edition CD-ROM once if no WDM sound device was
+    installed before.
+  - Windows 98 SE only: ME keeps Windows' own driver, which xHCI98
+    3.4.2.0 fixes for the unplug; on 2000 and later the INF matches
+    nothing.
+  - Known issues (README, Known issues): stop playback or recording
+    before unplugging a USB audio device, as with Windows' own driver;
+    the first audio device plugged in after a start can freeze 98 SE, as
+    with Windows' own driver (4 of 10 first plugs with each in the same
+    test); a program recording from the device may stop responding when
+    it is unplugged (Windows keeps running; as with `uac2`).
+  - [uac2 design, section 24](design/uac2.md).
 
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 

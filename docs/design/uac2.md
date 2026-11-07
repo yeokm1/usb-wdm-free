@@ -2886,5 +2886,30 @@ high half.
 
 **INF.** `uac1wdm.inf`, undecorated `[Models]` only (no NT section):
 `USB\Class_01&SubClass_01&Prot_00`, `&SubClass_00&Prot_00` and
-`&SubClass_02&Prot_00`; a function whose PDO names an AudioStreaming
-interface starts as a null function.
+`&SubClass_02&Prot_00`, and empty `[Models.NTx86]` and
+`[Models.NTamd64]`, so XP and later never match it (read on XP: Windows'
+`usbaudio` took a UAC 1.0 device with the INF staged); a function whose
+PDO names an AudioStreaming interface starts as a null function. The
+install section includes no Microsoft INF: 98 SE's Setup looks for an
+included INF's `Needs` files and catalogs (`ks.sys`, the KS filters,
+`ks.cat`, `wdmaudio.cat`) on the driver's own disk and asks for them, so
+the section writes the device loader pair (`*NTKERN,MMDEVLDR.VXD`)
+itself and a `RunOnce` entry has Windows install SysAudio from its own
+`wdmaudio.inf` at the end of the install, as `uac2wdm.inf`'s 9x section
+does.
+
+**Gates and the owner's ruling (2026-11-07).** G1 failed (the real Logi
+froze Windows at 2 of 5 unplugs while playing, and `uac2` froze the same
+way); G2 met 98 SE's own first-plug freeze at 4 of 10, as Windows'
+`usbaudio` did in the same test; G3 passed. A recording can stay stuck
+after an unplug with `uac1` and `uac2` alike, Windows running on. The
+owner ruled: `uac1` ships in 0.1.9 as an option, its INF by class as
+built; Windows' `usbaudio` stays the default unless the user installs
+`uac1` (xHCI98's installer row unticked); the three behaviours are known
+issues. Record: [uac1-98se](../testing/2026-11-07-uac1-98se.md).
+
+**Adaptive sources.** An adaptive IN endpoint whose `bSynchAddress`
+names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is
+read as a plain IN endpoint: the synch endpoint is selected with its
+alternate and never fed, as Windows' own driver does on XP (record
+[uac1-models](../testing/2026-11-07-uac1-models.md)).

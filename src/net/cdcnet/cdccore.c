@@ -97,12 +97,12 @@ typedef struct TPACKET {
     int Completions;
     NDIS_STATUS Status;
 } TPACKET;
-static TPACKET tp[64];
+static TPACKET tp[128];
 
 static void SendComplete(PNDIS_PACKET p, NDIS_STATUS status)
 {
     TPACKET *t = (TPACKET *)p;
-    CHECK(t >= tp && t < tp + 64);
+    CHECK(t >= tp && t < tp + 128);
     if (!Fake.Wdm110 && !timing) early++;
     t->Completions++;
     t->Status = status;
@@ -342,9 +342,43 @@ static void Win98Power(void)
     Balanced();
 }
 
+/* The send queue has no limit: a burst of 80, more than the 64 it once
+ * held, is accepted whole and completes, every send once and in success;
+ * a long array kicks the pump as it goes. A link down fails what is
+ * queued, once, and a send while down fails at once. */
+static void Queue(void)
+{
+    PNDIS_PACKET list[80];
+    int i, kicked, ok = 0;
+    Fresh(1);
+    for (i = 0; i < 80; i++) list[i] = MakePacket(i, 200);
+    kicked = kicks;
+    Fake.Chars.SendPacketsHandler(ctx, list, 80);
+    CHECK(kicks - kicked >= 10);
+    for (i = 0; i < 80; i++) CHECK(tp[i].Completions == 0);
+    CHECK(Transmit(1) == 80);
+    for (i = 0; i < 80; i++) if (tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS) ok++;
+    CHECK(ok == 80);
+    for (i = 0; i < 3; i++) list[i] = MakePacket(90 + i, 200);
+    Fake.Chars.SendPacketsHandler(ctx, list, 3);
+    cb.Link(cb.Context, 0, 0);                  /* the lower edge: link down (recovery, sleep) */
+    for (i = 0; i < 3; i++) CHECK(tp[90 + i].Completions == 1 && tp[90 + i].Status == NDIS_STATUS_FAILURE);
+    CHECK(Transmit(1) == 0);
+    list[0] = MakePacket(95, 200);
+    Fake.Chars.SendPacketsHandler(ctx, list, 1);
+    CHECK(tp[95].Completions == 1 && tp[95].Status == NDIS_STATUS_FAILURE);
+    cb.Link(cb.Context, 1, 1000000);
+    list[0] = MakePacket(96, 200);
+    Fake.Chars.SendPacketsHandler(ctx, list, 1);
+    CHECK(Transmit(1) == 1 && tp[96].Completions == 1 && tp[96].Status == NDIS_STATUS_SUCCESS);
+    Fake.Chars.HaltHandler(ctx);
+    Balanced();
+}
+
 int main(void)
 {
     Nt();
+    Queue();
     Win98();
     Win98Halt(17);
     Win98Halt(64);

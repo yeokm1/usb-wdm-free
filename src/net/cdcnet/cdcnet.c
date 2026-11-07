@@ -7,8 +7,10 @@
  *
  * A deserialized NDIS 5 miniport with a WDM lower edge (cdcusb.c):
  * - every packet accepted by SendPackets completes once through
- *   NdisMSendComplete, from the transmit path or a flush; the queue is
- *   bounded and an excess packet completes with failure at once;
+ *   NdisMSendComplete, from the transmit path or a flush; the queue has
+ *   no limit (a full queue never fails a send), and a packet while the
+ *   link is down or the adapter gone or halting completes with failure at
+ *   once;
  * - received frames are copied into a preallocated packet pool and
  *   indicated; a SUCCESS indication transfers ownership until
  *   ReturnPacket, a RESOURCES indication (pool low) is reclaimed on
@@ -26,7 +28,8 @@
 #include <ndis.h>
 #include "cdcusb.h"
 
-#define TX_LIMIT 64
+#define TX_LIMIT 64          /* OID_GEN_TRANSMIT_BUFFER_SPACE only: the queue itself is not bounded */
+#define TX_KICK 8            /* frames queued between kicks of the pump within one call */
 #define RX_PACKETS 64
 #define RX_LOW 8
 #define RX_STRIDE 1536
@@ -48,6 +51,7 @@ typedef struct ADAPTER {
     CDC_START Start;
     ULONG Filter, Lookahead, LinkSpeed;
     BOOLEAN Connected, Gone, Halting, Ready;
+    BOOLEAN LinkKnown;             /* the lower edge has called Link */
     UCHAR Multicast[MC_MAX][6];
     ULONG MulticastCount;
     PNDIS_PACKET TxHead, TxTail;   /* linked through MiniportReserved */
@@ -453,9 +457,10 @@ static void Link(void *context, int connected, cdc_u32 speed)
     if (connected < 0) a->Gone = TRUE;
     if (speed) a->LinkSpeed = speed;
     changed = a->Connected != (connected > 0);
+    a->LinkKnown = TRUE;
     a->Connected = connected > 0;
     CdcUnlock(a);
-    if (connected < 0) Flush(a);
+    if (connected <= 0) Flush(a);
     /* No indication before MiniportInitialize has returned. */
     if (changed && a->Ready) {
 #if defined(CDC_TRACE_E9) || DBG
@@ -646,8 +651,11 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
 #endif
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
         CdcLock(a);
-        if (!a->Gone && !a->Halting && size >= CDC_ETH_MIN && size <= CDC_ETH_MAX &&
-            a->TxQueued < TX_LIMIT) {
+        /* No limit on the queue: a deserialized miniport keeps every valid
+         * send until it can go (NDIS 5 rules); the packets themselves are
+         * the queue (MiniportReserved), so nothing is allocated. Only a
+         * gone, halting or disconnected adapter or a bad length fails one. */
+        if (!a->Gone && !a->Halting && a->Connected && size >= CDC_ETH_MIN && size <= CDC_ETH_MAX) {
             NEXT(p) = NULL;
             if (a->TxTail) NEXT(a->TxTail) = p; else a->TxHead = p;
             a->TxTail = p;
@@ -663,6 +671,8 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
                     CdcTrace("gone: %u sends failed", n);
             }
             TxDone(a, &one, 1, 0);
+        } else if (!((i + 1) % TX_KICK)) {
+            CdcUsbKick(a->Usb);   /* a long array starts going out at once */
         }
     }
     CdcUsbKick(a->Usb);
@@ -830,7 +840,9 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
     CdcLock(a);
-    a->Connected = a->Start.Connected != 0;
+    /* Link may have been called already (the worker runs from
+     * CdcUsbStart on): the latest state stands over the snapshot. */
+    if (!a->LinkKnown) a->Connected = a->Start.Connected != 0;
     if (!a->LinkSpeed) a->LinkSpeed = a->Start.LinkSpeed;
     a->Ready = TRUE;
     CdcUnlock(a);

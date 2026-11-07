@@ -1711,14 +1711,18 @@ and never for those they do. One INF, `RTLXP7.INF`, has one models
 section per system, so each Windows sees exactly its set. The ids are
 Linux `r8152.c`'s for these chips, with one exception: `0BDA:8056`, from
 Realtek's 7 INF (owner, 2026-11-06; below). Linux names no rebrand's
-chip, so no rebrand is listed.
+chip. Owner, 2026-11-07: ids that Realtek's own INFs list (its 7 INF
+7.61.20 in `usb-wdm-nonfree`, and its Windows 10 INF 10.68.20, read for
+its ids and chip sections only) are added where their chip is one this
+section serves and Realtek's XP to 7 INFs do not list them on that
+system; the id only is taken, and none has been seen here.
 
 | Models section | Systems | Ids |
 |---|---|---|
 | `[Models]` | 2000, which ignores decorations (`RTL815X.INF` serves it) | none |
-| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8056` (RTL8156B, from 2026-11-06), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159) |
-| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same five |
-| `NTx86.6.1`, `NTamd64.6.1` | 7 x86 and x64 | `0BDA:8157`, `0BDA:815A` |
+| `NTx86.5.1`, `NTamd64.5.2` | XP, XP x64 | `0BDA:8053` (RTL8153D), `0BDA:8156` (RTL8156, 8156B), `0BDA:8056` (RTL8156B, from 2026-11-06), `0BDA:8157` (RTL8157), `0BDA:815A` (RTL8159); from 2026-11-07 `0BDA:8057`, `0BDA:A157` (RTL8157), `0BDA:805A`, `0BDA:A15A`, ASUS `0B05:1D91` (RTL8159), and the rebrands Realtek's 7 INF puts in its RTL8156 or 8156B sections: D-Link `2001:B302`, Elecom `056E:4017`, I-O DATA `065F:3200`, Telaum `0DF4:0025`, Satechi `310E:0062`, Gopod `2D01:0032`, Getac `2BAF:0012`, ASUS `0B05:18D1` |
+| `NTx86.6.0`, `NTamd64.6.0` | Vista x86 and x64 | the same |
+| `NTx86.6.1`, `NTamd64.6.1` | 7 x86 and x64 | `0BDA:8157`, `0BDA:815A`; from 2026-11-07 `0BDA:8057`, `0BDA:A157`, `0BDA:805A`, `0BDA:A15A`, `0B05:1D91` (Realtek's 7 INF lists the RTL8156 and 8156B rebrands itself) |
 | `NTx86.6.2`, `NTamd64.6.2` | 8 and later | none: no NDIS 5 there (section 4.1) |
 
 Read against `usb-wdm-nonfree`'s Realtek INFs (2026-10-27): its XP 5.23
@@ -1726,7 +1730,23 @@ and Vista 6.27 INFs list `0BDA:8050`, `8152` and `8153` (bare and by
 revision) and rebrands, and no `8053`, `8156`, `8157` or `815A`. Its 7
 7.61.20 INFs add `8053`, `8155`, `8156` and `8056`, and no `8157` or
 `815A`. So no id here is matched by both packs on one system. The
-RTL8152 and RTL8153 ids stay off XP to 7.
+RTL8152 and RTL8153 ids stay off XP to 7. The ids of 2026-11-07 were read
+against the same INFs: none of them is in the XP or Vista INF, and the 7
+INF lists the eight RTL8156 and 8156B rebrands (so 7 does not get them
+here) and none of the RTL8157 and RTL8159 ids.
+
+`RTL81598.INF` and `RTL815X.INF` (98 SE, ME, 2000) list every chip, so
+from 2026-11-07 they also take the RTL8152B's `0BDA:8052`, TP-Link
+`2357:0603` and `0604`, Lenovo `17EF:3052`, `3057`, `3065`, `30FA`,
+`720A`, `8153`, `A3C1`, `309B`, `309C` and `309D`, and Belkin, LG,
+Elecom, ASUS, I-O DATA, Telaum, Satechi, Gopod, Club 3D, IOI, Luxshare
+and Getac rebrands (the INFs' comments list them). Not taken: D-Link
+`2001:7E34` and `A710` (Realtek names them as RNDIS devices), Killer
+`1A56:3100` (Realtek's own line is commented out), the RTL8156C, the
+Dash parts `0BDA:8D57` and `8D5A`, Realtek's test chip and the RTL8150,
+a different design. The chip core reads the chip from its id register
+(`RtlChipId`) and checks no vendor or product id, so an id costs an INF
+line only; an id carrying a chip it does not know is refused at start.
 
 `0BDA:8053` is the RTL8153D's id here. Linux added it to its table in the
 commit that added the RTL8153C and RTL8153D, and the simulator models the

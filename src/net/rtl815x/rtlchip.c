@@ -1935,14 +1935,15 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
     params->TxAlign = Fmt(s)->TxAlign;
     params->Version = s->Id;
     if (s->Desc == DESC_V2) {
-        /* RTL8157/8159: checksums both ways (ethernet.md section 4.9),
+        /* RTL8157/8159: transmit checksums (ethernet.md section 4.9),
          * checked on a real RTL8157; 32 KiB transfers as Realtek's driver
-         * sends. The large send (RtlTxOffload's NC_TX_LSO4) is not offered:
-         * 2000 and XP never used it, so it was never run on the chip. The
-         * first format keeps 16 KiB (Linux agg_buf_sz) and no offload: its
-         * bits are Linux's, unchecked on hardware here. */
+         * sends. Not offered: the large send (RtlTxOffload's NC_TX_LSO4;
+         * 2000 and XP never used it, so it never ran on the chip) and the
+         * receive checksums (RtlRxChecksum; 2000 received slower with
+         * them). The first format keeps 16 KiB (Linux agg_buf_sz) and no
+         * offload: its bits are Linux's, unchecked on hardware here. */
         params->TxSize = TX2_BUFFER;
-        params->Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4;
+        params->Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4;
         params->LsoMax = 0;
     } else {
         params->TxSize = TX_BUFFER;

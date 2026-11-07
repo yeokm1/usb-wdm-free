@@ -616,7 +616,7 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
   before a frame `RxParse` emitted). The other packages leave them out.
 - **RTL8157 and RTL8159** (`rtlchip.c`): 32 KiB transmit buffers, as
   Realtek's Windows driver sends 32848-byte transfers to the RTL8157, and
-  the checksums both ways. The descriptor bits are Linux `r8152.c`'s
+  the transmit checksums. The descriptor bits are Linux `r8152.c`'s
   (`tx_desc`, `rx_desc_v2`), and a real RTL8157 under Realtek's driver
   10.68.20 used the same ones (usbmon, Windows 10 x64).
 - **The large send is not offered** (2026-11-07). With it offered (up to
@@ -628,6 +628,12 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
   driver leaves a large send's TCP header offset 0, where Linux gives it;
   the core gives it, as Linux. The first format (RTL8152 to RTL8156B) keeps 16 KiB and no
   offload: its bits are Linux's too, but were not checked on hardware here.
+- **The receive checksums are not offered** (2026-11-07). Offered, 2000
+  SP4 enabled them and received slower in interleaved runs (median 153
+  against 161 Mb/s, mean 151 against 176): TCP/IP kept the checked
+  packets, the 64-packet receive pool ran down to 9 free and 27% of the
+  frames went up as copies. XP showed no gain. `RtlRxChecksum` and the
+  core's reporting stay, covered by the host and simulator tests.
 - **The model** (`rtlemu.py`) segments a large send and computes the
   checksums asked for on the RTL8157/8159, and writes the receive checksum
   bits as the real RTL8157 did; what was not seen is marked inferred there.

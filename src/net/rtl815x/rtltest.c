@@ -736,7 +736,7 @@ static void BringUpV2(nc_u16 id, nc_u8 speed)
     CHECK(par.RxSize == 32768UL);
     CHECK(par.TxHeader == 16 && par.TxAlign == 16 && par.TxSize == 32768 && par.TxSlots == 4);
     CHECK(par.TxBatch == 64 && par.LsoMax == 0);                       /* no large send offered */
-    CHECK(par.Offload == (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4));
+    CHECK(par.Offload == (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4));  /* transmit only */
     CHECK(par.RxCount == 8);
     /* base setup */
     CHECK(m->Usb[0xcffe] & 0x08);

@@ -451,6 +451,14 @@ class Tests(CoreCase):
         self.assertEqual((self.m.totals['tx_csum_ip'], self.m.totals['tx_csum_udp']), (2, 1))
         self.assertEqual(self.m.net.refused, 0)
         self.assertTrue([e for e in self.events('dhcp')])
+        self.m.chip.mac_regs[a.R_TXCOE] = 0x67           # UDP shorter than its IP payload: its own length
+        tail = bytearray(dhcp_discover(a.MODEL_MAC))
+        tail += b'\xee' * 4
+        tail[14 + 2:14 + 4] = struct.pack('!H', len(tail) - 14)
+        tail[14 + 10:14 + 12] = b'\0\0'
+        before = self.m.net.refused
+        self.m.transmit(record(bytes(tail), False))
+        self.assertEqual(self.m.net.refused, before)
         self.up('high')                                  # TXCOE 0 (ax179f): nothing is filled
         self.m.transmit(record(bytes(disc), False))
         self.assertEqual((self.m.totals['tx_csum_ip'], self.m.net.refused), (0, 1))

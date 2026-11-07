@@ -807,20 +807,27 @@ class Model:
             proto, l4 = f[23], 14 + ihl
             bit = {6: 0x02, 17: 0x04}.get(proto, 0)
             if bit & coe and not fragment:
-                pseudo = bytes(f[26:34]) + struct.pack('!BBH', 0, proto, total - ihl)
-                self.fill_l4(f, l4, 14 + total, proto, pseudo)
+                self.fill_l4(f, l4, 14 + total, proto, bytes(f[26:34]), False)
         elif ethertype == b'\x86\xdd' and len(f) >= 14 + 40 and f[14] >> 4 == 6:
             proto, plen = f[20], struct.unpack_from('!H', f, 18)[0]
             bit = {6: 0x20, 17: 0x40}.get(proto, 0)
             if bit & coe and 14 + 40 + plen <= len(f):
-                pseudo = bytes(f[22:54]) + struct.pack('!IxxxB', plen, proto)
-                self.fill_l4(f, 54, 54 + plen, proto, pseudo)
+                self.fill_l4(f, 54, 54 + plen, proto, bytes(f[22:54]), True)
         return bytes(f)
 
-    def fill_l4(self, f, start, end, proto, pseudo):
+    def fill_l4(self, f, start, end, proto, addresses, v6):
+        """The TCP or UDP checksum of the segment from start to end (UDP: to
+        its own length, when that is shorter than the IP payload)."""
         at = start + (16 if proto == 6 else 6)
         if end - start < (20 if proto == 6 else 8):
             return
+        if proto == 17:
+            ulen = struct.unpack_from('!H', f, start + 4)[0]
+            if not 8 <= ulen <= end - start:
+                return                                   # a UDP length no datagram has: left as sent
+            end = start + ulen
+        n = end - start
+        pseudo = addresses + (struct.pack('!IxxxB', n, proto) if v6 else struct.pack('!BBH', 0, proto, n))
         f[at:at + 2] = b'\0\0'
         value = checksum(pseudo + bytes(f[start:end]))
         f[at:at + 2] = struct.pack('!H', value or (0xffff if proto == 17 else 0))

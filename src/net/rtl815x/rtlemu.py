@@ -869,6 +869,7 @@ class Model:
         self.pending.clear()
         self.rx.clear()
         self.config, self.interrupt = 0, False
+        self.u1u2 = 0                              # a reset clears the U1/U2 enables
 
     # -- link ----------------------------------------------------------------
     def set_link(self, up, why):
@@ -1044,9 +1045,10 @@ class Model:
     # -- control -------------------------------------------------------------
     def descriptor(self, kind, number):
         if kind == 3:
-            if number == 3 and number in self.strings and self.serial_skip > 0:
+            serial = self.serial_index and number == self.serial_index and number in self.strings
+            if serial and self.serial_skip > 0:
                 self.serial_skip -= 1
-            elif number == 3 and number in self.strings and self.serial_stall > 0:
+            elif serial and self.serial_stall > 0:
                 self.serial_stall -= 1
                 self.log('serial_stalled', left=self.serial_stall)
                 return None

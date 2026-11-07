@@ -597,13 +597,13 @@ class NewerModelTests(unittest.TestCase):
         # STALL, then it answers, and the other strings never STALL.
         self.make('8157', serial='000334C8D6B113C7', serial_stall=2)
         self.assertEqual(self.m.device[16], 7)                    # the real RTL8157's index
-        self.m.strings[3] = self.m.strings.pop(7)                 # the reads below use index 3
         self.assertEqual(self.string(1)[0], 0)
-        self.assertEqual(self.string(3)[0], 4)
-        self.assertEqual(self.string(3)[0], 4)
-        status, text = self.string(3)
+        self.assertEqual(self.string(3)[0], 0)                    # its CDC address string never STALLs
+        self.assertEqual(self.string(7)[0], 4)
+        self.assertEqual(self.string(7)[0], 4)
+        status, text = self.string(7)
         self.assertEqual((status, text), (0, r.usb_string('000334C8D6B113C7')))
-        self.assertEqual(self.string(3)[0], 0)
+        self.assertEqual(self.string(7)[0], 0)
         stalls = [json.loads(x) for x in self.trace.getvalue().splitlines()]
         self.assertEqual([x['left'] for x in stalls if x['event'] == 'serial_stalled'], [1, 0])
         # --serial-skip: the first K reads answer, then the STALLs, then it
@@ -740,6 +740,9 @@ class NewerModelTests(unittest.TestCase):
         self.assertEqual(status(), 0x0c)
         self.m.control(1, struct.pack('<BBBBHHH', 0, 1, 0, 0, 48, 0, 0))
         self.assertEqual(status(), 0x08)
+        self.m.handle(3, 9, b'')                                  # a USB reset clears them
+        self.assertEqual(status(), 0)
+        self.m.handle(6, 1, b'\x01')
         cfg = self.m.config_desc
         self.assertEqual((cfg[7], cfg[8]), (0x80, 0x44))
         iclass, eps = parse_config(cfg)

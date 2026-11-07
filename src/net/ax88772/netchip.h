@@ -23,6 +23,8 @@
  * - Status, RxParse, TxHeader and TxEnd run at IRQL <= DISPATCH_LEVEL from
  *   USB completions; they never call NET_IO, allocate, or block.
  * - RxParse validates a whole transfer before it emits any frame.
+ * - TxOffload and RxChecksum (optional) run as TxHeader and RxParse do,
+ *   and are named only by a chip whose Start reports NET_PARAMS.Offload.
  * - RxReset (optional) runs at IRQL <= DISPATCH_LEVEL. A chip that names
  *   it asks for one bulk-IN transfer at a time (RxCount 1), so it never
  *   runs at the same time as RxParse.
@@ -97,7 +99,35 @@ typedef struct NET_PARAMS {
     nc_u32 TxAlign;             /* each header starts at a multiple (power of 2) */
     nc_u32 Version;             /* chip revision, for the log */
     nc_u32 RxConfig, RxConfigRead; /* receive configuration written and read back (log; 0 if none) */
+    nc_u32 Offload;             /* NC_OFFLOAD_* the chip performs (0: none; needs TxOffload/RxChecksum) */
+    nc_u32 LsoMax;              /* NC_OFFLOAD_LSO4: the largest large-send packet, bytes from the
+                                 * Ethernet header on (the lower edge caps it to one transmit buffer) */
 } NET_PARAMS;
+
+/* Offloads (NET_PARAMS.Offload), IPv4 only (ethernet.md section 4.9). */
+#define NC_OFFLOAD_TX_IP4  0x01  /* IPv4 header checksum on transmit */
+#define NC_OFFLOAD_TX_TCP4 0x02  /* TCP checksum on transmit (the IPv4 header's with it) */
+#define NC_OFFLOAD_TX_UDP4 0x04  /* UDP checksum on transmit (the IPv4 header's with it) */
+#define NC_OFFLOAD_LSO4    0x08  /* TCP segmentation of a large send */
+#define NC_OFFLOAD_RX4     0x10  /* receive checksums checked (RxChecksum) */
+
+/* One transmit frame's offload request (TxOffload). Transport is the
+ * offset of the TCP or UDP header from the start of the frame; Mss the
+ * segment payload size of a large send. */
+#define NC_TX_IP4  0x01
+#define NC_TX_TCP4 0x02
+#define NC_TX_UDP4 0x04
+#define NC_TX_LSO4 0x08
+typedef struct NET_TX_INFO {
+    nc_u32 Flags;               /* NC_TX_*; 0 for none */
+    nc_u32 Mss;
+    nc_u32 Transport;
+} NET_TX_INFO;
+
+/* What the chip found of a received frame's checksums (RxChecksum). */
+#define NC_RX_IP_OK  0x01
+#define NC_RX_TCP_OK 0x02
+#define NC_RX_UDP_OK 0x04
 
 typedef struct NET_LINK {
     int Up;
@@ -154,6 +184,14 @@ typedef struct NET_CHIP {
      * the data path closed): a chip whose receive stream runs across
      * transfers forgets where it was. */
     void (*RxReset)(void *chip);
+    /* Optional (NULL: none; NET_PARAMS.Offload names what it does).
+     * After TxHeader, for a frame whose info->Flags is not 0: the header
+     * asks the chip for those offloads. */
+    void (*TxOffload)(void *chip, nc_u8 *hdr, const NET_TX_INFO *info);
+    /* Optional (NULL: none). For a frame RxParse is emitting (frame is
+     * the pointer RxParse hands to emit, inside the transfer): the
+     * NC_RX_*_OK checksums the chip verified. */
+    nc_u32 (*RxChecksum)(void *chip, const nc_u8 *frame);
 } NET_CHIP;
 
 /* The package's chip table, defined by the package. */

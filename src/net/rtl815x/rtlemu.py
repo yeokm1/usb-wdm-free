@@ -130,6 +130,20 @@ IRQ_LINK = 0x04
 RX_DESC_LEN, TX_DESC_LEN = 24, 8                # the RTL8152 to RTL8156B
 WIDE_DESC_LEN, WIDE_ALIGN = 16, 16              # the RTL8157 and RTL8159, both ways
 TX_FIRST_LAST, TX_SIGNATURE = 0xc0000000, 0x15 << 27
+# Offloads of the RTL8157/8159 (the 16-byte descriptors), as Linux r8152.c
+# names the bits (tx_desc, rx_desc_v2) and as a real RTL8157 under
+# Realtek's Windows driver 10.68.20 showed them (usbmon, 2026-11-07):
+# transmit dword 0 GTSENDV4 (bit 28) with the TCP header offset in bits
+# 18-24 (Realtek's driver left it 0, Linux sets it), dword 1 UDP_CS (31),
+# TCP_CS (30), IPV4_CS (29) and bits 17-27 the MSS of a large send or the
+# TCP/UDP header offset; receive dword 2 IPF (26), UDPF (25), TCPF (24),
+# IPV4 (14), UDP (11), TCP (10). The real chip set, for a good TCP frame,
+# IPV4|TCP with UDPF; a UDP one IPV4|UDP with TCPF; ICMP IPV4 with TCPF and
+# UDPF; ARP IPF|UDPF|TCPF. A failed checksum setting its own F bit, the
+# IP ID stepping by one per segment of a large send, and FIN/PSH on its
+# last segment only are inferred (Linux/Windows expectations), not seen.
+TX_GTSENDV4, TX_UDP_CS, TX_TCP_CS, TX_IPV4_CS = 1 << 28, 1 << 31, 1 << 30, 1 << 29
+RX2_IPF, RX2_UDPF, RX2_TCPF, RX2_IPV4, RX2_UDP, RX2_TCP = 1 << 26, 1 << 25, 1 << 24, 1 << 14, 1 << 11, 1 << 10
 RMS_DEFAULT = 1522
 
 # Chips. id: MR_TX_CONFIG's high word; pid: the USB product id; family: 'a'
@@ -764,6 +778,129 @@ def usb_string(text):
     return bytes((len(raw) + 2, 3)) + raw
 
 
+def ones(data):
+    """The Internet checksum (RFC 1071) of data."""
+    if len(data) & 1:
+        data += b'\0'
+    total = sum(struct.unpack('!%dH' % (len(data) // 2), data))
+    while total >> 16:
+        total = (total & 0xffff) + (total >> 16)
+    return ~total & 0xffff
+
+
+def ip_header_sum(ip):
+    head = bytearray(ip)
+    head[10:12] = b'\0\0'
+    return ones(bytes(head))
+
+
+def l4_sum(frame, transport, proto):
+    """The TCP or UDP checksum of an IPv4 frame, its header at transport."""
+    ip = frame[14:]
+    seg = bytearray(frame[transport:])
+    seg[16 if proto == 6 else 6:18 if proto == 6 else 8] = b'\0\0'
+    pseudo = ip[12:20] + struct.pack('!BBH', 0, proto, len(seg))
+    s = ones(pseudo + bytes(seg))
+    return 0xffff if proto == 17 and s == 0 else s
+
+
+def ipv4_parse(frame):
+    """(header length, total length, protocol) of an IPv4 frame, or None."""
+    if len(frame) < 34 or frame[12:14] != b'\x08\x00' or frame[14] >> 4 != 4:
+        return None
+    ihl = (frame[14] & 15) * 4
+    if ihl < 20 or 14 + ihl > len(frame):
+        return None
+    return ihl, struct.unpack_from('!H', frame, 16)[0], frame[23]
+
+
+def tx_checksum(frame, opts2):
+    """A frame whose descriptor asks for the IPv4 and TCP/UDP checksums."""
+    info = ipv4_parse(frame)
+    if not info:
+        raise ValueError('checksum offload on a frame that is not IPv4')
+    ihl, total, proto = info
+    if len(frame) > 14 + total and opts2 & (TX_TCP_CS | TX_UDP_CS):
+        # A real RTL8157 sent a TCP ACK padded to 60 bytes with a TCP
+        # checksum request out with the checksum wrong (the peer dropped
+        # the ACKs; 2026-11-07, seen as stalled receives, the wire not
+        # captured); Linux and Realtek's driver send such frames unpadded.
+        raise ValueError('checksum offload on a frame padded past its IP length')
+    out = bytearray(frame)
+    if opts2 & (TX_TCP_CS | TX_UDP_CS):
+        transport = opts2 >> 17 & 0x7ff
+        want = 6 if opts2 & TX_TCP_CS else 17
+        if transport != 14 + ihl or proto != want:
+            raise ValueError('checksum offload: header offset %d or protocol %d wrong' % (transport, proto))
+        at = transport + (16 if want == 6 else 6)
+        struct.pack_into('!H', out, at, l4_sum(bytes(out[:14 + total]), transport, want))
+    if opts2 & TX_IPV4_CS or opts2 & (TX_TCP_CS | TX_UDP_CS):
+        struct.pack_into('!H', out, 24, ip_header_sum(bytes(out[14:14 + ihl])))
+    return bytes(out)
+
+
+def tx_large_send(frame, opts1, opts2):
+    """Segment a large TCP send: MSS bytes of payload each, headers copied,
+    IP total length, ID and checksum and TCP sequence and checksum
+    rewritten; FIN and PSH on the last segment only."""
+    info = ipv4_parse(frame)
+    if not info or info[2] != 6:
+        raise ValueError('large send that is not TCP over IPv4')
+    ihl, _, _ = info
+    transport = 14 + ihl
+    given = opts1 >> 18 & 0x7f
+    if given and given != transport:
+        raise ValueError('large send: TCP header offset %d, not %d' % (given, transport))
+    mss = opts2 >> 17 & 0x7ff
+    thl = (frame[transport + 12] >> 4) * 4
+    if not mss or thl < 20 or transport + thl > len(frame):
+        raise ValueError('large send without an MSS or a TCP header')
+    head, payload = frame[:transport + thl], frame[transport + thl:]
+    ident, = struct.unpack_from('!H', frame, 18)
+    seq, = struct.unpack_from('!I', frame, transport + 4)
+    flags = frame[transport + 13]
+    out = []
+    for k, at in enumerate(range(0, max(len(payload), 1), mss)):
+        part = payload[at:at + mss]
+        last = at + mss >= len(payload)
+        f = bytearray(head + part)
+        struct.pack_into('!H', f, 16, ihl + thl + len(part))
+        struct.pack_into('!H', f, 18, (ident + k) & 0xffff)
+        struct.pack_into('!I', f, transport + 4, (seq + at) & 0xffffffff)
+        f[transport + 13] = flags if last else flags & ~0x09
+        struct.pack_into('!H', f, 24, ip_header_sum(bytes(f[14:14 + ihl])))
+        struct.pack_into('!H', f, transport + 16, l4_sum(bytes(f), transport, 6))
+        if len(f) > 1514:
+            raise ValueError('large send segment longer than 1514 bytes (MSS %d)' % mss)
+        out.append(bytes(f))
+    return out
+
+
+def rx_checksum_bits(frame):
+    """The receive descriptor's third dword for a frame (16-byte format)."""
+    info = ipv4_parse(frame)
+    if not info:
+        return RX2_IPF | RX2_UDPF | RX2_TCPF
+    ihl, total, proto = info
+    bits = RX2_IPV4
+    if ip_header_sum(frame[14:14 + ihl]) != struct.unpack_from('!H', frame, 24)[0]:
+        return bits | RX2_IPF | RX2_UDPF | RX2_TCPF
+    transport = 14 + ihl
+    body = frame[:14 + total]
+    if proto == 6 and len(body) >= transport + 20:
+        bits |= RX2_TCP | RX2_UDPF
+        if l4_sum(body, transport, 6) != struct.unpack_from('!H', body, transport + 16)[0]:
+            bits |= RX2_TCPF
+    elif proto == 17 and len(body) >= transport + 8:
+        bits |= RX2_UDP | RX2_TCPF
+        given = struct.unpack_from('!H', body, transport + 6)[0]
+        if given and l4_sum(body, transport, 17) != given:
+            bits |= RX2_UDPF
+    else:
+        bits |= RX2_TCPF | RX2_UDPF
+    return bits
+
+
 class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
                  link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
@@ -977,6 +1114,8 @@ class Model:
             self.rx.popleft()
             size = len(frame) + 4
             desc = struct.pack('<I', size << 17 if self.chip.wide else size) + bytes(desc_len - 4)
+            if self.chip.wide:
+                desc = desc[:8] + struct.pack('<I', rx_checksum_bits(frame)) + desc[12:]
             out += desc + frame + struct.pack('<I', zlib.crc32(frame))
             out += b'\xee' * (padded - record)
             self.totals['rx_frames'] += 1
@@ -1034,7 +1173,22 @@ class Model:
                 raise ValueError('transmit header length beyond the transfer')
             if opts1 & TX_FIRST_LAST != TX_FIRST_LAST:
                 raise ValueError('transmit header without the first and last segment bits')
-            frames.append(data[off + hlen:off + hlen + length])
+            frame = data[off + hlen:off + hlen + length]
+            opts2 = struct.unpack_from('<I', data, off + 4)[0]
+            if (opts1 & TX_GTSENDV4 or opts2 & 0xf0000000) and not self.chip.wide:
+                raise ValueError('transmit offload bits on a chip modelled without offload')
+            if opts1 & TX_GTSENDV4:
+                segs = tx_large_send(frame, opts1, opts2)
+                self.totals['tx_large_sends'] += 1
+                self.totals['tx_large_send_segments'] += len(segs)
+                frames.extend(segs)
+            elif opts2 & (TX_IPV4_CS | TX_TCP_CS | TX_UDP_CS):
+                frames.append(tx_checksum(frame, opts2))
+                self.totals['tx_checksummed'] += 1
+            else:
+                if len(frame) > 1514:
+                    raise ValueError('transmit frame longer than 1514 bytes without a large send')
+                frames.append(frame)
             off = (off + hlen + length + align - 1) & ~(align - 1)
         if off < len(data) and any(data[off:]):
             raise ValueError('trailing bytes after the last frame')

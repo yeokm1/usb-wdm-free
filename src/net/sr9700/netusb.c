@@ -47,7 +47,7 @@
 #define RX_MAX 8
 #define TX_MAX 4
 #define RX_LIMIT 32768UL
-#define TX_LIMIT 16384UL
+#define TX_LIMIT 32768UL
 #define CONFIG_MAX 4096
 #define CONFIGS_MAX 4
 #define CTRL_MAX 512
@@ -447,37 +447,65 @@ static nc_u32 AlignUp(nc_u32 v, nc_u32 a) { return (v + a - 1) & ~(a - 1); }
 
 /* Build the next bulk-OUT transfer in slot s. Called by the pump with
  * s->Stage == TX_BUILD and the lock not held. Returns TRUE if a transfer
- * was queued; *starved is set when no IRP could be allocated for it. */
+ * was queued, or if every send taken failed alone (build again); *starved
+ * is set when no IRP could be allocated for it. */
 static BOOLEAN BuildTx(NET_DEV *d, SLOT *s, BOOLEAN *starved)
 {
     void *packets[NET_TX_BATCH];
-    nc_u32 count, i, total = 0;
+    nc_u32 count, i, total = 0, kept = 0;
     nc_u32 header = d->Params.TxHeader, align = d->Params.TxAlign;
     PUCHAR b = s->Buffer;
     BOOLEAN ok = TRUE;
     int zlp = 0;
     KIRQL old;
 
-    count = d->Cb.TxTake(d->Cb.Context, packets, d->TxBatch);
+    count = d->Cb.TxTake(d->Cb.Context, packets, d->TxBatch, s->Size, header, align);
     if (!count) {
         KeAcquireSpinLock(&d->Lock, &old);
         s->Stage = TX_IDLE;
         KeReleaseSpinLock(&d->Lock, old);
         return FALSE;
     }
-    /* TxBatch is sized so that count frames at their largest always fit. */
+    /* TxTake took only what fits, padding included; checked again here. A
+     * send that cannot be copied or asks for an offload the chip lacks
+     * fails alone; the others go on (kept). */
     for (i = 0; i < count && ok; i++) {
         nc_u32 at = AlignUp(total, align), n;
-        if (at + header + NC_ETH_MAX > s->Size) { ok = FALSE; break; }
-        n = d->Cb.TxCopy(d->Cb.Context, packets[i], b + at + header, NC_ETH_MAX);
-        if (n < NC_ETH_MIN) { ok = FALSE; break; }
-        if (n < NC_ETH_PAD) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
+        NET_TX_INFO info;
+        if (at + header + NC_ETH_PAD > s->Size) {
+            /* Never (TxTake's own rule): this and the rest fail below. */
+            while (i < count) packets[kept++] = packets[i++];
+            ok = FALSE;
+            break;
+        }
+        info.Flags = 0; info.Mss = 0; info.Transport = 0;
+        n = d->Cb.TxCopy(d->Cb.Context, packets[i], b + at + header, s->Size - at - header, &info);
+        if (n < NC_ETH_MIN || (info.Flags && !d->Chip->TxOffload)) {
+            d->Malformed++;
+            NetTrace("tx: a send failed alone (length %u, offload %x)", n, info.Flags);
+            d->Cb.TxDone(d->Cb.Context, &packets[i], 1, 0);
+            continue;
+        }
+        /* A frame with an offload is left as it is: the chip pads it (Linux
+         * r8152.c sends such frames unpadded; a padded one came out with a
+         * bad TCP checksum from a real RTL8157). */
+        if (n < NC_ETH_PAD && !info.Flags) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
         if (at > total) RtlZeroMemory(b + total, at - total);
         d->Chip->TxHeader(ChipState(d), b + at, n, d->OutMax, count == 1);
+        if (info.Flags) d->Chip->TxOffload(ChipState(d), b + at, &info);
         total = at + header + n;
+        packets[kept++] = packets[i];
     }
-    if (ok) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
+    count = kept;
+    if (ok && count) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
     KeAcquireSpinLock(&d->Lock, &old);
+    if (!count) {
+        /* Every send taken failed alone: the slot is free again, and the
+         * pump builds once more for what is still queued. */
+        s->Stage = TX_IDLE;
+        KeReleaseSpinLock(&d->Lock, old);
+        return TRUE;
+    }
     if (!ok || !d->Open || !d->LinkUp) {
         s->Stage = TX_IDLE;
         KeReleaseSpinLock(&d->Lock, old);
@@ -550,7 +578,9 @@ typedef struct EMIT_CONTEXT {
 static void Emit(void *context, const nc_u8 *frame, nc_u32 length)
 {
     EMIT_CONTEXT *e = context;
-    e->Dev->Cb.Receive(e->Dev->Cb.Context, &e->Gather, frame, length);
+    NET_DEV *d = e->Dev;
+    nc_u32 checksum = d->Chip->RxChecksum ? d->Chip->RxChecksum(ChipState(d), frame) : 0;
+    d->Cb.Receive(d->Cb.Context, &e->Gather, frame, length, checksum);
 }
 
 static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
@@ -1207,10 +1237,11 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
         if (txSize > TX_LIMIT) txSize = TX_LIMIT;
         if (txSlots > TX_MAX) txSlots = TX_MAX;
         if (!txSlots) txSlots = 1;
-        d->TxBatch = txSize / each;
-        if (d->TxBatch > d->Params.TxBatch) d->TxBatch = d->Params.TxBatch;
+        /* Transfers are filled by bytes (TxTake); the chip's TxBatch caps
+         * the frames in one. */
+        d->TxBatch = d->Params.TxBatch;
         if (d->TxBatch > NET_TX_BATCH) d->TxBatch = NET_TX_BATCH;
-        if (!d->TxBatch || txSize < d->Params.TxHeader + NC_ETH_MAX || rxSize < 2048) {
+        if (!d->TxBatch || txSize < each || rxSize < 2048) {
             Fail(start, NET_FAIL_CHIP, STATUS_INVALID_PARAMETER);
             status = STATUS_INVALID_PARAMETER;
             goto fail;
@@ -1236,8 +1267,21 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
             status = STATUS_INSUFFICIENT_RESOURCES;
             goto fail;
         }
-        NetTrace("buffers: rx %u x %u, tx %u x %u (%u frames)", d->RxCount, rxSize, d->TxCount,
-                 txSize, d->TxBatch);
+        /* Offloads: only those the chip has the routines for; a large
+         * send fits one transmit buffer behind its header. */
+        start->Offload = d->Params.Offload;
+        if (!d->Chip->TxOffload)
+            start->Offload &= ~(NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_LSO4);
+        if (!d->Chip->RxChecksum) start->Offload &= ~NC_OFFLOAD_RX4;
+        start->LsoMax = d->Params.LsoMax;
+        if (start->LsoMax > txSize - d->Params.TxHeader) start->LsoMax = txSize - d->Params.TxHeader;
+        if (!(start->Offload & NC_OFFLOAD_LSO4) || start->LsoMax <= NC_ETH_MAX) {
+            start->Offload &= ~NC_OFFLOAD_LSO4;
+            start->LsoMax = 0;
+        }
+        start->TxRoom = txSize;
+        NetTrace("buffers: rx %u x %u, tx %u x %u (%u frames); offload %x, large send %u", d->RxCount,
+                 rxSize, d->TxCount, txSize, d->TxBatch, start->Offload, start->LsoMax);
     }
     RtlCopyMemory(start->DeviceMac, d->Params.Mac, 6);
     start->Vendor = d->Probe.Vendor; start->Product = d->Probe.Product;

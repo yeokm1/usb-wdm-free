@@ -304,6 +304,37 @@
 #define TX2_ALIGN        16
 #define TX2_LEN_SHIFT    4
 #define TX2_SIGNATURE    0xa8000000UL
+#define TX2_BUFFER       32768UL /* Realtek's Windows driver sends transfers of 32848 bytes */
+
+/* Offloads in both formats' first two transmit dwords and in the receive
+ * header (facts from Linux r8152.c tx_desc/rx_desc/rx_desc_v2, checked
+ * against Realtek's Windows driver on a real RTL8157: the same bits for a
+ * TCP or UDP checksum with its header offset, the IPv4 checksum alone for
+ * ICMP, and GTSENDV4 with the MSS in the second dword for a large send;
+ * that driver leaves the large send's header offset 0, Linux gives it). */
+#define TX_GTSENDV4      0x10000000UL /* dword 0: large send, IPv4 */
+#define TX_GTTCPHO_SHIFT 18           /* dword 0: TCP header offset of a large send */
+#define TX_GTTCPHO_MAX   0x7fUL
+#define TX_UDP_CS        0x80000000UL /* dword 1 */
+#define TX_TCP_CS        0x40000000UL
+#define TX_IPV4_CS       0x20000000UL
+#define TX_MSS_SHIFT     17           /* dword 1: MSS of a large send */
+#define TX_MSS_MAX       0x7ffUL
+#define TX_TCPHO_SHIFT   17           /* dword 1: TCP/UDP header offset */
+#define TX_TCPHO_MAX     0x7ffUL
+#define TX2_TCPHO_MAX    0x3ffUL
+#define RX_IPV4_CS       0x00080000UL /* first format, dword 1: IPv4 */
+#define RX_TCP_CS        0x00400000UL /* dword 1: TCP */
+#define RX_UDP_CS        0x00800000UL /* dword 1: UDP */
+#define RX_IPF           0x00800000UL /* dword 2: IP checksum failed */
+#define RX_UDPF          0x00400000UL /* dword 2: UDP checksum failed */
+#define RX_TCPF          0x00200000UL /* dword 2: TCP checksum failed */
+#define RX2_IPF          0x04000000UL /* second format, dword 2 */
+#define RX2_UDPF         0x02000000UL
+#define RX2_TCPF         0x01000000UL
+#define RX2_IPV4_CS      0x00004000UL
+#define RX2_UDP_CS       0x00000800UL
+#define RX2_TCP_CS       0x00000400UL
 
 /* ---- chip ids (MR_TX_CONFIG high word & TXC_ID_MASK) ------------------
  * RTL8152 family: 4C00, 4C10, 4800. RTL8153: 5C00, 5C10, 5C20, 5C30.

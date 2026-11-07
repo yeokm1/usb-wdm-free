@@ -49,7 +49,59 @@ typedef struct _NDIS_PACKET {
     UINT HeaderSize;
     PVOID Pool;
     ULONG FakeMagic;
+    PVOID PerPacketInfo[3];       /* this test's stand-in for the packet extension */
 } NDIS_PACKET, *PNDIS_PACKET, **PPNDIS_PACKET;
+/* Task offload (2000 DDK network guide chapter 9). */
+typedef enum { TcpIpChecksumPacketInfo, IpSecPacketInfo, TcpLargeSendPacketInfo } NDIS_PER_PACKET_INFO;
+#define NDIS_PER_PACKET_INFO_FROM_PACKET(p, id) ((p)->PerPacketInfo[(id)])
+typedef struct _NDIS_TCP_IP_CHECKSUM_PACKET_INFO {
+    union {
+        struct {
+            ULONG NdisPacketChecksumV4:1; ULONG NdisPacketChecksumV6:1; ULONG NdisPacketTcpChecksum:1;
+            ULONG NdisPacketUdpChecksum:1; ULONG NdisPacketIpChecksum:1;
+        } Transmit;
+        struct {
+            ULONG NdisPacketTcpChecksumFailed:1; ULONG NdisPacketUdpChecksumFailed:1;
+            ULONG NdisPacketIpChecksumFailed:1; ULONG NdisPacketTcpChecksumSucceeded:1;
+            ULONG NdisPacketUdpChecksumSucceeded:1; ULONG NdisPacketIpChecksumSucceeded:1;
+            ULONG NdisPacketLoopback:1;
+        } Receive;
+        ULONG Value;
+    };
+} NDIS_TCP_IP_CHECKSUM_PACKET_INFO, *PNDIS_TCP_IP_CHECKSUM_PACKET_INFO;
+#define NDIS_TASK_OFFLOAD_VERSION 1
+typedef enum { TcpIpChecksumNdisTask, IpSecNdisTask, TcpLargeSendNdisTask, MaxNdisTask } NDIS_TASK;
+typedef enum { UNSPECIFIED_Encapsulation, NULL_Encapsulation, IEEE_802_3_Encapsulation } NDIS_ENCAPSULATION;
+typedef struct _NDIS_ENCAPSULATION_FORMAT {
+    NDIS_ENCAPSULATION Encapsulation;
+    struct { ULONG FixedHeaderSize:1; ULONG Reserved:31; } Flags;
+    ULONG EncapsulationHeaderSize;
+} NDIS_ENCAPSULATION_FORMAT;
+typedef struct _NDIS_TASK_OFFLOAD_HEADER {
+    ULONG Version, Size, Reserved, OffsetFirstTask;
+    NDIS_ENCAPSULATION_FORMAT EncapsulationFormat;
+} NDIS_TASK_OFFLOAD_HEADER, *PNDIS_TASK_OFFLOAD_HEADER;
+typedef struct _NDIS_TASK_OFFLOAD {
+    ULONG Version, Size;
+    NDIS_TASK Task;
+    ULONG OffsetNextTask, TaskBufferLength;
+    UCHAR TaskBuffer[1];
+} NDIS_TASK_OFFLOAD, *PNDIS_TASK_OFFLOAD;
+typedef struct _NDIS_TASK_TCP_IP_CHECKSUM {
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; ULONG IpChecksum:1; } V4Transmit;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; ULONG IpChecksum:1; } V4Receive;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; } V6Transmit;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; } V6Receive;
+} NDIS_TASK_TCP_IP_CHECKSUM, *PNDIS_TASK_TCP_IP_CHECKSUM;
+typedef struct _NDIS_TASK_TCP_LARGE_SEND {
+    ULONG Version, MaxOffLoadSize, MinSegmentCount;
+    BOOLEAN TcpOptions, IpOptions;
+} NDIS_TASK_TCP_LARGE_SEND, *PNDIS_TASK_TCP_LARGE_SEND;
+#define OID_TCP_TASK_OFFLOAD 0xFC010201
 
 typedef struct _NDIS_PNP_CAPABILITIES {
     ULONG Flags;

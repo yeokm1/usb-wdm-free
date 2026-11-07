@@ -368,7 +368,8 @@ the class interface for the particular bus at its lower edge."
   bears on 98 SE throughput; measured in M2.
 - **Upcalls on 98 SE and ME** (section 6.4.2; record
   `docs/testing/2026-11-07-98se-tcp.md`). In the shared core
-  (`netcore.c`, x86 NDIS 5.0 build only) no receive indication and no
+  (`netcore.c`) and in `cdcnet.c`, x86 NDIS 5.0 builds only, no receive
+  indication and no
   send completion is made from a USB completion routine when
   `IoIsWdmVersionAvailable(1, 0x10)` fails (98 SE and ME): `Receive` and
   `TxDone` queue the packet (a ring of receive packets, a list of

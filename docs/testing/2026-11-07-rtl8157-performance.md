@@ -109,8 +109,10 @@ These are the bits of Linux `r8152.c` (`tx_desc`, `rx_desc_v2`).
   TCP/IP and NDIS cost per segment on an emulated processor is the
   limit; the checksum offloads remove only the checksum part, and
   without a large send nothing removes the per-segment work.
-- 2000's stack is far lighter on the same rig: 3 times XP's speed in
-  both directions with the same driver.
+- 2000's stack is far lighter on the same rig: with `04d672d`, about 2.8
+  times XP's speed out (148 against 52.9 Mb/s, means of 3) and 2.7 times
+  in (176 against 64.2); different boots and build flavours (trace on
+  2000, free on XP), so only a rough ratio.
 
 ## Legs (this branch)
 

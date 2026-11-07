@@ -47,6 +47,7 @@ typedef struct FAKE {
      * holds it is freed); NdisMSetTimer, routine and cancel counts; the
      * Set state when it was last cancelled */
     PNDIS_MINIPORT_TIMER Timer;
+    PNDIS_MINIPORT_TIMER Timers[4];   /* every timer initialised (NULL once its memory is freed) */
     long TimerSets, TimerRuns, TimerCancels;
     int TimerSetAtCancel;
     int TimerCancelFails;             /* NdisMCancelTimer fails on a set timer: its DPC is due */

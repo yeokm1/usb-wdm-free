@@ -424,6 +424,7 @@ static void Interrupt(int up)
 
 typedef struct NDIS_SIDE {
     int Hold;
+    int Inject;                       /* frames to complete from inside the next receive indications */
     PNDIS_PACKET Held[128];
     int HeldCount;
     int Received, Resources;
@@ -443,6 +444,12 @@ static void Receive(PNDIS_PACKET p)
     NdisQueryPacket(p, NULL, NULL, &b, &total);
     NdisQueryBuffer(b, &va, &len);
     CHECK(len == total && p->HeaderSize == 14);
+    if (nd.Inject > 0) {
+        /* A bulk-IN completion while the timer's routine indicates. */
+        UCHAR f[64];
+        nd.Inject--;
+        if (Queued(P_IN)) CompleteIn(P_IN, f, OneFrame(f, sizeof(f)));
+    }
     FwLock(ndLock);
     nd.Received++;
     memcpy(nd.Last, va, len);
@@ -1326,8 +1333,39 @@ static void Deferred98(void)
     Halt();
     CHECK(nd.Received == 6);
     CHECK(tp[20].Completions == 1 && tp[21].Completions == 1);
-    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.TimerSets == sets);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.TimerSets == sets);
     CHECK(Fake.Timer == NULL);                        /* freed with the adapter, not set */
+    Balanced();
+}
+
+/* 98 SE and ME: receives completed while the timer's routine is
+ * indicating are delivered by that same run; the timer is never set from
+ * inside its own routine (the fake counts that as a violation), and is not
+ * set again once the run ends with nothing queued. */
+static void DeferredReentry98(void)
+{
+    UCHAR b[64];
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(Fake.TimerSets == 1);
+    nd.Inject = 3;
+    CHECK(FakeRunTimer() == 1);
+    CHECK(nd.Received == 4 && nd.Inject == 0);
+    CHECK(Fake.TimerSets == 1 && !Fake.Timer->Set);
+    {
+        PNDIS_MINIPORT_TIMER first = Fake.Timer;
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));      /* armed anew after the run: the other timer */
+        CHECK(Fake.TimerSets == 2 && Fake.Timer != first && Fake.Timer->Set);
+        CHECK(FakeRunTimer() == 1 && nd.Received == 5);
+        UNTIL(Queued(P_IN) > 0, 2000);
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));      /* and back to the first */
+        CHECK(Fake.TimerSets == 3 && Fake.Timer == first && FakeRunTimer() == 1 && nd.Received == 6);
+    }
+    Halt();
     Balanced();
 }
 
@@ -1355,7 +1393,7 @@ static void DeferredHalt98(ULONG frames)
         FwClose(t);
     }
     CHECK(nd.Received == 0);
-    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
     Balanced();
 }
 
@@ -1594,6 +1632,7 @@ int main(void)
     FillByBytes();
     TaskOffload();
     Deferred98();
+    DeferredReentry98();
     DeferredHalt98(17);
     DeferredHalt98(64);
     ZeroLengthPackets();

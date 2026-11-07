@@ -77,7 +77,8 @@ typedef struct ADAPTER {
     BOOLEAN UpcallStop;            /* Halt: the timer is never set again */
     BOOLEAN UpcallPaused;          /* asleep (D1-D3): no timer, nothing indicated */
     BOOLEAN SleepPending;          /* a sleep request Upcalls completes when it ends */
-    NDIS_MINIPORT_TIMER UpcallTimer;
+    NDIS_MINIPORT_TIMER UpcallTimer[2];  /* used in turn: never the one whose routine may still be ending */
+    ULONG UpcallNext;              /* the timer the next ArmUpcalls sets */
     PNDIS_PACKET RxPend[RX_PACKETS];
     ULONG RxPendHead, RxPendCount;
     PNDIS_PACKET DoneHead, DoneTail;
@@ -107,7 +108,11 @@ static void ArmUpcalls(ADAPTER *a)
 {
     if (a->UpcallArmed || a->UpcallStop || a->UpcallPaused) return;
     a->UpcallArmed = TRUE;
-    NdisMSetTimer(&a->UpcallTimer, 0);
+    /* The other timer from the last one set: a routine that has just
+     * cleared UpcallArmed may not have returned yet, and its own timer is
+     * not set again (see Upcalls). */
+    NdisMSetTimer(&a->UpcallTimer[a->UpcallNext], 0);
+    a->UpcallNext ^= 1;
 }
 
 /* Complete the queued sends and indicate the queued receives, in order,
@@ -147,22 +152,36 @@ static void Deliver(ADAPTER *a, BOOLEAN indicate)
 static VOID Upcalls(PVOID s1, PVOID context, PVOID s2, PVOID s3)
 {
     ADAPTER *a = context;
-    BOOLEAN indicate, sleep;
+    BOOLEAN indicate, sleep = FALSE, more;
     UNREFERENCED_PARAMETER(s1);
     UNREFERENCED_PARAMETER(s2);
     UNREFERENCED_PARAMETER(s3);
+    /* UpcallArmed stays TRUE until this routine ends with both queues
+     * empty, so ArmUpcalls never sets the timer while it runs: what
+     * arrives meanwhile is delivered by the loop here. Setting a timer
+     * again from inside its own routine is not relied on: on 98 SE/ME an
+     * occasional stall of both directions, and a halt that waited for
+     * ever, both fit such a set being lost (UpcallArmed left TRUE). */
     CdcLock(a);
-    a->UpcallArmed = FALSE;
     a->UpcallRunning = TRUE;
     a->UpcallRuns++;
-    indicate = !a->Halting && !a->UpcallPaused;
     CdcUnlock(a);
-    Deliver(a, indicate);
-    CdcLock(a);
-    a->UpcallRunning = FALSE;
-    sleep = a->SleepPending && !a->UpcallArmed;
-    if (sleep) a->SleepPending = FALSE;
-    CdcUnlock(a);
+    for (;;) {
+        CdcLock(a);
+        indicate = !a->Halting && !a->UpcallPaused;
+        CdcUnlock(a);
+        Deliver(a, indicate);
+        CdcLock(a);
+        more = a->RxPendCount || a->DoneHead;
+        if (!more) {
+            a->UpcallArmed = FALSE;
+            a->UpcallRunning = FALSE;
+            sleep = a->SleepPending;
+            a->SleepPending = FALSE;
+        }
+        CdcUnlock(a);
+        if (!more) break;
+    }
     if (sleep) {
         /* The sleep request Set pended for this routine (SleepNow). */
         Deliver(a, FALSE);
@@ -183,7 +202,12 @@ static void StopUpcalls(ADAPTER *a, BOOLEAN halt)
     CdcLock(a);
     if (halt) a->UpcallStop = TRUE; else a->UpcallPaused = TRUE;
     CdcUnlock(a);
-    NdisMCancelTimer(&a->UpcallTimer, &cancelled);
+    {
+        BOOLEAN c0 = FALSE, c1 = FALSE;   /* only the timer last set can be set */
+        NdisMCancelTimer(&a->UpcallTimer[0], &c0);
+        NdisMCancelTimer(&a->UpcallTimer[1], &c1);
+        cancelled = (BOOLEAN)(c0 || c1);
+    }
     CdcLock(a);
     if (cancelled) a->UpcallArmed = FALSE;
     busy = a->UpcallArmed || a->UpcallRunning;
@@ -209,7 +233,12 @@ static BOOLEAN SleepNow(ADAPTER *a)
     CdcLock(a);
     a->UpcallPaused = TRUE;
     CdcUnlock(a);
-    NdisMCancelTimer(&a->UpcallTimer, &cancelled);
+    {
+        BOOLEAN c0 = FALSE, c1 = FALSE;   /* only the timer last set can be set */
+        NdisMCancelTimer(&a->UpcallTimer[0], &c0);
+        NdisMCancelTimer(&a->UpcallTimer[1], &c1);
+        cancelled = (BOOLEAN)(c0 || c1);
+    }
     CdcLock(a);
     if (cancelled) a->UpcallArmed = FALSE;
     busy = a->UpcallArmed || a->UpcallRunning;
@@ -824,7 +853,10 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
      * once NDIS can send or set a filter, which is after Initialize
      * returns, so no failure path below has one to cancel. */
     a->Defer = !IoIsWdmVersionAvailable(1, 0x10);
-    if (a->Defer) NdisMInitializeTimer(&a->UpcallTimer, handle, Upcalls, a);
+    if (a->Defer) {
+        NdisMInitializeTimer(&a->UpcallTimer[0], handle, Upcalls, a);
+        NdisMInitializeTimer(&a->UpcallTimer[1], handle, Upcalls, a);
+    }
 #endif
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }

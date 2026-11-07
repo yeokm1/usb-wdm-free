@@ -69,6 +69,8 @@ void CdcTrace(const char *format, ...) { (void)format; }
 
 /* ---------------- the NDIS side ---------------- */
 
+static int inject;                              /* frames to deliver from inside the next indications */
+static void Frame(UCHAR fill, UINT length);
 static int timing;                              /* inside FakeRunTimer, or Halt */
 static int received, completed, early;
 static UCHAR lastFrame[1514];
@@ -81,6 +83,7 @@ static void Receive(PNDIS_PACKET p)
     PVOID va;
     UINT len, total;
     if (!Fake.Wdm110 && !timing) early++;
+    if (inject > 0) { inject--; Frame(0x70, 90); }   /* a bulk-IN completion during the run */
     NdisQueryPacket(p, NULL, NULL, &b, &total);
     NdisQueryBuffer(b, &va, &len);
     CHECK(len == total && p->HeaderSize == 14);
@@ -151,7 +154,7 @@ static void Fresh(int wdm110)
     ULONG filter = NDIS_PACKET_TYPE_DIRECTED, r = 0, n = 0;
     memset(&Fake, 0, sizeof(Fake));
     memset(tp, 0, sizeof(tp));
-    received = completed = early = setCompletes = 0;
+    received = completed = early = setCompletes = inject = 0;
     queuePower = 0;
     FakeSetComplete = SetDone;
     Fake.Wdm110 = wdm110;
@@ -264,7 +267,7 @@ static void Win98(void)
     timing--;
     CHECK(received == 3);
     CHECK(tp[20].Completions == 1 && tp[21].Completions == 1);
-    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
     Balanced();
 }
 
@@ -282,7 +285,7 @@ static void Win98Halt(int frames)
         FwClose(t);
     }
     CHECK(received == 0);
-    CHECK(Fake.TimerCancels == 1 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
     Balanced();
 }
 
@@ -375,6 +378,23 @@ static void Queue(void)
     Balanced();
 }
 
+/* 98 SE and ME: frames that arrive while the timer's routine indicates
+ * are delivered by that same run; the timer is not set from inside it. */
+static void Win98Reentry(void)
+{
+    Fresh(0);
+    inject = 0;
+    Frame(0x71, 100);
+    CHECK(Fake.TimerSets == 1);
+    inject = 3;
+    CHECK(RunTimer() == 1);
+    CHECK(received == 4 && inject == 0 && Fake.TimerSets == 1 && !Fake.Timer->Set);
+    Frame(0x72, 100);
+    CHECK(Fake.TimerSets == 2 && RunTimer() == 1 && received == 5);
+    Fake.Chars.HaltHandler(ctx);
+    Balanced();
+}
+
 int main(void)
 {
     Nt();
@@ -383,6 +403,7 @@ int main(void)
     Win98Halt(17);
     Win98Halt(64);
     Win98Power();
+    Win98Reentry();
     printf("PASS: %lu CDCNET upper-edge checks (cdcnet.c on the fake backend)\n", assertions);
     return 0;
 }

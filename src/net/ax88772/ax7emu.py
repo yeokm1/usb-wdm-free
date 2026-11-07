@@ -127,6 +127,13 @@ Behind the adapter sits the SIMULATED network of axemu.py (one host,
 192.168.77.1: ARP, ICMP echo, DHCP offering 192.168.77.2), with TCP from
 tcphost.py (echo 7, discard 9, a byte source 19, HTTP 80). No physical
 USB device is accessed.
+From Supereal's SR9800 1.1.7.0 driver run against this model (7 and XP,
+docs/testing/2026-11-07-model-fixes-ref4.md): its first request is
+SET_FEATURE(DEVICE_REMOTE_WAKEUP), taken as the configuration advertises
+remote wakeup; WRITE_MONITOR_MODE 0x1D and READ_MONITOR_MODE 0x1C keep a
+value and do nothing else; its records carry no flag bits and take TXCOE
+(0x2E, written 0307) as above. Its c0 B8 0120 3000 poll has no name in
+any source and is refused (the driver carries on).
 """
 import argparse
 import collections
@@ -158,6 +165,7 @@ ASIX_WRITES_NO_DATA, ASIX_WRITE_24, ASIX_READ_2D = (0x26,), 0x24, 0x2d
 # bit sets that match the INFs' offload defaults (receive 0x0319, transmit 0x0307: IPv4 header, TCP and
 # UDP over IPv4, TCP and UDP over IPv6), and 0x0009 / 0x0003 when the driver turns offload down.
 WRITE_RXCOE, WRITE_TXCOE = 0x2c, 0x2e
+READ_MONITOR_MODE, WRITE_MONITOR_MODE = 0x1c, 0x1d                # sr9800.h SR_CMD_WRITE_MONITOR_MODE, asix.h the same number
 TXCOE_IP, TXCOE_TCP, TXCOE_UDP = 0x0001, 0x0002, 0x0004
 TX_NO_COE = 0x8000                 # transmit header bit 15: the record's checksums are left as sent
 TX_JOIN_MAX = 65536                # a bulk-OUT transfer joined from packets: at most this many bytes
@@ -188,6 +196,7 @@ class Chip:
             self.eeprom[4 + i] = MODEL_MAC[2 * i] | MODEL_MAC[2 * i + 1] << 8
         self.node_id = bytearray(MODEL_MAC)  # INFERRED: loaded from the EEPROM at power-up and by RSE
         self.rx_ctl = self.medium = 0
+        self.monitor = 0                     # WRITE_MONITOR_MODE 0x1D; INFERRED: 0 at power-up
         self.multi = bytearray(8)
         self.sw_mii = False
         self.qct = None
@@ -277,6 +286,8 @@ class Chip:
         self.reads += 1
         if request == STATMNGSTS and length == 1:
             return bytes((CHIPCODE_772B | (HOST_EN if self.sw_mii else 0),))
+        if request == READ_MONITOR_MODE and length == 1:
+            return bytes((self.monitor & 255,))
         if request == READ_PHY_ID and length == 2:
             return bytes((0xe0, EMBD_PHY))
         if request == READ_EEPROM and length == 2 and value < 64:
@@ -322,6 +333,8 @@ class Chip:
             self.txcoe = value
         elif request in ASIX_WRITES_NO_DATA and not data or request == ASIX_WRITE_24 and len(data) == 4:
             pass                                        # INFERRED: accepted, no effect (see the header)
+        elif request == WRITE_MONITOR_MODE and not data:
+            self.monitor = value                        # sr9800.h/asix.h 0x1D; wake-up only, no effect here
         elif request == QCTCTRL and not data:
             self.qct = (value, index)
         elif request == WRITE_NODE_ID and len(data) == 6:
@@ -386,6 +399,7 @@ class Model:
         pid = default_pid if pid is None else pid
         self.chip = Chip(phy_id, mbps, half, partner_pause)
         self.sr9800 = chip == 'sr9800'
+        self.remote_wakeup = False
         self.net = Host(self.log, now)
         self.vid, self.pid = vid, pid
         self.chip_name = chip
@@ -745,6 +759,14 @@ class Model:
             status, data = 0, b'\0'
         elif request in (1, 3) and rt == 2 and value == 0:
             status = 0
+        elif request in (1, 3) and rt == 0 and value == 1:
+            # CLEAR/SET_FEATURE(DEVICE_REMOTE_WAKEUP): the configuration
+            # advertises remote wakeup (bmAttributes 0xA0), so the feature is
+            # taken (USB 2.0 9.4.1, 9.4.9). Supereal's SR9800 driver sends it
+            # first and stops on a STALL.
+            status = 0
+            self.remote_wakeup = request == 3
+            self.log('remote_wakeup', enabled=self.remote_wakeup)
         elif rt == 0xc0:                            # in any state (see the header)
             got = self.chip.read(request, value, index, length)
             status, data = (0, got) if got is not None else (4, b'')

@@ -259,6 +259,26 @@ class ChipTests(unittest.TestCase):
             self.assertEqual(self.control(g, 0xC0, 0xFF, 0x370C, 0, size), (0, bytes(size)))
             self.assertEqual(self.control(g, 0xC0, 0xFF, 0x3711, 0, 2)[0], 0 if part == 'cp2105' else 4)
 
+    def test_ref4_maker_driver_requests(self):
+        """Prolific 3.8.31.1/2.1.51 and Silicon Labs 4.20 (docs/testing/2026-11-07-model-fixes-ref4.md)."""
+        p = self.model('pl2303hx')
+        self.assertEqual(self.control(p, 0x40, 0x01, 0x0404, 1)[0], 0)
+        self.assertEqual(self.control(p, 0xC0, 0x01, 0x8484, 0, 1), (0, b'\x00'))   # not the 1 written
+        self.control(p, 0x40, 0x01, 0x0606, 0xAA)
+        self.assertEqual(self.control(p, 0xC0, 0x01, 0x8686, 0, 2), (0, b'\xaa\x00'))  # wLength 2
+        u = chipemu.ChipModel(Connection(), io.StringIO(), 'pl2303hx')       # unconfigured
+        u.peer_caps = LEGACY
+        u.handle(100, 1, struct.pack('<BBBBHHH', 0, 0x01, 0x40, 0, 0x0000, 0x18, 0))
+        reply = [x for x in u.connection.messages() if x[0] == 100][-1][2]
+        self.assertEqual(reply[3], 0)
+        c = self.model('cp2102')
+        self.assertEqual(self.control(c, 0x41, 0x11, 0, 0)[0], 0)           # RESET, before IFC_ENABLE
+        self.assertEqual(self.control(c, 0x41, 0x01, 0x0020, 0)[0], 0)      # SET_BAUDDIV 115200
+        self.assertEqual(self.events('rate')[-1]['rate'], 115200)
+        self.assertEqual(self.control(c, 0xC1, 0x02, 0, 0, 2), (0, struct.pack('<H', 0x20)))
+        self.assertEqual(self.control(c, 0x41, 0x01, 0, 0)[0], 4)           # divisor 0
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0741, 0)[0], 0)      # 7 bits, space, 1.5 stop
+
     def test_maker_driver_requests(self):
         # What the makers' own drivers sent in the 2026-11-06 reference runs.
         for part in ('ft232am', 'ft232bm', 'ft2232c', 'cp2101', 'cp2102', 'cp2103', 'cp2104'):
@@ -316,7 +336,8 @@ class ChipTests(unittest.TestCase):
         self.control(c, 0x41, 0x07, 0x0202, 0)                           # CTS back
         self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=31), b'ABC')
         self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=32), b'Z')
-        self.assertEqual(self.control(c, 0x41, 0x03, 0x0801, 0)[0], 4)      # 8 bits, 1.5 stop
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0801, 0)[0], 0)      # 8 bits, "1.5" stop: 2
+        self.assertEqual(self.events('framing')[-1]['stop'], 2)
         one = self.model('cp2101')
         self.assertEqual(self.control(one, 0x41, 0x03, 0x0700, 0)[0], 4)    # the CP2101: 8 bits only
 

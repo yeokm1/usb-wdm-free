@@ -142,3 +142,29 @@ Notes:
   `wv-8-x86` and `wv-8-x64` byte for byte as before.
 - No usbmidi guest leg; its 9x section has the same change as `uac2`'s.
 - No leg under NUSB's EHCI or xHCI98.
+
+## usbmidi on 98 SE (second time box, 2026-11-07 evening)
+
+Same rig; base `w98c` rebuilt the same way. Device: `midiemu.py --profile
+lone` (one MIDIStreaming interface, matched by the 98 SE INF's
+`USB\Class_01&SubClass_03&Prot_00`), Full Speed on UHCI port 1.
+Packages: usbmidi 0.1.8's `free\audio\usbmidi\w98se` (`usbmidi.inf`
+`c4beb3fe...9d42588c`) and the new `w98se` INF that `mkinf.ps1` writes
+from the template at w47-rel019 `16c6f7d` (`a0471714...f71527b1e`), with
+0.1.8's `usbmidi.sys` (`14437317...71dd865c74245`) in both. Test:
+`MIDITEST list`, `MIDITEST 0 0` (355 bytes through the simulator's echo,
+"PASS; cleanup=complete").
+
+| Leg | INF | Prompts from the package's disk | Windows' own prompts | MIDITEST 0 0 |
+|---|---|---|---|---|
+| h1 | 0.1.8, clean install | `ks.cat`, `ksclockf.ax`, `ksdata.ax`, `ksinterf.ax`, `ksproxy.ax`, `ksuser.dll`, `ksvpintf.ax`, `wdmaudio.cat` ("on usbmidi installation disk"), skipped | "Windows 98 Second Edition CD-ROM", answered with `E:\WIN98` | PASS |
+| h1, upgrade | new INF copied over the staged folder; Device Manager > Remove; plug | none | none | WinMM failure 4 (MMSYSERR_ALLOCATED, 98 SE's documented state after a replug until a restart); after a cold start PASS, PASS |
+| h3 | new, clean install | none | `ks.sys` on "Windows 98 Second Edition CD-ROM", answered with `E:\WIN98` | PASS, PASS, PASS |
+| h4 | 0.1.8, clean install | the same 8, skipped | as h1 | PASS, PASS, PASS |
+| h2 | new, clean install | none | as h3 | fatal exception 0E in VMM(01)+000094B0 during the first loopback (data had flowed); after a cold start, and again after a replug, the device was read but never configured (descriptor requests only), 0 MIDI ports |
+
+After the upgrade (h1) `INF\OTHER` holds the new INF (4,359 bytes) and
+the device's loader is `*NTKERN,MMDEVLDR.VXD`, written by the new INF.
+h2 is one of two clean installs with the new INF (h3 passed three times)
+and was not repeated in the time box; its cause is not read. ME was not
+run: its `wme` INF has only the by-hand model.

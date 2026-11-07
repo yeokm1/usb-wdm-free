@@ -23,8 +23,11 @@ Options shape what cdcnet must cope with: --caps (bmNetworkCapabilities),
 --out-remainder/--out-alignment (the host's transmit layout), --in-layout
 front|end|split (where the device puts its NDP16s), --mc-filters
 (wNumberMCFilters), --flap-after/--flap-for (NETWORK_CONNECTION 0 then 1),
---speed high|full. Behind the function sits the same SIMULATED host as
-rtlemu.py (192.168.77.1: ARP, ICMP echo, DHCP). Every NTB the host sends
+--speed high|full. Behind the function sits the SIMULATED host of
+axemu.py (192.168.77.1: ARP, ICMP echo, DHCP; it reassembles a fragmented
+request and fragments a long answer, which rtlemu.py's host, used here
+before, did not: Linux's cdc_ncm and cdcnet on 98 SE saw a 4000-byte echo
+answered with its first 1472 bytes only). Every NTB the host sends
 is checked against NCM 1.0's rules and the advertised parameters; a
 violation is logged as ntb_out_bad with its reason. The datagram
 alignment is taken for the datagram or for its payload after the
@@ -43,8 +46,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'rtl815x'))
-from rtlemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ax88179'))
+from axemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
 
 CAP_VERSION, CAP_EP_MAX, CAP_ID64, CAP_BULK32 = 1, 4, 5, 6
 CAPS = (1 << CAP_VERSION) | (1 << CAP_EP_MAX) | (1 << CAP_ID64) | (1 << CAP_BULK32)
@@ -196,7 +199,7 @@ class Model:
         self.f = function or Function()
         self.speed = self.f.speed
         self.in_layout, self.flap_after, self.flap_for = in_layout, flap_after, flap_for
-        self.net = Network(self.log)
+        self.net = Network(self.log, now=self.now)
         self.peer_caps = 0
         self.config = self.alt = 0
         self.interrupt = False

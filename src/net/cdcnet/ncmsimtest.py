@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ncmemu as n  # noqa: E402
-from rtlemu import HOST_MAC, HOST_IP, GUEST_IP, ipv4, checksum  # noqa: E402
+from axemu import HOST_MAC, HOST_IP, GUEST_IP, ipv4, checksum  # noqa: E402
 
 DLL_PATH = Path(__file__).resolve().parents[3] / 'out/net/cdcnet/hostabi/cdccore.dll'
 U8P = c.POINTER(c.c_ubyte)

@@ -539,10 +539,10 @@ parser, the front ends, the report), `absptr.h`, `absptr.rc`,
 core), `testinf.ps1` (the test INF copies), `ptrtest.c` and `ptrtest.cmd`
 (the guest reading tool), `absemu.py` (the simulator).
 
-Planned release folders (none released yet): `free/hid/absptr/w98se-me/`
-(98 SE, ME), `free/hid/absptr/w2k-xp/` (2000, XP 32-bit) and an x64
-folder for XP x64, Vista x64 and 7 x64 (`absptr64.inf`, the wdm64
-build), named by the owner at the release.
+Release folders (from usb-wdm-free 0.1.9): `free/hid/absptr/w98se-me/`
+(98 SE, ME), `free/hid/absptr/w2k-xp/` (2000, XP 32-bit) and
+`free/hid/absptr/xp-7-x64/` for XP x64, Vista x64 and 7 x64
+(`absptr64.inf`, the wdm64 build; the name is the owner's, 2026-11-07).
 
 ## 10. What is adapted, and the NOTICE.md rows
 
@@ -650,8 +650,8 @@ For the owner's release notes when absptr is first released (not in
 `docs/release-notes.md` until then).
 
 - **absptr, absolute pointing devices** (`hid/absptr/w98se-me/`, 98 SE
-  and ME; `hid/absptr/w2k-xp/`, 2000 and XP, 32-bit; the x64 folder, XP
-  x64, Vista x64 and 7 x64):
+  and ME; `hid/absptr/w2k-xp/`, 2000 and XP, 32-bit; `hid/absptr/xp-7-x64/`,
+  XP x64, Vista x64 and 7 x64):
   - On 98 SE and ME: the Wacom PenPartner, HID touch screens and pens,
     and absolute mice that Windows does not place right (12-bit
     positions). The touch screens of section 8 are found by their ids;
@@ -684,7 +684,7 @@ For the owner's release notes when absptr is first released (not in
     For a touch screen or pen, then uninstall the "HID-compliant device"
     under it (View, Devices by connection) and "Scan for hardware
     changes": it comes back as "HID-compliant mouse".
-  - Installing on XP x64: as on XP, from the x64 folder.
+  - Installing on XP x64: as on XP, from `xp-7-x64`.
   - Installing on Vista x64 and 7 x64: the driver needs a signature
     Windows accepts (see the x64 notes of this release). Stage the INF
     from an elevated prompt (`pnputil -a absptr64.inf`), then in Device

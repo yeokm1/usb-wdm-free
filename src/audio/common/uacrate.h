@@ -43,12 +43,16 @@ unsigned int UacRateFeedbackStride(int highSpeed, unsigned int capacity);
 #define UAC_FEEDBACK_BAD 0
 #define UAC_FEEDBACK_VALUE 1
 #define UAC_FEEDBACK_KEEPALIVE 2
+#define UAC_FEEDBACK_EMPTY 3
 /* One successful feedback packet of a URB whose packets are `stride`
  * bytes apart in a `bufferBytes` buffer. A packet whose stride does not
  * lie in the buffer, or whose length is above the stride, is rejected
  * before the buffer is read, a zero-length one included. A zero-length
- * packet is a keepalive only once a valid rate is active. Counts
- * BadFeedback on rejection, as UacRateFeedback does.
+ * packet is a keepalive only once a valid rate is active; before that it
+ * is UAC_FEEDBACK_EMPTY: the endpoint was serviced and answered nothing,
+ * the nominal cadence goes on, and it is not counted as bad
+ * (docs/design/uac2.md 25.6). Counts BadFeedback on rejection, as
+ * UacRateFeedback does.
  */
 int UacRateFeedbackPacket(UAC_RATE *state, const unsigned char *buffer,
     unsigned int bufferBytes, unsigned int offset, unsigned int length,

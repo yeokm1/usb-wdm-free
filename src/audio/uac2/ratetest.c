@@ -113,7 +113,8 @@ static void FullSpeed(void)
     /* Lengths, strides and offsets at the packet level. */
     CHECK(UacRateInitialize(&s,48000,0,1,4,200));
     bad=s.BadFeedback;
-    CHECK(UacRateFeedbackPacket(&s,b,32,0,0,4)==UAC_FEEDBACK_BAD); /* no rate yet */
+    CHECK(UacRateFeedbackPacket(&s,b,32,0,0,4)==UAC_FEEDBACK_EMPTY); /* no rate yet: serviced, empty */
+    CHECK(s.BadFeedback==bad && !s.FeedbackActive);
     for(i=0;i<32;i+=4) Feedback(b+i,48u<<16);
     CHECK(UacRateFeedbackPacket(&s,b,32,0,1,4)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,b,32,0,2,4)==UAC_FEEDBACK_BAD);
@@ -123,13 +124,13 @@ static void FullSpeed(void)
     CHECK(UacRateFeedbackPacket(&s,b,32,33,0,4)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,NULL,32,0,4,4)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,b,32,0xfffffffcu,4,4)==UAC_FEEDBACK_BAD);
-    CHECK(s.BadFeedback==bad+9 && !s.FeedbackActive);
+    CHECK(s.BadFeedback==bad+8 && !s.FeedbackActive);
     CHECK(UacRateFeedbackPacket(&s,b,32,28,4,4)==UAC_FEEDBACK_VALUE);
     Feedback3(b+4,48u<<14);
     CHECK(UacRateFeedbackPacket(&s,b,32,4,3,4)==UAC_FEEDBACK_VALUE); /* 3 bytes in a 4-byte stride */
     CHECK(UacRateFeedbackPacket(&s,b,32,8,0,4)==UAC_FEEDBACK_KEEPALIVE);
     good=s.GoodFeedback;
-    CHECK(good==2 && s.BadFeedback==bad+9);
+    CHECK(good==2 && s.BadFeedback==bad+8);
     /* Once active, a zero-length packet is still held to the buffer. */
     CHECK(UacRateFeedbackPacket(&s,b,32,33,0,4)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,b,32,29,0,4)==UAC_FEEDBACK_BAD);
@@ -138,7 +139,7 @@ static void FullSpeed(void)
     CHECK(UacRateFeedbackPacket(&s,b,32,0,0,0)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,b,3,0,0,4)==UAC_FEEDBACK_BAD);
     CHECK(UacRateFeedbackPacket(&s,b,32,28,0,4)==UAC_FEEDBACK_KEEPALIVE);
-    CHECK(s.GoodFeedback==good && s.BadFeedback==bad+15);
+    CHECK(s.GoodFeedback==good && s.BadFeedback==bad+14);
     CHECK(UacRateFeedbackPacket(&s,b,24,0,3,3)==UAC_FEEDBACK_BAD); /* b[0..2] is 16.16 low bytes */
     Feedback3(b,48u<<14);
     CHECK(UacRateFeedbackPacket(&s,b,24,0,3,3)==UAC_FEEDBACK_VALUE);
@@ -169,11 +170,23 @@ static void Deadline(void)
     last=0;
     for(now=ms;now<=1100*ms;now+=ms) {
         if(UacRateFeedbackPacket(&s,b,32,0,4,4)!=UAC_FEEDBACK_BAD) last=now;
-        if(UacRateFeedbackPacket(&s,b,32,4,0,4)!=UAC_FEEDBACK_BAD) last=now;
+        if(UacRateFeedbackPacket(&s,b,32,4,3,4)!=UAC_FEEDBACK_BAD) last=now;
         if(UacRateFeedbackPacket(&s,b,32,8,5,4)!=UAC_FEEDBACK_BAD) last=now;
         CHECK(UacFeedbackLate(now,last,s.FeedbackActive)==(now>1000*ms));
     }
     CHECK(last==0 && !s.FeedbackActive);
+    /* Section 25.6: empty answers before the first value keep the start
+     * deadline away (the endpoint is serviced, the cadence nominal), for
+     * as long as they come; a value then makes the stream active. */
+    CHECK(UacRateInitialize(&s,48000,0,1,4,200));
+    last=0;
+    for(now=ms;now<=5000*ms;now+=ms) {
+        CHECK(UacRateFeedbackPacket(&s,b,32,4,0,4)==UAC_FEEDBACK_EMPTY); last=now;
+        CHECK(!UacFeedbackLate(now,last,s.FeedbackActive) && !s.FeedbackActive && !s.BadFeedback);
+    }
+    Feedback(b,48u<<16);
+    CHECK(UacRateFeedbackPacket(&s,b,32,0,4,4)==UAC_FEEDBACK_VALUE && s.FeedbackActive);
+    CHECK(UacRateFeedbackPacket(&s,b,32,4,0,4)==UAC_FEEDBACK_KEEPALIVE);
 
     CHECK(UacRateInitialize(&s,48000,0,1,4,200));
     Feedback(b,48u<<16);

@@ -83,7 +83,7 @@ typedef struct UAC_USB_STATS {
  * inputs included), ascending; discrete ranges as given, continuous ones
  * as the common rates they contain. Close requires every stream destroyed.
  */
-NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out);
+NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_DEV **out);
 NTSTATUS UacUsbRates(UAC_DEV *dev, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count);
 int UacUsbHighSpeed(UAC_DEV *dev);
 void UacUsbClose(UAC_DEV *dev);

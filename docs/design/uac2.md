@@ -2374,3 +2374,96 @@ device 1.5% fast); a device at 44.1 kHz likewise on 98 SE. The released
 0.1.8.26 fails the 4-byte endpoint. On XP's own UHCI playback fails with
 either size, and 0.1.8.26 fails the 3-byte case the same way; the cause
 is not settled.
+
+## 24. A URB the stack fails whole, and Full Speed under 2000's own UHCI (xHCI98 Phase 47, 2026-11-07)
+
+### 24.1 The reports
+
+- XP, 7 and Vista under Windows' own EHCI and UHCI: playback of the
+  asynchronous profiles (an explicit feedback endpoint) stopped after a
+  few milliseconds to a few seconds and did not start again until the
+  stream was closed; under xHCI98 the same profiles played. Recording
+  passed everywhere.
+- 2000 under its own UHCI, Full Speed (`fs`, `fs4`): `uac2wdm` was the
+  device's service, yet the device was never configured (no
+  `SET_CONFIGURATION`) and no wave device appeared.
+
+### 24.2 What the trace showed
+
+A trace build (`build.cmd wdmx86 trace`, test-only: every URB's submit
+and completion, written to QEMU's debug console port 0xE9 at an anomaly)
+on XP under Windows' EHCI and UHCI:
+
+- When the host controller falls behind its schedule (here QEMU's EHCI
+  and UHCI skipping frames under load; on real hardware a resubmission
+  delayed past its frames does the same), every packet of one or more
+  queued URBs comes back failed: `USBD_STATUS_ISO_NOT_ACCESSED_BY_HW`
+  (EHCI) or `USBD_STATUS_NOT_ACCESSED` (UHCI) per packet, and the URB
+  with `USBD_STATUS_ISOCH_REQUEST_FAILED` (IRP `STATUS_UNSUCCESSFUL`).
+  `usb.h` defines that URB status as "all packets in an iso transfer
+  complete with an error". The URBs submitted after it were scheduled
+  and completed normally.
+- `uac2` treated any failed URB as fatal: the worker stopped, cancelled
+  the queue and exited, and nothing resubmitted until the client stopped
+  the stream. A URB with only some packets failed was already counted
+  and passed over (4.4, "never retried").
+- On 2000 and the controller's own UHCI, the device sits under 2000's
+  USB 1.1 stack (its hub service is `usbhub`; the EHCI controller's
+  devices are under 2000's USB 2.0 hub driver, `usbhub20`, as the
+  device registry of these legs shows). That hub does not answer the USBDI bus interface query (version 1, with
+  `IsHighSpeed`), and `UacUsbOpen` refused an unknown speed on 2000 and
+  later, so the start failed before the configuration was selected; the
+  same as ME before its rule (16.5, the ME row).
+
+### 24.3 The change
+
+- **A URB failed whole is a lost interval.** A completion whose URB
+  status is `USBD_STATUS_ISOCH_REQUEST_FAILED`, whose every packet
+  carries a failure of its own, and which was not cancelled
+  (`UacPlanIsoLost`) is handled as a URB whose packets all failed: its
+  packets are counted as errors, a render stream's position advances
+  past its bytes (they are not sent again), a capture stream delivers
+  nothing for it, a feedback URB counts its packets as bad feedback, and
+  the slot is resubmitted. Any other failed URB status (a bad start
+  frame, a device gone, a halted pipe) and every failed IRP without that
+  URB status stay fatal, as before.
+- **Bounded.** Lost data URBs in a row are counted; a run covering
+  `UAC_LOST_LIMIT_MS` (1 s) of data (`UacPlanLostLimit`: 250 URBs of
+  4 ms, at least 2) stops the stream as a failure did before. A good
+  data URB ends the run. Feedback stays under its own deadline (23.2,
+  `uacwatch.h`: 1 s before the first valid value, 200 ms after), which
+  this change does not move.
+- **The speed under 2000's USB 1.1 stack.** The rule that a missing or
+  version 0 USBDI answer means Full Speed (98 SE and ME, below WDM 1.10)
+  now also applies on 2000 (WDM 1.10, below 1.20) when the device's PDO
+  belongs to the driver object `\Driver\usbhub` (`UacPlanUsb11Hub`),
+  2000's USB 1.1 hub driver, which runs only Full and Low Speed devices.
+  Under any other hub on 2000 (a USB 2.0 stack that does not answer, for
+  one) and on XP and later an unknown speed is still refused: a missing
+  interface alone does not prove Full Speed.
+- The trace flavour (`build.cmd <profile> trace`) is test-only and never
+  released; a free or checked build compiles none of it.
+
+### 24.4 Not changed
+
+- Explicit `StartFrame` scheduling: the URBs after a lost one were placed
+  by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays.
+- Packet counts (multiples of 8 at High Speed `bInterval` 1) and the
+  queue (19.4).
+- The feedback deadline. Under QEMU on a loaded host it can still end a
+  stream when the controller skips more than 200 ms of frames; a stall
+  that long is not expected on real hardware.
+- When a stream stops on a failure, the KS pin stays in RUN with a
+  position that no longer moves, until the client stops or closes it;
+  with Windows' mixer (XP) that can be much later than the client's own
+  close. Not changed here.
+
+### 24.5 Tests
+
+- `test.cmd` (`desctest.c`): `UacPlanIsoLost` true only for that URB
+  status with every packet failed (not with one packet good, no packets,
+  success, a bad start frame, device gone, a cancelled or a halted
+  pipe status); `UacPlanLostLimit` for 1, 3, 4 and 8 ms spans, a span of
+  a second or more, and 0; `UacPlanUsb11Hub` for the name in either case,
+  and not for `usbhub20`, a shorter or other name, or none.
+- Legs: [uac2-iso-ehci](../testing/2026-11-07-uac2-iso-ehci.md).

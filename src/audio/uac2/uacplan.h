@@ -157,6 +157,28 @@ unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int que
                           unsigned int capacity, unsigned long ringBytes,
                           unsigned int *packets, unsigned long *spanUs);
 
+/* A lost service interval (docs/design/uac2.md section 24). Windows'
+ * USB stack completes an isochronous URB whose every packet failed with
+ * USBD_STATUS_ISOCH_REQUEST_FAILED (usb.h: "returned by HCD if all packets
+ * in an iso transfer complete with an error"), each packet carrying its
+ * own status (not accessed by the controller, late). The pipe stays
+ * usable: the next URBs are scheduled again. UacPlanIsoLost: 1 when a
+ * completion is such a URB (that URB status, packets > 0 and every one of
+ * them failed), else 0. The caller excludes cancellation. */
+#define UAC_ISO_LOST_STATUS 0xC0000B00UL
+unsigned int UacPlanIsoLost(unsigned long urbStatus, unsigned int packets, unsigned int failed);
+/* How many lost data URBs in a row a stream rides out before it stops:
+ * those covering UAC_LOST_LIMIT_MS at spanUs each (rounded up), at least
+ * 2; spanUs 0 is taken as 1 ms. */
+#define UAC_LOST_LIMIT_MS 1000U
+unsigned int UacPlanLostLimit(unsigned long spanUs);
+
+/* Section 24: 1 when a device's PDO belongs to Windows 2000's USB 1.1
+ * hub driver, whose devices run at Full or Low Speed: the driver object's
+ * name (count UTF-16 units, no terminator needed) is "\Driver\usbhub",
+ * compared without case, whole. 2000's USB 2.0 hub driver is usbhub20. */
+unsigned int UacPlanUsb11Hub(const unsigned short *name, unsigned int count);
+
 /* Sync type of an alternate's data endpoint: 1 async, 2 adaptive,
  * 3 synchronous, 0 none. */
 #define UacPlanSync(alt) (((alt)->Attributes >> 2) & 3)

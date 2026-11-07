@@ -196,6 +196,7 @@ struct UAC_USB {
     KEVENT Wake, Ready, Exited; /* Exited: the worker's last act */
     BOOLEAN Stop, ActiveAlt, WaitThread; /* WaitThread: WDM 1.10+ */
     ULONG NextSequence, CompletedSequence;
+    ULONG LostRun, LostLimit; /* section 24: lost data URBs in a row, and the most ridden out */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
@@ -990,11 +991,18 @@ static VOID Fail(UAC_USB *s, NTSTATUS status)
     TR_DUMP(("fail", (ULONG)status, s->CompletedSequence, s->NextSequence));
 }
 
+/* The packets that report a failure of their own. */
+static ULONG FailedPackets(USB_SLOT *slot)
+{
+    ULONG i, failed = 0;
+    for (i = 0; i < slot->Packets; i++)
+        if (!USBD_SUCCESS(slot->Urb->IsoPacket[i].Status)) failed++;
+    return failed;
+}
+
 static ULONG PacketErrors(USB_SLOT *slot)
 {
-    ULONG i, errors = 0;
-    for (i = 0; i < slot->Packets; i++)
-        if (!USBD_SUCCESS(slot->Urb->IsoPacket[i].Status)) errors++;
+    ULONG errors = FailedPackets(slot);
     if (!NT_SUCCESS(slot->Status) || !USBD_SUCCESS(slot->Urb->Hdr.Status))
         if (!errors) errors = slot->Packets;
     return errors;
@@ -1061,7 +1069,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
 {
     KIRQL old;
     ULONG i, j, raw, errors = PacketErrors(slot);
-    BOOLEAN stop, valid = FALSE, good;
+    BOOLEAN stop, valid = FALSE, good, lost;
     NTSTATUS status = slot->Status;
     USBD_STATUS usbStatus = slot->Urb->Hdr.Status;
 #if defined(UAC_TRACE_E9)
@@ -1089,6 +1097,13 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
     }
     KeReleaseSpinLock(&s->Lock, old);
     good = !stop && NT_SUCCESS(status) && USBD_SUCCESS(usbStatus);
+    /* Section 24: a URB the stack failed whole (every packet not accessed
+     * or late, as a host controller that fell behind its schedule leaves
+     * them) is a lost service interval, as a failed packet is: counted,
+     * its time passed, the stream going on. Only a run of them covering
+     * UAC_LOST_LIMIT_MS of data stops it. */
+    lost = !stop && status != STATUS_CANCELLED &&
+        UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot));
     if (slot->Feedback) {
         if (good) {
             for (i = 0; i < slot->Packets; i++) {
@@ -1129,6 +1144,7 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
                 }
             }
         }
+        if (lost) s->Rate_.BadFeedback += slot->Packets;
         if (valid) s->LastFeedbackPacket = KeQueryInterruptTime();
         KeAcquireSpinLock(&s->Lock, &old);
         if (!stop && status != STATUS_CANCELLED) FeedbackDiag(s, slot, status);
@@ -1159,15 +1175,22 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             s->Stats.CapturedBytes += delivered; s->Stats.CompletedBytes += delivered;
             KeReleaseSpinLock(&s->Lock, old);
             s->Progress(s->CallbackContext, 0, errors);
-        } else if (good) {
+        } else if (lost && s->Capture) {
+            s->Progress(s->CallbackContext, 0, errors);
+        } else if (good || lost) {
             /* Advance in submission order, including failed/lost scheduled
              * packets. Never retry time-specific PCM or synthesize a timer. */
             s->Progress(s->CallbackContext, slot->Bytes, errors);
         }
+        if (lost) s->LostRun++;
+        else if (good) s->LostRun = 0;
         s->CompletedSequence++;
     }
     slot->Phase = 0;
-    if (!stop && !NT_SUCCESS(status)) Fail(s, status);
+    if (lost) {
+        if (!slot->Feedback && s->LostRun >= s->LostLimit)
+            Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
+    } else if (!stop && !NT_SUCCESS(status)) Fail(s, status);
     else if (!stop && !USBD_SUCCESS(usbStatus)) Fail(s, STATUS_DEVICE_DATA_ERROR);
 }
 
@@ -1294,12 +1317,12 @@ static VOID Worker(PVOID context)
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
-NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
+NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_DEV **out)
 {
     UAC_DEV *d;
     UAC_BYTE numbers[32], pipes[32];
     unsigned int ifCount;
-    BOOLEAN high = FALSE;
+    BOOLEAN high = FALSE, usb11 = FALSE;
     NTSTATUS status;
     if (!out) return STATUS_INVALID_PARAMETER;
     *out = NULL;
@@ -1311,14 +1334,22 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
     if (UacAltZero(desc->Bytes, desc->Length, numbers, pipes, 32, &ifCount) != UAC_OK)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     status = BusSpeed(lower, &high);
-    TR_LINE(("speed", (ULONG)status, high, IoIsWdmVersionAvailable(1, 0x10)));
+    /* 2000 (WDM 1.10, below 1.20): the device's PDO is its USB 1.1 hub
+     * driver's (usbhub; the USB 2.0 one is usbhub20). */
+    if (IoIsWdmVersionAvailable(1, 0x10) && !IoIsWdmVersionAvailable(1, 0x20) &&
+        pdo && pdo->DriverObject && pdo->DriverObject->DriverName.Buffer)
+        usb11 = UacPlanUsb11Hub(pdo->DriverObject->DriverName.Buffer,
+                                pdo->DriverObject->DriverName.Length / sizeof(WCHAR)) ? TRUE : FALSE;
+    TR_LINE(("speed", (ULONG)status, high, usb11));
     /* No speed from the USBDI interface (STATUS_NOT_SUPPORTED: no answer,
      * or a version 0 interface, which predates USB 2.0; any other unusable
      * answer fails otherwise) on a system below WDM 1.10 (98 SE, ME):
      * Windows' own 9x stack, UHCI or OHCI without USB 2.0, where a device
      * runs at Full Speed. NUSB's EHCI stack and xHCI98 give version 1. On
-     * 2000 and later it is still refused: the speed is not guessed there. */
-    if (status == STATUS_NOT_SUPPORTED && !IoIsWdmVersionAvailable(1, 0x10)) {
+     * 2000 the same holds only under its own USB 1.1 hub driver (UHCI and
+     * OHCI; docs/design/uac2.md section 24). Otherwise, on 2000 and later,
+     * it is still refused: the speed is not guessed there. */
+    if (status == STATUS_NOT_SUPPORTED && (!IoIsWdmVersionAvailable(1, 0x10) || usb11)) {
         high = FALSE;
         status = STATUS_SUCCESS;
     }
@@ -1531,6 +1562,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         if (!slot->Urb || !slot->Buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto done; }
     }
     s->NextSequence = s->CompletedSequence = 0;
+    s->LostRun = 0; s->LostLimit = UacPlanLostLimit(s->TransferUs);
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;

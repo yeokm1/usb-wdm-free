@@ -688,7 +688,10 @@ class Model:
         a time (UHCI at Full Speed) is joined up here. Linux's form, whose
         header gives its length, is taken as soon as it is complete; when
         that is on a packet boundary, a packet of usbnet's one zero pad
-        byte (or a zero-length packet) that follows on its own ends it."""
+        byte (or a zero-length packet) that follows on its own ends it.
+        ASIX's XP form gives no transfer length: on a packet boundary its
+        transfer is taken when its records end exactly there, and a
+        zero-length packet that follows on its own ends it."""
         if self.tx_pad_next and not self.tx_buf and data in (b'', b'\0'):
             self.tx_pad_next = False
             self.totals['tx_padded'] += 1
@@ -703,12 +706,32 @@ class Model:
             length = struct.unpack_from('<I', self.tx_buf)[0]
             if not length & 0x80000000 and length > TX_JOIN_MAX - 9:
                 raise ValueError('transmit header length %d' % length)
-            if length & 0x80000000 or len(self.tx_buf) < 8 + length:
-                return                             # ASIX's XP form, or more of the frame to come
-            self.tx_pad_next = len(self.tx_buf) == 8 + length
+            if length & 0x80000000:
+                if not self.records_whole(self.tx_buf):
+                    return                         # ASIX's XP form, a record still to come
+                self.tx_pad_next = True
+            elif len(self.tx_buf) < 8 + length:
+                return                             # more of the frame to come
+            else:
+                self.tx_pad_next = len(self.tx_buf) == 8 + length
         whole, self.tx_buf = bytes(self.tx_buf), bytearray()
         if whole:
             self.transmit(whole)
+
+    @staticmethod
+    def records_whole(data):
+        """Whether data is a whole number of ASIX XP-form records (8-byte
+        header with bit 31 set, the frame padded to 4 bytes), so a transfer
+        on a packet boundary can be taken without waiting for more."""
+        offset = 0
+        while offset < len(data):
+            if len(data) - offset < 8:
+                return False
+            length = struct.unpack_from('<I', data, offset)[0]
+            if not length & 0x80000000:
+                return True                        # not a record: transmit() refuses it
+            offset += 8 + (((length & 0x7fffffff) + 3) & ~3)
+        return offset == len(data)
 
     def transmit(self, data):
         """One bulk-OUT transfer: the 8-byte header and one frame (Linux's

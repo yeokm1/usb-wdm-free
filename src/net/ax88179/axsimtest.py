@@ -378,6 +378,32 @@ class Tests(CoreCase):
         self.assertEqual((self.m.totals['tx_frames'], self.m.totals['tx_padded']), (3, 1))
         self.assertEqual(self.m.net.refused, 0)
 
+    def test_asix_form_on_a_packet_boundary_is_taken_without_a_zlp(self):
+        """ASIX's XP form ending exactly on a packet boundary is sent through
+        handle() as one transfer with no ZLP: taken at once; a ZLP after it is
+        absorbed; a record cut off at a boundary still waits for the rest."""
+        for speed, size in (('high', 512), ('super', 1024)):
+            self.up(speed)
+            frame, _ = echo_request(a.MODEL_MAC, size - 8 - 14 - 20 - 8)
+            data = struct.pack('<II', 0x80000000 | len(frame), 0) + frame
+            self.assertEqual(len(data), size)
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(data), 0, 0) + data)
+            self.assertEqual(self.m.totals['tx_frames'], 1)
+            frames, _ = self.rx()
+            self.assertEqual(len(frames), 1)          # the echo answered without a later transfer
+            self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 0, 0, 0))
+            self.assertEqual(self.m.totals['tx_frames'], 1)
+            self.assertFalse(self.m.tx_buf)
+        self.up('full')
+        frame, _ = echo_request(a.MODEL_MAC, 100)
+        data = struct.pack('<II', 0x80000000 | len(frame), 0) + frame
+        data += bytes((-len(data)) % 4)
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, 64, 0, 0) + data[:64])
+        self.assertEqual(self.m.totals['tx_frames'], 0)
+        rest = data[64:]
+        self.m.handle(101, 7, struct.pack('<BBHIH', a.EP_OUT, 0, len(rest), 0, 0) + rest)
+        self.assertEqual(self.m.totals['tx_frames'], 1)
+
     def test_interface_reselection_drops_a_cut_off_transfer(self):
         self.up('full')
         frame, _ = echo_request(a.MODEL_MAC, 150)

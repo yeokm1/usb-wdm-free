@@ -66,7 +66,11 @@ typedef struct UAC_USB_STATS {
     LONG VolMin[3], VolMax[3], VolRes[3], VolTop[3], VolOffered[3], VolStartCur[3];
 } UAC_USB_STATS;
 
+#ifdef UAC_V1
+#define UAC_USB_RATES 32   /* UAC1_RATES: every rate one alternate lists */
+#else
 #define UAC_USB_RATES 16
+#endif
 
 /* Device: PASSIVE. Open copies the descriptor view, learns the bus speed
  * and selects the configuration (every interface at alternate 0). Rates
@@ -76,6 +80,12 @@ typedef struct UAC_USB_STATS {
  */
 NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out);
 NTSTATUS UacUsbRates(UAC_DEV *dev, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count);
+#ifdef UAC_V1
+/* USB Audio 1.0: the rates of the alternates that carry this format
+ * (terminal, channels, subslot, bits), so one format's rates never
+ * crowd out another's. */
+NTSTATUS UacUsbRatesFor(UAC_DEV *dev, const UAC_FORMAT *format, ULONG *rates, ULONG max, ULONG *count);
+#endif
 int UacUsbHighSpeed(UAC_DEV *dev);
 #ifdef UAC_V1
 /* uac1, PASSIVE: the USBDI bus interface's speed answer for the device

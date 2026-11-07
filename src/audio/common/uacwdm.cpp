@@ -964,7 +964,11 @@ private:
             ULONG rates[UAC_USB_RATES], count = 0, kept = 0;
             if (all[i].Subslot < 2) continue; /* 8-bit: see UacStream::Parse */
             if (all[i].Terminal != terminal) continue;
+#ifdef UAC_V1
+            if (!NT_SUCCESS(UacUsbRatesFor(dev, &all[i], rates, UAC_USB_RATES, &count))) continue;
+#else
             if (!NT_SUCCESS(UacUsbRates(dev, all[i].Terminal, rates, UAC_USB_RATES, &count))) continue;
+#endif
             for (ULONG k = 0; k < count; k++) {
                 unsigned int index;
                 if (UacPlanPick(descriptor, d->Capture, terminal, all[i].Channels, all[i].Subslot,

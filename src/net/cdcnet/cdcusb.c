@@ -615,17 +615,14 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
         }
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (!NT_SUCCESS(status)) Fault(d, status, usb);
         else d->Recoveries = 0;
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
     } else {
         void *packets[CDC_TX_BATCH];
         ULONG count = 0;
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
-        d->Outstanding--;
         if (NT_SUCCESS(status) && d->TxStage == TX_DATA && d->TxZlp && d->Open) {
             d->TxStage = TX_ZLP_READY;   /* the ZLP before any later payload */
         } else {
@@ -636,11 +633,19 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
             if (!NT_SUCCESS(status)) Fault(d, status, usb);
             else d->Recoveries = 0;
         }
-        CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
         if (count) d->Cb.TxDone(d->Cb.Context, packets, count, NT_SUCCESS(status));
     }
     Pump(d);
+    /* The IRP stays counted until here, its slot free since above (as in
+     * the shared core's netusb.c): Quiesce - so a sleep request, a
+     * recovery and the free in CdcUsbStop - waits for this routine's
+     * callbacks (Receive, TxDone) and its pump to end. Nothing touches d
+     * after the lock. */
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Outstanding--;
+    CheckDrained(d);
+    KeReleaseSpinLock(&d->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 

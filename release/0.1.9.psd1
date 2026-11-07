@@ -89,7 +89,7 @@
             Folders = @(
                 @{ Name = 'w98se'; Arch = 'x86'
                    Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\w98se\usbmidi.sys'; 'usbmidi.inf' = 'out\audio\usbmidi\wdmx86\free\inf\w98se\usbmidi.inf' }
-                   Stage = @{ 'usbmidi.inf' = @('STAGE', 'W98SE', '0.1.9: the 9x INF has Windows install its own audio components (no KS file prompts), the same change as uac2, no usbmidi guest leg (record 2026-11-07 98se-ks-prompts); UHCI, xHCI98 and NUSB EHCI legs passed') } }
+                   Stage = @{ 'usbmidi.inf' = @('STAGE', 'W98SE', '0.1.9: the 9x INF has Windows install its own audio components (no KS file prompts), the same change as uac2; on 98 SE under Windows UHCI a clean install and an install over 0.1.8 (Remove, replug, restart) asked for no KS file and the MIDI loopback passed (simulator, record 2026-11-07 98se-ks-prompts); ME not run; UHCI, xHCI98 and NUSB EHCI legs passed') } }
                 @{ Name = 'wme'; Arch = 'x86'
                    Files = @{ 'usbmidi.sys' = 'tree:free\audio\usbmidi\wme\usbmidi.sys'; 'usbmidi.inf' = 'out\audio\usbmidi\wdmx86\free\inf\wme\usbmidi.inf' }
                    Stage = @{ 'usbmidi.inf' = @('COPY', 'WME', '0.1.9: the 9x INF change of uac2 (no KS file prompts); by-hand INF (USBMIDI_BY_HAND only); Windows usbaudio serves the rest') } }

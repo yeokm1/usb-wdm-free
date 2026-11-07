@@ -10,7 +10,7 @@
 # - ax88179 0.1.3.0: the net core fixes;
 # - xpad98 0.1.1.0: SurpriseRemovalOK;
 # - uac1 0.1.0.1 (new, Windows 98 SE only): USB Audio Class 1.0 by class, built from the
-#   driver core uac2 shares (docs/design/uac2.md 24); uac2's image unchanged;
+#   driver core uac2 shares (docs/design/uac2.md 25); uac2's image unchanged;
 # - new packages: ax88772 (AX88772B/C on 98 SE and ME, the SR9800 on 98 SE to
 #   7), sr9700 (98 SE to 7) and absptr (98 SE to 7 x64; x64 folder xp-7-x64,
 #   owner 2026-11-07).
@@ -409,7 +409,7 @@
     )
     Relations = @(
         'EXCLUDES | free:audio/uac1 | free:audio/usbmidi | WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids'
-        'COEXISTS | free:audio/uac1 | free:audio/usbmidi | W98SE | uac1 0.1.0.1 serves no MIDI: a MIDI-only function gets a null start; usbmidi keeps the devices it lists by hardware id (outranking uac1''s class line) and its by-hand model serves the rest (docs/design/uac2.md 24.10)'
+        'COEXISTS | free:audio/uac1 | free:audio/usbmidi | W98SE | uac1 0.1.0.1 serves no MIDI: a MIDI-only function gets a null start; usbmidi keeps the devices it lists by hardware id (outranking uac1''s class line) and its by-hand model serves the rest (docs/design/uac2.md 25.10)'
         'COEXISTS | free:audio/uac1 | free:audio/noaud | W98SE | noaud''s hardware ids (a webcam microphone, opt-in) outrank uac1''s class line: the microphone stays driverless where the user chose it'
         'EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | the same chips'
         'COEXISTS | free:net/rtl815x | nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: RTLXP7.INF lists only chips the nonfree INFs leave out on each system (owner, 2026-10-29: split again with the xHCI98 packager change, xHCI98 task 45.6)'

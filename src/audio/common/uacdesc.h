@@ -25,7 +25,7 @@ typedef struct UAC_ALT {
     UAC_WORD MaxPacket, FeedbackMaxPacket;
     unsigned int ChannelConfig; /* AS_GENERAL bmChannelConfig (UAC2 4.1) */
 #ifdef UAC_V1
-    /* USB Audio 1.0, uac1 only (docs/design/uac2.md section 24): the
+    /* USB Audio 1.0, uac1 only (docs/design/uac2.md section 25): the
      * alternate's own rates from its Type I format descriptor, discrete
      * (RateCount 1..UAC1_RATES) or continuous (RateCount 0, RateMin to
      * RateMax), and its class-specific endpoint bmAttributes (D0 Sampling

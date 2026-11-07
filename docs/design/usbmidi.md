@@ -944,7 +944,7 @@ for an included INF's files and catalog on this package's own disk, so it
 asked for `ks.cat`, `ksclockf.ax`, `wdmaudio.cat` and others, which the
 Windows CD holds only inside its CAB files (records
 `2026-10-22-usbmidi-m1.md` and `2026-11-07-98se-ks-prompts.md`). As in
-`uac2` (`docs/design/uac2.md` section 25, which has the details), `[UM]`
+`uac2` (`docs/design/uac2.md` section 24, which has the details), `[UM]`
 now includes no Microsoft INF: `[SysAudio9x]` writes the RunOnce entry by
 which Windows installs SysAudio's software device from its own
 `wdmaudio.inf` (bringing the KS files and registration, KMixer and the

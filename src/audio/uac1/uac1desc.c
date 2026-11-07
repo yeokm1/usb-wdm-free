@@ -184,7 +184,7 @@ static int Finish(UAC1_DESC *d, CANDIDATE *c, int highSpeed)
     a->EpControls = e->Controls;
     a->LockUnits = e->LockUnits;
     a->LockDelay = e->LockDelay;
-    /* Not carried (docs/design/uac2.md 24.3): a MaxPacketsOnly source's
+    /* Not carried (docs/design/uac2.md 25.3): a MaxPacketsOnly source's
      * padding cannot be told from samples by a count rule. An adaptive
      * source is read as a plain IN endpoint and its synch OUT endpoint
      * (ADC-1 3.7.2.2) is opened but sent nothing, as Windows' own driver

@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Yeo Kheng Meng
  * The stream-format model the USB Audio 1.0 parser (uac1desc.c) fills;
  * uac1model.c puts it in the shared model (src/audio/common/uacdesc.h)
- * the driver runs on (docs/design/uac2.md section 24).
+ * the driver runs on (docs/design/uac2.md section 25).
  * No Windows types, allocation, packed structures or unaligned reads.
  */
 #ifndef UACFMT_H

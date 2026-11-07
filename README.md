@@ -91,7 +91,7 @@ that Windows.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 - (m) Under xHCI98.
 - (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
-- (o) Under xHCI98: the Logi USB Headset, and simulated headsets, DACs and a copy of the Sound Blaster Play! 2's layout. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging while playing can freeze Windows (Known issues).
+- (o) Under xHCI98: the Logi USB Headset, and simulated headsets, DACs and a copy of the Sound Blaster Play! 2's layout. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install
@@ -101,16 +101,15 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 - **98 SE may freeze when the first USB audio device is plugged in after
   a boot** (an audio or MIDI interface, a headset, a webcam with a
-  microphone), with `uac1`, `uac2` and Windows' own audio driver alike. Plug the device in
-  before switching on and leave it in; if Windows freezes, restart with
-  it plugged in. For a webcam whose microphone you do not need, install
+  microphone), with `uac1`, `uac2` and Windows' own audio driver alike.
+  Plug the device in before switching on and leave it in; if Windows
+  freezes, restart with it plugged in. For a webcam whose microphone you do not need, install
   `NOAUD98.INF`.
 - **On Windows 98 SE, stop audio playback or recording before
-  unplugging a USB audio device.** Unplugging it while it plays can
-  freeze Windows, with `uac1`, `uac2` and Windows' own driver alike;
-  restart if it does. A program recording from the device may stop
-  responding when it is unplugged; Windows keeps running, and the
-  program's window goes away at the next restart.
+  unplugging a USB audio device.** Unplugging while it plays can stop
+  Windows; unplugging while it records can leave the recording program
+  not responding until the next restart. This happens with Windows' own
+  USB audio driver too.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
 - **XP and XP x64 install their own USB audio driver for a `uac2` device

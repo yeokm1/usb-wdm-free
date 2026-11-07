@@ -3,7 +3,7 @@
  * The USB Audio 1.0 function (uac1desc.c) as the shared model the driver
  * runs on (src/audio/common/uacdesc.h, built with UAC_V1). Original code
  * from ADC-1 3.7.2.3 (audio channel clusters) and Tables 4-3 to 4-15;
- * docs/design/uac2.md section 24. No Windows types or allocation.
+ * docs/design/uac2.md section 25. No Windows types or allocation.
  */
 #include "uac1desc.h"
 #include "uacdesc.h"
@@ -90,6 +90,17 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
         if (a->FormatTag != 1 || a->Subframe < 2 || a->Subframe > 4 ||
             (!a->Capture && (a->EpControls & UAC_EP_MAXPACKETSONLY)) ||
             d->AltCount == UAC_MAX_ALTS) {
+            d->Skipped++;
+            continue;
+        }
+        /* One direction per AS interface: an alternate whose endpoint runs
+         * the other way from one already carried on the same interface is
+         * not carried, so starting one direction never reselects the
+         * interface under the other's running stream. */
+        for (k = 0; k < d->AltCount; k++)
+            if (d->Alt[k].Interface == a->Interface &&
+                ((d->Alt[k].DataEndpoint & 0x80) != 0) != (a->Capture != 0)) break;
+        if (k < d->AltCount) {
             d->Skipped++;
             continue;
         }

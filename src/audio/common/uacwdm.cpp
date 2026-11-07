@@ -4,7 +4,7 @@
  * the formats and rates the device's descriptors and clocks offer.
  * Original code from DDK headers and published PortCls documentation.
  * Built as uac2wdm.sys (USB Audio 2.0) and, with UAC_V1 defined, as
- * uac1wdm.sys (USB Audio 1.0, docs/design/uac2.md section 24).
+ * uac1wdm.sys (USB Audio 1.0, docs/design/uac2.md section 25).
  */
 #define PC_NEW_NAMES
 #include <initguid.h>
@@ -1022,7 +1022,7 @@ public:
      * clock stay one pair, as before. */
 #ifdef UAC_V1
     /* USB Audio 1.0 has no clock entities to tell endpoints apart by:
-     * one pair, the first playback and capture terminal (section 24.4). */
+     * one pair, the first playback and capture terminal (section 25.4). */
     ULONG Pairs() const { return 1; }
 #else
     ULONG Pairs() const {
@@ -1788,7 +1788,7 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
     s = Descriptor(ext->Lower, bytes, header.wTotalLength);
     Record(fdo, 3, s);
 #ifdef UAC_V1
-    /* USB Audio 1.0 (section 24): the function the PDO names (its MI_
+    /* USB Audio 1.0 (section 25): the function the PDO names (its MI_
      * interface, else the whole device's first UAC 1.0 function) parsed for
      * the bus speed (the bus's answer; without one, the speed the
      * descriptors alone fit; else Full Speed, the only one 98 SE's own
@@ -1912,7 +1912,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     NTSTATUS s = ParseDevice(fdo, &model);
     if (!NT_SUCCESS(s)) return s;
 #ifdef UAC_V1
-    /* A null function (section 24.6, G3): nothing this driver runs (a
+    /* A null function (section 25.6, G3): nothing this driver runs (a
      * MIDI-only function, say, or formats it does not carry). It starts
      * with no audio device, as Windows' driver leaves such a function on
      * 98 SE, rather than failing (Code 10); stage 0x40 records it. */

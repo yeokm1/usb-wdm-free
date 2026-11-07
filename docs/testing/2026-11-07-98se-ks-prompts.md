@@ -4,7 +4,7 @@ Installing `uac2` on 98 SE made Setup ask for `ks.sys`, then
 `ksclockf.ax`, and neither was on the 98 SE CD's `\WIN98` folder or in
 `C:\WINDOWS\OPTIONS\CABS` (owner, 2026-11-07). This record establishes
 what a clean 98 SE has, what Setup asks for and why, and tests the INF
-change of branch `w47-ksinf` (`docs/design/uac2.md` section 25,
+change of branch `w47-ksinf` (`docs/design/uac2.md` section 24,
 `docs/design/usbmidi.md` section 19). Development legs in QEMU, not
 "Tested". No Microsoft binary was read; Windows' own `ks.inf`,
 `wdmaudio.inf` and `layout.inf` were read as text to understand them,

@@ -21,7 +21,7 @@ Per package, newest first. A release is a commit and a tag
     then plug it in again: Windows installs the new INF without a
     prompt. This was run with `uac2`; `usbmidi`'s 98 SE and ME INF has
     the same change and had no run on a guest.
-  - [uac2 design, section 25](design/uac2.md),
+  - [uac2 design, section 24](design/uac2.md),
     [usbmidi design, section 19](design/usbmidi.md),
     [98 SE KS prompts record](testing/2026-11-07-98se-ks-prompts.md).
 - **Known issue, Windows 2000, USB MIDI**: Windows 2000 has no USB MIDI
@@ -75,13 +75,15 @@ Per package, newest first. A release is a commit and a tag
     3.4.2.0 fixes for the unplug. On XP and later the INF matches
     nothing; ME and 2000 would read it, so do not point them at this
     folder.
-  - Known issues (README, Known issues): stop playback or recording
-    before unplugging a USB audio device, as with Windows' own driver;
-    the first audio device plugged in after a start can freeze 98 SE, as
+  - Known issues (README, Known issues): on Windows 98 SE, stop audio
+    playback or recording before unplugging a USB audio device.
+    Unplugging while it plays can stop Windows; unplugging while it
+    records can leave the recording program not responding until the
+    next restart. This happens with Windows' own USB audio driver too.
+    The first audio device plugged in after a start can freeze 98 SE, as
     with Windows' own driver (4 of 10 first plugs with each in the same
-    test); a program recording from the device may stop responding when
-    it is unplugged (Windows keeps running; as with `uac2`).
-  - [uac2 design, section 24](design/uac2.md).
+    test).
+  - [uac2 design, section 25](design/uac2.md).
 
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 

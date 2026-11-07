@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Experimental USB Audio Class 1.0 driver for Windows 98 SE only
-; (docs/design/uac2.md section 24): playback and capture in the formats and
+; (docs/design/uac2.md section 25): playback and capture in the formats and
 ; rates the device describes, on the driver core uac2 shares.
 [Version]
 Signature="$CHICAGO$"
@@ -46,7 +46,7 @@ Driver.Copy=10,system32\drivers
 ; driver's disk, not in Windows' CABs, and asks for them. The device
 ; loader pair is written here instead, and SysAudio9x has Windows install
 ; SysAudio from its own wdmaudio.inf at the end of the install (as
-; uac2wdm.inf, docs/design/uac2.md 25).
+; uac2wdm.inf, docs/design/uac2.md 24).
 [UAC1]
 CopyFiles=Driver.Copy
 AddReg=Loader,AudioSupport,Queue9x,SysAudio9x

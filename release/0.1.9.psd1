@@ -14,8 +14,8 @@
 #   owner 2026-11-07).
 # Every x64 image is signed again with the SHA-1 test certificate
 # 7A3C6E62... (release\usb-wdm-free-test-sha1.cer, -Certificate): the new
-# builds from out\, the images of unchanged packages (usbmidi, cdcnet,
-# UACCI1.DLL) as strip: entries. Every other x86 file is 0.1.8's, from the tree.
+# builds from out\, the images of unchanged packages (usbmidi, UACCI1.DLL) as
+# strip: entries; cdcnet 0.1.3.0 from out\ (ndis5, ndis51). Every other x86 file is 0.1.8's, from the tree.
 # absptr's and xpad98's INFs come from src\ (their "Experimental build" comment
 # removed after the build, owner 2026-11-07); their images from out\.
 # The new packages are staged on the systems their legs ran on (owner, 2026-11-07).
@@ -50,8 +50,8 @@
                    'xpad98.wxp-x64.xpad98.sys' = 'out\hid\xpad98\wdm64\free\xpad98.sys'
                    'xpad98.wv-x64.xpad98.sys' = 'out\hid\xpad98\wdm64\free\xpad98.sys'
                    'absptr.xp-7-x64.absptr.sys' = 'out\hid\absptr\wdm64\free\absptr.sys'
-                   'cdcnet.wxp-x64.CDCNET.SYS' = 'strip:free\net\cdcnet\wxp-x64\CDCNET.SYS'
-                   'cdcnet.wv-7-x64.CDCNET.SYS' = 'strip:free\net\cdcnet\wv-7-x64\CDCNET.SYS' }
+                   'cdcnet.wxp-x64.CDCNET.SYS' = 'out\net\cdcnet\ndis51\free\cdcnet.sys'
+                   'cdcnet.wv-7-x64.CDCNET.SYS' = 'out\net\cdcnet\ndis51\free\cdcnet.sys' }
     Packages = @(
         @{
             Id = 'audio/uac2'; Kind = 'CLASS'
@@ -155,23 +155,23 @@
             Services = @('cdcnet')
             Folders = @(
                 @{ Name = 'w98se-me'; Arch = 'x86'
-                   Files = @{ 'CDCNET.SYS' = 'tree:free\net\cdcnet\w98se-me\CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\w98se-me\CDCNET.INF' }
-                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W98SE WME', 'binds QEMU usb-net (0525:A4A2): install and ping passed on 98 SE under xHCI98 3.2.0.0; the UHCI, NUSB EHCI and xHCI98 data legs ran its test copy CDCT98.INF') } }
+                   Files = @{ 'CDCNET.SYS' = 'out\net\cdcnet\ndis5\free\cdcnet.sys'; 'CDCNET.INF' = 'out\net\cdcnet\ndis5\free\CDC98.INF' }
+                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W98SE WME', '0.1.3.0: the 98 SE and ME upcalls from an NDIS timer, the sleep drain, the unbounded send queue, the removal fix and the departure probe (legs on XP, XP x64, 2000, 98 SE and ME: record 2026-11-07 98se-tcp; on ME with QEMU usb-net a two-way TCP stall stays open); binds QEMU usb-net (0525:A4A2): install and ping passed on 98 SE under xHCI98 3.2.0.0; the UHCI, NUSB EHCI and xHCI98 data legs ran its test copy CDCT98.INF') } }
                 @{ Name = 'w2k-xp'; Arch = 'x86'
-                   Files = @{ 'CDCNET.SYS' = 'tree:free\net\cdcnet\w2k-xp\CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\w2k-xp\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
-                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W2K WXP', 'binds QEMU usb-net (0525:A4A2): install and ping passed on XP under UHCI; the UHCI and EHCI ECM data legs ran its test copy CDCTEST.INF')
+                   Files = @{ 'CDCNET.SYS' = 'out\net\cdcnet\ndis5\free\cdcnet.sys'; 'CDCNET.INF' = 'out\net\cdcnet\ndis5\free\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W2K WXP', '0.1.3.0: the 98 SE and ME upcalls from an NDIS timer, the sleep drain, the unbounded send queue, the removal fix and the departure probe (legs on XP, XP x64, 2000, 98 SE and ME: record 2026-11-07 98se-tcp; on ME with QEMU usb-net a two-way TCP stall stays open); binds QEMU usb-net (0525:A4A2): install and ping passed on XP under UHCI; the UHCI and EHCI ECM data legs ran its test copy CDCTEST.INF')
                               'CDCRNDIS.INF' = @('COPY', 'WXP', 'binds Windows RNDIS driver; no passing data leg') } }
                 @{ Name = 'wv-7-x86'; Arch = 'x86'
-                   Files = @{ 'CDCNET.SYS' = 'tree:free\net\cdcnet\wv-7-x86\CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wv-7-x86\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
-                   Stage = @{ 'CDCNET.INF' = @('COPY', 'WVISTA W7', 'no leg on Vista or 7 x86')
+                   Files = @{ 'CDCNET.SYS' = 'out\net\cdcnet\ndis5\free\cdcnet.sys'; 'CDCNET.INF' = 'out\net\cdcnet\ndis5\free\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Stage = @{ 'CDCNET.INF' = @('COPY', 'WVISTA W7', '0.1.3.0: no leg on Vista or 7 x86')
                               'CDCRNDIS.INF' = @('COPY', 'WVISTA W7', 'binds Windows RNDIS driver; no passing data leg') } }
                 @{ Name = 'wxp-x64'; Arch = 'x64'
-                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wxp-x64.CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wxp-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
-                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'WXP64', 'binds QEMU usb-net (0525:A4A2): simulator legs on XP x64 (2026-11-04): the INF staged by SetupCopyOEMInf, install, DHCP, ping and TFTP passed under UHCI and xHCI98 3.4.0.0; NCM by class (simulator) under EHCI: DHCP and ping; its XP x64 models list no RNDIS id')
+                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wxp-x64.CDCNET.SYS'; 'CDCNET.INF' = 'out\net\cdcnet\ndis51\free\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'WXP64', '0.1.3.0: the 98 SE and ME upcalls from an NDIS timer, the sleep drain, the unbounded send queue, the removal fix and the departure probe (legs on XP, XP x64, 2000, 98 SE and ME: record 2026-11-07 98se-tcp; on ME with QEMU usb-net a two-way TCP stall stays open); binds QEMU usb-net (0525:A4A2): simulator legs on XP x64 (2026-11-04): the INF staged by SetupCopyOEMInf, install, DHCP, ping and TFTP passed under UHCI and xHCI98 3.4.0.0; NCM by class (simulator) under EHCI: DHCP and ping; its XP x64 models list no RNDIS id')
                               'CDCRNDIS.INF' = @('COPY', 'WXP64', 'binds Windows RNDIS driver; no passing data leg') } }
                 @{ Name = 'wv-7-x64'; Arch = 'x64'
-                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wv-7-x64.CDCNET.SYS'; 'CDCNET.INF' = 'tree:free\net\cdcnet\wv-7-x64\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
-                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W7X64', 'UHCI ECM leg on 7 x64 ran its test copy CDCTEST.INF (same install sections); test-signed')
+                   Files = @{ 'CDCNET.SYS' = 'x64:cdcnet.wv-7-x64.CDCNET.SYS'; 'CDCNET.INF' = 'out\net\cdcnet\ndis51\free\CDCNET.INF'; 'CDCRNDIS.INF' = 'tree:src\net\cdcnet\CDCRNDIS.INF' }
+                   Stage = @{ 'CDCNET.INF' = @('STAGE', 'W7X64', '0.1.3.0: no 7 x64 leg at preparation; UHCI ECM leg on 7 x64 ran its test copy CDCTEST.INF (same install sections); test-signed')
                               'CDCRNDIS.INF' = @('COPY', 'WVISTA64 W7X64', 'binds Windows RNDIS driver; no passing data leg') } }
             )
         }

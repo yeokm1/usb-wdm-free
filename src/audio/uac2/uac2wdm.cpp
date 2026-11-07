@@ -68,6 +68,7 @@ struct UAC_DIR_FORMATS {
 inline void *operator new(size_t, void *memory) { return memory; }
 static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status);
 static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN capture);
+static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo);
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
@@ -1073,7 +1074,7 @@ public:
     NTSTATUS Prepare() {
         NTSTATUS s = STATUS_SUCCESS;
         if (primary) dev = primary->dev;
-        else s = UacUsbOpen(lower, descriptor, &dev);
+        else s = UacUsbOpen(lower, PdoOf(device), descriptor, &dev);
         if (!NT_SUCCESS(s)) return s;
         Learn(&dir[0]); Learn(&dir[1]);
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
@@ -1417,6 +1418,8 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
 struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
              ULONG NameLength; UCHAR Name[256]; };
 static PDRIVER_DISPATCH PortClsPnp;
+static EXT *Extension(PDEVICE_OBJECT fdo);
+static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo) { return Extension(fdo)->Pdo; }
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
 }

@@ -13,6 +13,10 @@
 #ifndef UAC2_STREAM_H
 #define UAC2_STREAM_H
 
+#ifndef UAC_TRACE
+#define UAC_TRACE(x)
+#endif
+
 class UacStream;
 struct UAC_STREAM_HOOKS {
     PVOID Context;
@@ -317,6 +321,7 @@ public:
         return interval;
     }
     STDMETHODIMP SetState(KSSTATE next) {
+        UAC_TRACE(("state", (ULONG)capture << 16 | (ULONG)state, (ULONG)next, filled));
         if (next == KSSTATE_RUN) {
             if (!hooks.Start || !hooks.Stop || !hooks.Close || !hooks.Notify)
                 return STATUS_NOT_SUPPORTED;

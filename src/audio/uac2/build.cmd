@@ -1,12 +1,15 @@
 @echo off
 rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
-rem build.cmd <profile> <free|checked>
+rem build.cmd <profile> <free|checked|trace>
 rem
 rem Builds the UAC2 M0 experiment for one profile (build.md sections 3 and 4) into
 rem out\audio\uac2\<profile>\<flavour>\. Every path is rooted in
 rem this repository; a missing kit is reported, never searched for.
 rem PASS.TXT is written last, only when every gate has passed.
+rem
+rem   trace   a free build that also writes a stream trace to QEMU's debug
+rem           console port 0xE9: test-only, never released.
 rem
 rem Copyright (C) 2026 Yeo Kheng Meng
 
@@ -28,7 +31,7 @@ set FLAVOUR=%~2
 if "%PROFILE%"=="" goto usage
 if "%FLAVOUR%"=="" goto usage
 if not "%~3"=="" goto usage
-if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" goto usage
+if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" if /I not "%FLAVOUR%"=="trace" goto usage
 if /I "%PROFILE%"=="wdmx86" goto profile_ok
 if /I "%PROFILE%"=="wdm64" goto profile_ok
 goto usage
@@ -55,6 +58,9 @@ if /I "%PROFILE%"=="wdm64" call :env_wdm64 || goto fail
 
 if /I "%FLAVOUR%"=="free" (
     set CFLAV=%CFREE%
+    set LFLAV=/RELEASE
+) else if /I "%FLAVOUR%"=="trace" (
+    set CFLAV=%CFREE% /DUAC_TRACE_E9=1
     set LFLAV=/RELEASE
 ) else (
     set CFLAV=%CCHK%
@@ -174,7 +180,7 @@ exit /b 1
 exit /b 0
 
 :usage
-echo usage: build.cmd ^<wdmx86^|wdm64^> ^<free^|checked^>
+echo usage: build.cmd ^<wdmx86^|wdm64^> ^<free^|checked^|trace^>
 endlocal
 exit /b 2
 

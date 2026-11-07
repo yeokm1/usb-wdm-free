@@ -3,7 +3,7 @@
  * The USB Audio 1.0 function (uac1desc.c) as the shared model the driver
  * runs on (src/audio/common/uacdesc.h, built with UAC_V1). Original code
  * from ADC-1 3.7.2.3 (audio channel clusters) and Tables 4-3 to 4-15;
- * docs/design/uac2.md section 25. No Windows types or allocation.
+ * docs/design/uac2.md section 26. No Windows types or allocation.
  */
 #include "uac1desc.h"
 #include "uacdesc.h"

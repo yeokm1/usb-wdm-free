@@ -157,6 +157,54 @@ static void QueueTests(void)
     CHECK(UacPlanQueue(1, 4, 128, 192000, 4, 0, 16384, NULL, NULL) == 8);
 }
 
+/* Section 25: a URB the stack failed whole is a lost interval, not a
+ * broken pipe; a run of them covering a second stops the stream. And
+ * 2000's USB 1.1 hub driver by name. */
+static void LostTests(void)
+{
+    CHECK(UAC_ISO_LOST_STATUS == 0xC0000B00UL);
+    CHECK(UacPlanIsoLost(UAC_ISO_LOST_STATUS, 32, 32));
+    CHECK(UacPlanIsoLost(UAC_ISO_LOST_STATUS, 4, 4));
+    CHECK(UacPlanIsoLost(UAC_ISO_LOST_STATUS, 1, 1));
+    /* A packet that did not fail, or no packets: not this case. */
+    CHECK(!UacPlanIsoLost(UAC_ISO_LOST_STATUS, 32, 31));
+    CHECK(!UacPlanIsoLost(UAC_ISO_LOST_STATUS, 32, 0));
+    CHECK(!UacPlanIsoLost(UAC_ISO_LOST_STATUS, 0, 0));
+    /* Every other URB status stays fatal: success, a bad start frame,
+     * device gone, a canceled request, a halted pipe. */
+    CHECK(!UacPlanIsoLost(0, 32, 32));
+    CHECK(!UacPlanIsoLost(0xC0000A00UL, 32, 32));
+    CHECK(!UacPlanIsoLost(0xC0007000UL, 32, 32));
+    CHECK(!UacPlanIsoLost(0xC0010000UL, 32, 32));
+    CHECK(!UacPlanIsoLost(0xC0000004UL, 32, 32));
+    /* The run limit: 4 ms URBs ride out 250, 8 ms 125, 1 ms 1000; 3 ms
+     * rounds up; a span of a second or more still allows 2; 0 is 1 ms. */
+    CHECK(UAC_LOST_LIMIT_MS == 1000);
+    CHECK(UacPlanLostLimit(4000) == 250);
+    CHECK(UacPlanLostLimit(8000) == 125);
+    CHECK(UacPlanLostLimit(1000) == 1000);
+    CHECK(UacPlanLostLimit(3000) == 334);
+    CHECK(UacPlanLostLimit(1000000UL) == 2);
+    CHECK(UacPlanLostLimit(32768000UL) == 2);
+    CHECK(UacPlanLostLimit(0) == 1000);
+
+    /* Windows 2000's USB 1.1 hub driver, by its driver object's name. */
+    {
+        static const unsigned short hub[] = { '\\', 'D', 'r', 'i', 'v', 'e', 'r', '\\', 'u', 's', 'b', 'h', 'u', 'b' };
+        static const unsigned short low[] = { '\\', 'd', 'r', 'i', 'v', 'e', 'r', '\\', 'U', 'S', 'B', 'H', 'U', 'B' };
+        static const unsigned short hub20[] = { '\\', 'D', 'r', 'i', 'v', 'e', 'r', '\\', 'u', 's', 'b', 'h', 'u', 'b', '2', '0' };
+        static const unsigned short other[] = { '\\', 'D', 'r', 'i', 'v', 'e', 'r', '\\', 'n', 'u', 's', 'b', 'h', 'u' };
+        CHECK(UacPlanUsb11Hub(hub, 14));
+        CHECK(UacPlanUsb11Hub(low, 14));
+        CHECK(!UacPlanUsb11Hub(hub20, 16));
+        CHECK(!UacPlanUsb11Hub(hub20, 15));
+        CHECK(!UacPlanUsb11Hub(hub, 13));
+        CHECK(!UacPlanUsb11Hub(other, 14));
+        CHECK(!UacPlanUsb11Hub(hub, 0));
+        CHECK(!UacPlanUsb11Hub(NULL, 14));
+    }
+}
+
 /* A string descriptor from ASCII text with \x01-style bytes allowed, or
  * from UTF-16 units (units != NULL). */
 static unsigned int Str(UAC_BYTE *d, const char *text, const unsigned short *units, unsigned int n)
@@ -471,6 +519,7 @@ int main(int argc, char **argv)
         }
     }
     QueueTests();
+    LostTests();
     Names();
     printf("PASS %u assertions, %u byte mutations; X4 PCM/feedback/clocks; names\n", checks, n);
     return 0;

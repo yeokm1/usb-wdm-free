@@ -33,4 +33,48 @@ static int UacFeedbackLate(UAC_WATCH_TICK now,UAC_WATCH_TICK last,int active)
     if(active) return UacFeedbackExpired(now,last);
     return now>=last && now-last>UAC_FEEDBACK_START_TIMEOUT_100NS;
 }
+/* docs/design/uac2.md section 25: the same deadlines in bus time.
+ * unusableUs is the service time covered by the feedback URBs that came
+ * back (not cancelled) without a usable packet since the last usable one.
+ * A time in which the stack held every URB and none came back, or the
+ * guest's clock jumped, is not counted against the device. Stale past
+ * 200 ms once the stream has had a valid value, 1 s before. */
+static int UacFeedbackStale(unsigned long unusableUs,int active)
+{
+    return unusableUs>(active?UAC_FEEDBACK_TIMEOUT_100NS:UAC_FEEDBACK_START_TIMEOUT_100NS)/10u;
+}
+/* One feedback packet's service time in microseconds: at High Speed
+ * 125 << (bInterval - 1) (bInterval 1 to 4: one packet a serviced
+ * microframe, one a frame at 4), at Full Speed one frame. */
+static unsigned long UacFeedbackPacketUs(int highSpeed,unsigned int interval)
+{
+    if(!highSpeed) return 1000u;
+    if(interval<1) interval=1;
+    if(interval>4) interval=4;
+    return 125ul<<(interval-1);
+}
+/* Both bus-time counts: unusableUs as above; quietUs the service time of
+ * the data URBs that came back since the last usable feedback packet
+ * (feedback held, or coming back unusable, while data plays). Stale when
+ * either is. */
+static int UacFeedbackStaleBus(unsigned long unusableUs,unsigned long quietUs,int active)
+{
+    return UacFeedbackStale(unusableUs>quietUs?unusableUs:quietUs,active);
+}
+/* Whether a data URB that came back as completion number stamp counts
+ * toward quietUs, the last usable feedback having come back as number
+ * from: only one that came back after it (the worker retires feedback
+ * first, so a backlog of older data is retired after newer feedback).
+ * Modulo 2^32. */
+static int UacFeedbackAfter(unsigned long stamp,unsigned long from)
+{
+    return (long)(stamp-from)>0;
+}
+/* unusableUs after a URB of n packets came back unusable, saturated. */
+static unsigned long UacFeedbackAdd(unsigned long unusableUs,unsigned long n,unsigned long packetUs)
+{
+    unsigned long add=n*packetUs;
+    if(packetUs&&add/packetUs!=n) return 0xfffffffful;
+    return unusableUs>0xfffffffful-add?0xfffffffful:unusableUs+add;
+}
 #endif

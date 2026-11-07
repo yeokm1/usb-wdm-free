@@ -4,7 +4,7 @@
  * the formats and rates the device's descriptors and clocks offer.
  * Original code from DDK headers and published PortCls documentation.
  * Built as uac2wdm.sys (USB Audio 2.0) and, with UAC_V1 defined, as
- * uac1wdm.sys (USB Audio 1.0, docs/design/uac2.md section 25).
+ * uac1wdm.sys (USB Audio 1.0, docs/design/uac2.md section 26).
  */
 #define PC_NEW_NAMES
 #include <initguid.h>
@@ -73,6 +73,7 @@ struct UAC_DIR_FORMATS {
 inline void *operator new(size_t, void *memory) { return memory; }
 static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status);
 static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN capture);
+static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo);
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
@@ -1022,7 +1023,7 @@ public:
      * clock stay one pair, as before. */
 #ifdef UAC_V1
     /* USB Audio 1.0 has no clock entities to tell endpoints apart by:
-     * one pair, the first playback and capture terminal (section 25.4). */
+     * one pair, the first playback and capture terminal (section 26.4). */
     ULONG Pairs() const { return 1; }
 #else
     ULONG Pairs() const {
@@ -1110,7 +1111,7 @@ public:
     NTSTATUS Prepare() {
         NTSTATUS s = STATUS_SUCCESS;
         if (primary) dev = primary->dev;
-        else s = UacUsbOpen(lower, descriptor, &dev);
+        else s = UacUsbOpen(lower, PdoOf(device), descriptor, &dev);
         if (!NT_SUCCESS(s)) return s;
         Learn(&dir[0]); Learn(&dir[1]);
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
@@ -1454,6 +1455,8 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
 struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
              ULONG NameLength; UCHAR Name[256]; };
 static PDRIVER_DISPATCH PortClsPnp;
+static EXT *Extension(PDEVICE_OBJECT fdo);
+static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo) { return Extension(fdo)->Pdo; }
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
 }
@@ -1788,7 +1791,7 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
     s = Descriptor(ext->Lower, bytes, header.wTotalLength);
     Record(fdo, 3, s);
 #ifdef UAC_V1
-    /* USB Audio 1.0 (section 25): the function the PDO names (its MI_
+    /* USB Audio 1.0 (section 26): the function the PDO names (its MI_
      * interface, else the whole device's first UAC 1.0 function) parsed for
      * the bus speed (the bus's answer; without one, the speed the
      * descriptors alone fit; else Full Speed, the only one 98 SE's own
@@ -1912,7 +1915,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     NTSTATUS s = ParseDevice(fdo, &model);
     if (!NT_SUCCESS(s)) return s;
 #ifdef UAC_V1
-    /* A null function (section 25.6, G3): nothing this driver runs (a
+    /* A null function (section 26.6, G3): nothing this driver runs (a
      * MIDI-only function, say, or formats it does not carry). It starts
      * with no audio device, as Windows' driver leaves such a function on
      * 98 SE, rather than failing (Code 10); stage 0x40 records it. */

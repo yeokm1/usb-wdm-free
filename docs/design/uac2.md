@@ -52,7 +52,7 @@ experiment, not completion of that target. UAC 3.0 is a separate class;
 vendor-specific DSD semantics require separate evidence rather than being
 inferred from UAC2 compliance. UAC 1.0 functions stay with the in-box
 `usbaudio.sys` (Owner, 2026-10-20: not handled by this driver in v1;
-revisited 2026-11-07, section 25).
+revisited 2026-11-07, section 26).
 
 One device the owner already holds is a UAC 2.0 device: the Sound Blaster X4 (`041E:3278`, High Speed, seven
 interfaces in two IADs, isochronous `bInterval` 1, 3 and 4), recorded in
@@ -803,7 +803,7 @@ Owner, 2026-10-20, on the questions this draft raised:
   bind a whole device generically; unsplit devices are served under xHCI98,
   or by VID/PID entries added on request (section 3).
 - **Q5, UAC 1 devices.** Not handled by this driver in v1. Revisited
-  2026-11-07: section 25.
+  2026-11-07: section 26.
 - **Q6, folder names.** One scheme across all drivers, `README.md`,
   "Layout" (section 6).
 - **Q7, back-ported EHCI stacks.** NUSB's EHCI stack on 98 SE is fully
@@ -2430,14 +2430,152 @@ On a system where some WDM audio device was installed before (Windows'
 own USB audio, for one), everything is already there and the install
 asks for nothing but this package's own file.
 
-## 25. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
+## 25. A URB the stack fails whole, and Full Speed under 2000's own UHCI (xHCI98 Phase 47, 2026-11-07)
 
-Status: design, 2026-11-07; the options of 25.5 and 25.6 are the
+### 25.1 The reports
+
+- XP, 7 and Vista under Windows' own EHCI and UHCI: playback of the
+  asynchronous profiles (an explicit feedback endpoint) stopped after a
+  few milliseconds to a few seconds and did not start again until the
+  stream was closed; under xHCI98 the same profiles played. Recording
+  passed everywhere.
+- 2000 under its own UHCI, Full Speed (`fs`, `fs4`): `uac2wdm` was the
+  device's service, yet the device was never configured (no
+  `SET_CONFIGURATION`) and no wave device appeared.
+
+### 25.2 What the trace showed
+
+A trace build (`build.cmd wdmx86 trace`, test-only: every URB's submit
+and completion, written to QEMU's debug console port 0xE9 at an anomaly)
+on XP under Windows' EHCI and UHCI, on 7 under Windows' EHCI and on 2000
+under its UHCI:
+
+- When the host controller falls behind its schedule (here QEMU's EHCI
+  and UHCI skipping frames under load; on real hardware a resubmission
+  delayed past its frames does the same), every packet of one or more
+  queued URBs comes back failed: `USBD_STATUS_ISO_NOT_ACCESSED_BY_HW`
+  (EHCI) or `USBD_STATUS_NOT_ACCESSED` (UHCI) per packet, and the URB
+  with `USBD_STATUS_ISOCH_REQUEST_FAILED` (IRP `STATUS_UNSUCCESSFUL`).
+  `usb.h` defines that URB status as "all packets in an iso transfer
+  complete with an error". The URBs submitted after it were scheduled
+  and completed normally.
+- `uac2` treated any failed URB as fatal: the worker stopped, cancelled
+  the queue and exited, and nothing resubmitted until the client stopped
+  the stream. A URB with only some packets failed was already counted
+  and passed over (4.4, "never retried").
+- On 7 under Windows' EHCI the stack at times held every queued URB,
+  feedback and data alike, for 0.6 to 1.2 s with none coming back, then
+  completed them and went on. The feedback deadline (23.2, 200 ms after
+  the last usable packet) ended the stream inside such a hold, though no
+  feedback URB had come back unusable: the time counted was the stack's,
+  not the device's.
+- On 2000 and the controller's own UHCI, the device sits under 2000's
+  USB 1.1 stack (its hub service is `usbhub`; the EHCI controller's
+  devices are under 2000's USB 2.0 hub driver, `usbhub20`, as the
+  device registry of these legs shows). That hub does not answer the
+  USBDI bus interface query (`STATUS_NOT_SUPPORTED`; version 1 carries
+  `IsHighSpeed`), and `UacUsbOpen` refused an unknown speed on 2000 and
+  later, so the start failed before the configuration was selected; the
+  same as ME before its rule (16.5, the ME row).
+
+### 25.3 The change
+
+- **A URB failed whole is a lost interval.** A completion whose URB
+  status is `USBD_STATUS_ISOCH_REQUEST_FAILED`, whose every packet
+  carries a failure of its own, and which was not cancelled
+  (`UacPlanIsoLost`) is handled as a URB whose packets all failed: its
+  packets are counted as errors, a render stream's position advances
+  past its bytes (they are not sent again), a capture stream delivers
+  nothing for it, a feedback URB counts its packets as bad feedback, and
+  the slot is resubmitted. Any other failed URB status (a bad start
+  frame, a device gone, a halted pipe) and every failed IRP without that
+  URB status stay fatal, as before.
+- **Bounded.** Lost data URBs in a row are counted; a run covering
+  `UAC_LOST_LIMIT_MS` (1 s) of data (`UacPlanLostLimit`: 250 URBs of
+  4 ms, at least 2) stops the stream as a failure did before. A good
+  data URB ends the run. Feedback has its own deadline (next item).
+- **The feedback deadline in bus time.** The deadline keeps its lengths
+  (23.2: 1 s before the first valid value of a stream, 200 ms after) but
+  counts the service time of the feedback URBs that came back (not
+  cancelled) with no usable packet since the last usable one: each such
+  URB adds its packets times one packet's service time
+  (`UacFeedbackPacketUs`: 125 << (`bInterval` - 1) microseconds at High
+  Speed, a frame at Full Speed; `UacFeedbackAdd`, `UacFeedbackStale`,
+  `uacwatch.h`), and a usable packet resets the count. The data URBs
+  that come back after the last usable packet count the same way (their
+  span each, reset only by a usable packet; data that came back before
+  it but is retired after it, as the worker retires feedback first, is
+  not counted: `UacFeedbackAfter` on each completion's stamp. The
+  worker retires the completed feedback URBs in the order they came back
+  (the oldest stamp first, chosen in one look under the stream's lock,
+  then the data in sequence), and a feedback
+  URB that came back before the newest one already retired changes
+  neither count;
+  `UacFeedbackStaleBus`, the
+  larger of the two counts), so feedback held, or trickling back
+  unusable, while data plays still ends the stream after 200 ms of bus
+  time. A time in which
+  the stack holds every URB and none comes back, or the guest's clock
+  jumps, no longer counts against the device; a device whose feedback
+  comes back empty, failed or out of range for 200 ms of bus time still
+  ends the stream, as before. A stack that never returns the URBs leaves
+  the stream silent until it is stopped, where before it failed after
+  200 ms; neither plays.
+- **The speed under 2000's USB 1.1 stack.** The rule that a missing or
+  version 0 USBDI answer means Full Speed (98 SE and ME, below WDM 1.10)
+  now also applies on 2000 (WDM 1.10, below 1.20) when the device's PDO
+  belongs to the driver object `\Driver\usbhub` (`UacPlanUsb11Hub`),
+  2000's USB 1.1 hub driver, which runs only Full and Low Speed devices.
+  Under any other hub on 2000 (a USB 2.0 stack that does not answer, for
+  one) and on XP and later an unknown speed is still refused: a missing
+  interface alone does not prove Full Speed.
+- The trace flavour (`build.cmd <profile> trace`) is test-only and never
+  released; a free or checked build compiles none of it.
+
+### 25.4 Not changed
+
+- Explicit `StartFrame` scheduling: the URBs after a lost one were placed
+  by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays.
+- Packet counts (multiples of 8 at High Speed `bInterval` 1) and the
+  queue (19.4).
+- The deadline's lengths. Under QEMU on a loaded host a controller that
+  skips more than 200 ms of frames still returns that much unusable
+  feedback and ends the stream; a stall that long is not expected on
+  real hardware.
+- When a stream stops on a failure, the KS pin stays in RUN with a
+  position that no longer moves, until the client stops or closes it;
+  with Windows' mixer (XP) that can be much later than the client's own
+  close. Not changed here.
+
+### 25.5 Tests
+
+- `test.cmd` (`watchtest.c`): `UacFeedbackStale` at the 200 ms and 1 s
+  boundaries and never at 0; `UacFeedbackPacketUs` for each High Speed
+  `bInterval` (and out of range) and Full Speed; 25 then 26 unusable
+  8-packet URBs of 1 ms packets once active, 125 then 126 at start;
+  `UacFeedbackAdd` saturating; `UacFeedbackStaleBus` on either count,
+  and 50 then 51 data URBs of 4 ms with feedback held, also with an
+  unusable feedback URB back after every 49th; a 128 ms backlog of data
+  older than a usable feedback URB not counted, also with the two
+  feedback slots retired in reverse of their order; an older usable and
+  a newer unusable feedback URB retired oldest first near the boundary;
+  the stamps' wrap.
+- `test.cmd` (`desctest.c`): `UacPlanIsoLost` true only for that URB
+  status with every packet failed (not with one packet good, no packets,
+  success, a bad start frame, device gone, a cancelled or a halted
+  pipe status); `UacPlanLostLimit` for 1, 3, 4 and 8 ms spans, a span of
+  a second or more, and 0; `UacPlanUsb11Hub` for the name in either case,
+  and not for `usbhub20`, a shorter or other name, or none.
+- Legs: [uac2-iso-ehci](../testing/2026-11-07-uac2-iso-ehci.md).
+
+## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
+
+Status: design, 2026-11-07; the options of 26.5 and 26.6 are the
 owner's to choose; no code yet. Owner, 2026-11-07: "Please support UAC1
 in the UAC2 driver", and "Or have a separate UAC1 driver, depending on
 which is easier"; for release 0.1.9. This revisits Q5 (section 13).
 
-### 25.1 Why
+### 26.1 Why
 
 - **98 SE, unplug while playing.** With Windows' own `usbaudio.sys`
   playing a USB Audio 1.0 device, an unplug froze 98 SE or ended in a
@@ -2451,7 +2589,7 @@ which is easier"; for release 0.1.9. This revisits Q5 (section 13).
   5 of 5 while playing and 3 of 3 while recording on `3.4.2.0`'s option
   B, all with a UAC 2.0 device (the Sound Blaster X4, High Speed; same
   issue, section 4). Whether that holds for a Full Speed UAC 1.0 device
-  is this design's first leg (25.7).
+  is this design's first leg (26.7).
 - **ME** stopped at about one unplug in four with `usbaudio.sys`, on
   xHCI98 and on ME's own UHCI stack; xHCI98 `3.4.2.0`'s option B fixes it
   under xHCI98 (0 in 54), not on ME's own stack (issue 25, sections 3
@@ -2465,7 +2603,7 @@ which is easier"; for release 0.1.9. This revisits Q5 (section 13).
   (`docs/testing/2026-10-23-brio-null.md`); this work neither cures nor
   causes it, and the documents must not say otherwise.
 
-### 25.2 What was built before
+### 26.2 What was built before
 
 A separate UAC 1.0 driver, `uac1wdm.sys`, was designed and built on
 2026-10-23/24 (owner decision of 2026-10-23: a separate driver from a
@@ -2495,7 +2633,7 @@ section 19; the fetch-cursor position, 17; several pairs per device, 15;
 the device's name, 21; the preferred device, 22; Full Speed 4-byte
 feedback, 23).
 
-### 25.3 UAC 1.0 against UAC 2.0, and what the driver does
+### 26.3 UAC 1.0 against UAC 2.0, and what the driver does
 
 Specifications: USB-IF "Device Class Definition for Audio Devices" 1.0
 (ADC-1), "... for Audio Data Formats" 1.0 (FMT-1) and "... for Terminal
@@ -2519,7 +2657,7 @@ Types" 1.0, section numbers theirs (copies kept outside the repository,
 | Speeds | Full and High Speed | Full Speed nearly always; High Speed UAC 1.0 exists (the Brio 100's microphone, `bInterval` 4) | Unchanged: `uacrate.c`'s cadence, `bInterval` 1 at Full Speed, 1 to 4 at High Speed, the packets-per-URB rules of 4.4 and 4.6 |
 | Synchronisation, OUT | Async with explicit feedback, adaptive, synchronous | The same three; async feedback 3 bytes 10.14 at Full Speed, renewed every 2^`bRefresh` ms | As now (4.5 and 23): feedback read every frame, 3 or 4 bytes at Full Speed, 4 bytes 16.16 at High Speed. Linux's detection of a shifted High Speed value (`uac1fb.c`) waits for a device that needs it |
 | Synchronisation, IN | Async, synchronous; adaptive needs a synch OUT | The same; an adaptive source needs its synch OUT endpoint fed (ADC-1 3.7.2.2) | Async and synchronous sources as now. An adaptive source whose endpoint names a synch OUT endpoint (`bSynchAddress`) is skipped: `uac2` sends no Ff (today it reads any IN endpoint the same way, whatever its sync type, `uacplan.c` `Runnable`) |
-| Feedback loss | The stream ends 1 s without a first valid value, 200 ms after one (`uacwatch.h`, 23.2) | Many UAC 1.0 devices answer feedback only while locked | Owner question U4 (25.9) |
+| Feedback loss | The stream ends 1 s without a first valid value, 200 ms after one (`uacwatch.h`, 23.2) | Many UAC 1.0 devices answer feedback only while locked | Owner question U4 (26.9) |
 | Capture | As now | Mono microphones at 8 to 48 kHz are common | As now: native formats; 98 SE's KMixer converted capture in the 5.2 readings |
 | 8-bit, float | Not offered (`Subslot` below 2 skipped, 5.2) | PCM8 (`wFormatTag` 2), IEEE_FLOAT (3), ALAW, MULAW | Only `wFormatTag` 1 (PCM), 2 to 4-byte subframes; the rest skipped |
 | HID controls on the device | A separate function | The same (the Logi's interface 3, consumer keys) | Untouched: the parent gives HID its own function, `hidclass` binds it |
@@ -2538,7 +2676,7 @@ interface 2 alternate 1: stereo 16-bit at seven discrete rates from 8 to
 192 kHz, endpoint `0x01` adaptive OUT, 768 bytes, Sampling Frequency
 control, lock delay 4 ms. Interface 3: HID.
 
-### 25.4 `uac2`'s pipeline against UAC 1.0
+### 26.4 `uac2`'s pipeline against UAC 1.0
 
 | Part | UAC 1.0 | New or parameterised |
 |---|---|---|
@@ -2546,30 +2684,30 @@ control, lock delay 4 ms. Interface 3: HID.
 | Rates (`UacUsbRates`, the clock walk) | The alternate's list, no requests | Parameterised: a family branch before the walk |
 | Rate set (`SetClock`, before `SelectAlt`) | Endpoint `SET_CUR` after `SelectAlt` | New function; the order by family |
 | Alternate choice (`uacplan.c`) | The smallest `wMaxPacketSize` alternate that carries the format and lists the rate | Parameterised: the rate check per alternate |
-| Stream, ring, worker, `Uac2QueueMs`, `Uac2Realtime`, the position (17, 19) | Unchanged | MaxPacketsOnly OUT only: per-packet PCM lengths beside the padded USB lengths, so fill, position and completion count PCM bytes (25.3) |
+| Stream, ring, worker, `Uac2QueueMs`, `Uac2Realtime`, the position (17, 19) | Unchanged | MaxPacketsOnly OUT only: per-packet PCM lengths beside the padded USB lengths, so fill, position and completion count PCM bytes (26.3) |
 | Feedback (`uacrate.c`, `uacwatch.h`) | Unchanged at Full Speed (3 or 4 bytes) | None, unless U4 changes the loss rule |
 | Volume and mute (`uacvol.c`, the volume object in `uac2wdm.cpp`) | Feature Unit layout and MIN/MAX/RES | Parameterised: `Access`, `UnitChannels`, `Sources` and the range read by family |
 | Topology to KS (`uactopo.c`'s fixed graphs; `Learn`; jacks from `UacVolJack`) | The fixed graphs unchanged; the terminal checks of `uacvol.c` by family; the terminal type codes used here (0x0101, 0x0201, 0x0301, 0x0302, 0x0402, 0x0601, 0x0603, 0x0605) are the same in both versions | Parameterised (`uacvol.c`) |
 | Several pairs per device (15) | `Wave::Pairs()` gives one pair unless every endpoint resolves to a clock source of its own (`UacClock`); UAC 1.0 has none, so a UAC 1.0 function is one pair: its first playback and first capture terminal, as `Learn` picks them | None; several UAC 1.0 pairs are not in this work (a rule of their own, with the shared-unit check of 15.3 item 6, when a device needs it) |
 | Names (21), `SetupPreferredAudioDevices` (22) | The same INF values and product string | None (INF lines only) |
 | PortCls side (WaveCyclic per direction, Topology; KMixer, SysAudio and WDMAud on 98 SE to XP, the audio engine on Vista and later) | Unchanged: `uac2` is a PortCls WaveCyclic driver on every system, a KS audio device to the stack above | None |
-| Co-installer `UACCI1.DLL` (16) | Its rule is `Prot_20` only; UAC 1.0 functions are left to Windows | None, unless option c of 25.6 |
+| Co-installer `UACCI1.DLL` (16) | Its rule is `Prot_20` only; UAC 1.0 functions are left to Windows | None, unless option c of 26.6 |
 | Host tests | Parser on the Logi and Brio 100 fixtures, QEMU's layout, the simulator's profiles and malformed variants; endpoint and Feature Unit setup packets; volume ranges | New tests beside `desctest.c` and `voltest.c` |
 
 Size, by the `uac1-prior` files and `uac2`'s: about 500 lines of parser
 (mostly ported), 150 in the USB layer, 200 for controls and topology,
 INF lines; about 400 lines of simulator profiles.
 
-### 25.5 Option 1: inside `uac2`, or a separate driver
+### 26.5 Option 1: inside `uac2`, or a separate driver
 
 | | A: inside `uac2` (one binary, one package) | B: a separate package (`uac1wdm.sys` and its INF), built from `uac2`'s sources with the family fixed at build time |
 |---|---|---|
-| Code | The work of 25.4, once | The same work, plus a second build target, resources, INF, folders and import gate; the old `uac1-prior` driver is not a base (25.2) |
+| Code | The work of 26.4, once | The same work, plus a second build target, resources, INF, folders and import gate; the old `uac1-prior` driver is not a base (26.2) |
 | Shared or duplicated | Nothing duplicated | Nothing duplicated if built from the same files (one source, two binaries, as `AGENTS.md` allows); duplicated if it were the old copies |
 | Risk to UAC 2.0 users | Their binary carries the new branches; the family is chosen once at parse and the UAC 2.0 paths keep their code; host tests and regression legs | The same source changes compiled into `uac2wdm.sys` too, unless guarded out at build time; `uac2`'s INF untouched |
-| INF and rank | The UAC 1.0 lines go into `uac2`'s 98 SE INF, and a by-hand model on NT and ME (25.6) | Its own INF and `STAGE.TXT` rows; the rank facts of 25.6 are the same |
+| INF and rank | The UAC 1.0 lines go into `uac2`'s 98 SE INF, and a by-hand model on NT and ME (26.6) | Its own INF and `STAGE.TXT` rows; the rank facts of 26.6 are the same |
 | Signing | No new image: `uac2`'s x64 image changes in 0.1.9 already (0.1.10.0, section 23) and is signed in the same pass | One more x64 image in the owner's signing pass |
-| Packaging here | `free/audio/uac2/` as now (with the 9x folder split of 25.6 if chosen) | New `free/audio/uac1/` folders, `README.md` rows, release notes, `STAGE.TXT` |
+| Packaging here | `free/audio/uac2/` as now (with the 9x folder split of 26.6 if chosen) | New `free/audio/uac1/` folders, `README.md` rows, release notes, `STAGE.TXT` |
 | xHCI98's installer | No new row; the `uac2` row's words gain UAC 1.0, the pin moves | A row: the withdrawn `free:audio/uac1` revived, which carries `EXCLUDES free:audio/usbmidi` on every system ("uac1 serves MIDI-only functions by class") and needs that line lifted by the cut's rules (xHCI98 design record 26, 6.7.11 and 6.7.14); or a new id with its own lines |
 | For the user | One Audio box, one set of registry values | Two Audio boxes; its own registry value names (`Uac2QueueMs` would need a twin) |
 | Maintenance | One driver | Two packages to version, release and test, from one source |
@@ -2584,7 +2722,7 @@ went with splitting the transport into a library first; with `uac2` now
 the only home of that transport, A is that shared library without a
 second package.
 
-### 25.6 Option 2: which systems bind UAC 1.0 to `uac2`
+### 26.6 Option 2: which systems bind UAC 1.0 to `uac2`
 
 **Facts the options rest on.**
 
@@ -2714,7 +2852,7 @@ back to d plus the by-hand model:
   UAC 1.0 function) show on 98 SE a recorded start failure with its
   reason, no hang, and Update Driver back to "USB Audio Device"
   completing (the device bound to `usbaudio`, started). In QEMU that is
-  the rebinding only: 98 SE's `usbaudio` cannot stream there (25.1), so
+  the rebinding only: 98 SE's `usbaudio` cannot stream there (26.1), so
   the functional recovery (playback for a render fixture, recording for
   a capture one, the adaptive source's included) is read on XP's
   `usbaudio` with the same fixtures for the fixture's own soundness,
@@ -2725,7 +2863,7 @@ back to d plus the by-hand model:
 Option d alone would leave every other UAC 1.0 device on 98 SE with the
 limitation.
 
-### 25.7 Tests
+### 26.7 Tests
 
 **Models first, each checked against a driver written without it** (the
 owner's rule of 2026-11-06, `docs/testing/2026-11-06-inbox-reference.md`):
@@ -2785,7 +2923,7 @@ and `mxnt`, fresh overlays; QEMU ports 51310 to 51329; 4 vCPU at most):
    Windows' `usbaudio` on XP (play for render, record for capture); then
    on 98 SE under xHCI98: the start fails with its reason recorded, the
    system goes on, and Update Driver back to `usbaudio` completes (bound
-   and started; no stream read there, 25.1).
+   and started; no stream read there, 26.1).
 4b. **Mixed functions**: a fixture with a UAC 1.0 and a UAC 2.0 function
    in one configuration (host test; a simulator profile if cheap): each
    function parsed in its own family.
@@ -2804,7 +2942,7 @@ and `mxnt`, fresh overlays; QEMU ports 51310 to 51329; 4 vCPU at most):
    range from MIN/MAX/RES, the per-alternate rate pick, MaxPacketsOnly
    padding with PCM and USB lengths apart and null packets kept.
 
-### 25.8 Estimate and risks
+### 26.8 Estimate and risks
 
 Agent time with reviews, option A with a: parser and its tests 5 h;
 USB layer 4 h; controls and topology 4 h; INFs, folders, `STAGE.TXT`,
@@ -2837,20 +2975,20 @@ Risks:
    `usbaudio` runs Update Driver once; the notes say how.
 7. **MIDI**: a MIDI-only function on 98 SE gets `uac2` by class and fails
    its start (before: `usbaudio`, also without MIDI there); listed
-   devices keep `usbmidi`; the `Drivers\midi` removal effect of 25.6 on
+   devices keep `usbmidi`; the `Drivers\midi` removal effect of 26.6 on
    98 SE (leg 4a).
 8. **Formats `uac2` does not run** (G3): with option a such a device on
    98 SE loses `usbaudio` to a failed start until the user goes back;
-   rare, not shown absent (25.6).
+   rare, not shown absent (26.6).
 9. **Time**: 0.1.9's signing pass waits for the x64 image.
 
-### 25.9 Owner questions
+### 26.9 Owner questions
 
-- **U1. A or B** (25.5). Recommended: A.
-- **U2. ME automatic or by hand** (25.6). Recommended: by hand, with the
+- **U1. A or B** (26.5). Recommended: A.
+- **U2. ME automatic or by hand** (26.6). Recommended: by hand, with the
   9x folder split into `w98se/` and `wme/`.
 - **U2a. 98 SE: class binding (a) with its stated loss, or d plus the
-  by-hand model** (25.6). Recommended: a, behind G1 to G3.
+  by-hand model** (26.6). Recommended: a, behind G1 to G3.
 - **U3. 2000 to 8.1**: by hand (recommended), or option c.
 - **U4. Feedback loss on a UAC 1.0 asynchronous sink**: end the stream
   at `uacwatch.h`'s deadline as for UAC 2.0 (recommended: one rule,
@@ -2859,11 +2997,11 @@ Risks:
 - **U5. The xHCI98 installer row's words** (option A): "USB audio
   (uac2): USB Audio Class 1.0 and 2.0 sound cards, headsets and DACs".
 
-### 25.10 The owner's decisions (2026-11-07)
+### 26.10 The owner's decisions (2026-11-07)
 
 - **U1: B**, a separate driver, `uac1`, built from source shared with
   `uac2`, not the `uac1-prior` copies; `uac2`'s behaviour unchanged, shown
-  by its build (25.11) and its host tests and regression legs.
+  by its build (26.11) and its host tests and regression legs.
 - **Scope: Windows 98 SE only.** One x86 package; no ME, 2000, XP, Vista
   to 10 package, no by-hand models there, no x64 image. ME keeps Windows'
   `usbaudio`, which xHCI98 `3.4.2.0`'s option B fixed for the unplug.
@@ -2885,7 +3023,7 @@ Risks:
   `free:audio/uac1`; its `EXCLUDES` against `usbmidi` becomes `COEXISTS` on
   98 SE, by the reasons above).
 
-### 25.11 As built (uac1 0.1.0.1)
+### 26.11 As built (uac1 0.1.0.1)
 
 **Sharing.** `uac2`'s driver sources moved to `src/audio/common/`
 (`uacwdm.cpp` is the former `uac2wdm.cpp`; `uacdesc`, `uacusb`,

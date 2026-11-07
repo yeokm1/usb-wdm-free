@@ -90,7 +90,7 @@ Per package, newest first. A release is a commit and a tag
     The first audio device plugged in after a start can freeze 98 SE, as
     with Windows' own driver (4 of 10 first plugs with each in the same
     test).
-  - [uac2 design, section 25](design/uac2.md).
+  - [uac2 design, section 26](design/uac2.md).
 
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 

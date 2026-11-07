@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
  * Original code from USB 2.0 9.6.6 and 5.6.3 and the UAC 1.0 / 2.0
- * format descriptors (docs/design/uac2.md section 25).
+ * format descriptors (docs/design/uac2.md section 26).
  */
 #include "uacfmt.h"
 
@@ -45,7 +45,7 @@ unsigned int UacFmtNeed(const UAC_FMT_ALT *a, unsigned long rate, int highSpeed)
     /* Only an asynchronous endpoint runs on a clock other than the host's
      * cadence: its feedback (sink) or its own clock (source) may need one
      * frame more than nominal. Adaptive and synchronous sinks get the
-     * nominal cadence (docs/design/uac2.md 25.3). */
+     * nominal cadence (docs/design/uac2.md 26.3). */
     if (a->Sync == UAC_SYNC_ASYNC) frames++;
     bytes = frames * a->Channels * a->Subframe;
     return bytes > 0xffffUL ? 0 : (unsigned int)bytes;

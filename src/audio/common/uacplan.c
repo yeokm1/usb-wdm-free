@@ -63,6 +63,32 @@ unsigned int UacPlanQueueMs(unsigned long raw)
     return (unsigned int)raw;
 }
 
+unsigned int UacPlanIsoLost(unsigned long urbStatus, unsigned int packets, unsigned int failed)
+{
+    return urbStatus == UAC_ISO_LOST_STATUS && packets && failed == packets;
+}
+
+unsigned int UacPlanLostLimit(unsigned long spanUs)
+{
+    unsigned long n;
+    if (!spanUs) spanUs = 1000UL;
+    n = (UAC_LOST_LIMIT_MS * 1000UL + spanUs - 1) / spanUs;
+    return n < 2 ? 2U : (unsigned int)n;
+}
+
+unsigned int UacPlanUsb11Hub(const unsigned short *name, unsigned int count)
+{
+    static const char want[] = "\\driver\\usbhub";
+    unsigned int i;
+    if (!name || count != sizeof(want) - 1) return 0;
+    for (i = 0; i < count; i++) {
+        unsigned short c = name[i];
+        if (c >= 'A' && c <= 'Z') c = (unsigned short)(c - 'A' + 'a');
+        if (c != (unsigned char)want[i]) return 0;
+    }
+    return 1;
+}
+
 unsigned int UacPlanQueue(int highSpeed, unsigned int interval, unsigned int queueMs,
                           unsigned long bytesPerSecond, unsigned int frameBytes,
                           unsigned int capacity, unsigned long ringBytes,

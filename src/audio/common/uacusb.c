@@ -29,6 +29,134 @@
 #define WALK_VISITS 64
 #define TAG 'b2aU'
 
+/* The trace flavour (build.cmd trace): a stream trace to QEMU's debug
+ * console port 0xE9, test-only and never released. Events go to a small
+ * ring as they happen and are written out at an anomaly (a failure, a
+ * worker wait that saw nothing for 100 ms, a stop), so the output does
+ * not slow the stream it watches; the first events of every start are
+ * written at once. A free or checked build compiles none of it. */
+#if defined(UAC_TRACE_E9)
+#define TR_RING 4096
+#define TR_HEAD 48
+typedef struct TR_EVENT { ULONG T; char K; UCHAR Slot; USHORT Packets; ULONG Seq, A, B, C, D; } TR_EVENT;
+static TR_EVENT TrRing[TR_RING];
+static ULONG TrNext, TrFrom, TrHead;
+static KSPIN_LOCK TrLock;
+static LONG TrInit;
+
+static VOID TrByte(char c)
+{
+#if defined(_M_AMD64)
+    __outbyte(0xe9, (unsigned char)c);
+#else
+    __asm { mov dx, 0xe9
+            mov al, c
+            out dx, al }
+#endif
+}
+
+static VOID TrHex(ULONG v)
+{
+    int i;
+    for (i = 28; i >= 0; i -= 4) TrByte("0123456789abcdef"[(v >> i) & 15]);
+}
+
+static VOID TrDec(ULONG v)
+{
+    char b[12];
+    int n = 0;
+    do { b[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+    while (n) TrByte(b[--n]);
+}
+
+static VOID TrStr(const char *s) { while (*s) TrByte(*s++); }
+
+/* Milliseconds from the performance counter (the interrupt time is the
+ * stream's own clock; watchchk.ps1 counts its uses). */
+static ULONG TrNow(void)
+{
+    LARGE_INTEGER hz, now = KeQueryPerformanceCounter(&hz);
+    return hz.QuadPart >= 1000 ? (ULONG)(now.QuadPart / (hz.QuadPart / 1000)) : 0;
+}
+
+static VOID TrLine(const char *tag, ULONG a, ULONG b, ULONG c)
+{
+    TrStr("u2: "); TrDec(TrNow()); TrByte(' '); TrStr(tag);
+    TrByte(' '); TrHex(a); TrByte(' '); TrHex(b); TrByte(' '); TrHex(c); TrByte('\n');
+}
+
+static VOID TrPrint(const TR_EVENT *e)
+{
+    TrStr("u2: "); TrDec(e->T); TrByte(' '); TrByte(e->K);
+    TrStr(" s="); TrDec(e->Slot); TrStr(" q="); TrDec(e->Seq); TrStr(" n="); TrDec(e->Packets);
+    TrByte(' '); TrHex(e->A); TrByte(' '); TrHex(e->B); TrByte(' '); TrHex(e->C); TrByte(' '); TrHex(e->D);
+    TrByte('\n');
+}
+
+static VOID TrSetup(void)
+{
+    if (!InterlockedExchange(&TrInit, 1)) KeInitializeSpinLock(&TrLock);
+}
+
+/* K: 'S' submit (A bytes, B current frame, C flags), 'C' completion (A
+ * IRP status, B URB status, C start frame, D current frame), 'P' after a
+ * completion with errors (A the first bad packet's status, B its length,
+ * C bad packets << 16 | first bad index, D the URB's ErrorCount). */
+static VOID TrEvent(char k, ULONG slot, ULONG seq, ULONG packets, ULONG a, ULONG b, ULONG c, ULONG d)
+{
+    KIRQL old;
+    TR_EVENT e;
+    BOOLEAN now;
+    e.T = TrNow(); e.K = k; e.Slot = (UCHAR)slot; e.Packets = (USHORT)packets;
+    e.Seq = seq; e.A = a; e.B = b; e.C = c; e.D = d;
+    KeAcquireSpinLock(&TrLock, &old);
+    now = TrHead < TR_HEAD;
+    if (now) TrHead++;
+    else {
+        TrRing[TrNext % TR_RING] = e;
+        TrNext++;
+        if (TrNext - TrFrom > TR_RING) TrFrom = TrNext - TR_RING;
+    }
+    KeReleaseSpinLock(&TrLock, old);
+    if (now) TrPrint(&e);
+}
+
+/* Writes what the ring holds since the last dump, then the reason. */
+static VOID TrDump(const char *why, ULONG a, ULONG b, ULONG c)
+{
+    KIRQL old;
+    TR_EVENT e;
+    for (;;) {
+        KeAcquireSpinLock(&TrLock, &old);
+        if (TrFrom == TrNext) { KeReleaseSpinLock(&TrLock, old); break; }
+        e = TrRing[TrFrom % TR_RING];
+        TrFrom++;
+        KeReleaseSpinLock(&TrLock, old);
+        TrPrint(&e);
+    }
+    TrLine(why, a, b, c);
+}
+
+static VOID TrRestart(void)
+{
+    KIRQL old;
+    KeAcquireSpinLock(&TrLock, &old);
+    TrHead = 0; TrFrom = TrNext;
+    KeReleaseSpinLock(&TrLock, old);
+}
+void UacTrace(const char *tag, ULONG a, ULONG b, ULONG c)
+{
+    TrDump(tag, a, b, c);
+}
+#define TR_EVENT_(x) TrEvent x
+#define TR_DUMP(x) TrDump x
+#define TR_LINE(x) TrLine x
+#else
+#define TR_EVENT_(x)
+#define TR_DUMP(x)
+#define TR_LINE(x)
+#endif
+
 typedef struct USB_SLOT {
     struct UAC_USB *Owner;
     PIRP Irp;
@@ -36,6 +164,7 @@ typedef struct USB_SLOT {
     PUCHAR Buffer;
     ULONG Packets, Bytes, BufferBytes, Sequence;
     LONG Phase; /* 0 idle,1 lower-owned,2 completed and caller-owned */
+    ULONG DoneStamp; /* section 25: the stream's completion count when it came back */
     BOOLEAN Feedback, CancelIssued, Used;
     NTSTATUS Status;
 } USB_SLOT;
@@ -74,7 +203,10 @@ struct UAC_USB {
     KEVENT Wake, Ready, Exited; /* Exited: the worker's last act */
     BOOLEAN Stop, ActiveAlt, WaitThread; /* WaitThread: WDM 1.10+ */
     ULONG NextSequence, CompletedSequence;
+    ULONG LostRun, LostLimit; /* section 25: lost data URBs in a row, and the most ridden out */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
+    ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 25: the deadline in bus time */
+    ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
     USB_SLOT Slot[SLOTS];
@@ -165,6 +297,7 @@ static NTSTATUS BusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
     stack->Parameters.QueryInterface.Interface = (PINTERFACE)&bus;
     stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     status = CallAndDrain(lower, irp, &event);
+    TR_LINE(("busif", (ULONG)status, (ULONG)bus.Size << 16 | bus.Version, bus.IsHighSpeed ? 1 : 0));
     if (!NT_SUCCESS(status)) return status;
     /* Answered, but not with an interface this module can use: refused. */
     status = STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -488,6 +621,7 @@ NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT 
     urb.LanguageId = language;
     status = UsbRequest(lower, (PURB)&urb);
     if (NT_SUCCESS(status)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
+    TR_LINE(("desc", (ULONG)type << 16 | index, (ULONG)status, *got));
     return status;
 }
 
@@ -790,6 +924,35 @@ static ULONG AltZeroPipes(UAC_DEV *d, ULONG iface)
     return 0;
 }
 
+#if defined(UAC_TRACE_E9)
+/* The bus's current frame, PASSIVE only; 0xffffffff when the stack fails it. */
+static ULONG TrFrame(UAC_USB *s)
+{
+    struct _URB_GET_CURRENT_FRAME_NUMBER frame;
+    RtlZeroMemory(&frame, sizeof(frame));
+    frame.Hdr.Length = sizeof(frame);
+    frame.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&frame)))
+        return 0xffffffff;
+    return frame.FrameNumber;
+}
+
+/* One line: every slot's phase (0 idle, 1 with the stack, 2 completed),
+ * '.' for an unused slot. */
+static VOID TrPhases(UAC_USB *s, const char *why, ULONG a)
+{
+    ULONG i;
+    TrStr("u2: "); TrDec(TrNow()); TrByte(' '); TrStr(why); TrByte(' '); TrHex(a);
+    TrStr(" cs="); TrDec(s->CompletedSequence); TrStr(" ns="); TrDec(s->NextSequence);
+    TrStr(" stop="); TrDec(s->Stop); TrStr(" ph=");
+    for (i = 0; i < SLOTS; i++) TrByte((char)(s->Slot[i].Used ? '0' + s->Slot[i].Phase : '.'));
+    TrStr(" seq=");
+    for (i = 0; i < SLOTS; i++)
+        if (s->Slot[i].Used && !s->Slot[i].Feedback) { TrDec(s->Slot[i].Sequence); TrByte(','); }
+    TrByte('\n');
+}
+#endif
+
 static NTSTATUS SelectAlt(UAC_USB *s, BOOLEAN active)
 {
     UAC_DEV *d = s->Dev;
@@ -812,6 +975,8 @@ static NTSTATUS SelectAlt(UAC_USB *s, BOOLEAN active)
     KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
     status = UsbRequest(d->Lower, (PURB)urb);
     KeReleaseMutex(&d->Lock, FALSE);
+    TR_LINE(("alt", (ULONG)s->Alt.Interface << 16 | urb->Interface.AlternateSetting, (ULONG)status,
+             (ULONG)urb->Hdr.Status));
     if (NT_SUCCESS(status)) {
         s->DataPipe = s->FeedbackPipe = NULL;
         s->ActiveAlt = active;
@@ -838,6 +1003,7 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     KeAcquireSpinLock(&s->Lock, &old);
     slot->Status = irp->IoStatus.Status;
     slot->Phase = 2;
+    slot->DoneStamp = ++s->DoneCount;
     /* The sound driver's wait increment: on NT the woken worker runs
      * boosted (at most 15, decaying) ahead of normal-priority threads
      * (docs/design/uac2.md 19.6). */
@@ -904,6 +1070,8 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
         }
     }
     KeReleaseSpinLock(&s->Lock, old);
+    TR_EVENT_(('S', (ULONG)(slot - s->Slot), slot->Feedback ? 0xffffffff : slot->Sequence, slot->Packets,
+               size, TrFrame(s), urb->TransferFlags, (ULONG)urb->StartFrame));
     (void)IoCallDriver(s->Dev->Lower, slot->Irp);
     return STATUS_SUCCESS;
 }
@@ -916,13 +1084,21 @@ static VOID Fail(UAC_USB *s, NTSTATUS status)
     s->Stop = TRUE;
     KeSetEvent(&s->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&s->Lock, old);
+    TR_DUMP(("fail", (ULONG)status, s->CompletedSequence, s->NextSequence));
+}
+
+/* The packets that report a failure of their own. */
+static ULONG FailedPackets(USB_SLOT *slot)
+{
+    ULONG i, failed = 0;
+    for (i = 0; i < slot->Packets; i++)
+        if (!USBD_SUCCESS(slot->Urb->IsoPacket[i].Status)) failed++;
+    return failed;
 }
 
 static ULONG PacketErrors(USB_SLOT *slot)
 {
-    ULONG i, errors = 0;
-    for (i = 0; i < slot->Packets; i++)
-        if (!USBD_SUCCESS(slot->Urb->IsoPacket[i].Status)) errors++;
+    ULONG errors = FailedPackets(slot);
     if (!NT_SUCCESS(slot->Status) || !USBD_SUCCESS(slot->Urb->Hdr.Status))
         if (!errors) errors = slot->Packets;
     return errors;
@@ -989,9 +1165,23 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
 {
     KIRQL old;
     ULONG i, j, raw, errors = PacketErrors(slot);
-    BOOLEAN stop, valid = FALSE, good;
+    BOOLEAN stop, valid = FALSE, good, lost;
     NTSTATUS status = slot->Status;
     USBD_STATUS usbStatus = slot->Urb->Hdr.Status;
+#if defined(UAC_TRACE_E9)
+    {
+        ULONG k, first = 0xffff;
+        for (k = 0; k < slot->Packets; k++)
+            if (!USBD_SUCCESS(slot->Urb->IsoPacket[k].Status)) { first = k; break; }
+        TrEvent('C', (ULONG)(slot - s->Slot), slot->Feedback ? 0xffffffff : slot->Sequence, slot->Packets,
+                (ULONG)status, (ULONG)usbStatus, (ULONG)slot->Urb->StartFrame, TrFrame(s));
+        if (first != 0xffff || errors)
+            TrEvent('P', (ULONG)(slot - s->Slot), first, slot->Packets,
+                    first != 0xffff ? (ULONG)slot->Urb->IsoPacket[first].Status : 0,
+                    first != 0xffff ? slot->Urb->IsoPacket[first].Length : 0,
+                    errors << 16 | first, (ULONG)slot->Urb->ErrorCount);
+    }
+#endif
     IoFreeIrp(slot->Irp); slot->Irp = NULL;
     KeAcquireSpinLock(&s->Lock, &old);
     stop = s->Stop;
@@ -1003,6 +1193,13 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
     }
     KeReleaseSpinLock(&s->Lock, old);
     good = !stop && NT_SUCCESS(status) && USBD_SUCCESS(usbStatus);
+    /* Section 25: a URB the stack failed whole (every packet not accessed
+     * or late, as a host controller that fell behind its schedule leaves
+     * them) is a lost service interval, as a failed packet is: counted,
+     * its time passed, the stream going on. Only a run of them covering
+     * UAC_LOST_LIMIT_MS of data stops it. */
+    lost = !stop && status != STATUS_CANCELLED &&
+        UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot));
     if (slot->Feedback) {
         if (good) {
             for (i = 0; i < slot->Packets; i++) {
@@ -1039,11 +1236,32 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
                     s->LastFeedbackValueAt = KeQueryInterruptTime();
                     break;
                 default:
+                    /* 'F': a rejected feedback packet (A its first 4 bytes, B
+                     * its length, C its offset, D the stride). */
+                    TR_EVENT_(('F', (ULONG)(slot - s->Slot), i, slot->Packets,
+                               packet->Length && packet->Offset + 4 <= slot->BufferBytes ?
+                               *(ULONG UNALIGNED *)(slot->Buffer + packet->Offset) : 0,
+                               packet->Length, packet->Offset, s->FeedbackBytes));
                     break;
                 }
             }
         }
-        if (valid) s->LastFeedbackPacket = KeQueryInterruptTime();
+        if (lost) s->Rate_.BadFeedback += slot->Packets;
+        /* Section 25: the deadline counts the service time of the URBs
+         * that came back with nothing usable, not the time since the last
+         * usable packet: a time in which the stack held every URB and none
+         * came back is not the device's. The feedback slots are retired by
+         * index, so one that came back before the newest already retired
+         * one leaves the accounting alone. */
+        if (UacFeedbackAfter(slot->DoneStamp, s->FeedbackStamp)) {
+            s->FeedbackStamp = slot->DoneStamp;
+            if (valid) {
+                s->LastFeedbackPacket = KeQueryInterruptTime();
+                s->FeedbackUnusableUs = s->FeedbackQuietUs = 0;
+                s->QuietFrom = slot->DoneStamp;
+            } else if (!stop && status != STATUS_CANCELLED)
+                s->FeedbackUnusableUs = UacFeedbackAdd(s->FeedbackUnusableUs, slot->Packets, s->FeedbackPacketUs);
+        }
         KeAcquireSpinLock(&s->Lock, &old);
         if (!stop && status != STATUS_CANCELLED) FeedbackDiag(s, slot, status);
         s->Stats.FeedbackUrbs++;
@@ -1073,15 +1291,26 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             s->Stats.CapturedBytes += delivered; s->Stats.CompletedBytes += delivered;
             KeReleaseSpinLock(&s->Lock, old);
             s->Progress(s->CallbackContext, 0, errors);
-        } else if (good) {
+        } else if (lost && s->Capture) {
+            s->Progress(s->CallbackContext, 0, errors);
+        } else if (good || lost) {
             /* Advance in submission order, including failed/lost scheduled
              * packets. Never retry time-specific PCM or synthesize a timer. */
             s->Progress(s->CallbackContext, slot->Bytes, errors);
         }
+        if (lost) s->LostRun++;
+        else if (good) s->LostRun = 0;
+        /* Section 25: bus time since the last usable feedback, also while
+         * feedback URBs are held or come back unusable. */
+        if (s->Feedback && (good || lost) && UacFeedbackAfter(slot->DoneStamp, s->QuietFrom))
+            s->FeedbackQuietUs = UacFeedbackAdd(s->FeedbackQuietUs, 1, s->TransferUs);
         s->CompletedSequence++;
     }
     slot->Phase = 0;
-    if (!stop && !NT_SUCCESS(status)) Fail(s, status);
+    if (lost) {
+        if (!slot->Feedback && s->LostRun >= s->LostLimit)
+            Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
+    } else if (!stop && !NT_SUCCESS(status)) Fail(s, status);
     else if (!stop && !USBD_SUCCESS(usbStatus)) Fail(s, STATUS_DEVICE_DATA_ERROR);
 }
 
@@ -1125,15 +1354,32 @@ static VOID Worker(PVOID context)
     busy = 0;
     for (;;) {
         KeClearEvent(&s->Wake);
-        /* Feedback first so newly prepared data uses the newest valid rate.
-         * Data completions are retired in sequence even if callbacks reorder. */
+        /* Feedback first so newly prepared data uses the newest valid rate,
+         * in the order the feedback URBs came back (section 25: the oldest
+         * stamp first). Data completions are retired in sequence even if
+         * callbacks reorder. */
         do {
+            USB_SLOT *oldest = NULL;
+            ULONG oldestStamp = 0, stamp;
             progress = FALSE;
+            /* One look under the lock: no completion lands between two
+             * slots' reads and makes a newer one look the oldest. */
+            KeAcquireSpinLock(&s->Lock, &old);
             for (i = 0; i < SLOTS; i++) {
                 USB_SLOT *slot = &s->Slot[i];
-                if (!slot->Used) continue;
+                if (!slot->Used || !slot->Feedback) continue;
+                phase = slot->Phase; stamp = slot->DoneStamp;
+                if (phase == 2 && (!oldest || UacFeedbackAfter(oldestStamp, stamp))) {
+                    oldest = slot; oldestStamp = stamp;
+                }
+            }
+            KeReleaseSpinLock(&s->Lock, old);
+            if (oldest) { Completed(s, oldest); progress = TRUE; continue; }
+            for (i = 0; i < SLOTS; i++) {
+                USB_SLOT *slot = &s->Slot[i];
+                if (!slot->Used || slot->Feedback) continue;
                 KeAcquireSpinLock(&s->Lock, &old); phase = slot->Phase; KeReleaseSpinLock(&s->Lock, old);
-                if (phase == 2 && (slot->Feedback || slot->Sequence == s->CompletedSequence)) {
+                if (phase == 2 && slot->Sequence == s->CompletedSequence) {
                     Completed(s, slot); progress = TRUE;
                 }
             }
@@ -1151,16 +1397,18 @@ static VOID Worker(PVOID context)
             if (phase) pending++;
             if (!stop && !phase) {
                 status = SubmitSlot(s, slot);
-                if (!NT_SUCCESS(status)) { Fail(s, status); stop = TRUE; }
+                if (!NT_SUCCESS(status)) { TR_LINE(("subfail", i, (ULONG)status, 0)); Fail(s, status); stop = TRUE; }
                 else pending++;
             }
         }
         if (stop && !pending) break;
-        /* Adjustable system time is unsuitable for elapsed deadlines: NTP
-         * or SetSystemTime must not create a feedback loss or hide one. */
-        if (!stop && s->Feedback && UacFeedbackLate(KeQueryInterruptTime(), s->LastFeedbackPacket,
-                                                    s->Rate_.FeedbackActive))
-            Fail(s, STATUS_IO_TIMEOUT); /* no usable rate for 1 s at start, 200 ms after */
+        /* The deadline is in bus time (section 25), never system time:
+         * NTP or SetSystemTime must not create a feedback loss or hide one. */
+        if (!stop && s->Feedback &&
+            UacFeedbackStaleBus(s->FeedbackUnusableUs, s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
+            TR_LINE(("fblate", (ULONG)s->Rate_.FeedbackActive, s->Rate_.GoodFeedback, s->Rate_.BadFeedback));
+            Fail(s, STATUS_IO_TIMEOUT);
+        } /* nothing usable back for 1 s at start, 200 ms after */
         /* 19.6's fairness rule (build 23): a stack that completes URBs
          * inline over and over (nothing delivered, no Fail) leaves Wake
          * signalled, so the wait below returns at once and a real-time
@@ -1185,7 +1433,14 @@ static VOID Worker(PVOID context)
         }
         timeout.QuadPart = -1000000; /* watchdog only; events drive PCM */
         if (realtime) waitStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
+#if defined(UAC_TRACE_E9)
+        if (KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &timeout) == STATUS_TIMEOUT) {
+            TrDump("idle", pending, stop, 0);
+            TrPhases(s, "idle", pending);
+        }
+#else
         KeWaitForSingleObject(&s->Wake, Executive, KernelMode, FALSE, &timeout);
+#endif
         if (realtime) {
             runStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
             /* A wait that returned at once is not idle time (Codex, build
@@ -1194,16 +1449,17 @@ static VOID Worker(PVOID context)
         }
     }
     KeAcquireSpinLock(&s->Lock, &old); s->Stats.Running = 0; KeReleaseSpinLock(&s->Lock, old);
+    TR_DUMP(("exit", s->CompletedSequence, s->NextSequence, (ULONG)s->Stats.LastStatus));
     KeSetEvent(&s->Exited, IO_NO_INCREMENT, FALSE); /* last access to s */
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
-NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
+NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_DEV **out)
 {
     UAC_DEV *d;
     UAC_BYTE numbers[32], pipes[32];
     unsigned int ifCount;
-    BOOLEAN high = FALSE;
+    BOOLEAN high = FALSE, usb11 = FALSE;
     NTSTATUS status;
     if (!out) return STATUS_INVALID_PARAMETER;
     *out = NULL;
@@ -1221,14 +1477,23 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
     status = desc->Speed == 1 || desc->Speed == 2 ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 #else
     status = BusSpeed(lower, &high);
+    /* 2000 (WDM 1.10, below 1.20): the device's PDO is its USB 1.1 hub
+     * driver's (usbhub; the USB 2.0 one is usbhub20). */
+    if (IoIsWdmVersionAvailable(1, 0x10) && !IoIsWdmVersionAvailable(1, 0x20) &&
+        pdo && pdo->DriverObject && pdo->DriverObject->DriverName.Buffer)
+        usb11 = UacPlanUsb11Hub(pdo->DriverObject->DriverName.Buffer,
+                                pdo->DriverObject->DriverName.Length / sizeof(WCHAR)) ? TRUE : FALSE;
+    TR_LINE(("speed", (ULONG)status, high, usb11));
 #endif
     /* No speed from the USBDI interface (STATUS_NOT_SUPPORTED: no answer,
      * or a version 0 interface, which predates USB 2.0; any other unusable
      * answer fails otherwise) on a system below WDM 1.10 (98 SE, ME):
      * Windows' own 9x stack, UHCI or OHCI without USB 2.0, where a device
      * runs at Full Speed. NUSB's EHCI stack and xHCI98 give version 1. On
-     * 2000 and later it is still refused: the speed is not guessed there. */
-    if (status == STATUS_NOT_SUPPORTED && !IoIsWdmVersionAvailable(1, 0x10)) {
+     * 2000 the same holds only under its own USB 1.1 hub driver (UHCI and
+     * OHCI; docs/design/uac2.md section 25). Otherwise, on 2000 and later,
+     * it is still refused: the speed is not guessed there. */
+    if (status == STATUS_NOT_SUPPORTED && (!IoIsWdmVersionAvailable(1, 0x10) || usb11)) {
         high = FALSE;
         status = STATUS_SUCCESS;
     }
@@ -1245,6 +1510,7 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, const UAC_DESC *desc, UAC_DEV **out)
     d->Lower = lower; d->HighSpeed = high;
     KeInitializeMutex(&d->Lock, 0);
     status = Configure(d);
+    TR_LINE(("config", (ULONG)status, d->IfCount, d->HighSpeed));
     if (!NT_SUCCESS(status)) { ExFreePool(d->Config); ExFreePool(d); return status; }
     *out = d;
     return STATUS_SUCCESS;
@@ -1326,6 +1592,7 @@ static VOID FreeSlots(UAC_USB *s)
 static VOID StopLocked(UAC_USB *s)
 {
     KIRQL old;
+    TR_LINE(("stop", s->Thread ? 1 : 0, s->ActiveAlt, (ULONG)s->Stats.LastStatus));
     if (s->Thread) {
         KeAcquireSpinLock(&s->Lock, &old);
         s->Stop = TRUE;
@@ -1340,6 +1607,7 @@ static VOID StopLocked(UAC_USB *s)
             KeDelayExecutionThread(KernelMode, FALSE, &t);
         }
         s->Thread = NULL;
+        TR_LINE(("stopped", 0, 0, 0));
     }
     FreeSlots(s);
     if (s->ActiveAlt) {
@@ -1389,6 +1657,11 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     KeReleaseSpinLock(&s->Lock, old);
     if (already) { KeReleaseMutex(&s->Operation, FALSE); return STATUS_SUCCESS; }
     StopLocked(s);
+#if defined(UAC_TRACE_E9)
+    TrSetup(); TrRestart();
+    TrLine("start", (ULONG)s->Capture << 16 | s->Alt.Interface << 8 | s->Alt.Alternate,
+           (ULONG)s->Dev->HighSpeed << 24 | s->DataSlots << 16 | s->DataPackets, s->Feedback);
+#endif
     RtlZeroMemory(&s->Stats, sizeof(s->Stats));
     s->Stats.HighSpeed = s->Dev->HighSpeed;
     s->Stats.Capture = s->Capture; s->Stats.Channels = s->Alt.Channels;
@@ -1414,6 +1687,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         frame.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
         if (NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&frame))) s->Stats.StartCurrentFrame = frame.FrameNumber;
         else s->Stats.StartCurrentFrame = 0xffffffff;
+        TR_LINE(("frame", s->Stats.StartCurrentFrame, s->Rate, s->Capacity));
     }
     if (!s->Capture &&
         !UacRateInitialize(&s->Rate_, s->Rate, s->Dev->HighSpeed, s->Alt.Interval,
@@ -1436,9 +1710,13 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         if (!slot->Urb || !slot->Buffer) { status = STATUS_INSUFFICIENT_RESOURCES; goto done; }
     }
     s->NextSequence = s->CompletedSequence = 0;
+    s->LostRun = 0; s->LostLimit = UacPlanLostLimit(s->TransferUs);
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;
+    s->FeedbackUnusableUs = s->FeedbackQuietUs = 0;
+    s->DoneCount = s->QuietFrom = s->FeedbackStamp = 0;
+    s->FeedbackPacketUs = UacFeedbackPacketUs(s->Dev->HighSpeed, s->Alt.FeedbackInterval);
     KeClearEvent(&s->Ready); KeClearEvent(&s->Wake); KeClearEvent(&s->Exited);
     /* PsCreateSystemThread wants the system process on 2000 and 98 SE;
      * SetState runs in the client's. An executive work item creates the

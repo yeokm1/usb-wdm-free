@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
 ; Experimental USB Audio Class 1.0 driver for Windows 98 SE only
-; (docs/design/uac2.md section 25): playback and capture in the formats and
+; (docs/design/uac2.md section 26): playback and capture in the formats and
 ; rates the device describes, on the driver core uac2 shares.
 [Version]
 Signature="$CHICAGO$"

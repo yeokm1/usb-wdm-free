@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Yeo Kheng Meng
  * USB Audio Class 1.0 descriptor parser (ADC-1 1.0 sections 4.3 to 4.6,
  * FMT-1 1.0 section 2.2.5). Original code from the specification tables;
- * docs/design/uac2.md section 25. No Windows types, allocation, packed
+ * docs/design/uac2.md section 26. No Windows types, allocation, packed
  * structures or unaligned reads.
  */
 #ifndef UAC1DESC_H

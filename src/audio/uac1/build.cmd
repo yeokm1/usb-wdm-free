@@ -3,7 +3,7 @@ rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
 rem build.cmd <profile> <free|checked>
 rem
-rem Builds uac1 (USB Audio 1.0, docs/design/uac2.md section 25) for one profile (build.md sections 3 and 4) into
+rem Builds uac1 (USB Audio 1.0, docs/design/uac2.md section 26) for one profile (build.md sections 3 and 4) into
 rem out\audio\uac1\<profile>\<flavour>\. Every path is rooted in
 rem this repository; a missing kit is reported, never searched for.
 rem PASS.TXT is written last, only when every gate has passed.

@@ -61,6 +61,19 @@ static int UacFeedbackStaleBus(unsigned long unusableUs,unsigned long quietUs,in
 {
     return UacFeedbackStale(unusableUs>quietUs?unusableUs:quietUs,active);
 }
+/* The deadline as applied: stale only when both the bus time (above) and
+ * the interrupt time since the last usable packet (or the stream's start),
+ * UacFeedbackLate, are past it. Bus time alone overcounts where a stack
+ * returns URBs faster than their span (98 SE under NUSB: zero-length
+ * feedback at a stream's start came back several times faster than its
+ * packets' service time and ended the stream within 0.3 s); interrupt time
+ * alone counts a time in which the stack held every URB (7 under its own
+ * EHCI). The earlier of the two never decides. */
+static int UacFeedbackStaleBoth(UAC_WATCH_TICK now,UAC_WATCH_TICK last,unsigned long unusableUs,
+                                unsigned long quietUs,int active)
+{
+    return UacFeedbackLate(now,last,active) && UacFeedbackStaleBus(unusableUs,quietUs,active);
+}
 /* Whether a data URB that came back as completion number stamp counts
  * toward quietUs, the last usable feedback having come back as number
  * from: only one that came back after it (the worker retires feedback

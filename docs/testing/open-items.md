@@ -43,13 +43,13 @@ Left: the rest of the legs on a real device swap: 98 SE with real devices (one `
 
 ## `uvc98` on 98 SE: the matrix's 1784 FAILs, and Full Speed under 98 SE's own UHCI
 
-Done: the matrix's `M1CAP` error 1784 on every 98 SE `uvc98` cell was the matrix's stale test tool, `M1CAP` `7ef711ff`, which predates the driver's RGB24 ranges and its KS_FRAME_INFO extended stream header: it connected to range 0 (now RGB24) and read with a bare stream header, and the read was refused before the camera started. With the current `M1CAP` `06e30623` the xHCI98 leg passed 8 of 8; `uvcm2.sys` is the 0.1.8 binary. The matrix's 98 SE cells rerun with `06e30623` (2026-11-08): under xHCI98 every step passed, 13 of 13; under NUSB every High Speed cell of the matrix's table passed ([9x matrix](2026-11-07-matrix-9x.md), "`uvc98` on 98 SE with the current `M1CAP`").
+Done: the matrix's `M1CAP` error 1784 on every 98 SE `uvc98` cell was the matrix's stale test tool, `M1CAP` `7ef711ff`, which predates the driver's RGB24 ranges and its KS_FRAME_INFO extended stream header: it connected to range 0 (now RGB24) and read with a bare stream header, and the read was refused before the camera started. With the current `M1CAP` `06e30623` the xHCI98 leg passed 8 of 8; `uvcm2.sys` is the 0.1.8 binary. The matrix's 98 SE cells rerun with `06e30623` (2026-11-08): under xHCI98 every `M1CAP` run passed, 12 of 12; under NUSB every High Speed cell of the matrix's table passed ([9x matrix](2026-11-07-matrix-9x.md), "`uvc98` on 98 SE with the current `M1CAP`").
 
 Left: under 98 SE's own UHCI at Full Speed (`uvc11-fs`), with `06e30623`, the third frame times out in 4 of 4 runs: READ 1 and 2 are good, READ 3 completes empty, and QEMU stops the isochronous stream 0.255 s after every start. The driver is unchanged since 0.1.8, which was never run on that stack. The rerun of 2026-11-08 met the same signature under NUSB, whose Full Speed camera sits on the UHCI companion (5 of 5 runs), and once in 2 at 640x480 and 5 frames a second under NUSB's EHCI; under xHCI98 the same Full Speed profile passed. Not settled whether the driver, the UHCI driver or QEMU's UHCI model is the cause.
 
 ## `usbmidi` on 98 SE under xHCI98, `multi`: one fatal exception (watch)
 
-One VMM fatal exception 0E in 7 legs of the `multi` profile (0 in 5 reruns), during the first `MIDITEST`; caller unknown. `usbmidi.sys` is unchanged since 0.1.8 (only its INF changed in 0.1.9). Watch item: record any repeat with its screen and the leg.
+One VMM fatal exception 0E in 9 legs of the `multi` profile, during the first `MIDITEST` of matrix leg b; caller unknown. The matrix legs c, r4 and r5 and 5 reruns in a separate kit had none (1 in 7 before r4 and r5). `usbmidi.sys` is unchanged since 0.1.8 (only its INF changed in 0.1.9). Watch item: record any repeat with its screen and the leg.
 
 ## `uac1`: the real Sound Blaster Play! 2 on 98 SE
 

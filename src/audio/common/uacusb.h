@@ -73,6 +73,9 @@ typedef struct UAC_USB_STATS {
     ULONG VolRangeRead, VolStartKnown;
     ULONG VolCount[3];
     LONG VolMin[3], VolMax[3], VolRes[3], VolTop[3], VolOffered[3], VolStartCur[3];
+    /* Design 25.7, word 94: 1 when the stream stopped polling feedback
+     * after UAC_FB_RESTART_LIMIT refusals in a row (UAC_FB_OFF). */
+    ULONG FeedbackOff;
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16

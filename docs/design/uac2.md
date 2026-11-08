@@ -2603,21 +2603,42 @@ answers for 5 s keep the start deadline away and leave BadFeedback at 0,
 a value then makes the stream active and later empties keepalives; the
 start deadline still fires for rejected packets; `uac1test.c` likewise.
 
-### 25.7 A feedback URB refused for its start frame (2026-11-08)
+### 25.7 Feedback refused for its start frame: the stream goes on without it (2026-11-08)
 
-On 98 SE under NUSB's UHCI a stream sometimes ended when one feedback URB
+On 98 SE under NUSB's UHCI a stream sometimes ended when a feedback URB
 came back with `USBD_STATUS_BAD_START_FRAME`, after a guest stall (the
-stream's stats: one failed feedback URB, `STATUS_DEVICE_DATA_ERROR`,
-feedback good until then). Every build since the first ended the stream
-on it. Now a feedback URB, and only a feedback URB, that comes back so is
-passed over and its slot resubmitted (ASAP), the last good value kept,
-while fewer than `UAC_FB_RESTART_LIMIT` (8) came back so in a row
-(`UacPlanFbRestart`); a good feedback URB ends the run. The USBD header
-marks that status as halting the pipe: a stack that keeps the pipe halted
-fails the next URBs the same way, and the stream ends after 8 of them, as
-it did at the first; no pipe reset is issued. Data URBs keep 25.3's
-rules. `desctest.c`: passed over for that status below 8 in a row, not at
-8 or for any other status.
+stream's stats: failed feedback URBs, all of that status,
+`STATUS_DEVICE_DATA_ERROR`). Every build since the first ended the stream
+on it. A first try (resubmitting the feedback URB, up to 8 in a row) did
+not recover: once NUSB refused a feedback URB's start frame it refused the
+next ones too, 9 in a row in one play, which fits the USBD header's note
+that the status halts the pipe.
+
+Now, for a feedback URB, and only a feedback URB, that comes back with
+that status (`UacPlanFbRefused`): the first 7 in a row are passed over and
+their slot resubmitted (ASAP), and a good feedback URB ends the run; at the
+8th the stream stops polling feedback for the rest of the stream instead
+of ending: no feedback slot is resubmitted, the deadline (25.3) no longer
+applies, and the data cadence keeps its last good feedback value, or the
+nominal one if none came, as it does before the first value (25.6). The
+stats' word 94, `FeedbackOff`, reads 1 then. Data URB failures, other
+feedback URB statuses and out-of-window values still end the stream as
+before.
+
+Feedback is not polled again in the same stream. A pipe that refuses
+start frames in a row is halted at the stack (the status's own definition);
+polling it again without a pipe reset fails the same way, and a reset
+needs every feedback URB on the pipe aborted first, with the data stream
+running on the same interface: more risk than a stream at its last good
+rate for the rest of a play. The next start of the stream selects the
+alternate again, which opens the pipes afresh, and polls feedback from
+the start. A device whose clock drifts from the last good value then
+plays with a slow buffer drift until that next start, as an adaptive
+device does.
+
+`desctest.c`: resubmitted for that status at 0 to 6 refusals before,
+feedback off at 7 and above (the 8th), the count wrap-safe; any other
+status not handled here.
 
 ## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
 

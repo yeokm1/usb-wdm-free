@@ -205,6 +205,7 @@ struct UAC_USB {
     ULONG NextSequence, CompletedSequence;
     ULONG LostRun, LostLimit; /* section 25: lost data URBs in a row, and the most ridden out */
     ULONG FbRestartRun;       /* 25.7: feedback URBs refused for their start frame, in a row */
+    BOOLEAN FeedbackOff;      /* 25.7: feedback polling stopped for the rest of the stream */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
     ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 25: the deadline in bus time */
     ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
@@ -1166,7 +1167,8 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
 {
     KIRQL old;
     ULONG i, j, raw, errors = PacketErrors(slot);
-    BOOLEAN stop, valid = FALSE, good, lost, restart;
+    BOOLEAN stop, valid = FALSE, good, lost, restart = FALSE, fbOff = FALSE;
+    unsigned int refused = UAC_FB_NONE;
     NTSTATUS status = slot->Status;
     USBD_STATUS usbStatus = slot->Urb->Hdr.Status;
 #if defined(UAC_TRACE_E9)
@@ -1203,10 +1205,11 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
         UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot));
     /* Design 25.7: a feedback URB the stack refused for its start frame
      * is passed over a few times in a row; data keeps the rules above. */
-    restart = slot->Feedback && !stop && status != STATUS_CANCELLED &&
-        UacPlanFbRestart((ULONG)usbStatus, s->FbRestartRun);
     if (slot->Feedback && !stop && status != STATUS_CANCELLED) {
-        if (restart) s->FbRestartRun++;
+        refused = UacPlanFbRefused((ULONG)usbStatus, s->FbRestartRun);
+        restart = refused == UAC_FB_RESUBMIT;
+        fbOff = refused == UAC_FB_OFF;
+        if (refused != UAC_FB_NONE) s->FbRestartRun++;
         else if (good) s->FbRestartRun = 0;
     }
     if (slot->Feedback) {
@@ -1327,6 +1330,13 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
     } else if (restart) {
         /* passed over: the slot is resubmitted ASAP by the worker */
+    } else if (fbOff) {
+        /* 25.7: no more feedback polls in this stream; the cadence keeps
+         * its last good value (or the nominal one) and the deadline is off. */
+        KeAcquireSpinLock(&s->Lock, &old);
+        s->FeedbackOff = TRUE; s->Stats.FeedbackOff = 1;
+        KeReleaseSpinLock(&s->Lock, old);
+        TR_LINE(("fboff", s->FbRestartRun, (ULONG)usbStatus, 0));
     } else if (!stop && !NT_SUCCESS(status)) Fail(s, status);
     else if (!stop && !USBD_SUCCESS(usbStatus)) Fail(s, STATUS_DEVICE_DATA_ERROR);
 }
@@ -1412,7 +1422,7 @@ static VOID Worker(PVOID context)
                 (void)IoCancelIrp(slot->Irp);
             }
             if (phase) pending++;
-            if (!stop && !phase) {
+            if (!stop && !phase && !(slot->Feedback && s->FeedbackOff)) {
                 status = SubmitSlot(s, slot);
                 if (!NT_SUCCESS(status)) { TR_LINE(("subfail", i, (ULONG)status, 0)); Fail(s, status); stop = TRUE; }
                 else pending++;
@@ -1421,7 +1431,7 @@ static VOID Worker(PVOID context)
         if (stop && !pending) break;
         /* The deadline is in bus time (section 25), never system time:
          * NTP or SetSystemTime must not create a feedback loss or hide one. */
-        if (!stop && s->Feedback &&
+        if (!stop && s->Feedback && !s->FeedbackOff &&
             UacFeedbackStaleBoth(KeQueryInterruptTime(), s->LastFeedbackPacket, s->FeedbackUnusableUs,
                                  s->FeedbackQuietUs, s->Rate_.FeedbackActive)) {
             TR_LINE(("fblate", (ULONG)s->Rate_.FeedbackActive, s->Rate_.GoodFeedback, s->Rate_.BadFeedback));
@@ -1729,7 +1739,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     }
     s->NextSequence = s->CompletedSequence = 0;
     s->LostRun = 0; s->LostLimit = UacPlanLostLimit(s->TransferUs);
-    s->FbRestartRun = 0;
+    s->FbRestartRun = 0; s->FeedbackOff = FALSE;
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;

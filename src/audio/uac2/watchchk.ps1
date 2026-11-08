@@ -5,6 +5,9 @@
 # Requires prior normal successful builds in all four named profiles.
 param([string]$Scratch='E:/usb-wdm-free/wave2/uac-watchdog-check')
 $ErrorActionPreference='Stop'
+# Retired 2026-11-07: tied to uac2's sources and builds of 2026-10 (before the
+# move to src/audio/common); kept as the record of its runs, not run again.
+throw 'retired: see the header'
 $repo=(Resolve-Path "$PSScriptRoot/../../..").Path
 $dest=[IO.Path]::GetFullPath($Scratch)
 New-Item -ItemType Directory -Force $dest | Out-Null

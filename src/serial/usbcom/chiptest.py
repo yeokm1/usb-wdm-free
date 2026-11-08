@@ -205,7 +205,8 @@ class ChipTests(unittest.TestCase):
     def test_cp210x(self):
         m = self.model('cp2105')
         self.assertEqual(self.control(m, 0xC0, 0xFF, 0x370B, 1, 1), (0, b'\x05'))
-        self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 4)   # before enable
+        self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 0)   # before enable
+        self.assertEqual(self.events('before_enable')[-1]['request'], 0x1E)
         self.assertEqual(self.control(m, 0x41, 0x00, 1, 1)[0], 0)
         self.assertEqual(self.control(m, 0x41, 0x1E, 0, 1, 4, struct.pack('<I', 9600))[0], 0)
         self.assertEqual(self.control(m, 0x41, 0x03, 0x0800, 1)[0], 0)
@@ -225,6 +226,120 @@ class ChipTests(unittest.TestCase):
         block = struct.pack('<IIII', 0x09, 0x00, 128, 128)                # through SET_FLOW: low
         self.control(m, 0x41, 0x13, 0, 1, 16, block)
         self.assertFalse(m.fns[1].rts)
+
+    def test_linux_driver_requests(self):
+        """What Linux 6.12's pl2303 and cp210x sent (docs/testing/2026-11-07-linux-reference.md)."""
+        p = self.model('pl2303hx')
+        status, line = self.control(p, 0xA1, 0x21, 0, 0, 7)                # GET_LINE_CODING first
+        self.assertEqual((status, line), (0, struct.pack('<IBBB', 9600, 0, 0, 8)))
+        c = self.model('cp2102')
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370B, 0, 2)[0], 4)   # the two-byte quirk probe
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370B, 0, 1), (0, b'\x02'))
+        self.assertEqual(self.control(c, 0xC0, 0xFF, 0x370C, 0, 13)[0], 4)  # no GPIO on a CP2102
+        self.control(c, 0x41, 0x00, 1, 0)                                # IFC_ENABLE
+        self.assertEqual(self.control(c, 0x41, 0x15, 0xEC, 0)[0], 0)        # EMBED_EVENTS, escape EC
+        self.bulk_out(c, c.fns[0].out, b'A\xecB')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=33), b'A\xec\x00B')
+        self.control(c, 0x41, 0x05, 1, 0)                                # break: looped back
+        self.control(c, 0x41, 0x05, 0, 0)
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=34), b'\xec\x01\x10\x00')
+        self.control(c, 0x41, 0x15, 0, 0)                                # events off: as before
+        self.bulk_out(c, c.fns[0].out, b'\xec')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=35), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then disabled
+        self.control(c, 0x41, 0x00, 0, 0)
+        self.control(c, 0x41, 0x00, 1, 0)
+        self.bulk_out(c, c.fns[0].out, b'\xec')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=36), b'\xec')
+        self.control(c, 0x41, 0x15, 0xEC, 0)                             # on again, then a reset
+        c.handle(3, 50, b'')
+        self.assertEqual(c.fns[0].esc, 0)
+        for part, size in (('cp2104', 13), ('cp2105', 15), ('cp2108', 0x49)):
+            g = self.model(part)
+            self.assertEqual(self.control(g, 0xC0, 0xFF, 0x370C, 0, size), (0, bytes(size)))
+            self.assertEqual(self.control(g, 0xC0, 0xFF, 0x3711, 0, 2)[0], 0 if part == 'cp2105' else 4)
+
+    def test_ref4_maker_driver_requests(self):
+        """Prolific 3.8.31.1/2.1.51 and Silicon Labs 4.20 (docs/testing/2026-11-07-model-fixes-ref4.md)."""
+        p = self.model('pl2303hx')
+        self.assertEqual(self.control(p, 0x40, 0x01, 0x0404, 1)[0], 0)
+        self.assertEqual(self.control(p, 0xC0, 0x01, 0x8484, 0, 1), (0, b'\x00'))   # not the 1 written
+        self.control(p, 0x40, 0x01, 0x0606, 0xAA)
+        self.assertEqual(self.control(p, 0xC0, 0x01, 0x8686, 0, 2), (0, b'\xaa\x00'))  # wLength 2
+        u = chipemu.ChipModel(Connection(), io.StringIO(), 'pl2303hx')       # unconfigured
+        u.peer_caps = LEGACY
+        u.handle(100, 1, struct.pack('<BBBBHHH', 0, 0x01, 0x40, 0, 0x0000, 0x18, 0))
+        reply = [x for x in u.connection.messages() if x[0] == 100][-1][2]
+        self.assertEqual(reply[3], 0)
+        c = self.model('cp2102')
+        self.assertEqual(self.control(c, 0x41, 0x11, 0, 0)[0], 0)           # RESET, before IFC_ENABLE
+        self.assertEqual(self.control(c, 0x41, 0x01, 0x0020, 0)[0], 0)      # SET_BAUDDIV 115200
+        self.assertEqual(self.events('rate')[-1]['rate'], 115200)
+        self.assertEqual(self.control(c, 0xC1, 0x02, 0, 0, 2), (0, struct.pack('<H', 0x20)))
+        self.assertEqual(self.control(c, 0x41, 0x01, 0, 0)[0], 4)           # divisor 0
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0741, 0)[0], 0)      # 7 bits, space, 1.5 stop
+
+    def test_maker_driver_requests(self):
+        # What the makers' own drivers sent in the 2026-11-06 reference runs.
+        for part in ('ft232am', 'ft232bm', 'ft2232c', 'cp2101', 'cp2102', 'cp2103', 'cp2104'):
+            self.assertIn(part, chipemu.PARTS)
+        m = self.model('ft232h')
+        self.assertEqual(self.control(m, 0xC0, 0x90, 0, 0x3F, 2), (0, b'\xff\xff'))  # blank EEPROM
+        self.assertEqual(self.control(m, 0x40, 4, 0x0807, 0)[0], 0)          # channel 0, 7N1.5
+        self.assertEqual(self.events('framing')[-1]['stop'], 1)
+        self.assertEqual(self.control(m, 0x40, 6, 0x011A, 0)[0], 0)          # SET_EVENT_CHAR
+        self.assertEqual(self.control(m, 0x40, 7, 0x0000, 0)[0], 0)          # SET_ERROR_CHAR
+        self.assertEqual(self.control(m, 0x40, 9, 2, 0)[0], 0)               # latency 2 ms
+        self.assertEqual(self.control(m, 0xC0, 0x0A, 0, 0, 1), (0, b'\x02'))
+        b = chipemu.ChipModel(Connection(), io.StringIO(), 'ft232bm')        # unconfigured
+        b.peer_caps = LEGACY
+        b.handle(100, 1, struct.pack('<BBBBHHH', 0x80, 0x90, 0xC0, 0, 0, 1, 2))
+        reply = [x for x in b.connection.messages() if x[0] == 100][-1][2]
+        self.assertEqual((reply[3], reply[10:]), (0, b'\xff\xff'))
+        port = m.fns[0]                                                  # the 2 ms timer set above
+        clock = [1000.0]
+        real, chipemu.time.monotonic = chipemu.time.monotonic, lambda: clock[0]
+        try:
+            self.bulk_in(m, port.inp, 64, ident=29)                      # the first status, at once
+            m.handle(101, 30, struct.pack('<BBHI', port.inp, 0, 64, 0))  # then nothing to say: waits
+            clock[0] += 0.0019
+            m.latency_tick()
+            self.assertEqual([r for r in m.connection.messages() if r[0] == 101], [])
+            clock[0] += 0.0002                                          # 2.1 ms after the first
+            m.latency_tick()
+        finally:
+            chipemu.time.monotonic = real
+        replies = [r for r in self.connection.messages() if r[0] == 101 and r[1] == 30]
+        self.assertEqual(replies[-1][2][8:], bytes([0x01, 0x60]))
+        self.assertEqual(m.status_packets, 1)
+        a = self.model('ft232am')                                        # no latency timer on the AM
+        self.assertEqual(self.control(a, 0xC0, 0x0A, 0, 0, 1)[0], 4)
+        c = self.model('cp2102')
+        status, props = self.control(c, 0xC1, 0x0F, 0, 0, 164)              # before IFC_ENABLE
+        self.assertEqual((status, len(props), props[:2]), (0, 66, b'B\x00'))
+        self.assertEqual(struct.unpack_from('<I', props, 20)[0], 0x10000000 | 1000000)
+        self.assertEqual(self.control(c, 0x41, 0x19, 0, 0, 6, b'\x00\x00\x00\x00\x11\x13')[0], 0)
+        self.assertEqual(self.control(c, 0xC1, 0x0E, 0, 0, 6)[1], b'\x00\x00\x00\x00\x11\x13')
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0501, 0)[0], 0)      # 5 bits, 1.5 stop
+        self.control(c, 0x41, 0x00, 1, 0)
+        status, comm = self.control(c, 0xC0, 0x10, 0, 0, 19)                # to the device
+        self.assertEqual((status, len(comm)), (0, 19))
+        self.assertEqual(self.control(c, 0x41, 0x06, 0x15A, 0)[0], 4)       # IMM_CHAR: a byte only
+        self.control(c, 0x41, 0x07, 0x0200, 0)                           # RTS low: CTS holds
+        block = struct.pack('<IIII', 0x09, 0x40, 128, 128)
+        self.control(c, 0x41, 0x13, 0, 0, 16, block)                     # CTS handshake, RTS low
+        self.control(c, 0x41, 0x07, 0x0200, 0)
+        self.bulk_out(c, c.fns[0].out, b'ABC')
+        comm = self.control(c, 0xC1, 0x10, 0, 0, 19)[1]
+        self.assertEqual(struct.unpack_from('<II', comm, 8), (3, 0))     # one queue: counted as in
+        self.assertEqual(self.control(c, 0x41, 0x06, 0x5A, 0)[0], 0)        # IMM_CHAR comes back
+        self.control(c, 0x41, 0x07, 0x0202, 0)                           # CTS back
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=31), b'ABC')
+        self.assertEqual(self.bulk_in(c, c.fns[0].inp, 64, ident=32), b'Z')
+        self.assertEqual(self.control(c, 0x41, 0x03, 0x0801, 0)[0], 0)      # 8 bits, "1.5" stop: 2
+        self.assertEqual(self.events('framing')[-1]['stop'], 2)
+        one = self.model('cp2101')
+        self.assertEqual(self.control(one, 0x41, 0x03, 0x0700, 0)[0], 4)    # the CP2101: 8 bits only
 
 
 if __name__ == '__main__':

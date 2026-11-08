@@ -4,6 +4,9 @@
 # only uacusb.c is compiled twice. Does not overwrite/stage any package SYS.
 param([string]$Scratch='E:/usb-wdm-free/wave2/uac-clock-pair')
 $ErrorActionPreference='Stop'
+# Retired 2026-11-07: tied to uac2's sources and builds of 2026-10 (before the
+# move to src/audio/common); kept as the record of its runs, not run again.
+throw 'retired: see the header'
 $repo=(Resolve-Path "$PSScriptRoot/../../..").Path
 $dest=[IO.Path]::GetFullPath($Scratch)
 $oldSource='E:/usb-wdm-free/wave2/uac-watchdog-baseline/uacusb.c'

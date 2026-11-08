@@ -55,6 +55,15 @@ real PC yet); `STAGE.TXT` says which INFs xHCI98's installer may stage.
 2026-10-24), a tool, not a driver package.
 Release 0.1.1 (owner, 2026-10-25): 0.1.0 plus `ax88179` (98 SE and ME
 staged, 2000 copy only; [release 0.1.1](testing/2026-10-25-release-0.1.1.md)).
+The release after 0.1.8 (not yet tagged) signs every x64 image with a new
+test certificate, `CN=usb-wdm-free test signing SHA-1 (not trusted)`,
+thumbprint `7A3C6E6289EC46E6E128D87BB54E87196B824959`
+(`release/usb-wdm-free-test-sha1.cer`, published as
+`usb-wdm-free-test.cer`): 0.1.4's certificate (`E6A2749B...`) is itself
+signed with SHA-256, which 7 x64 accepts only after Microsoft's SHA-2
+code-signing update and Vista x64 has no update for; `release.ps1` now
+refuses a signer certificate not signed with SHA-1
+([the certificate's legs](testing/2026-11-06-sha1-cert.md)).
 Release 0.1.8 (prepared 2026-11-05; awaiting the owner's x64 signature
 and the tag): `uac2` 0.1.8.26 (the queue, the real-time worker, the volume
 topped at 0 dB, the device names) and the STAGE.TXT lines owner-approved on
@@ -107,6 +116,7 @@ The packages and their design documents:
 | Package | What | Design | 98 SE now |
 |---|---|---|---|
 | `uvc98` | USB Video Class webcams, 98 SE to 2000, with `uvcdec` (`src/video/uvcdec/`), its MJPEG codec for VfW and DirectShow, for 1080p | [docs/design/uvc.md](design/uvc.md) | xHCI98: 160x120 PASS, 320x240 FAIL with the Brio via VM, both PASS with the simulator, 640x480 PASS after the stride fix (QEMU-paced, not sustained); NUSB EHCI: binds, FAIL in QEMU with the Brio via VM and with the simulator |
+| `uac1` | USB Audio Class 1.0 playback and capture, 98 SE only, from the driver core `uac2` shares | [docs/design/uac2.md](design/uac2.md) section 26 | 0.1.0.1 ([uac1-98se](testing/2026-11-07-uac1-98se.md)): the real Logi headset and simulated devices install, play, record and take volume under xHCI98; unplug while playing froze in 2 of 5 (G1), as `uac2`'s control did; the first plug of a boot hung 4 of 10 times under 98 SE's own USB 1.1 driver, as Windows' own driver did (G2); a recording can stay stuck after an unplug, as with `uac2`; optional (owner, 2026-11-07); formats it does not run start as a null function (G3); `usbmidi` works beside it; XP keeps Windows' own driver |
 | `uac2` | USB Audio Class 2.0 playback and capture, 98 SE to 8; playback volume and mute from 0.1.4.0 | [docs/design/uac2.md](design/uac2.md) | 0.1.4.0, simulated devices: volume and mute PASS on 98 SE, XP x86, XP x64, Vista x86 and 7 x86 ([uac2-volume](testing/2026-10-28-uac2-volume.md)); build 16, simulated devices: xHCI98: all eight layouts PASS (X4, X4 with capture, 2-channel 16/24/32-bit, 8-channel playback only, mono capture only, Full Speed, clock selector and multiplier, adaptive); NUSB EHCI in QEMU: the same except 8-channel playback (FAIL, the stream stalls) and Full Speed (no leg); a capture-only device's hot arrival faulted WDMAud with builds 14 and 15 |
 | `usbmidi` | USB MIDI 1.0 devices, 98 SE to 8 | [docs/design/usbmidi.md](design/usbmidi.md) | UHCI, NUSB EHCI and xHCI98 legs PASS on first plug; a replugged device works again only after a restart (98 SE limitation); under NUSB the composite parent `USBHUB.SYS` must be present |
 | `cdcnet`, `rtl815x`, `ax88179` | USB Ethernet: CDC-ECM, CDC-NCM and RNDIS, 98 SE to 7 (RNDIS on XP to 7 as an INF that binds Windows' own driver); Realtek RTL8152/8153 and ASIX AX88179, 98 SE, ME and 2000 | [docs/design/ethernet.md](design/ethernet.md) | cdcnet: ECM and RNDIS PASS under NUSB EHCI and xHCI98 with QEMU `usb-net`, NCM PASS under both with the SIMULATED `ncmemu.py`; no real device; ax88179: xHCI98 legs (98 SE, ME) with the real dongle; rtl815x: no real device; with the SIMULATED RTL8153 (`rtlemu.py`) 98 SE PASS under NUSB EHCI and xHCI98 |
@@ -165,7 +175,10 @@ does not open, and Ctrl+Alt+Del lists "Msgsrv32 [Not responding]". It is
 USB 1.1 driver, NUSB's EHCI and xHCI98 alike, in about half of the first
 plugs or more in QEMU; once one device has come through in a boot, later
 plugs in that boot did not freeze
-([record](testing/2026-10-23-brio-null.md)).
+([record](testing/2026-10-23-brio-null.md)). `uac1` meets it the same
+way: 4 of 10 first plugs of a boot under 98 SE's own USB 1.1 driver, and
+Windows' own driver 4 of 10 in the same test
+([uac1-98se](testing/2026-11-07-uac1-98se.md)).
 
 What helps:
 
@@ -285,6 +298,7 @@ it is tested there too.
 | Package | 98 SE | ME | 2000 | XP | XP x64 | Vista | Vista x64 | 7 | 7 x64 | 8 | 8 x64 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `uvc98` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
+| `uac1` | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `uac2` | Tested on a real PC (10) | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested |
 | `usbmidi` | Built, not tested | Built, not tested (1) | Built, not tested | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) |
 | `cdcnet` | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Not a target | Not a target |

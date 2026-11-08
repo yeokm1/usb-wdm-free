@@ -13,12 +13,12 @@ try {
     $env:PATH="$(Split-Path $gcc);$saved"
     & $gcc --version | Set-Content "$dest/compiler.txt"
     if($LASTEXITCODE) {throw 'Cannot query GCC'}
-    $flags=@('-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-misleading-indentation')
+    $flags=@('-std=c99','-O2','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',"-I$PSScriptRoot/../common")
     foreach($mode in @('normal','trap')) {
         $extra=@();if($mode -eq 'trap') {$extra=@('-fsanitize=undefined','-fsanitize-undefined-trap-on-error')}
         foreach($kind in @('control','mixer')) {
-            $files=@("$PSScriptRoot/uacctl.c","$PSScriptRoot/ctltest.c")
-            if($kind -eq 'mixer') {$files=@("$PSScriptRoot/uacctl.c","$PSScriptRoot/uacmix.c","$PSScriptRoot/mixtest.c")}
+            $files=@("$PSScriptRoot/../common/uacctl.c","$PSScriptRoot/ctltest.c")
+            if($kind -eq 'mixer') {$files=@("$PSScriptRoot/../common/uacctl.c","$PSScriptRoot/uacmix.c","$PSScriptRoot/mixtest.c")}
             $exe=Join-Path $dest "$kind-$mode.exe"
             & $gcc @flags @extra -o $exe @files 2>&1 | Set-Content "$dest/$kind-$mode-build.log"
             if($LASTEXITCODE) {throw "GCC $kind/$mode build failed"}

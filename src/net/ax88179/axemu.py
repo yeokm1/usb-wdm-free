@@ -15,8 +15,9 @@ each fact comes from:
   (0B95:1790, bcdDevice 0100, bcdUSB 0300, one configuration, interface
   0 class FF/FF/00, interrupt IN 0x81 of 8 bytes with interval 0x0b,
   bulk IN 0x82 and bulk OUT 0x03, 1024 bytes with their SuperSpeed
-  companions). At SuperSpeed the device and configuration descriptors
-  are those bytes. The High and Full Speed forms (bcdUSB 0210 and 0200,
+  companions; the interrupt endpoint's companion gives wBytesPerInterval
+  0, which Linux corrects to 8 with a warning). At SuperSpeed the device
+  and configuration descriptors are those bytes. The High and Full Speed forms (bcdUSB 0210 and 0200,
   bulk 512 and 64 bytes, no companions) and the BOS are this model's
   choice: no USB 2.0 capture exists (testdata/ax2k is QEMU passing the
   SuperSpeed set through to EHCI).
@@ -48,10 +49,32 @@ each fact comes from:
 - Transmit framing (axframe.c, Linux's ax88179_tx_fixup): eight bytes,
   the frame length and then the flags dword (0x80008000 when header and
   frame end on a packet boundary), then the frame; one frame per bulk-OUT
-  transfer.
+  transfer. On a boundary Linux's usbnet adds one zero byte (the driver
+  has no FLAG_SEND_ZLP), which those flags tell the chip to drop. A
+  transfer that comes a packet at a time (UHCI) is joined up first.
 - Power-up values the facts do not give are this model's: the MAC
   00:0e:c6:77:00:02 in NODE_ID, the PHY's BMCR 1140 (autonegotiation on),
+  its advertisement 05E1 and 1000BASE-T control 0300, and while linked a
+  partner that advertises up to the link's speed (LPA 45E1 or 4461,
+  1000BASE-T status 3C00 at 1000 Mb/s), so that Linux's MII view (ethtool)
+  agrees with PHYSR,
   EEPROM word 0x43 0x0000 (no auto-detach), the FIFO never full.
+- From ASIX's own XP driver 1.4.2.0 run against this model on XP SP3
+  (its USB traffic, docs/testing/2026-11-06-reference-drivers.md): it
+  polls PHY register 2 until it is not 0 (this model answers 0283:BC30,
+  INFERRED), reads the eFuse (request 0x05, wIndex 0x20, 64 bytes; Linux
+  6.12's ax88179_check_efuse asks with wIndex 0x40, its length, as for
+  ACCESS_MAC, and both are answered; this model's is blank, INFERRED)
+  and EEPROM words 0x3c and 0x05 (unprogrammed words read FFFF here,
+  INFERRED), writes requests 0x06 and 0x91 with no
+  data (accepted, no effect, INFERRED); it writes RX_CTL without IPE
+  (0x0200), and only with IPE do the two padding bytes precede each
+  frame; it lost every reply whose transfer held an even number of
+  records until the header array was padded to 8 bytes, so a transfer is
+  always a multiple of 8 (the trailer still gives the offset Linux
+  reads); and it sends its own transmit form: bit 31 set in the first
+  header dword, each frame padded to 4 bytes, and several such records in
+  one bulk-OUT transfer, all accepted here beside Linux's exact form.
 
 Link: the PHY is up when PHYPWR_RSTCTL holds IPRL and CLK_SELECT both
 clocks; it links (1000 Mb/s full duplex, or --mbps) --link-after seconds
@@ -65,7 +88,14 @@ MULFLTARY hash; PRO everything).
 Behind the adapter sits a SIMULATED network of one host, 192.168.77.1
 (02:00:5E:77:00:01): it answers ARP, ICMP echo and DHCP (offering
 192.168.77.2/24, router 192.168.77.1), and logs every frame (the same
-host as rtlemu.py's). No physical USB device is accessed.
+host as rtlemu.py's).
+--udp LOCAL:REMOTE replaces the simulated host by a bridge: every frame the
+guest sends goes as one UDP datagram to 127.0.0.1:REMOTE, every datagram
+arriving on 127.0.0.1:LOCAL is a frame from the network (the framing of
+QEMU's "-netdev dgram"/"socket,udp=" backend, so a QEMU user-mode network
+behind a hub gives real TCP, for sustained-traffic legs); frames are then
+not logged one by one.
+No physical USB device is accessed.
 """
 import argparse
 import collections
@@ -87,15 +117,26 @@ TESTDATA = Path(__file__).resolve().parent / 'testdata' / 'ax179'
 VENDOR, PRODUCT, RELEASE = 0x0b95, 0x1790, 0x0100
 EP_INT, EP_IN, EP_OUT = 0x81, 0x82, 0x03
 ACCESS_MAC, ACCESS_PHY, ACCESS_EEPROM, FIFO_STATUS = 0x01, 0x02, 0x04, 0x81
+ACCESS_EFUSE = 0x05
 PHY_ID = 0x03
+PHY_ID1, PHY_ID2 = 0x02, 0x03
+MODEL_PHY_ID = (0x0283, 0xbc30)          # INFERRED: any id other than 0 (see the header)
 R_LINK_STATUS, R_RX_CTL, R_NODE_ID, R_MULTI = 0x02, 0x0b, 0x10, 0x16
 R_MEDIUM, R_PHYPWR, R_QCTRL, R_CLK = 0x22, 0x26, 0x2e, 0x33
+R_TXCOE = 0x35                           # Linux's AX_TXCOE_CTL
 USB_SS, USB_HS = 0x04, 0x02
 RX_START, RX_AP, RX_AM, RX_AB, RX_AMALL, RX_PRO = 0x0080, 0x0020, 0x0010, 0x0008, 0x0002, 0x0001
+RX_IPE = 0x0200
 MEDIUM_RECEIVE = 0x0100
 PHYPWR_IPRL = 0x0020
 CLK_BCS, CLK_ACS = 0x01, 0x02
 BMCR, BMSR, PHYSR, PAGE_SELECT = 0x00, 0x01, 0x11, 0x1f
+ADVERTISE, LPA, CTRL1000, STAT1000 = 0x04, 0x05, 0x09, 0x0a
+# INFERRED (IEEE 802.3 clause 22 and 28, no ASIX fact): the PHY's own advertisement at power-up (10/100 half and
+# full, pause; 1000 half and full) and the link partner's, which advertises up to the --mbps the link comes up at.
+POWERUP_ADVERTISE, POWERUP_CTRL1000 = 0x05e1, 0x0300
+PARTNER_LPA = {1000: 0x45e1, 100: 0x45e1, 10: 0x4461}
+PARTNER_STAT1000 = {1000: 0x3c00, 100: 0, 10: 0}
 BMCR_ANENABLE, BMCR_ANRESTART, BMCR_RESET = 0x1000, 0x0200, 0x8000
 BMSR_LINK, BMSR_ANDONE = 0x0004, 0x0020
 PHYSR_LINK, PHYSR_FULL = 0x0400, 0x2000
@@ -103,6 +144,7 @@ PHYSR_SPEED = {1000: 0x8000, 100: 0x4000, 10: 0x0000}
 INT_LINK = 0x00010000
 FIFO_FULL = 0x40000000
 TX_PAD = 0x80008000
+TX_JOIN_MAX = 0x10000                    # this model's bound on one joined bulk-OUT transfer
 MODEL_MAC = bytes.fromhex('000ec6770002')
 EEPROM = {0x43: 0x0000}
 
@@ -116,6 +158,8 @@ class Chip:
         self.pages = {0: [0] * 32}
         self.pages[0][BMCR] = 0x1140
         self.pages[0][BMSR] = 0x7949
+        self.pages[0][ADVERTISE], self.pages[0][CTRL1000] = POWERUP_ADVERTISE, POWERUP_CTRL1000
+        self.pages[0][PHY_ID1], self.pages[0][PHY_ID2] = MODEL_PHY_ID
         self.mmd = {}
         self.mmd_ctrl = 0
         self.mbps = mbps
@@ -161,6 +205,8 @@ class Chip:
             return v | (BMSR_LINK | BMSR_ANDONE if self.link else 0)
         if reg == 0x0e and self.page() == 0:
             return self.mmd.get(self.mmd_ctrl, 0)
+        if reg in (LPA, STAT1000) and self.page() == 0:
+            return ((PARTNER_LPA if reg == LPA else PARTNER_STAT1000)[self.mbps]) if self.link else 0
         return self.pages.setdefault(self.page() if reg != PAGE_SELECT else 0, [0] * 32)[reg]
 
     def phy_write(self, reg, value):
@@ -193,10 +239,15 @@ class Chip:
             self.reads += 1
             return struct.pack('<H', self.phy_read(index))
         if request == ACCESS_EEPROM:
-            if index != 1 or length != 2 or value not in EEPROM:
+            if index != 1 or length != 2 or value > 0xff:
                 return None
             self.reads += 1
-            return struct.pack('<H', EEPROM[value])
+            return struct.pack('<H', EEPROM.get(value, 0xffff))    # INFERRED: other words unprogrammed
+        if request == ACCESS_EFUSE:
+            if value or index not in (0x20, 0x40) or length != 64:     # ASIX's XP driver; Linux
+                return None
+            self.reads += 1
+            return b'\xff' * 64                     # INFERRED: a blank eFuse
         if request == FIFO_STATUS:
             if value != 0x8c or index or length != 4:
                 return None
@@ -220,6 +271,9 @@ class Chip:
                 return False
             self.writes += 1
             self.phy_write(index, struct.unpack('<H', data)[0])
+            return True
+        if request in (0x06, 0x91) and not data:
+            self.writes += 1                       # ASIX's XP driver sends these; INFERRED: no effect
             return True
         return False
 
@@ -462,6 +516,8 @@ def bos_descriptor(speed):
 
 
 class Model:
+    bridge = None                                  # (socket, peer) of --udp, or None
+
     def __init__(self, connection, trace, speed='super', now=time.monotonic, link_after=1.0,
                  flap_after=None, flap_for=2.0, mbps=1000, fcs=False, serial='SIM179'):
         self.connection, self.trace, self.now = connection, trace, now
@@ -484,6 +540,8 @@ class Model:
         self.interrupt = False
         self.pending = collections.OrderedDict()   # bulk-IN request id -> length
         self.rx = collections.deque()
+        self.tx_buf = bytearray()                  # bulk-OUT packets of a transfer not yet ended
+        self.tx_pad_next = False                   # a frame ended on a packet boundary: its pad may follow
         self.link_at = self.flap_at = self.restore_at = None
         self.flapped = False
         self.restarts_seen = 0
@@ -534,6 +592,7 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 1, 0))
         self.pending.clear()
         self.rx.clear()
+        self.tx_buf, self.tx_pad_next = bytearray(), False
         self.config, self.interrupt = 0, False
 
     # -- link ----------------------------------------------------------------
@@ -591,11 +650,13 @@ class Model:
         """One bulk-IN transfer: records (2 padding bytes + frame [+ FCS],
         padded to 8), one header dword per record, the trailer dword."""
         records, headers = bytearray(), []
+        lead = b'\0\0' if self.chip.word(R_RX_CTL) & RX_IPE else b''    # IPE: the 2 alignment bytes
         while self.rx:
             frame = self.rx[0]
-            body = b'\0\0' + frame + (struct.pack('<I', zlib.crc32(frame)) if self.fcs else b'')
+            body = lead + frame + (struct.pack('<I', zlib.crc32(frame)) if self.fcs else b'')
             padded = (len(body) + 7) & ~7
-            if len(records) + padded + 4 * (len(headers) + 1) + 4 > length:
+            n = len(headers) + 1
+            if len(records) + padded + 4 * n + (4 if n % 2 == 0 else 0) + 4 > length:
                 break
             self.rx.popleft()
             records += body + bytes(padded - len(body))
@@ -603,7 +664,8 @@ class Model:
             self.totals['rx_frames'] += 1
         if not headers:
             return b''
-        return bytes(records) + struct.pack('<%dI' % len(headers), *headers) + \
+        pad = bytes(4 * (len(headers) % 2 == 0))   # the header array padded to 8 (see the header)
+        return bytes(records) + struct.pack('<%dI' % len(headers), *headers) + pad + \
             struct.pack('<I', len(headers) | len(records) << 16)
 
     def drain(self):
@@ -618,20 +680,165 @@ class Model:
             del self.pending[ident]
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(data)) + data)
             self.totals['rx_transfers'] += 1
-            self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+            if not self.bridge:
+                self.log('bulk_in', length=len(data), sha256=hashlib.sha256(data).hexdigest())
+
+    def receive_out(self, data):
+        """One bulk-OUT packet or transfer from the host. A transfer ends
+        with a short (or zero-length) packet, so one that comes a packet at
+        a time (UHCI at Full Speed) is joined up here. Linux's form, whose
+        header gives its length, is taken as soon as it is complete; when
+        that is on a packet boundary, a packet of usbnet's one zero pad
+        byte (or a zero-length packet) that follows on its own ends it.
+        ASIX's XP form gives no transfer length: on a packet boundary its
+        transfer is taken when its records end exactly there, and a
+        zero-length packet that follows on its own ends it."""
+        if self.tx_pad_next and not self.tx_buf and data in (b'', b'\0'):
+            self.tx_pad_next = False
+            self.totals['tx_padded'] += 1
+            return
+        self.tx_pad_next = False
+        if len(self.tx_buf) + len(data) > TX_JOIN_MAX:
+            raise ValueError('bulk-OUT transfer past %d bytes without a short packet' % TX_JOIN_MAX)
+        self.tx_buf += data
+        if data and len(data) % self.bulk_max == 0:
+            if len(self.tx_buf) < 8:
+                return
+            length = struct.unpack_from('<I', self.tx_buf)[0]
+            if not length & 0x80000000 and length > TX_JOIN_MAX - 9:
+                raise ValueError('transmit header length %d' % length)
+            if length & 0x80000000:
+                if not self.records_whole(self.tx_buf):
+                    return                         # ASIX's XP form, a record still to come
+                self.tx_pad_next = True
+            elif len(self.tx_buf) < 8 + length:
+                return                             # more of the frame to come
+            elif len(self.tx_buf) > 8 + length + 1 and not self.records_whole(self.tx_buf):
+                return                             # the drivers' padded form, a record still to come
+            else:
+                self.tx_pad_next = len(self.tx_buf) == 8 + length
+        whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        if whole:
+            self.transmit(whole)
+
+    @staticmethod
+    def records_whole(data):
+        """Whether data is a whole number of records padded to 4 bytes (8-byte
+        header, bit 31 set or not, the frame), so a transfer on a packet
+        boundary can be taken without waiting for more."""
+        offset = 0
+        while offset < len(data):
+            if len(data) - offset < 8:
+                return False
+            length = struct.unpack_from('<I', data, offset)[0] & 0x7fffffff
+            if length > TX_JOIN_MAX:
+                return True                        # not a record: transmit() refuses it
+            offset += 8 + ((length + 3) & ~3)
+        return offset == len(data)
 
     def transmit(self, data):
-        """One bulk-OUT transfer: the 8-byte header and one frame."""
+        """One bulk-OUT transfer: the 8-byte header and one frame (Linux's
+        form, checked strictly: when header and frame end on a packet
+        boundary the flags are 0x80008000, and usbnet's one zero pad byte
+        may follow); or records of header and frame, each padded to 4 bytes,
+        one or more per transfer: ASIX's XP form (bit 31 of the first dword
+        set on every record) and the form of ASIX's 7 and 3.20/4.20 drivers
+        and Windows 10's own (bit 31 set on some records only, ARP and some
+        IPv6, clear on the IPv4 ones). A record without bit 31 has its
+        checksums inserted as TXCOE asks (see insert_checksums)."""
         if len(data) < 8 + 14:
             raise ValueError('transmit transfer shorter than a header and a frame')
         length, flags = struct.unpack_from('<II', data)
-        if length != len(data) - 8:
-            raise ValueError('transmit header length %d, transfer %d' % (length, len(data)))
-        want = TX_PAD if (length + 8) % self.bulk_max == 0 else 0
-        if flags != want:
-            raise ValueError('transmit flags %08x, expected %08x' % (flags, want))
-        frame = data[8:]
+        if not length & 0x80000000:
+            boundary = (length + 8) % self.bulk_max == 0
+            if len(data) == length + 8 or (boundary and len(data) == length + 9 and data[-1] == 0):
+                # On a packet boundary Linux and ax179f send 0x80008000; the
+                # drivers' padded form sends 0 for a record that is 4-aligned
+                # and fills the packet (504 bytes at High Speed), so both pass.
+                if flags not in ((TX_PAD, 0) if boundary else (0,)):
+                    raise ValueError('transmit flags %08x on a %s' % (flags, 'boundary' if boundary else 'frame'))
+                if len(data) == length + 9:
+                    self.totals['tx_padded'] += 1
+                return self.transmit_frame(self.insert_checksums(data[8:8 + length]))
+            if len(data) < 8 + ((length + 3) & ~3):
+                raise ValueError('transmit header length %d, transfer %d' % (length, len(data)))
+        offset, frame = 0, b''
+        while offset < len(data):
+            if len(data) - offset < 8 + 14:
+                raise ValueError('transmit record at %d shorter than a header and a frame' % offset)
+            length, flags = struct.unpack_from('<II', data, offset)
+            if flags not in (0, TX_PAD):
+                raise ValueError('transmit record at %d: header %08x %08x' % (offset, length, flags))
+            marked = bool(length & 0x80000000)
+            length &= 0x7fffffff
+            end = offset + 8 + ((length + 3) & ~3)
+            if length < 14 or offset + 8 + length > len(data):
+                raise ValueError('transmit record at %d: length %d, transfer %d' % (offset, length, len(data)))
+            self.totals['tx_records_asix_form' if marked else 'tx_records_padded_unmarked'] += 1
+            frame = data[offset + 8:offset + 8 + length]
+            frame = self.transmit_frame(frame if marked else self.insert_checksums(frame))
+            offset = min(end, len(data))
+        return frame
+
+    def insert_checksums(self, frame):
+        """Transmit checksum offload: with TXCOE (0x35) bits set, the chip
+        writes the IPv4 header checksum (bit 0), TCP and UDP over IPv4 (bits
+        1, 2) and over IPv6 (bits 5, 6) (Linux's AX_TXCOE_* names; it sets
+        them and leaves those checksums to the chip, as ASIX's 7 and 3.20/4.20
+        drivers and Windows 10's own do with 0x67 or 0x27). INFERRED: a
+        record with bit 31 set gets none (only ARP and some IPv6 records
+        carry it); fragments get the IPv4 header checksum only; IPv6 with
+        extension headers is left as it is. ax179f writes TXCOE 0."""
+        coe = self.chip.mac_regs[R_TXCOE]
+        if not coe or len(frame) < 14 + 20:
+            return frame
+        f = bytearray(frame)
+        ethertype = f[12:14]
+        if ethertype == b'\x08\x00' and f[14] >> 4 == 4:
+            ihl = (f[14] & 15) * 4
+            total = struct.unpack_from('!H', f, 16)[0]
+            if ihl < 20 or total < ihl or 14 + total > len(f):
+                return frame
+            if coe & 0x01:
+                f[24:26] = b'\0\0'
+                f[24:26] = struct.pack('!H', checksum(bytes(f[14:14 + ihl])))
+                self.totals['tx_csum_ip'] += 1
+            fragment = struct.unpack_from('!H', f, 20)[0] & 0x3fff
+            proto, l4 = f[23], 14 + ihl
+            bit = {6: 0x02, 17: 0x04}.get(proto, 0)
+            if bit & coe and not fragment:
+                self.fill_l4(f, l4, 14 + total, proto, bytes(f[26:34]), False)
+        elif ethertype == b'\x86\xdd' and len(f) >= 14 + 40 and f[14] >> 4 == 6:
+            proto, plen = f[20], struct.unpack_from('!H', f, 18)[0]
+            bit = {6: 0x20, 17: 0x40}.get(proto, 0)
+            if bit & coe and 14 + 40 + plen <= len(f):
+                self.fill_l4(f, 54, 54 + plen, proto, bytes(f[22:54]), True)
+        return bytes(f)
+
+    def fill_l4(self, f, start, end, proto, addresses, v6):
+        """The TCP or UDP checksum of the segment from start to end (UDP: to
+        its own length, when that is shorter than the IP payload)."""
+        at = start + (16 if proto == 6 else 6)
+        if end - start < (20 if proto == 6 else 8):
+            return
+        if proto == 17:
+            ulen = struct.unpack_from('!H', f, start + 4)[0]
+            if not 8 <= ulen <= end - start:
+                return                                   # a UDP length no datagram has: left as sent
+            end = start + ulen
+        n = end - start
+        pseudo = addresses + (struct.pack('!IxxxB', n, proto) if v6 else struct.pack('!BBH', 0, proto, n))
+        f[at:at + 2] = b'\0\0'
+        value = checksum(pseudo + bytes(f[start:end]))
+        f[at:at + 2] = struct.pack('!H', value or (0xffff if proto == 17 else 0))
+        self.totals['tx_csum_tcp' if proto == 6 else 'tx_csum_udp'] += 1
+
+    def transmit_frame(self, frame):
         self.totals['tx_frames'] += 1
+        if self.bridge:
+            if self.chip.link:
+                self.bridge[0].sendto(frame, self.bridge[1])
+            return frame
         self.log('tx_frame', length=len(frame), destination=frame[:6].hex(), ethertype=frame[12:14].hex())
         if self.chip.link:
             for reply in self.net.handle(frame):
@@ -714,6 +921,8 @@ class Model:
             if len(packet) != (2 if kind == 9 else 1):
                 raise ValueError('alternate length')
             ok = self.config and packet[0] == 0 and (kind == 10 or packet[1] == 0)
+            if ok and kind == 9:
+                self.tx_buf, self.tx_pad_next = bytearray(), False   # a transfer cut off is dropped
             self.send(11, ident, bytes((0 if ok else 4, packet[0], 0)))
         elif kind in (15, 16):
             if len(packet) != 1:
@@ -746,8 +955,7 @@ class Model:
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
+                self.receive_out(data)
                 self.drain()
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:
@@ -775,8 +983,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -805,6 +1022,16 @@ class Model:
                     self.handle(kind, ident, packet)
 
 
+def open_bridge(spec):
+    """--udp LOCAL:REMOTE: the bound, non-blocking socket and the peer."""
+    local, remote = (int(x) for x in spec.split(':'))
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    udp.bind(('127.0.0.1', local))
+    udp.setblocking(False)
+    return udp, ('127.0.0.1', remote)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', type=int, required=True)
@@ -816,6 +1043,7 @@ def main():
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--fcs', action='store_true', help='forward the FCS in every receive record')
     ap.add_argument('--serial', default='SIM179', help='the serial number string (iSerialNumber 3)')
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     if not (0 < len(args.serial) <= 126 and args.serial.isascii()):
         ap.error('--serial needs 1 to 126 ASCII characters')
@@ -830,6 +1058,8 @@ def main():
             model = Model(connection, trace, args.speed, link_after=args.link_after,
                           flap_after=args.flap_after, flap_for=args.flap_for, mbps=args.mbps,
                           fcs=args.fcs, serial=args.serial)
+            if args.udp:
+                model.bridge = open_bridge(args.udp)
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

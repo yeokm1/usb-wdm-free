@@ -1,0 +1,126 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; AX772F.INF - usb-wdm-free AX772F, Windows 2000, XP, XP x64, Vista and 7,
+; x86 and x64: the CoreChips SR9800 only (ethernet.md sections 6.9.1 and
+; 7.6). No maker's driver serves the SR9800 on any Windows. The ASIX
+; AX88772B and AX88772C, which this driver also runs, are not listed here:
+; ASIX's own drivers in usb-wdm-nonfree serve them on 2000 and later, and
+; one id is never listed by two INFs on one system. AX772F98.INF is the
+; Windows 98 SE and ME INF. Written as RTLXP7.INF is (the Windows 2000 DDK
+; network guide's INF pages; no DDK sample INF was read).
+;
+; Models: [Models] for 2000 (which ignores decorations), NTx86.5.1 and
+; NTamd64.5.2 (XP, XP x64), NTx86.6.0 / NTamd64.6.0 (Vista), NTx86.6.1 /
+; NTamd64.6.1 (7): 0FE6:9800 (Linux sr9800.c). NTx86.6.2 / NTamd64.6.2:
+; none, Windows 8 and later have no NDIS 5 (ethernet.md section 4.1).
+
+[Version]
+Signature="$Windows NT$"
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=11/06/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models,NTx86.5.1,NTamd64.5.2,NTx86.6.0,NTamd64.6.0,NTx86.6.1,NTamd64.6.1,NTx86.6.2,NTamd64.6.2
+
+[Models]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTx86.5.1]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTamd64.5.2]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTx86.6.0]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTamd64.6.0]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTx86.6.1]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTamd64.6.1]
+%Sr9800%=AX,USB\VID_0FE6&PID_9800
+
+[Models.NTx86.6.2]
+
+[Models.NTamd64.6.2]
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+ax772f.sys=1
+
+[DestinationDirs]
+CopyNT=12
+
+[AX.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
+
+[AX.NTamd64]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
+
+[CopyNT]
+ax772f.sys
+
+[RegNT]
+HKR,Ndi,Service,,ax772f
+HKR,Ndi\Interfaces,UpperRange,,ndis5
+HKR,Ndi\Interfaces,LowerRange,,ethernet
+
+[AX.NT.Services]
+AddService=ax772f,2,Service,EventLog
+
+[AX.NTamd64.Services]
+AddService=ax772f,2,Service,EventLog
+
+[Service]
+DisplayName=%Service%
+ServiceType=1
+StartType=3
+ErrorControl=1
+LoadOrderGroup=NDIS
+ServiceBinary=%12%\ax772f.sys
+
+[EventLog]
+AddReg=EventLogReg
+
+[EventLogReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
+HKR,,TypesSupported,0x00010001,7
+
+; The Advanced tab: a locally administered address (ethernet.md 4.8).
+[Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="AX772F installation disk"
+Service="usb-wdm-free AX772F USB Fast Ethernet"
+AddressDesc="Network Address"
+Sr9800="CoreChips SR9800 USB 2.0 Fast Ethernet (AX772F)"

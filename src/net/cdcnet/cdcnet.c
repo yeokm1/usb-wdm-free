@@ -7,25 +7,42 @@
  *
  * A deserialized NDIS 5 miniport with a WDM lower edge (cdcusb.c):
  * - every packet accepted by SendPackets completes once through
- *   NdisMSendComplete, from the transmit path or a flush; the queue is
- *   bounded and an excess packet completes with failure at once;
+ *   NdisMSendComplete, from the transmit path or a flush; the queue has
+ *   no limit (a full queue never fails a send), and a packet while the
+ *   link is down or the adapter gone or halting completes with failure at
+ *   once;
  * - received frames are copied into a preallocated packet pool and
  *   indicated; a SUCCESS indication transfers ownership until
  *   ReturnPacket, a RESOURCES indication (pool low) is reclaimed on
  *   return using the status saved before the call;
  * - OIDs that need the device (filter, multicast, power) and reset pend
  *   and complete from the lower edge's passive worker.
+ *
+ * The x86 NDIS 5.0 build only (the NDIS 5.1 x64 build has none of it,
+ * ethernet.md section 4.4, as the shared core netcore.c): every accepted
+ * send is marked NDIS_STATUS_PENDING, the adapter's lock is the kernel
+ * spin lock inside its NDIS_SPIN_LOCK, and on 98 SE and ME (at run time)
+ * no receive indication or send completion is made from a USB completion:
+ * both are queued and made from an NDIS timer (Upcalls).
  */
 #include <ndis.h>
 #include "cdcusb.h"
 
-#define TX_LIMIT 64
+#define TX_LIMIT 64          /* OID_GEN_TRANSMIT_BUFFER_SPACE only: the queue itself is not bounded */
+#define TX_KICK 8            /* frames queued between kicks of the pump within one call */
 #define RX_PACKETS 64
 #define RX_LOW 8
 #define RX_STRIDE 1536
 #define MC_MAX 32
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 1
+#define RX_BATCH 16                /* 98 SE/ME: receives per deferred indication, at most */
+
+#if !defined(NDIS51_MINIPORT)
+#define CDC_DEFER 1
+#else
+#define CDC_DEFER 0
+#endif
 
 typedef struct ADAPTER {
     NDIS_HANDLE Handle;
@@ -34,6 +51,7 @@ typedef struct ADAPTER {
     CDC_START Start;
     ULONG Filter, Lookahead, LinkSpeed;
     BOOLEAN Connected, Gone, Halting, Ready;
+    BOOLEAN LinkKnown;             /* the lower edge has called Link */
     UCHAR Multicast[MC_MAX][6];
     ULONG MulticastCount;
     PNDIS_PACKET TxHead, TxTail;   /* linked through MiniportReserved */
@@ -47,9 +65,201 @@ typedef struct ADAPTER {
     ULONG PowerState;
     ULONG TxOk, TxError, RxOk, RxError, RxNoBuffer;
     ULONG TxBytes, RxBytes;
+#if CDC_DEFER
+    /* 98 SE and ME (Defer): what the USB completions would have indicated
+     * or completed waits here for Upcalls, under Lock. RxPend is a ring of
+     * packets taken from RxFree and not yet indicated (it cannot overflow:
+     * there are RX_PACKETS packets); DoneHead/DoneTail lists completed
+     * sends through NEXT, their status in DONE_STATUS. */
+    BOOLEAN Defer;
+    BOOLEAN UpcallArmed;           /* the timer is set and its routine has not started */
+    BOOLEAN UpcallRunning;         /* Upcalls is running */
+    BOOLEAN UpcallStop;            /* Halt: the timer is never set again */
+    BOOLEAN UpcallPaused;          /* asleep (D1-D3): no timer, nothing indicated */
+    BOOLEAN SleepPending;          /* a sleep request Upcalls completes when it ends */
+    NDIS_MINIPORT_TIMER UpcallTimer[2];  /* used in turn: never the one whose routine may still be ending */
+    ULONG UpcallNext;              /* the timer the next ArmUpcalls sets */
+    PNDIS_PACKET RxPend[RX_PACKETS];
+    ULONG RxPendHead, RxPendCount;
+    PNDIS_PACKET DoneHead, DoneTail;
+    ULONG UpcallRuns;              /* trace */
+#endif
 } ADAPTER;
 
 #define NEXT(p) (*(PNDIS_PACKET *)&(p)->MiniportReserved[0])
+
+#if CDC_DEFER
+/* The adapter's lock is taken from the lower edge's USB completions and
+ * from NDIS's own calls. On Windows 98 SE NdisAcquireSpinLock did not keep
+ * those completions out of a queue (2026-11-07-rtl8157-hardware.md), so
+ * the kernel spin lock inside NDIS_SPIN_LOCK is taken directly: on NT that
+ * is what NdisAcquireSpinLock does. */
+#define CdcLock(a) KeAcquireSpinLock(&(a)->Lock.SpinLock, &(a)->Lock.OldIrql)
+#define CdcUnlock(a) KeReleaseSpinLock(&(a)->Lock.SpinLock, (a)->Lock.OldIrql)
+#define DONE_STATUS(p) (*(NDIS_STATUS *)&(p)->MiniportReserved[sizeof(PVOID)])
+
+/* Windows 98 SE: under sustained TCP, receive indications and send
+ * completions made straight from the USB completions stalled the 98
+ * TCP/IP, and from an NDIS timer they did not
+ * (docs/testing/2026-11-07-98se-tcp.md). So on 98 SE and ME the
+ * completions only queue (Receive, TxDone) and arm the timer, and Upcalls
+ * makes the calls. NT makes them at once. Called with the lock held. */
+static void ArmUpcalls(ADAPTER *a)
+{
+    if (a->UpcallArmed || a->UpcallStop || a->UpcallPaused) return;
+    a->UpcallArmed = TRUE;
+    /* The other timer from the last one set: a routine that has just
+     * cleared UpcallArmed may not have returned yet, and its own timer is
+     * not set again (see Upcalls). */
+    NdisMSetTimer(&a->UpcallTimer[a->UpcallNext], 0);
+    a->UpcallNext ^= 1;
+}
+
+/* Complete the queued sends and indicate the queued receives, in order,
+ * until both queues are empty. With indicate FALSE (Halt) the receives go
+ * back to the pool unindicated. */
+static void Deliver(ADAPTER *a, BOOLEAN indicate)
+{
+    PNDIS_PACKET rx[RX_BATCH], done;
+    ULONG n, i, taken;
+    for (;;) {
+        CdcLock(a);
+        done = a->DoneHead;
+        a->DoneHead = a->DoneTail = NULL;
+        n = 0;
+        while (n < RX_BATCH && a->RxPendCount) {
+            rx[n++] = a->RxPend[a->RxPendHead];
+            a->RxPendHead = (a->RxPendHead + 1) % RX_PACKETS;
+            a->RxPendCount--;
+        }
+        taken = n;
+        if (!indicate) {
+            for (i = 0; i < n; i++) a->RxFree[a->RxFreeCount++] = rx[i];
+            a->RxOut -= (LONG)n;
+            n = 0;
+        }
+        CdcUnlock(a);
+        if (!done && !taken) return;
+        while (done) {
+            PNDIS_PACKET next = NEXT(done);
+            NdisMSendComplete(a->Handle, done, DONE_STATUS(done));
+            done = next;
+        }
+        if (n) NdisMIndicateReceivePacket(a->Handle, rx, n);
+    }
+}
+
+static VOID Upcalls(PVOID s1, PVOID context, PVOID s2, PVOID s3)
+{
+    ADAPTER *a = context;
+    BOOLEAN indicate, sleep = FALSE, more;
+    UNREFERENCED_PARAMETER(s1);
+    UNREFERENCED_PARAMETER(s2);
+    UNREFERENCED_PARAMETER(s3);
+    /* UpcallArmed stays TRUE until this routine ends with both queues
+     * empty, so ArmUpcalls never sets the timer while it runs: what
+     * arrives meanwhile is delivered by the loop here. Setting a timer
+     * again from inside its own routine is not relied on: on 98 SE/ME an
+     * occasional stall of both directions, and a halt that waited for
+     * ever, both fit such a set being lost (UpcallArmed left TRUE). */
+    CdcLock(a);
+    a->UpcallRunning = TRUE;
+    a->UpcallRuns++;
+    CdcUnlock(a);
+    for (;;) {
+        CdcLock(a);
+        indicate = !a->Halting && !a->UpcallPaused;
+        CdcUnlock(a);
+        Deliver(a, indicate);
+        CdcLock(a);
+        more = a->RxPendCount || a->DoneHead;
+        if (!more) {
+            a->UpcallArmed = FALSE;
+            a->UpcallRunning = FALSE;
+            sleep = a->SleepPending;
+            a->SleepPending = FALSE;
+        }
+        CdcUnlock(a);
+        if (!more) break;
+    }
+    if (sleep) {
+        /* The sleep request Set pended for this routine (SleepNow). */
+        Deliver(a, FALSE);
+        NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
+    }
+}
+
+/* Halt (halt TRUE), or a sleep request before it completes: the timer is
+ * cancelled, as the 2000 DDK's OID_PNP_SET_POWER page asks before a sleep
+ * state, and never set again until ResumeUpcalls; a routine already
+ * started or due runs to its end, indicating nothing once Halting or
+ * UpcallPaused is set; then the queued sends complete and the unindicated
+ * receives go back to the pool. PASSIVE_LEVEL (Halt, the worker). */
+static void StopUpcalls(ADAPTER *a, BOOLEAN halt)
+{
+    BOOLEAN cancelled = FALSE, busy;
+    ULONG waited = 0;
+    CdcLock(a);
+    if (halt) a->UpcallStop = TRUE; else a->UpcallPaused = TRUE;
+    CdcUnlock(a);
+    {
+        BOOLEAN c0 = FALSE, c1 = FALSE;   /* only the timer last set can be set */
+        NdisMCancelTimer(&a->UpcallTimer[0], &c0);
+        NdisMCancelTimer(&a->UpcallTimer[1], &c1);
+        cancelled = (BOOLEAN)(c0 || c1);
+    }
+    CdcLock(a);
+    if (cancelled) a->UpcallArmed = FALSE;
+    busy = a->UpcallArmed || a->UpcallRunning;
+    CdcUnlock(a);
+    while (busy) {
+        NdisMSleep(1000);
+        if (++waited % 5000 == 0) CdcTrace("upcall routine still due");
+        CdcLock(a);
+        busy = a->UpcallArmed || a->UpcallRunning;
+        CdcUnlock(a);
+    }
+    Deliver(a, FALSE);
+}
+
+/* A sleep request Set completes itself (the request could not be queued
+ * to the worker, so there is no passive context to wait in): delivery
+ * stops as in StopUpcalls. TRUE when a routine already started or due
+ * must end first: Set then pends the request and that routine completes
+ * it (Upcalls); FALSE when it is done here. */
+static BOOLEAN SleepNow(ADAPTER *a)
+{
+    BOOLEAN cancelled = FALSE, busy;
+    CdcLock(a);
+    a->UpcallPaused = TRUE;
+    CdcUnlock(a);
+    {
+        BOOLEAN c0 = FALSE, c1 = FALSE;   /* only the timer last set can be set */
+        NdisMCancelTimer(&a->UpcallTimer[0], &c0);
+        NdisMCancelTimer(&a->UpcallTimer[1], &c1);
+        cancelled = (BOOLEAN)(c0 || c1);
+    }
+    CdcLock(a);
+    if (cancelled) a->UpcallArmed = FALSE;
+    busy = a->UpcallArmed || a->UpcallRunning;
+    if (busy) a->SleepPending = TRUE;
+    CdcUnlock(a);
+    if (!busy) Deliver(a, FALSE);
+    return busy;
+}
+
+/* Back at D0: deferred delivery again, for anything queued meanwhile. */
+static void ResumeUpcalls(ADAPTER *a)
+{
+    CdcLock(a);
+    a->UpcallPaused = FALSE;
+    if (a->RxPendCount || a->DoneHead) ArmUpcalls(a);
+    CdcUnlock(a);
+}
+#else
+#define CdcLock(a) NdisAcquireSpinLock(&(a)->Lock)
+#define CdcUnlock(a) NdisReleaseSpinLock(&(a)->Lock)
+#endif
 
 /* Live adapters: from a successful Initialize to the start of Halt. On
  * Windows 98 SE under NUSB's EHCI stack, NDIS called the set handler
@@ -122,10 +332,10 @@ static void Receive(void *context, const cdc_u8 *frame, cdc_u32 length)
     BOOLEAN accept = FALSE, low = FALSE;
     NDIS_STATUS saved;
 
-    NdisAcquireSpinLock(&a->Lock);
+    CdcLock(a);
     filter = a->Filter;
     if (a->Halting || !filter) {
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
         return;
     }
     /* Software filter: a device that ignores the CDC filter requests
@@ -153,7 +363,7 @@ static void Receive(void *context, const cdc_u8 *frame, cdc_u32 length)
             a->RxNoBuffer++;
         }
     }
-    NdisReleaseSpinLock(&a->Lock);
+    CdcUnlock(a);
     if (!packet) return;
 
     NdisQueryPacket(packet, NULL, NULL, &buffer, NULL);
@@ -162,33 +372,45 @@ static void Receive(void *context, const cdc_u8 *frame, cdc_u32 length)
     NdisAdjustBufferLength(buffer, length);
     NdisRecalculatePacketCounts(packet);
     NDIS_SET_PACKET_HEADER_SIZE(packet, 14);
+#if CDC_DEFER
+    if (a->Defer) {
+        /* Indicated by Upcalls, always with NDIS_STATUS_SUCCESS: the
+         * RESOURCES path below needs the indication inside this call. */
+        NDIS_SET_PACKET_STATUS(packet, NDIS_STATUS_SUCCESS);
+        CdcLock(a);
+        a->RxPend[(a->RxPendHead + a->RxPendCount++) % RX_PACKETS] = packet;
+        ArmUpcalls(a);
+        CdcUnlock(a);
+        return;
+    }
+#endif
     saved = low ? NDIS_STATUS_RESOURCES : NDIS_STATUS_SUCCESS;
     NDIS_SET_PACKET_STATUS(packet, saved);
     NdisMIndicateReceivePacket(a->Handle, &packet, 1);
     /* The status saved before the call decides ownership, never the
      * status after it (NDIS 5 receive indication contract). */
     if (saved == NDIS_STATUS_RESOURCES) {
-        NdisAcquireSpinLock(&a->Lock);
+        CdcLock(a);
         a->RxFree[a->RxFreeCount++] = packet;
         a->RxOut--;
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
     }
 }
 
 static VOID ReturnPacket(NDIS_HANDLE context, PNDIS_PACKET packet)
 {
     ADAPTER *a = context;
-    NdisAcquireSpinLock(&a->Lock);
+    CdcLock(a);
     a->RxFree[a->RxFreeCount++] = packet;
     a->RxOut--;
-    NdisReleaseSpinLock(&a->Lock);
+    CdcUnlock(a);
 }
 
 static cdc_u32 TxTake(void *context, void **packets, cdc_u32 max)
 {
     ADAPTER *a = context;
     cdc_u32 n = 0;
-    NdisAcquireSpinLock(&a->Lock);
+    CdcLock(a);
     while (n < max && a->TxHead) {
         PNDIS_PACKET p = a->TxHead;
         a->TxHead = NEXT(p);
@@ -196,7 +418,7 @@ static cdc_u32 TxTake(void *context, void **packets, cdc_u32 max)
         a->TxQueued--;
         packets[n++] = p;
     }
-    NdisReleaseSpinLock(&a->Lock);
+    CdcUnlock(a);
     return n;
 }
 
@@ -227,9 +449,23 @@ static void TxDone(void *context, void **packets, cdc_u32 count, int success)
         PNDIS_PACKET p = packets[i];
         UINT size;
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
-        NdisAcquireSpinLock(&a->Lock);
+        CdcLock(a);
         if (success) { a->TxOk++; a->TxBytes += size; } else a->TxError++;
-        NdisReleaseSpinLock(&a->Lock);
+#if CDC_DEFER
+        /* Queued for Upcalls, except asleep: no USB completion runs then
+         * (the worker drained them), so a send SendPackets or a flush
+         * fails completes at once, below. */
+        if (a->Defer && !a->UpcallPaused) {
+            NEXT(p) = NULL;
+            DONE_STATUS(p) = success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
+            if (a->DoneTail) NEXT(a->DoneTail) = p; else a->DoneHead = p;
+            a->DoneTail = p;
+            ArmUpcalls(a);
+            CdcUnlock(a);
+            continue;
+        }
+#endif
+        CdcUnlock(a);
         NdisMSendComplete(a->Handle, p, success ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE);
     }
 }
@@ -246,13 +482,14 @@ static void Link(void *context, int connected, cdc_u32 speed)
 {
     ADAPTER *a = context;
     BOOLEAN changed;
-    NdisAcquireSpinLock(&a->Lock);
+    CdcLock(a);
     if (connected < 0) a->Gone = TRUE;
     if (speed) a->LinkSpeed = speed;
     changed = a->Connected != (connected > 0);
+    a->LinkKnown = TRUE;
     a->Connected = connected > 0;
-    NdisReleaseSpinLock(&a->Lock);
-    if (connected < 0) Flush(a);
+    CdcUnlock(a);
+    if (connected <= 0) Flush(a);
     /* No indication before MiniportInitialize has returned. */
     if (changed && a->Ready) {
 #if defined(CDC_TRACE_E9) || DBG
@@ -272,6 +509,11 @@ static void TaskDone(void *context, int request, long status)
         NdisMResetComplete(a->Handle, NDIS_STATUS_SUCCESS, FALSE);
         return;
     }
+#if CDC_DEFER
+    /* 98 SE and ME: before a sleep request completes, nothing may be left
+     * for the timer to indicate (D0 resumed in Set, before the worker). */
+    if (a->Defer && request == CDC_REQ_POWER && a->PowerState != NdisDeviceStateD0) StopUpcalls(a, FALSE);
+#endif
     /* A filter or multicast request the device refused still stands in
      * the software filter, which keeps delivery correct; a power change
      * always completes, the adapter recovering or reporting itself gone. */
@@ -365,10 +607,10 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
     case OID_802_3_MULTICAST_LIST:
         if (length % 6) { *needed = (length / 6 + 1) * 6; return NDIS_STATUS_INVALID_LENGTH; }
         if (length > sizeof(a->Multicast)) return NDIS_STATUS_MULTICAST_FULL;
-        NdisAcquireSpinLock(&a->Lock);
+        CdcLock(a);
         if (length) NdisMoveMemory(a->Multicast, buffer, length);
         a->MulticastCount = length / 6;
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
         *read = length;
         if (a->Gone || !CdcUsbRequest(a->Usb, CDC_REQ_MULTICAST, 0, buffer, length))
             return NDIS_STATUS_SUCCESS;
@@ -386,17 +628,28 @@ static NDIS_STATUS Set(NDIS_HANDLE context, NDIS_OID oid, PVOID buffer,
         }
         if (oid == OID_PNP_SET_POWER) {
             a->PowerState = value;
-            if (a->Gone || !CdcUsbRequest(a->Usb, CDC_REQ_POWER, value == NdisDeviceStateD0 ? 1 : 0, NULL, 0))
+#if CDC_DEFER
+            /* 98 SE and ME: deferred delivery is back before the worker
+             * reopens the device, so no USB completion of the restart
+             * reaches NDIS directly. */
+            if (a->Defer && value == NdisDeviceStateD0) ResumeUpcalls(a);
+#endif
+            if (a->Gone || !CdcUsbRequest(a->Usb, CDC_REQ_POWER, value == NdisDeviceStateD0 ? 1 : 0, NULL, 0)) {
+#if CDC_DEFER
+                /* Completed here, or by a routine still due (SleepNow). */
+                if (a->Defer && value != NdisDeviceStateD0 && SleepNow(a)) return NDIS_STATUS_PENDING;
+#endif
                 return NDIS_STATUS_SUCCESS;
+            }
             return NDIS_STATUS_PENDING;
         }
         if (value & ~(NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST |
                       NDIS_PACKET_TYPE_MULTICAST | NDIS_PACKET_TYPE_ALL_MULTICAST |
                       NDIS_PACKET_TYPE_PROMISCUOUS))
             return NDIS_STATUS_NOT_SUPPORTED;
-        NdisAcquireSpinLock(&a->Lock);
+        CdcLock(a);
         a->Filter = value;
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
         if (a->Gone || !CdcUsbRequest(a->Usb, CDC_REQ_FILTER, value, NULL, 0))
             return NDIS_STATUS_SUCCESS;
         return NDIS_STATUS_PENDING;
@@ -418,17 +671,27 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
         PNDIS_PACKET p = packets[i];
         UINT size;
         BOOLEAN queued = FALSE;
+#if CDC_DEFER
+        /* Pending until NdisMSendComplete (the deserialized rules allow
+         * the Status member to be set). Windows 98 SE's NDIS reads it: a
+         * packet left at another value is handed back to the protocol
+         * while it is still queued here, and reused. */
+        NDIS_SET_PACKET_STATUS(p, NDIS_STATUS_PENDING);
+#endif
         NdisQueryPacket(p, NULL, NULL, NULL, &size);
-        NdisAcquireSpinLock(&a->Lock);
-        if (!a->Gone && !a->Halting && size >= CDC_ETH_MIN && size <= CDC_ETH_MAX &&
-            a->TxQueued < TX_LIMIT) {
+        CdcLock(a);
+        /* No limit on the queue: a deserialized miniport keeps every valid
+         * send until it can go (NDIS 5 rules); the packets themselves are
+         * the queue (MiniportReserved), so nothing is allocated. Only a
+         * gone, halting or disconnected adapter or a bad length fails one. */
+        if (!a->Gone && !a->Halting && a->Connected && size >= CDC_ETH_MIN && size <= CDC_ETH_MAX) {
             NEXT(p) = NULL;
             if (a->TxTail) NEXT(a->TxTail) = p; else a->TxHead = p;
             a->TxTail = p;
             a->TxQueued++;
             queued = TRUE;
         }
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
         if (!queued) {
             void *one = p;
             if (a->Gone) {
@@ -437,6 +700,8 @@ static VOID SendPackets(NDIS_HANDLE context, PPNDIS_PACKET packets, UINT count)
                     CdcTrace("gone: %u sends failed", n);
             }
             TxDone(a, &one, 1, 0);
+        } else if (!((i + 1) % TX_KICK)) {
+            CdcUsbKick(a->Usb);   /* a long array starts going out at once */
         }
     }
     CdcUsbKick(a->Usb);
@@ -473,12 +738,18 @@ static VOID Halt(NDIS_HANDLE context)
     ULONG waited = 0;
     CdcTrace("halt: begin");
     LiveDrop(a);
-    NdisAcquireSpinLock(&a->Lock);
+    CdcLock(a);
     a->Halting = TRUE;
-    NdisReleaseSpinLock(&a->Lock);
+    CdcUnlock(a);
     CdcUsbStop(a->Usb);          /* no USB activity or callback after this */
     a->Usb = NULL;
     Flush(a);
+#if CDC_DEFER
+    if (a->Defer) {
+        StopUpcalls(a, TRUE);
+        CdcTrace("halt: %u upcall runs", a->UpcallRuns);
+    }
+#endif
     /* Every indicated packet comes back before its pool is freed. */
     while (a->RxOut > 0) {
         NdisMSleep(10000);
@@ -495,9 +766,9 @@ static VOID PnPEvent(NDIS_HANDLE context, NDIS_DEVICE_PNP_EVENT event, PVOID buf
     UNREFERENCED_PARAMETER(buffer);
     UNREFERENCED_PARAMETER(length);
     if (event == NdisDevicePnPEventSurpriseRemoved) {
-        NdisAcquireSpinLock(&a->Lock);
+        CdcLock(a);
         a->Gone = TRUE;
-        NdisReleaseSpinLock(&a->Lock);
+        CdcUnlock(a);
         CdcUsbSurpriseRemoved(a->Usb);
         Flush(a);
     }
@@ -550,6 +821,9 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     a->Lookahead = 1500;
     a->PowerState = NdisDeviceStateD0;
     NdisAllocateSpinLock(&a->Lock);
+#if CDC_DEFER
+    KeInitializeSpinLock(&a->Lock.SpinLock);   /* 98 SE: NDIS need not initialise it */
+#endif
 
     /* Receive pool: packets, buffers and storage, all before USB starts. */
     NdisAllocatePacketPool(&status, &a->PacketPool, RX_PACKETS, 4 * sizeof(PVOID));
@@ -574,6 +848,16 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
                          | NDIS_ATTRIBUTE_SURPRISE_REMOVE_OK
 #endif
                          , NdisInterfaceInternal);
+#if CDC_DEFER
+    /* 98 SE and ME: the WDM 1.10 query fails there. The timer is set only
+     * once NDIS can send or set a filter, which is after Initialize
+     * returns, so no failure path below has one to cancel. */
+    a->Defer = !IoIsWdmVersionAvailable(1, 0x10);
+    if (a->Defer) {
+        NdisMInitializeTimer(&a->UpcallTimer[0], handle, Upcalls, a);
+        NdisMInitializeTimer(&a->UpcallTimer[1], handle, Upcalls, a);
+    }
+#endif
     NdisMGetDeviceProperty(handle, &pdo, &fdo, &lower, NULL, NULL);
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 
@@ -587,14 +871,21 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
         FreeAdapter(a);
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
-    NdisAcquireSpinLock(&a->Lock);
-    a->Connected = a->Start.Connected != 0;
+    CdcLock(a);
+    /* Link may have been called already (the worker runs from
+     * CdcUsbStart on): the latest state stands over the snapshot. */
+    if (!a->LinkKnown) a->Connected = a->Start.Connected != 0;
     if (!a->LinkSpeed) a->LinkSpeed = a->Start.LinkSpeed;
     a->Ready = TRUE;
-    NdisReleaseSpinLock(&a->Lock);
+    CdcUnlock(a);
     LiveAdd(a);
+#if CDC_DEFER
+    CdcTrace("initialized: protocol %u, %s speed, link %u%s", a->Start.Protocol,
+             a->Start.HighSpeed ? "high" : "full", a->Connected, a->Defer ? ", upcalls deferred" : "");
+#else
     CdcTrace("initialized: protocol %u, %s speed, link %u", a->Start.Protocol,
              a->Start.HighSpeed ? "high" : "full", a->Connected);
+#endif
     return NDIS_STATUS_SUCCESS;
 }
 

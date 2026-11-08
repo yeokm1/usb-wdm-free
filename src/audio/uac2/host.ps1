@@ -10,13 +10,13 @@ New-Item -ItemType Directory -Force $dest | Out-Null
 $bin = Join-Path $repo 'tools/WinDDK71/bin/x86/amd64'
 Push-Location $dest
 try {
-    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacdesc.obj "$PSScriptRoot/uacdesc.c"
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacdesc.obj "$PSScriptRoot/../common/uacdesc.c"
     if ($LASTEXITCODE) { throw 'uacdesc compile failed' }
-    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacplan.obj "$PSScriptRoot/uacplan.c"
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacplan.obj "$PSScriptRoot/../common/uacplan.c"
     if ($LASTEXITCODE) { throw 'uacplan compile failed' }
-    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacvol.obj "$PSScriptRoot/uacvol.c"
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacvol.obj "$PSScriptRoot/../common/uacvol.c"
     if ($LASTEXITCODE) { throw 'uacvol compile failed' }
-    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacctl.obj "$PSScriptRoot/uacctl.c"
+    & "$bin/cl.exe" /nologo /c /O2 /W3 /WX /GS- /Zl /Fouacctl.obj "$PSScriptRoot/../common/uacctl.c"
     if ($LASTEXITCODE) { throw 'uacctl compile failed' }
     & "$bin/link.exe" /nologo /DLL /NOENTRY /NODEFAULTLIB /MACHINE:X64 /OUT:uaccore.dll `
         /EXPORT:UacParse /EXPORT:UacFunction /EXPORT:UacWholeFirst /EXPORT:UacClock /EXPORT:UacClockPath `

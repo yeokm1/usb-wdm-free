@@ -935,3 +935,19 @@ What the M1 code settled or changed against this draft; the evidence is in
   MI_00) on 98 SE and 2000 only.
 - Not yet done from M1: stall/removal handling is written but only the
   removal path has run; quirks (M2), pacing (6.6) and `UmFlags` are M2.
+
+## 19. 98 SE and ME: no KS file prompts (2026-11-07)
+
+The 9x section `[UM]` included Windows' `ks.inf` and `wdmaudio.inf` and
+needed `KS.Registration` and `WDMAUDIO.Registration`. On 9x, Setup looks
+for an included INF's files and catalog on this package's own disk, so it
+asked for `ks.cat`, `ksclockf.ax`, `wdmaudio.cat` and others, which the
+Windows CD holds only inside its CAB files (records
+`2026-10-22-usbmidi-m1.md` and `2026-11-07-98se-ks-prompts.md`). As in
+`uac2` (`docs/design/uac2.md` section 24, which has the details), `[UM]`
+now includes no Microsoft INF: `[SysAudio9x]` writes the RunOnce entry by
+which Windows installs SysAudio's software device from its own
+`wdmaudio.inf` (bringing the KS files and registration, KMixer and the
+software synth from Windows' installation files), and the device loader
+is `*NTKERN,MMDEVLDR.VXD`. `mkinf.ps1` keeps the new strings to the 9x
+folders; the NT folders' INFs are byte for byte as before.

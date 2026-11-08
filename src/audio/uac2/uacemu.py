@@ -19,7 +19,8 @@ Profiles (--profile):
             every alternate functional: HID, CDC ACM and a UAC 2 function
             (playback 2/6/8 channels 16/24-bit, async with explicit
             feedback; 1-channel capture 16/24-bit); strings replaced by
-            SIMULATED labels, serial index zero.
+            SIMULATED labels, serial index zero. Its HID interface
+            answers as below; its CDC ACM pair is not modelled.
   hs24      High Speed, one programmable clock (44.1 to 192 kHz), playback
             2 channels 16/24/32-bit (subslots 2, 3, 4), capture 2 channels
             16/24-bit; async playback with explicit feedback.
@@ -27,7 +28,13 @@ Profiles (--profile):
             channels 24-bit (IF2), 48/96 kHz, async with feedback.
   mic       High Speed capture only: 1 channel 16/24-bit, 16/48/96 kHz.
   fs        Full Speed UAC 2.0: playback 2 channels 16-bit 44.1/48 kHz with
-            3-byte 10.14 feedback, capture 1 channel 16-bit.
+            explicit feedback, capture 1 channel 16-bit. The feedback
+            endpoint is USB 2.0's 3-byte 10.14 form (5.12.4.2).
+            --fs-feedback 4 makes it 4 bytes carrying 16.16 samples per
+            frame, the form Windows 10's own UAC 2.0 driver
+            (usbaudio2.sys) takes: it refuses the 3-byte one (Code 10,
+            "could not find a feedback endpoint") and reads 4 bytes as
+            16.16 (docs/testing/2026-11-06-inbox-reference.md).
   clocks    High Speed, two clock sources (44.1 kHz family, 48 kHz family)
             behind a two-input clock selector for playback; capture on a
             clock multiplier (1/1) of the 48 kHz source.
@@ -41,7 +48,7 @@ Profiles (--profile):
             with 16/24/32-bit stereo alternates at the listed packet sizes
             (192/288/384 bytes, 384 kHz at bInterval 1). The rate list is
             not in that listing: 44.1 to 384 kHz, both families, assumed.
-            Its HID interface is not modelled.
+            Its HID interface is not in the descriptors.
   cx31993m  a user's CX31993 with a MAX97220 headphone amplifier
             (3302:12C3, testdata/cx31993m) replayed: its device and
             configuration descriptors as XHCITR printed them, strings
@@ -52,7 +59,7 @@ Profiles (--profile):
             volume RANGE and rate list are not in the report: --vol-range
             and --vol-cur (--vol-cur-at, --vol-cur-stall) set the one,
             the rates are cx31993's, assumed.
-            The HID interface answers nothing.
+            The HID interface answers as below.
   alc4080   an ASSUMED layout for the Realtek ALC4080 on-board codec
             (docs/design/uac2.md section 15.4), not a capture: one
             programmable clock, three playback endpoints - 8-channel
@@ -67,7 +74,7 @@ Profiles (--profile):
             replaced by SIMULATED labels; adaptive playback on IF4 to IF6,
             async capture on IF1 to IF3, each terminal on its own clock
             (44.1 to 192 kHz; the headphones' to 384 kHz, as Linux listed).
-            The HID interface answers nothing.
+            The HID interface answers as below.
   uac3dual  two configurations, as USB Audio 3.0 section 3.3 requires of a
             3.0 device: configuration 1 (index 0) is hs24's UAC 2.0
             function, configuration 2 a USB Audio 3.0 function (IAD
@@ -82,6 +89,15 @@ Every profile answers the standard requests and the clock source
 requests of the entities its descriptors declare, read from the
 descriptors themselves. A SET_CUR is refused where the descriptor's
 bmaControls do not make the control read/write.
+
+A HID interface in a captured layout (x4, x4full, x1, cx31993m,
+alc4080cap) answers SET_IDLE and GET_DESCRIPTOR(Report) with a stand-in
+report descriptor (a vendor-page collection with one input byte, padded
+with Usage items to the length the interface's HID descriptor declares)
+and sends no reports: none of the captures holds the real report
+descriptor. Windows' HID driver resets the whole device when that
+request stalls, and a reset while Windows 10's own UAC 2.0 driver starts
+the audio function fails it (Code 10, docs/testing/2026-11-06-inbox-reference.md).
 
 Feature units of the built profiles (--fu): 'full' (master and every
 channel: mute and volume read/write, the default), 'master' (master
@@ -100,8 +116,8 @@ silence value 0x8000), so a leg reads a level change made in hardware
 (rendered moves, received stays) or in the driver (received moves). A
 volume SET_CUR must be a step of the range, or the silence value. Playback OUT packets are checked against the
 active alternate (frame size, maximum packet) and counted; feedback runs
-at the feedback endpoint's interval, 16.16 at High Speed and 10.14 at
-Full Speed, with --fb-ppm, --fb-zero-every and --fb-stop-after to model
+at the feedback endpoint's interval, 16.16 at High Speed and at Full
+Speed by the endpoint's size (4 bytes 16.16, 3 bytes 10.14), with --fb-ppm, --fb-zero-every and --fb-stop-after to model
 drift and loss. Capture IN endpoints stream a 1 kHz sine at the selected
 rate and depth. Built profiles carry IDs FFFF:02xx, which no INF lists
 (--vid/--pid change them, for the X4 profiles too).
@@ -135,6 +151,36 @@ QUALIFIER = (FIXTURE / 'qualifier.bin').read_bytes()
 def usb_string(text):
     raw = text.encode('utf-16le')
     return bytes((len(raw) + 2, 3)) + raw
+
+
+def hid_interfaces(config):
+    """{interface number: report descriptor length} of every HID
+    interface (class 3) whose HID descriptor (HID 1.11 6.2.1) names a
+    report descriptor."""
+    found, current, off = {}, None, 9
+    while off + 2 <= len(config) and config[off] >= 2:
+        d = config[off:off + config[off]]
+        if d[1] == 4 and len(d) >= 9:
+            current = d[2] if d[5] == 3 else None
+        elif d[1] == 0x21 and current is not None and len(d) >= 9:
+            for k in range(d[5]):
+                if 6 + 3 * k + 3 <= len(d) and d[6 + 3 * k] == 0x22:
+                    found[current] = int.from_bytes(d[7 + 3 * k:9 + 3 * k], 'little')
+        off += config[off]
+    return found
+
+
+def hid_report(length):
+    """A stand-in report descriptor of exactly `length` bytes: Usage Page
+    FF00 (vendor), Usage 1, Collection (Application), one 8-bit input,
+    padded with Usage items inside the collection; None below 21 bytes."""
+    head = bytes.fromhex('0600ff 0901 a101 1500 26ff00 7508 9501')
+    tail = bytes.fromhex('0901 8102 c0')
+    pad = length - len(head) - len(tail)
+    if pad < 0 or pad == 1:
+        return None
+    fill = (b'\x0a\x01\x00' if pad % 2 else b'') + b'\x09\x01' * (pad // 2 - (1 if pad % 2 else 0))
+    return head + fill + tail
 
 
 STRINGS = {0: b'\x04\x03\x09\x04',
@@ -207,6 +253,16 @@ def audio_function(config):
                 entities[d[3]] = dict(kind='fu', source=d[4], channels=n - 1,
                                       controls=[int.from_bytes(d[5 + 4 * i:9 + 4 * i], 'little')
                                                 for i in range(n)])
+            elif sub == 0x04 and size >= 13 + d[4]:
+                # Mixer Unit (4.7.2.6): bNrChannels, then bmMixerControls up
+                # to bmControls and iMixer, the last two bytes.
+                p = d[4]
+                entities[d[3]] = dict(kind='mx', unit='mixer', inputs=list(d[5:5 + p]), channels=d[5 + p],
+                                      mixer_controls=bytes(d[11 + p:size - 2]))
+            elif sub == 0x05 and size >= 7 + d[4]:
+                # Selector Unit (4.7.2.7): bmControls after the sources.
+                p = d[4]
+                entities[d[3]] = dict(kind='mx', unit='selector', inputs=list(d[5:5 + p]), controls=d[5 + p])
             elif sub in (0x04, 0x05) and size >= 5 and size >= 5 + d[4]:
                 entities[d[3]] = dict(kind='mx', inputs=list(d[5:5 + d[4]]))
             elif sub in (0x08, 0x09) and size >= 7 and size >= 7 + d[6]:
@@ -242,8 +298,11 @@ class Builder:
     """One UAC2 function behind an IAD: AC interface 0, then one streaming
     interface per stream() call."""
 
-    def __init__(self, speed):
+    def __init__(self, speed, fs_feedback=3):
         self.speed = speed
+        # Full Speed feedback endpoint size: 3 (10.14, USB 2.0 5.12.4.2) or
+        # 4 (16.16, what Windows 10's own UAC 2.0 driver takes).
+        self.fs_feedback = fs_feedback
         self.ac = b''
         self.streams = []
         self.interfaces = 1
@@ -310,7 +369,7 @@ class Builder:
             body += bytes((8, 0x25, 0x01, 0, 0, 0, 0, 0))
             if fb:
                 body += bytes((7, 5, 0x80 | (number + 8), 0x11)) + struct.pack(
-                    '<HB', 4 if self.speed == 'high' else 3, 4 if self.speed == 'high' else 1)
+                    '<HB', 4 if self.speed == 'high' else self.fs_feedback, 4 if self.speed == 'high' else 1)
         self.streams.append(body)
 
     def configuration(self):
@@ -324,7 +383,7 @@ FAMILY_44 = [44100, 88200, 176400]
 FAMILY_48 = [48000, 96000, 192000]
 
 
-def build(name, fu='full'):
+def build(name, fu='full', fs_feedback=3):
     """(speed, configuration, {clock source id: rates}, product id). fu: the
     playback feature units' controls (Builder.feature_unit)."""
     if name == 'hs24':
@@ -353,7 +412,7 @@ def build(name, fu='full'):
         b.stream(3, 'in', 1, [(2, 16), (3, 24)], 96000)
         pid = 0x0203
     elif name == 'fs':
-        b = Builder('full')
+        b = Builder('full', fs_feedback)
         b.clock_source(0x10)
         rates = {0x10: [44100, 48000]}
         b.input_terminal(1, 0x0101, 0x10, 2); b.output_terminal(3, 0x0301, b.feature_unit(2, 1, 2, fu), 0x10)
@@ -429,8 +488,9 @@ VOLUME_RANGE = (-0x6000, 0, 0x100)
 
 
 class Profile:
-    def __init__(self, name='x4', vid=None, pid=None, fu='full', vol_range=VOLUME_RANGE, vol_cur=0):
-        if name not in PROFILE_NAMES or fu not in FU_MODES:
+    def __init__(self, name='x4', vid=None, pid=None, fu='full', vol_range=VOLUME_RANGE, vol_cur=0,
+                 fs_feedback=3):
+        if name not in PROFILE_NAMES or fu not in FU_MODES or fs_feedback not in (3, 4):
             raise ValueError('profile')
         lo, hi, res = vol_range
         if not -32768 <= lo <= hi <= 32767 or res < 0 or not -32768 <= vol_cur <= 32767:
@@ -442,10 +502,14 @@ class Profile:
             base = (ALC_FIXTURE / 'device.bin').read_bytes()
             self.vid, self.pid = vid or 0x0b05, pid or 0x1b9b
             # Strings: index 1 product, 3 manufacturer in the capture; serial none.
+            # Index 5 is the IAD's iFunction and every interface's iInterface;
+            # Windows 10's own UAC 2.0 driver reads it and fails the function
+            # (Code 10) when it stalls.
             self.device = base[:8] + struct.pack('<HH', self.vid, self.pid) + base[12:]
             self.qualifier = struct.pack('<BBHBBBBBB', 10, 6, 0x200, 0xef, 2, 1, 64, 1, 0)
             self.strings = {0: b'\x04\x03\x09\x04', 1: usb_string('ALC4080 capture - SIMULATED'),
-                            3: usb_string('usb-wdm-free SIMULATED')}
+                            3: usb_string('usb-wdm-free SIMULATED'),
+                            5: usb_string('ALC4080 audio function - SIMULATED')}
             all44 = sorted(FAMILY_44 + FAMILY_48)
             self.rates = {1: all44, 3: all44, 4: all44, 5: all44, 6: all44 + [352800, 384000], 8: all44}
             self.allowed, self.fu_settable = None, True
@@ -478,7 +542,7 @@ class Profile:
             self.allowed = {(4, 1)} if name == 'x4' else None
             self.fu_settable = name == 'x4full'
         else:
-            self.speed, self.config, self.rates, default_pid = build('hs24' if name == 'uac3dual' else name, fu)
+            self.speed, self.config, self.rates, default_pid = build('hs24' if name == 'uac3dual' else name, fu, fs_feedback)
             if name == 'uac3dual':
                 default_pid = 0x0230
             self.vid, self.pid = vid or 0xffff, pid or default_pid
@@ -498,6 +562,7 @@ class Profile:
             if e['kind'] == 'cs':
                 self.rates.setdefault(cid, [48000])
         self.interfaces = sorted({i for i, _ in self.layout})
+        self.hid = hid_interfaces(self.config)
 
     def set_product(self, text):
         """iProduct's string: text (an empty string gives an empty
@@ -559,6 +624,9 @@ class Model:
         self.vol_stall = vol_stall
         self.freq = {cid: (48000 if 48000 in r else r[0]) for cid, r in self.p.rates.items()}
         self.selector = {cid: 1 for cid, e in self.p.entities.items() if e['kind'] == 'cx'}
+        # Selector Units' positions and Mixer Units' set crosspoints (1/256 dB).
+        self.unit_sel = {uid: 1 for uid, e in self.p.entities.items() if e.get('unit') == 'selector'}
+        self.mix = {}
         self.mute, self.volume = {}, {}
         self.peak = {}          # channel: largest |sample| received this window (full scale 1.0)
         self.rpeak = {}         # the same after the units in force at each packet
@@ -743,6 +811,17 @@ class Model:
             return self.rate(e['source'], depth + 1)
         return None
 
+    def cluster(self, eid, depth=0):
+        """The number of logical channels an entity's output carries."""
+        e = self.p.entities.get(eid)
+        if e is None or depth > 16:
+            return 0
+        if e['kind'] in ('it', 'fu') or e.get('unit') == 'mixer':
+            return e['channels']
+        if e['kind'] in ('mx', 'xu') and e['inputs']:
+            return self.cluster(e['inputs'][0], depth + 1)
+        return 0
+
     def owner(self, ep):
         for interface, alternate in self.alts.items():
             info = self.p.stream_alt(interface, alternate) if alternate else None
@@ -776,6 +855,11 @@ class Model:
             status, data = 0, bytes((self.alts[index],))
         elif request == 1 and rt == 2 and value == 0:
             status = 0
+        elif request == 6 and rt == 0x81 and value >> 8 == 0x22 and index in p.hid and self.config == 1:
+            data = hid_report(p.hid[index])
+            status, data = (0, data) if data is not None else (4, b'')
+        elif request == 0x0a and rt == 0x21 and index in p.hid and self.config == 1:
+            status = 0      # SET_IDLE (HID 1.11 7.2.4)
         elif rt in (0xa1, 0x21) and index & 255 == p.ac and self.config == 1:
             status, data = self.entity_request(request, rt == 0xa1, index >> 8, value >> 8,
                                                value & 255, payload)
@@ -814,6 +898,37 @@ class Model:
                 return 0, b''
         elif e['kind'] == 'cm' and selector in (1, 2) and not channel and get and request == 1:
             return 0, struct.pack('<H', 1)
+        elif e.get('unit') == 'selector' and selector == 1 and not channel and request == 1:
+            # Selector Control (5.2.5.4): the selected input pin, 1-based.
+            # Windows' own UAC 2.0 driver reads it (GET CUR) on every
+            # Selector Unit of the topology.
+            if get:
+                return 0, bytes((self.unit_sel[entity],))
+            if e['controls'] & 3 == 3 and len(payload) == 1 and 1 <= payload[0] <= len(e['inputs']):
+                self.unit_sel[entity] = payload[0]
+                self.log('selector_unit', entity=entity, input=payload[0])
+                return 0, b''
+        elif e.get('unit') == 'mixer' and selector == 1 and request in (1, 2):
+            # Mixer Control (5.2.5.5): one 1/256 dB value per crosspoint,
+            # numbered over input channels x output channels. Each is
+            # readable; bmMixerControls marks the programmable ones (first
+            # bit the MSB of the first byte). Windows' own UAC 2.0 driver
+            # reads them (GET CUR) on every Mixer Unit of the topology.
+            inputs = sum(self.cluster(i) for i in e['inputs'])
+            if channel >= inputs * e['channels']:
+                return 4, b''
+            bits = e['mixer_controls']
+            settable = channel // 8 < len(bits) and bits[channel // 8] >> (7 - channel % 8) & 1
+            if get and request == 1:
+                return 0, struct.pack('<h', self.mix.get((entity, channel), 0))
+            if get and request == 2:
+                return 0, struct.pack('<Hhhh', 1, -15360 if settable else 0, 0, 256 if settable else 0)
+            if not get and request == 1 and settable and len(payload) == 2:
+                value = struct.unpack('<h', payload)[0]
+                if -15360 <= value <= 0 and value % 256 == 0 or value == -32768:
+                    self.mix[(entity, channel)] = value
+                    self.log('mixer', entity=entity, control=channel, value=value)
+                    return 0, b''
         elif e['kind'] == 'fu' and channel <= e['channels'] and selector in (1, 2):
             # bmaControls: mute D1..0, volume D3..2; 1 read only, 3 read/write
             # (0 absent and 2 reserved stall).
@@ -999,6 +1114,10 @@ class Model:
         rate = (self.rate(info['clock']) or 48000) * (1 + self.fb_ppm / 1e6)
         if self.p.speed == 'high':
             return struct.pack('<I', int(round(rate / 8000 * 65536)))     # 16.16, per microframe
+        if info['feedback']['max'] >= 4:
+            # A 4-byte Full Speed feedback endpoint: 16.16 samples per frame,
+            # the form Windows 10's own UAC 2.0 driver reads there.
+            return struct.pack('<I', int(round(rate / 1000 * 65536)))
         return struct.pack('<I', int(round(rate / 1000 * 16384)))[:3]     # 10.14, per frame
 
     def feedback(self):
@@ -1115,6 +1234,8 @@ def main():
     ap.add_argument('--vid', type=lambda s: int(s, 16))
     ap.add_argument('--pid', type=lambda s: int(s, 16))
     ap.add_argument('--fb-ppm', type=float, default=0.0, help='feedback offset from the clock, ppm')
+    ap.add_argument('--fs-feedback', type=int, choices=(3, 4), default=3,
+                    help='fs profile: feedback endpoint bytes, 3 (10.14) or 4 (16.16, as Windows 10 takes)')
     ap.add_argument('--fb-zero-every', type=int, default=0,
                     help='every Nth feedback packet is zero-length (lost)')
     ap.add_argument('--fb-stop-after', type=float,
@@ -1142,7 +1263,10 @@ def main():
     vol_range = tuple(int(v) for v in args.vol_range.split(':'))
     if len(vol_range) != 3:
         ap.error('--vol-range MIN:MAX:RES')
-    profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur)
+    if args.fs_feedback != 3 and args.profile != 'fs':
+        ap.error('--fs-feedback applies to the fs profile')
+    profile = Profile(args.profile, args.vid, args.pid, fu=args.fu, vol_range=vol_range, vol_cur=args.vol_cur,
+                      fs_feedback=args.fs_feedback)
     if args.no_product:
         profile.set_product(None)
     elif args.product is not None:

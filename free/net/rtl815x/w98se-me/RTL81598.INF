@@ -15,6 +15,19 @@
 ; The driver tells the chips apart by the chip id they report, not by
 ; these ids: an id here carrying a chip it does not serve is refused at
 ; start (unknown chip version), with an event-log entry.
+; 0BDA:8056 is not from Linux: Realtek's own Windows 7
+; INF (rtump62x86sta.INF 7.61.20, in usb-wdm-nonfree) lists it in its
+; RTL8156B sections (owner, 2026-11-06; the id only is taken). No device
+; on it has been seen. It needs no chip path of its own: the chip is read
+; from its id register, as for every id here.
+; The ids added on 2026-11-07 (owner) are not from Linux: Realtek's own
+; INFs list them, its 7 INF (7.61.20, in usb-wdm-nonfree) and its
+; Windows 10 INF 10.68.20 (read for its ids and chip sections only):
+; 0BDA:8052 (RTL8152B), 8057 and A157 (RTL8157), 805A and A15A (RTL8159);
+; the rebrands of D-Link (2001:B302), TP-Link (2357:0603, 0604), Lenovo
+; (17EF:3052, 3057, 3065, 30FA, 720A, 8153, A3C1, 309B, 309C, 309D),
+; Belkin, LG, Elecom, ASUS, I-O DATA, Telaum, Satechi, Gopod, Club 3D,
+; IOI, Luxshare and Getac. The id only is taken; none has been seen here.
 ; 0BDA:8153 moves here from CDCNET.INF's 98 SE/ME/2000 models when this
 ; package ships (owner decision, ethernet.md 6.5).
 
@@ -23,7 +36,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/27/2026,0.2.0.0
+DriverVer=11/06/2026,0.2.1.0
 
 [Manufacturer]
 %Provider%=Models
@@ -61,8 +74,50 @@ DriverVer=10/27/2026,0.2.0.0
 %D29%=RTL,USB\VID_20F4&PID_E02C
 %D30%=RTL,USB\VID_0BDA&PID_8155
 %D31%=RTL,USB\VID_0BDA&PID_8156
+%D31%=RTL,USB\VID_0BDA&PID_8056
 %D32%=RTL,USB\VID_0BDA&PID_8157
 %D33%=RTL,USB\VID_0BDA&PID_815A
+%D02%=RTL,USB\VID_0BDA&PID_8052
+%D32%=RTL,USB\VID_0BDA&PID_8057
+%D32%=RTL,USB\VID_0BDA&PID_A157
+%D33%=RTL,USB\VID_0BDA&PID_805A
+%D33%=RTL,USB\VID_0BDA&PID_A15A
+%D25%=RTL,USB\VID_2001&PID_B302
+%D23%=RTL,USB\VID_2357&PID_0603
+%D24%=RTL,USB\VID_2357&PID_0604
+%D09%=RTL,USB\VID_17EF&PID_3052
+%D09%=RTL,USB\VID_17EF&PID_3057
+%D09%=RTL,USB\VID_17EF&PID_3065
+%D09%=RTL,USB\VID_17EF&PID_30FA
+%D09%=RTL,USB\VID_17EF&PID_720A
+%D09%=RTL,USB\VID_17EF&PID_8153
+%D09%=RTL,USB\VID_17EF&PID_A3C1
+%D09%=RTL,USB\VID_17EF&PID_309B
+%D09%=RTL,USB\VID_17EF&PID_309C
+%D09%=RTL,USB\VID_17EF&PID_309D
+%D34%=RTL,USB\VID_050D&PID_047A
+%D34%=RTL,USB\VID_050D&PID_048A
+%D35%=RTL,USB\VID_043E&PID_9819
+%D35%=RTL,USB\VID_043E&PID_9820
+%D36%=RTL,USB\VID_056E&PID_4013
+%D36%=RTL,USB\VID_056E&PID_4017
+%D36%=RTL,USB\VID_056E&PID_9013
+%D27%=RTL,USB\VID_0B05&PID_18D1
+%D27%=RTL,USB\VID_0B05&PID_65F1
+%D27%=RTL,USB\VID_0B05&PID_1AED
+%D27%=RTL,USB\VID_0B05&PID_1D91
+%D37%=RTL,USB\VID_065F&PID_3200
+%D38%=RTL,USB\VID_0DF4&PID_0025
+%D39%=RTL,USB\VID_310E&PID_0060
+%D39%=RTL,USB\VID_310E&PID_0061
+%D39%=RTL,USB\VID_310E&PID_0062
+%D40%=RTL,USB\VID_2D01&PID_0030
+%D40%=RTL,USB\VID_2D01&PID_0031
+%D40%=RTL,USB\VID_2D01&PID_0032
+%D41%=RTL,USB\VID_2D1C&PID_8153
+%D42%=RTL,USB\VID_0F21&PID_8153
+%D43%=RTL,USB\VID_208E&PID_D003
+%D44%=RTL,USB\VID_2BAF&PID_0012
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -149,3 +204,14 @@ D30="Realtek USB Ethernet (RTL815X)"
 D31="Realtek RTL8156 USB 2.5G Ethernet (RTL815X)"
 D32="Realtek RTL8157 USB 5G Ethernet (RTL815X)"
 D33="Realtek RTL8159 USB 10G Ethernet (RTL815X)"
+D34="Belkin USB Ethernet adapter (RTL815X)"
+D35="LG USB Ethernet adapter (RTL815X)"
+D36="Elecom USB Ethernet adapter (RTL815X)"
+D37="I-O DATA USB Ethernet adapter (RTL815X)"
+D38="Telaum USB Ethernet adapter (RTL815X)"
+D39="Satechi USB Ethernet adapter (RTL815X)"
+D40="Gopod USB Ethernet adapter (RTL815X)"
+D41="Club 3D USB Ethernet adapter (RTL815X)"
+D42="IOI USB Ethernet adapter (RTL815X)"
+D43="Luxshare USB Ethernet adapter (RTL815X)"
+D44="Getac USB Ethernet adapter (RTL815X)"

@@ -182,7 +182,15 @@ class Codec:
         if len(packets) % 4:
             raise ValueError('USB MIDI bulk OUT is not event-aligned')
         result = bytearray()
+        self.reserved = 0
         for offset in range(0, len(packets), 4):
+            # Code Index Numbers 0 and 1 are reserved (USB MIDI 1.0, Table
+            # 4-1) and carry no MIDI bytes; a device skips them. XP's
+            # usbaudio.sys fills each 64-byte bulk OUT packet with zero
+            # (CIN 0, cable 0) events after the real ones.
+            if packets[offset] & 15 < 2:
+                self.reserved += 1
+                continue
             payload = ctypes.create_string_buffer(3)
             packet = ctypes.create_string_buffer(packets[offset:offset + 4])
             count = self.dll.UmDecodePacket(packet, 4, (1 << self.cables) - 1, payload)
@@ -430,7 +438,7 @@ class Model:
                 data = self.out_data(p, packet[8:])
                 self.bulk_reply(ident, ep, 0, actual=length)
                 self.log('bulk_out', endpoint=ep, length=length, echo_length=len(data),
-                         sha256=hashlib.sha256(packet[8:]).hexdigest())
+                         reserved=p.codec.reserved, sha256=hashlib.sha256(packet[8:]).hexdigest())
                 self.drain()
             else:
                 if len(packet) != 8 or not length or length % 4 or ident in p.pending or len(p.pending)>=256:

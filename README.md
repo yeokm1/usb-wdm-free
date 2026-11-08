@@ -15,6 +15,7 @@ These drivers are experimental. They may not work with every device and can make
 
 | Driver | Device class | Windows |
 |---|---|---|
+| `uac1` | USB Audio Class 1.0, playback and recording, with volume and mute; optional: Windows' own driver stays the default unless you install `uac1` | 98 SE |
 | `uac2` | USB Audio Class 2.0, playback and recording, with volume and mute | 98 SE to 8; x64 from XP |
 | `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
@@ -22,6 +23,8 @@ These drivers are experimental. They may not work with every device and can make
 | `cdcnet` | USB CDC-ECM, CDC-NCM and RNDIS networking | 98 SE to 7; x64 from XP (2) |
 | `rtl815x` | Realtek RTL8152, 8153, 8156, 8157 and 8159 USB Ethernet | 98 SE, ME, 2000. Newer chips also XP to 7, x64 too (6) |
 | `ax88179` | ASIX AX88179 and AX88178A USB Gigabit Ethernet | 98 SE, ME, 2000 |
+| `ax88772` | ASIX AX88772B and AX88772C, CoreChips SR9800 USB Fast Ethernet | 98 SE, ME; the SR9800 also 2000 to 7, x64 from XP (7) |
+| `sr9700` | CoreChips SR9700 USB Ethernet | 98 SE to 7; x64 from XP |
 | `xpad98` | Xbox-compatible game pads | 98 SE to Vista; x64 on XP and Vista (3) |
 | `usbflop` | USB floppy drives (UFI), an INF for Windows' `usbstor.sys` | 98 SE to 8; x64 from XP (4) |
 | `noaud` | `NOAUD98.INF`, opt-in: no driver for a listed webcam's microphone | 98 SE |
@@ -39,6 +42,9 @@ These drivers are experimental. They may not work with every device and can make
    current inkjets and host-based printers have no Windows 98 or ME driver.
 6. XP and Vista: the RTL8153D, 8156 and 8156B. XP, Vista and 7: the
    RTL8157 and 8159. Realtek's own drivers serve the other chips there.
+7. The AX88772B and AX88772C on 2000 and later: ASIX's own driver, in
+   usb-wdm-nonfree. The AX88772 and AX88772A: ASIX's driver on every
+   Windows.
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 
@@ -55,6 +61,7 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
+| `uac1` | Real device (VM); simulator (o) | - | - | - | - | - | - |
 | `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
@@ -62,6 +69,8 @@ that Windows.
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
 | `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
 | `ax88179` | Real PC (l); real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
+| `ax88772` | Simulator only | Simulator only | Simulator only, SR9800 (m) | Simulator only, SR9800, x86 and x64 (m) | Not evaluated | Simulator only, SR9800, x86 and x64 (m) | - |
+| `sr9700` | Simulator only (n) | Simulator only | Simulator only (m) | Simulator only, x86 and x64 (m) | Not evaluated | Simulator only, x86 and x64 (m) | - |
 | `xpad98` | Simulator only (g) | Simulator only | Simulator only | Simulator only, x86 and x64 | Simulator only, x86 and x64 | - | - |
 | `usbflop` | Real device (VM) | Real device (VM) | Real device (VM) (h) | Real device (VM) (h) | Not evaluated | Real device (VM), x64 (h) | Not evaluated |
 | `noaud` | Real device (VM) | - | - | - | - | - | - |
@@ -77,9 +86,12 @@ that Windows.
 - (g) The Xbox 360 wireless receiver fails under xHCI98 3.1.0.0 and works under 3.2.0.0.
 - (h) The real drive was recognised but no disk was read; reading passed with a simulated drive.
 - (i) Install and device listing only; no data transfers.
-- (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98 only. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
-- (k) The newer chips only (footnote 6). Every leg ran at High Speed. Faster links were not run.
+- (j) The RTL8153D, 8156, 8156B, 8157 and 8159 were run on 98 SE, ME and 2000 under xHCI98, and the 8156 and 8156B also on 98 SE under NUSB's EHCI. No firmware patch is loaded. Without its patch the RTL8159 links at 5 Gb/s at most.
+- (k) The newer chips only (footnote 6), at High Speed under Windows' EHCI. On XP and XP x64 the 8156 and 8156B also ran under xHCI98, at 2.5 Gb/s.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
+- (m) Under xHCI98.
+- (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
+- (o) Under xHCI98: the Logi USB Headset, and simulated headsets, DACs and a copy of the Sound Blaster Play! 2's layout. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install
@@ -89,10 +101,15 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 - **98 SE may freeze when the first USB audio device is plugged in after
   a boot** (an audio or MIDI interface, a headset, a webcam with a
-  microphone), with Windows' own audio driver too. Plug the device in
-  before switching on and leave it in; if Windows freezes, restart with
-  it plugged in. For a webcam whose microphone you do not need, install
+  microphone), with `uac1`, `uac2` and Windows' own audio driver alike.
+  Plug the device in before switching on and leave it in; if Windows
+  freezes, restart with it plugged in. For a webcam whose microphone you do not need, install
   `NOAUD98.INF`.
+- **On Windows 98 SE, stop audio playback or recording before
+  unplugging a USB audio device.** Unplugging while it plays can stop
+  Windows; unplugging while it records can leave the recording program
+  not responding until the next restart. This happens with Windows' own
+  USB audio driver too.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
 - **XP and XP x64 install their own USB audio driver for a `uac2` device
@@ -114,16 +131,19 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.8` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.9` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.8). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.9). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.8 is signed with the test certificate 0.1.4 introduced. Trust the
-`usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
-thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`.
+0.1.9 is signed with the test certificate
+`CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
+`7A3C6E6289EC46E6E128D87BB54E87196B824959`; 7 x64 needs no update for
+it. Trust the `usb-wdm-free-test.cer` of this release; 0.1.4's
+certificate (`E6A2749B78E9E4074260CF79972A57EEB6E76C0A`) no longer
+applies.
 
 `uac2` on 2000 to 7: before plugging a UAC 2.0 device in, put `uac2`
 where Windows looks (`pnputil -a uac2wdm.inf` on Vista and 7; its
@@ -133,6 +153,45 @@ folder on `DevicePath` on 2000 and XP) and install the folder's
 without the co-installer; their x64 `pnputil` wants a signed catalog,
 which this package has none of
 ([release notes](docs/release-notes.md), 0.1.5).
+
+`usbmidi` on 2000: Windows 2000 gives a class-compliant MIDI keyboard
+or interface to its own audio driver, which can stop Windows. `usbmidi`
+takes such a device over only if its INF lists it. To add yours, before
+you plug it into the 2000 PC:
+
+1. On a PC with Windows XP or later, plug the device in. In Device
+   Manager, under Sound, video and game controllers, open it (on XP:
+   "USB Audio Device"), Details, Hardware Ids. Copy the line of the form
+   `USB\VID_xxxx&PID_yyyy&MI_nn` (the one without `REV_`). If no line
+   has `&MI_`, these steps do not apply to the device.
+2. Copy `free/audio/usbmidi/w2k/` to the 2000 PC, say to `C:\USBMIDI`.
+   In its `usbmidi.inf`, under `[Models]`, add your line after the
+   UM-ONE line, in this form:
+
+   ```
+   %UmOneTab%=UM,USB\VID_0582&PID_0168&MI_00
+   %Manual%=UM,USB\VID_xxxx&PID_yyyy&MI_nn
+   ```
+
+3. Put the folder on `DevicePath`: run `regedt32` (not Regedit, which
+   can change the value's type), open
+   `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion` and
+   add `;C:\USBMIDI` to the end of `DevicePath`, keeping what is there.
+4. Plug the device in. Answer Yes to the signature question, and
+   restart if Windows asks.
+
+Do not plug the device in before step 3: Windows 2000's audio driver
+takes it and can stop Windows. If that happens, restart without the
+device and do the steps. The edited INF no longer matches `SHA256.TXT`.
+
+`uac1`, `uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
+
+`uac1` on 98 SE is optional. Without it, Windows' own USB audio driver
+keeps every USB Audio 1.0 device, as before. To use `uac1`, point the
+wizard (or Update Driver, for a device Windows' driver already has) at
+`free/audio/uac1/w98se/`. After that, USB Audio 1.0 devices plugged in
+for the first time get `uac1` too. To go back for one device, use Update
+Driver and pick Windows' own USB audio driver from the list.
 
 `usbprn` on 98 SE and ME: plug the printer in, point the wizard at
 `free/print/usbprn/w98se/` or `wme/`, then add the printer with Add

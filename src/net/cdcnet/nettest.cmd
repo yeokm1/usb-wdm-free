@@ -18,8 +18,11 @@ cl /nologo /W3 /WX /MD /O2 /Fe"%OUT%\NETTEST.EXE" "%SRC%nettest.c" ws2_32.lib us
 if errorlevel 1 goto fail
 cl /nologo /W3 /WX /MD /O2 /Fe"%OUT%\NETLOAD.EXE" "%SRC%netload.c" ws2_32.lib user32.lib /link /SUBSYSTEM:WINDOWS,4.0 >> build.log 2>&1
 if errorlevel 1 goto fail
+cl /nologo /W3 /WX /MD /O2 /Fe"%OUT%\NETPERF.EXE" "%SRC%netperf.c" ws2_32.lib advapi32.lib /link /SUBSYSTEM:CONSOLE,4.0 >> build.log 2>&1
+if errorlevel 1 goto fail
 echo PASS: %OUT%\NETTEST.EXE
 echo PASS: %OUT%\NETLOAD.EXE
+echo PASS: %OUT%\NETPERF.EXE
 popd
 exit /b 0
 :fail

@@ -49,7 +49,59 @@ typedef struct _NDIS_PACKET {
     UINT HeaderSize;
     PVOID Pool;
     ULONG FakeMagic;
+    PVOID PerPacketInfo[3];       /* this test's stand-in for the packet extension */
 } NDIS_PACKET, *PNDIS_PACKET, **PPNDIS_PACKET;
+/* Task offload (2000 DDK network guide chapter 9). */
+typedef enum { TcpIpChecksumPacketInfo, IpSecPacketInfo, TcpLargeSendPacketInfo } NDIS_PER_PACKET_INFO;
+#define NDIS_PER_PACKET_INFO_FROM_PACKET(p, id) ((p)->PerPacketInfo[(id)])
+typedef struct _NDIS_TCP_IP_CHECKSUM_PACKET_INFO {
+    union {
+        struct {
+            ULONG NdisPacketChecksumV4:1; ULONG NdisPacketChecksumV6:1; ULONG NdisPacketTcpChecksum:1;
+            ULONG NdisPacketUdpChecksum:1; ULONG NdisPacketIpChecksum:1;
+        } Transmit;
+        struct {
+            ULONG NdisPacketTcpChecksumFailed:1; ULONG NdisPacketUdpChecksumFailed:1;
+            ULONG NdisPacketIpChecksumFailed:1; ULONG NdisPacketTcpChecksumSucceeded:1;
+            ULONG NdisPacketUdpChecksumSucceeded:1; ULONG NdisPacketIpChecksumSucceeded:1;
+            ULONG NdisPacketLoopback:1;
+        } Receive;
+        ULONG Value;
+    };
+} NDIS_TCP_IP_CHECKSUM_PACKET_INFO, *PNDIS_TCP_IP_CHECKSUM_PACKET_INFO;
+#define NDIS_TASK_OFFLOAD_VERSION 1
+typedef enum { TcpIpChecksumNdisTask, IpSecNdisTask, TcpLargeSendNdisTask, MaxNdisTask } NDIS_TASK;
+typedef enum { UNSPECIFIED_Encapsulation, NULL_Encapsulation, IEEE_802_3_Encapsulation } NDIS_ENCAPSULATION;
+typedef struct _NDIS_ENCAPSULATION_FORMAT {
+    NDIS_ENCAPSULATION Encapsulation;
+    struct { ULONG FixedHeaderSize:1; ULONG Reserved:31; } Flags;
+    ULONG EncapsulationHeaderSize;
+} NDIS_ENCAPSULATION_FORMAT;
+typedef struct _NDIS_TASK_OFFLOAD_HEADER {
+    ULONG Version, Size, Reserved, OffsetFirstTask;
+    NDIS_ENCAPSULATION_FORMAT EncapsulationFormat;
+} NDIS_TASK_OFFLOAD_HEADER, *PNDIS_TASK_OFFLOAD_HEADER;
+typedef struct _NDIS_TASK_OFFLOAD {
+    ULONG Version, Size;
+    NDIS_TASK Task;
+    ULONG OffsetNextTask, TaskBufferLength;
+    UCHAR TaskBuffer[1];
+} NDIS_TASK_OFFLOAD, *PNDIS_TASK_OFFLOAD;
+typedef struct _NDIS_TASK_TCP_IP_CHECKSUM {
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; ULONG IpChecksum:1; } V4Transmit;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; ULONG IpChecksum:1; } V4Receive;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; } V6Transmit;
+    struct { ULONG IpOptionsSupported:1; ULONG TcpOptionsSupported:1; ULONG TcpChecksum:1;
+             ULONG UdpChecksum:1; } V6Receive;
+} NDIS_TASK_TCP_IP_CHECKSUM, *PNDIS_TASK_TCP_IP_CHECKSUM;
+typedef struct _NDIS_TASK_TCP_LARGE_SEND {
+    ULONG Version, MaxOffLoadSize, MinSegmentCount;
+    BOOLEAN TcpOptions, IpOptions;
+} NDIS_TASK_TCP_LARGE_SEND, *PNDIS_TASK_TCP_LARGE_SEND;
+#define OID_TCP_TASK_OFFLOAD 0xFC010201
 
 typedef struct _NDIS_PNP_CAPABILITIES {
     ULONG Flags;
@@ -75,6 +127,7 @@ typedef struct _NDIS_MINIPORT_CHARACTERISTICS {
 #define NDIS_STATUS_RESOURCES         ((NDIS_STATUS)0xC000009AL)
 #define NDIS_STATUS_NOT_SUPPORTED     ((NDIS_STATUS)0xC00000BBL)
 #define NDIS_STATUS_ADAPTER_NOT_FOUND ((NDIS_STATUS)0xC0010006L)
+#define NDIS_STATUS_ADAPTER_REMOVED   ((NDIS_STATUS)0xC0010018L)
 #define NDIS_STATUS_MULTICAST_FULL    ((NDIS_STATUS)0xC0010009L)
 #define NDIS_STATUS_INVALID_LENGTH    ((NDIS_STATUS)0xC0010014L)
 #define NDIS_STATUS_INVALID_DATA      ((NDIS_STATUS)0xC0010015L)
@@ -170,6 +223,15 @@ void NdisWriteConfiguration(PNDIS_STATUS s, NDIS_HANDLE h, PNDIS_STRING name,
 void NdisReadNetworkAddress(PNDIS_STATUS s, PVOID *address, PUINT length, NDIS_HANDLE h);
 void NdisGetCurrentSystemTime(PLARGE_INTEGER t);
 void NdisMSleep(ULONG microseconds);
+typedef VOID (*PNDIS_TIMER_FUNCTION)(PVOID s1, PVOID context, PVOID s2, PVOID s3);
+typedef struct _NDIS_MINIPORT_TIMER {
+    PNDIS_TIMER_FUNCTION Function;
+    PVOID Context;
+    int Set;                          /* set and its routine not yet started */
+} NDIS_MINIPORT_TIMER, *PNDIS_MINIPORT_TIMER;
+void NdisMInitializeTimer(PNDIS_MINIPORT_TIMER t, NDIS_HANDLE h, PNDIS_TIMER_FUNCTION f, PVOID context);
+void NdisMSetTimer(PNDIS_MINIPORT_TIMER t, UINT ms);
+void NdisMCancelTimer(PNDIS_MINIPORT_TIMER t, PBOOLEAN cancelled);
 void NdisWriteErrorLogEntry(NDIS_HANDLE h, ULONG code, ULONG count, ...);
 void NdisMSetAttributesEx(NDIS_HANDLE h, NDIS_HANDLE context, UINT timeout, ULONG attributes,
                           NDIS_INTERFACE_TYPE type);

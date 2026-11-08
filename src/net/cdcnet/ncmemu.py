@@ -23,10 +23,22 @@ Options shape what cdcnet must cope with: --caps (bmNetworkCapabilities),
 --out-remainder/--out-alignment (the host's transmit layout), --in-layout
 front|end|split (where the device puts its NDP16s), --mc-filters
 (wNumberMCFilters), --flap-after/--flap-for (NETWORK_CONNECTION 0 then 1),
---speed high|full. Behind the function sits the same SIMULATED host as
-rtlemu.py (192.168.77.1: ARP, ICMP echo, DHCP). Every NTB the host sends
+--speed high|full. Behind the function sits the SIMULATED host of
+axemu.py (192.168.77.1: ARP, ICMP echo, DHCP; it reassembles a fragmented
+request and fragments a long answer, which rtlemu.py's host, used here
+before, did not: Linux's cdc_ncm and cdcnet on 98 SE saw a 4000-byte echo
+answered with its first 1472 bytes only). Every NTB the host sends
 is checked against NCM 1.0's rules and the advertised parameters; a
-violation is logged as ntb_out_bad with its reason.
+violation is logged as ntb_out_bad with its reason. The datagram
+alignment is taken for the datagram or for its payload after the
+Ethernet header (Linux's cdc_ncm reads it so), and the totals say which.
+An NTB that comes a packet at a time (UHCI) is joined up until its short
+or zero-length packet, or dwNtbOutMaxSize.
+--udp LOCAL:REMOTE replaces the simulated host by a bridge, as in
+rtlemu.py: each datagram the host sends goes as one UDP datagram to
+127.0.0.1:REMOTE, each one arriving on 127.0.0.1:LOCAL is a frame from the
+network (QEMU's "socket,udp=" framing), and NTBs are then not logged one
+by one.
 """
 import argparse
 import collections
@@ -39,8 +51,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'rtl815x'))
-from rtlemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ax88179'))
+from axemu import Network, ether_crc, HOST_MAC  # noqa: E402  (the SIMULATED host)
 
 CAP_VERSION, CAP_EP_MAX, CAP_ID64, CAP_BULK32 = 1, 4, 5, 6
 CAPS = (1 << CAP_VERSION) | (1 << CAP_EP_MAX) | (1 << CAP_ID64) | (1 << CAP_BULK32)
@@ -128,9 +140,13 @@ def build_ntb(frames, sequence, layout='front', divisor=4):
     return bytes(out)
 
 
-def parse_out_ntb(b, f):
+def parse_out_ntb(b, f, placement=None):
     """Check a host NTB16 against NCM 1.0 and the advertised parameters.
-    Returns (datagrams, problems)."""
+    Returns (datagrams, problems). wNdpOutDivisor/wNdpOutPayloadRemainder
+    are read two ways, both accepted: for the datagram's first byte (as
+    cdcnet places it) or for its payload after the 14-byte Ethernet header
+    (Linux's cdc_ncm, "according to NCM specification", 6.12
+    cdc_ncm_check_tx_max); placement, a Counter if given, counts which."""
     problems = []
     if len(b) < 12 or struct.unpack_from('<I', b)[0] != NTH16:
         return [], ['NTH16 signature']
@@ -160,8 +176,15 @@ def parse_out_ntb(b, f):
             if at + n > len(b) or not 14 <= n <= 1514:
                 problems.append('datagram %d+%d out of bounds' % (at, n))
                 continue
-            if at % f.out_divisor != f.out_remainder:
+            if at % f.out_divisor == f.out_remainder:
+                way = 'datagram'
+            elif (at + 14) % f.out_divisor == f.out_remainder:
+                way = 'payload'
+            else:
+                way = None
                 problems.append('datagram at %d not %d mod %d' % (at, f.out_remainder, f.out_divisor))
+            if way and placement is not None:
+                placement['tx_aligned_' + way] += 1
             if ndp <= at < ndp + nlen or at <= ndp < at + n:
                 problems.append('datagram overlaps NDP16')
             datagrams.append(bytes(b[at:at + n]))
@@ -175,13 +198,15 @@ def parse_out_ntb(b, f):
 
 
 class Model:
+    bridge = None                                  # (socket, peer) of --udp, or None
+
     def __init__(self, connection, trace, function=None, now=time.monotonic, in_layout='front',
                  flap_after=None, flap_for=3.0):
         self.connection, self.trace, self.now = connection, trace, now
         self.f = function or Function()
         self.speed = self.f.speed
         self.in_layout, self.flap_after, self.flap_for = in_layout, flap_after, flap_for
-        self.net = Network(self.log)
+        self.net = Network(self.log, now=self.now)
         self.peer_caps = 0
         self.config = self.alt = 0
         self.interrupt = False
@@ -191,7 +216,21 @@ class Model:
         self.totals = collections.Counter()
         self.reset_function()
 
+    def receive_out(self, data):
+        """One bulk-OUT packet or transfer. An NTB ends with a short packet,
+        a zero-length one, or at dwNtbOutMaxSize, so one that comes a packet
+        at a time (UHCI at Full Speed) is joined up here first."""
+        if not data:
+            self.totals['tx_zlp'] += 1
+        self.tx_buf += data
+        if data and len(data) % self.f.bulk == 0 and len(self.tx_buf) < self.f.out_max:
+            return
+        whole, self.tx_buf = bytes(self.tx_buf), bytearray()
+        if whole:
+            self.transmit(whole)
+
     def reset_function(self):
+        self.tx_buf = bytearray()
         self.ntb_format = 0
         self.in_size = self.f.in_max
         self.max_datagram = 1514
@@ -311,17 +350,23 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 0, len(ntb)) + ntb)
             self.totals['rx_ntbs'] += 1
             self.totals['rx_datagrams'] += len(frames)
-            self.log('ntb_in', length=len(ntb), datagrams=len(frames), layout=self.in_layout)
+            if not self.bridge:
+                self.log('ntb_in', length=len(ntb), datagrams=len(frames), layout=self.in_layout)
 
     def transmit(self, data):
-        datagrams, problems = parse_out_ntb(data, self.f)
+        datagrams, problems = parse_out_ntb(data, self.f, self.totals)
         self.totals['tx_ntbs'] += 1
         if problems:
             self.totals['tx_bad'] += 1
             self.log('ntb_out_bad', length=len(data), problems=problems[:8])
-        self.log('ntb_out', length=len(data), datagrams=len(datagrams))
+        if not self.bridge:
+            self.log('ntb_out', length=len(data), datagrams=len(datagrams))
         for frame in datagrams:
             self.totals['tx_datagrams'] += 1
+            if self.bridge:
+                if self.connected:
+                    self.bridge[0].sendto(frame, self.bridge[1])
+                continue
             if self.connected:
                 for reply in self.net.handle(frame):
                     self.deliver(reply)
@@ -448,6 +493,7 @@ class Model:
             if kind == 9 and ok and interface == 1:
                 self.cancel_all()
                 self.rx.clear()
+                self.tx_buf = bytearray()                   # an NTB cut off by the restart is dropped
                 self.alt = alternate
                 self.info()
                 self.log('alternate', interface=1, alternate=alternate)
@@ -491,10 +537,7 @@ class Model:
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
-                else:
-                    self.totals['tx_zlp'] += 1
+                self.receive_out(data)
                 self.drain()
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:
@@ -522,8 +565,17 @@ class Model:
             if self.now() >= next_report:
                 next_report = self.now() + 5
                 self.log('totals', **self.totals)
-            readable, _, _ = select.select([self.connection], [], [], 0.02)
-            if not readable:
+            watched = [self.connection] + ([self.bridge[0]] if self.bridge else [])
+            readable, _, _ = select.select(watched, [], [], 0.02)
+            if self.bridge and self.bridge[0] in readable:
+                for _ in range(64):
+                    try:
+                        frame = self.bridge[0].recv(2048)
+                    except (BlockingIOError, ConnectionResetError):
+                        break
+                    self.totals['bridge_in'] += 1
+                    self.deliver(frame)
+            if self.connection not in readable:
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -570,6 +622,7 @@ def main():
     ap.add_argument('--flap-for', type=float, default=3.0)
     ap.add_argument('--vid', type=lambda s: int(s, 16), default=0x0525)
     ap.add_argument('--pid', type=lambda s: int(s, 16), default=0xa4a2)
+    ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     function = Function(args.speed, args.caps, args.ntb32, out_divisor=args.out_divisor,
                         out_remainder=args.out_remainder, out_alignment=args.out_alignment,
@@ -584,6 +637,13 @@ def main():
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, function, in_layout=args.in_layout,
                           flap_after=args.flap_after, flap_for=args.flap_for)
+            if args.udp:
+                local, remote = (int(x) for x in args.udp.split(':'))
+                udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+                udp.bind(('127.0.0.1', local))
+                udp.setblocking(False)
+                model.bridge = (udp, ('127.0.0.1', remote))
             try:
                 model.run()
             except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):

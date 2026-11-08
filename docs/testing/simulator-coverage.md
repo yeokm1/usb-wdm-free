@@ -183,6 +183,17 @@ is a second, independent FTDI model. Physical: none (xHCI98's bench task
 45-E.14). Gaps: standby and resume with a bridge port open; two bridges at
 once.
 
+Checked against the makers' own drivers (2026-11-06): FTDI CDM 2.12.36.20
+on Windows 10 and FTDI's 98 SE drivers, Silicon Labs' CP210x 11.6.0.420 on
+Windows 10 and Prolific's 4.3.0.0 installer on Windows 10, with the parts
+FT232AM, FT232BM, FT2232C and CP2101 to CP2104 added. What they asked and
+the simulator did not answer was added (the FTDI EEPROM, latency timer and
+characters; the CP210x properties, status, characters, interface strings
+and settings before `IFC_ENABLE`). Prolific's driver starts no variant: it
+reads identification registers no public source describes
+([serial reference](2026-11-06-serial-reference.md)). Host tests:
+`chiptest.py` (8).
+
 ### `xpad98` (Xbox pads)
 
 Claimed: Xbox 360 wired protocol (start, LED, rumble, XUSB input), Xbox

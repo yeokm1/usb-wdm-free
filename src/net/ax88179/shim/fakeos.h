@@ -13,7 +13,9 @@
  * - no spin lock acquired twice by one thread, none released by another;
  * - a completion routine returns STATUS_MORE_PROCESSING_REQUIRED (the
  *   driver owns and frees its IRPs); an IRP is freed exactly once;
- * - a packet, buffer or pool block is freed exactly once.
+ * - a packet, buffer or pool block is freed exactly once;
+ * - with Wdm110 0 (98 SE, ME), no receive indication or send completion
+ *   from inside a USB completion routine: those come from the NDIS timer.
  */
 #ifndef FAKEOS_H
 #define FAKEOS_H
@@ -41,6 +43,14 @@ typedef struct FAKE {
     /* NdisWriteErrorLogEntry: entries, and the last one's code and first two values */
     int ErrorLogs;
     ULONG ErrorCode, ErrorValue[2];
+    /* NDIS timer: the one initialised last (NULL once the memory that
+     * holds it is freed); NdisMSetTimer, routine and cancel counts; the
+     * Set state when it was last cancelled */
+    PNDIS_MINIPORT_TIMER Timer;
+    PNDIS_MINIPORT_TIMER Timers[4];   /* every timer initialised (NULL once its memory is freed) */
+    long TimerSets, TimerRuns, TimerCancels;
+    int TimerSetAtCancel;
+    int TimerCancelFails;             /* NdisMCancelTimer fails on a set timer: its DPC is due */
 } FAKE;
 
 extern FAKE Fake;
@@ -60,5 +70,8 @@ void FakeComplete(PIRP irp, NTSTATUS status, USBD_STATUS usb);
 void FakeViolation(const char *what);
 /* Locks the calling thread holds. */
 long FakeHeld(void);
+/* Run the NDIS timer's routine on the calling thread if it is set; 1 if
+ * it ran. */
+int FakeRunTimer(void);
 
 #endif

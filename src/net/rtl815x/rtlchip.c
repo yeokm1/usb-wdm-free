@@ -1925,13 +1925,31 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
 
     for (i = 0; i < 6; i++) params->Mac[i] = s->Mac[i];
     params->RxSize = RxBuffer(s);
-    params->RxCount = 4;
-    params->TxSize = TX_BUFFER;
+    /* Eight bulk-IN transfers outstanding (owner, 2026-11-06; four before):
+     * the chip keeps filling while completions are serviced. Linux keeps
+     * ten; Realtek's Windows 10 driver was seen with five. */
+    params->RxCount = 8;
     params->TxSlots = 4;
-    params->TxBatch = 32;
+    params->TxBatch = 64;         /* transfers are filled by bytes (Linux r8152_tx_agg_fill) */
     params->TxHeader = Fmt(s)->TxDesc;
     params->TxAlign = Fmt(s)->TxAlign;
     params->Version = s->Id;
+    if (s->Desc == DESC_V2) {
+        /* RTL8157/8159: transmit checksums (ethernet.md section 4.9),
+         * checked on a real RTL8157; 32 KiB transfers as Realtek's driver
+         * sends. Not offered: the large send (RtlTxOffload's NC_TX_LSO4;
+         * 2000 and XP never used it, so it never ran on the chip) and the
+         * receive checksums (RtlRxChecksum; 2000 received slower with
+         * them). The first format keeps 16 KiB (Linux agg_buf_sz) and no
+         * offload: its bits are Linux's, unchecked on hardware here. */
+        params->TxSize = TX2_BUFFER;
+        params->Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4;
+        params->LsoMax = 0;
+    } else {
+        params->TxSize = TX_BUFFER;
+        params->Offload = 0;
+        params->LsoMax = 0;
+    }
     return NC_OK;
 }
 
@@ -2038,6 +2056,19 @@ static long RtlSetFilter(void *chip, NET_IO *io, nc_u32 filter, const nc_u8 *mul
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
+/* The PHY powered down (MII control bit 11) after the sleep steps, so a
+ * halted, disabled or suspended adapter drops its link instead of keeping
+ * it up at full speed; this core sets no wake-up source. Owner,
+ * 2026-11-06: as Realtek's Windows 10 driver does on disable (a capture
+ * of it on an RTL8157); Linux leaves the PHY up. Every setup table clears
+ * the bit again (PHY_TRIM MII_CONTROL POWERDOWN), and Resume runs the
+ * whole setup. Best effort: a failed access before it leaves it undone. */
+static void PhyDown(RTL_STATE *s, NET_IO *io)
+{
+    nc_u16 v = PhyGet(s, io, MII(MII_CONTROL));
+    if (io->Status >= 0) PhyPut(s, io, MII(MII_CONTROL), (nc_u16)(v | MIICTL_POWERDOWN));
+}
+
 static long RtlStop(void *chip, NET_IO *io)
 {
     RTL_STATE *s = chip;
@@ -2045,6 +2076,7 @@ static long RtlStop(void *chip, NET_IO *io)
     s->Carrier = 0;
     Run(s, io, SeqFor(s, R_SLEEP));
     Run(s, io, SeqFor(s, R_DETACH));
+    PhyDown(s, io);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
@@ -2054,6 +2086,7 @@ static long RtlSuspend(void *chip, NET_IO *io)
     if (!s->Id) return NC_OK;
     s->Carrier = 0;
     Run(s, io, SeqFor(s, R_SLEEP));
+    PhyDown(s, io);
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
@@ -2136,6 +2169,54 @@ static void RtlTxHeader(void *chip, nc_u8 *hdr, nc_u32 length, nc_u32 maxPacket,
     }
 }
 
+/* Offloads on a header TxHeader wrote (section 4.9; bits in rtlchip.h):
+ * a large send sets GTSENDV4 and the TCP header offset in the first
+ * dword and the MSS in the second; a checksum sets IPV4_CS, and TCP_CS or
+ * UDP_CS with the header offset, in the second. The same in both
+ * formats. */
+static void RtlTxOffload(void *chip, nc_u8 *hdr, const NET_TX_INFO *info)
+{
+    const RTL_STATE *s = chip;
+    nc_u32 d0 = Le32(hdr), d1 = Le32(hdr + 4);
+    nc_u32 tcpho = (s && s->Desc == DESC_V2) ? TX2_TCPHO_MAX : TX_TCPHO_MAX;
+    if (info->Flags & NC_TX_LSO4) {
+        d0 |= TX_GTSENDV4 | ((info->Transport & TX_GTTCPHO_MAX) << TX_GTTCPHO_SHIFT);
+        d1 |= (info->Mss > TX_MSS_MAX ? TX_MSS_MAX : info->Mss) << TX_MSS_SHIFT;
+    } else {
+        if (info->Flags & (NC_TX_IP4 | NC_TX_TCP4 | NC_TX_UDP4)) d1 |= TX_IPV4_CS;
+        if (info->Flags & (NC_TX_TCP4 | NC_TX_UDP4)) {
+            d1 |= (info->Flags & NC_TX_TCP4) ? TX_TCP_CS : TX_UDP_CS;
+            d1 |= (info->Transport & tcpho) << TX_TCPHO_SHIFT;
+        }
+    }
+    SetLe32(hdr, d0);
+    SetLe32(hdr + 4, d1);
+}
+
+/* The receive header before a frame RxParse emitted: which IPv4, TCP and
+ * UDP checksums the chip found good (Linux r8152_rx_csum/r8157_rx_csum).
+ * Nothing when the IP checksum failed. */
+static nc_u32 RtlRxChecksum(void *chip, const nc_u8 *frame)
+{
+    const RTL_STATE *s = chip;
+    nc_u32 r = 0, d1, d2;
+    if (s && s->Desc == DESC_V2) {
+        d2 = Le32(frame - RX2_DESC_LEN + 8);
+        if (!(d2 & RX2_IPV4_CS) || (d2 & RX2_IPF)) return 0;
+        r = NC_RX_IP_OK;
+        if ((d2 & (RX2_TCP_CS | RX2_TCPF)) == RX2_TCP_CS) r |= NC_RX_TCP_OK;
+        else if ((d2 & (RX2_UDP_CS | RX2_UDPF)) == RX2_UDP_CS) r |= NC_RX_UDP_OK;
+        return r;
+    }
+    d1 = Le32(frame - RX_DESC_LEN + 4);
+    d2 = Le32(frame - RX_DESC_LEN + 8);
+    if (!(d1 & RX_IPV4_CS) || (d2 & RX_IPF)) return 0;
+    r = NC_RX_IP_OK;
+    if ((d1 & RX_TCP_CS) && !(d2 & RX_TCPF)) r |= NC_RX_TCP_OK;
+    else if ((d1 & RX_UDP_CS) && !(d2 & RX_UDPF)) r |= NC_RX_UDP_OK;
+    return r;
+}
+
 /* No padding and no zero-length packet after a transfer. */
 static int RtlTxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 maxPacket)
 {
@@ -2148,5 +2229,5 @@ const NET_CHIP NetPackageChip = {
     "usb-wdm-free RTL815X (Realtek RTL8152/8153/8156/8157/8159 USB Ethernet)",
     0x0001,
     RtlProbe, RtlStart, RtlSetMac, RtlLink, RtlPoll, RtlSetFilter, RtlStop, RtlSuspend, RtlResume,
-    RtlStatus, RtlRxParse, RtlTxHeader, RtlTxEnd
+    RtlStatus, RtlRxParse, RtlTxHeader, RtlTxEnd, 0, RtlTxOffload, RtlRxChecksum
 };

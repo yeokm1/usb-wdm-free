@@ -306,6 +306,8 @@ changes for HID devices are what SweetLow's `hidusbf` already does (its
 licence is unverified; it is not proposed for this repository). HID
 game controllers that need a start-up sequence belong to
 [gamepad.md](gamepad.md).
+Keyboard volume and media keys (the Consumer page) on 98 SE and ME
+are read and designed in [mediakeys.md](mediakeys.md).
 
 ### 14. USB Wi-Fi adapters
 

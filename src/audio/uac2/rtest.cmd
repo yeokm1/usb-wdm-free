@@ -16,9 +16,9 @@ set _CL_=
 set LINK=
 set _LINK_=
 pushd "%OUT%"
-cl /nologo /W4 /WX /MD /Od /Fe"%OUT%\ratetest.exe" "%~dp0uacrate.c" "%~dp0ratetest.c" > build.log 2>&1
+cl /nologo /W4 /WX /MD /Od /I"%~dp0..\common" /Fe"%OUT%\ratetest.exe" "%~dp0..\common\uacrate.c" "%~dp0ratetest.c" > build.log 2>&1
 if errorlevel 1 goto fail
-ratetest.exe > test.log 2>&1
+.\ratetest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
 echo PASS uac2 rate > PASS.TXT

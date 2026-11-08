@@ -434,6 +434,12 @@ class ProfileTest(unittest.TestCase):
         self.assertIsNone(uacemu.Profile('adaptive').stream_alt(1, 1)['feedback'])
         self.assertEqual(uacemu.Profile('hs24').stream_alt(1, 1)['feedback']['address'], 0x89)
         self.assertEqual(uacemu.Profile('fs').stream_alt(1, 1)['feedback']['max'], 3)
+        self.assertEqual(uacemu.Profile('fs', fs_feedback=4).stream_alt(1, 1)['feedback']['max'], 4)
+        # Full Speed feedback values: 16.16 in a 4-byte endpoint, 10.14 in 3.
+        for fb, value in ((4, struct.pack('<I', 48 << 16)), (3, struct.pack('<I', 48 << 14)[:3])):
+            m = uacemu.Model(Wire(), io.StringIO(), lambda: self.time,
+                             profile=uacemu.Profile('fs', fs_feedback=fb))
+            self.assertEqual(m.feedback_value(m.p.stream_alt(1, 1)), value)
 
     def test_alc4080_endpoints(self):
         # The assumed ALC4080 layout (uac2.md section 15.4): the planner
@@ -634,6 +640,72 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(self.control(m, 2, 0xa1, 0x200, 0x0200, 8),
                          (0, struct.pack('<Hhhh', 1, -0x6000, 0, 0x100)))
         self.assertEqual(self.control(m, 1, 0x21, 0x200, 0x0200, 2, struct.pack('<h', 0x100))[0], 4)
+
+    def test_mixer_and_selector_units(self):
+        # The X4 layout's Mixer Unit 7 and Selector Unit 26 (AC interface 3):
+        # Windows' own UAC 2.0 driver reads both with GET CUR and stops the
+        # function (Code 10) when either stalls.
+        m, _, _ = self.model('x4full')
+        self.configure(m)
+        e = m.p.entities[7]
+        self.assertEqual(e['unit'], 'mixer')
+        n = sum(m.cluster(i) for i in e['inputs']) * e['channels']
+        self.assertTrue(0 < n < 256)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x0703, 2), (0, b'\0\0'))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100 | (n - 1), 0x0703, 2), (0, b'\0\0'))
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100 | n, 0x0703, 2)[0], 4)
+        self.assertEqual(self.control(m, 2, 0xa1, 0x100, 0x0703, 8), (0, struct.pack('<Hhhh', 1, 0, 0, 0)))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x0703, 2, b'\0\0')[0], 4)   # none programmable
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x1a03, 1), (0, b'\1'))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\2')[0], 0)
+        self.assertEqual(self.control(m, 1, 0xa1, 0x100, 0x1a03, 1), (0, b'\2'))
+        self.assertEqual(self.control(m, 1, 0x21, 0x100, 0x1a03, 1, b'\5')[0], 4)   # 4 inputs
+        self.assertEqual(self.control(m, 1, 0xa1, 0x200, 0x1a03, 1)[0], 4)
+
+    def test_hid_interfaces_answer(self):
+        # A captured layout's HID interface answers SET_IDLE and its report
+        # descriptor, at the length its HID descriptor declares: Windows'
+        # HID driver resets the whole device on a stall, which fails the
+        # audio function Windows 10's own UAC 2.0 driver is starting.
+        expect = {'x4': {0: 83}, 'x4full': {0: 83}, 'x1': {0: 83}, 'cx31993m': {2: 74}, 'alc4080cap': {7: 34}}
+        for name in uacemu.PROFILE_NAMES:
+            with self.subTest(profile=name):
+                m, _, _ = self.model(name)
+                self.assertEqual(m.p.hid, expect.get(name, {}))
+                for interface, length in m.p.hid.items():
+                    self.assertEqual(self.control(m, 6, 0x81, 0x2200, interface, length + 64)[0], 4)  # unconfigured
+                    m.handle(6, 1, b'\x01')
+                    self.assertEqual(self.control(m, 0x0a, 0x21, 0, interface, 0), (0, b''))
+                    status, data = self.control(m, 6, 0x81, 0x2200, interface, length + 64)
+                    self.assertEqual((status, len(data)), (0, length))
+                    self.assertEqual(data[:3], bytes.fromhex('0600ff'))
+                    self.assertEqual(data[-5:], bytes.fromhex('09018102c0'))
+                    # every item whole: short items only, sizes 0/1/2/4
+                    off = 0
+                    while off < len(data):
+                        off += 1 + (0, 1, 2, 4)[data[off] & 3]
+                    self.assertEqual(off, len(data))
+                    self.assertEqual(self.control(m, 6, 0x81, 0x2200, interface + 1, 64)[0], 4)
+        for length in [21] + list(range(23, 200)):
+            self.assertEqual(len(uacemu.hid_report(length)), length)
+        self.assertIsNone(uacemu.hid_report(20))
+        self.assertIsNone(uacemu.hid_report(22))
+
+    def test_referenced_strings_answer(self):
+        # Every iFunction (IAD) and iInterface a profile's descriptors name
+        # has a string: Windows 10's own UAC 2.0 driver reads them and fails
+        # the function (Code 10) on a stall (alc4080cap's index 5).
+        for name in uacemu.PROFILE_NAMES:
+            p = uacemu.Profile(name)
+            d, off, named = p.config, 0, set()
+            while off < len(d) and d[off] >= 2:
+                if d[off + 1] == 4:
+                    named.add(d[off + 8])
+                elif d[off + 1] == 0x0b:
+                    named.add(d[off + 7])
+                off += d[off]
+            for index in named - {0}:
+                self.assertIn(index, p.strings, (name, index))
 
     def test_feature_unit_modes_and_access(self):
         # The descriptor's bmaControls decide what answers: SET only where

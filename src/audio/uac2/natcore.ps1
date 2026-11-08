@@ -10,6 +10,6 @@ $env:TMP=$Output
 $tool=Get-Item -LiteralPath $Compiler
 $env:PATH=$tool.DirectoryName+';'+$env:PATH
 & $tool.FullName -shared -O2 -Wall -Wextra -Werror '-Wl,--no-insert-timestamp' ('-Wl,--out-implib,'+(Join-Path $Output 'UACRATE.A')) `
-    (Join-Path $PSScriptRoot 'uacrate.c') -o (Join-Path $Output 'UACRATE.DLL')
+    (Join-Path $PSScriptRoot '../common/uacrate.c') -o (Join-Path $Output 'UACRATE.DLL')
 if($LASTEXITCODE){throw 'Rate DLL build failed'}
 Get-FileHash -LiteralPath (Join-Path $Output 'UACRATE.DLL')

@@ -43,6 +43,10 @@ typedef struct CHIP_MODEL {
     int LinkApplied;
     nc_u32 Fcs;                 /* RxParse reports this many frames per transfer as FCS-stripped */
     nc_u32 Mbps;                /* link speed Link reports; 0: 100 */
+    nc_u32 Offload, LsoMax;     /* what Start reports */
+    nc_u32 RxSum;               /* RxChecksum's answer */
+    int Offloads;               /* TxOffload calls */
+    NET_TX_INFO LastInfo;       /* the last TxOffload request */
 } CHIP_MODEL;
 static CHIP_MODEL chip;
 
@@ -68,6 +72,7 @@ static long CStart(void *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *p)
     p->RxSize = 2048; p->RxCount = 4;
     p->TxSize = 4096; p->TxSlots = (nc_u32)chip.TxSlots; p->TxBatch = 4;
     p->TxHeader = 4; p->TxAlign = 4; p->Version = 0x7e57;
+    p->Offload = chip.Offload; p->LsoMax = chip.LsoMax;
     chip.LinkApplied = 0;
     return io->Status;
 }
@@ -154,10 +159,22 @@ static int CTxEnd(void *s, nc_u8 *b, nc_u32 *total, nc_u32 cap, nc_u32 maxPacket
     return chip.Zlp && *total % maxPacket == 0;
 }
 
+/* Offloads: the request is recorded and marked in the header (bit 7 of
+ * its fourth byte). */
+static void CTxOffload(void *s, nc_u8 *h, const NET_TX_INFO *info)
+{
+    (void)s;
+    chip.Offloads++;
+    chip.LastInfo = *info;
+    h[3] |= 0x80;
+}
+
+static nc_u32 CRxChecksum(void *s, const nc_u8 *frame) { (void)s; (void)frame; return chip.RxSum; }
+
 const NET_CHIP NetPackageChip = {
     "coretest", "coretest double", 1,
     CProbe, CStart, CSetMac, CLink, CPoll, CSetFilter, CStop, CSuspend, CResume,
-    CStatus, CRxParse, CTxHeader, CTxEnd
+    CStatus, CRxParse, CTxHeader, CTxEnd, 0, CTxOffload, CRxChecksum
 };
 
 /* ---------------- the fake USB device ---------------- */
@@ -407,11 +424,13 @@ static void Interrupt(int up)
 
 typedef struct NDIS_SIDE {
     int Hold;
+    int Inject;                       /* frames to complete from inside the next receive indications */
     PNDIS_PACKET Held[128];
     int HeldCount;
     int Received, Resources;
     UCHAR Last[1514];
     UINT LastLength;
+    ULONG LastChecksum;           /* the last packet's checksum per-packet information */
     int Connects, Disconnects, SetCompletes, ResetCompletes;
 } NDIS_SIDE;
 static NDIS_SIDE nd;
@@ -425,10 +444,17 @@ static void Receive(PNDIS_PACKET p)
     NdisQueryPacket(p, NULL, NULL, &b, &total);
     NdisQueryBuffer(b, &va, &len);
     CHECK(len == total && p->HeaderSize == 14);
+    if (nd.Inject > 0) {
+        /* A bulk-IN completion while the timer's routine indicates. */
+        UCHAR f[64];
+        nd.Inject--;
+        if (Queued(P_IN)) CompleteIn(P_IN, f, OneFrame(f, sizeof(f)));
+    }
     FwLock(ndLock);
     nd.Received++;
     memcpy(nd.Last, va, len);
     nd.LastLength = len;
+    nd.LastChecksum = (ULONG)(ULONG_PTR)NDIS_PER_PACKET_INFO_FROM_PACKET(p, TcpIpChecksumPacketInfo);
     if (p->Status == NDIS_STATUS_RESOURCES) {
         nd.Resources++;               /* copied; the miniport keeps it */
         FwUnlock(ndLock);
@@ -460,7 +486,7 @@ static void ReturnHeld(void)
 typedef struct TPACKET {
     NDIS_PACKET P;
     NDIS_BUFFER B[3];
-    UCHAR Data[1600];
+    UCHAR Data[4200];
     UINT Length;
     int Completions;
     NDIS_STATUS Status;
@@ -811,7 +837,8 @@ static void SendPath(void)
     for (i = 0; i < 10; i++) CHECK(tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS);
     CHECK(QueryUlong(OID_GEN_XMIT_OK) == 10);
 
-    /* A burst beyond the queue: everything completes exactly once. */
+    /* A burst of 80, more than the 64 the queue once held: every packet
+     * completes exactly once, and none fails for want of room. */
     for (i = 0; i < 80; i++) list[i] = MakePacket(100 + i, 200, peer);
     Fake.Chars.SendPacketsHandler(ctx, list, 80);
     dev.SentCount = 0;
@@ -829,11 +856,11 @@ static void SendPath(void)
             CHECK(tp[100 + i].Completions == 1);
             if (tp[100 + i].Status == NDIS_STATUS_SUCCESS) ok++; else failed++;
         }
-        CHECK(failed > 0 && ok >= 64);                /* the queue holds 64 */
+        CHECK(failed == 0 && ok == 80);               /* no limit on the queue */
     }
 
     /* A failed transfer fails its packets once, and traffic recovers. */
-    for (i = 0; i < 4; i++) list[i] = MakePacket(200 + i, 300, peer);
+    for (i = 0; i < 4; i++) list[i] = MakePacket(200 + i, 1514, peer);
     Fake.Chars.SendPacketsHandler(ctx, list, 4);
     UNTIL(Queued(P_OUT) == 2, 2000);
     CompleteOut(STATUS_UNSUCCESSFUL);
@@ -859,6 +886,514 @@ static void SendPath(void)
     Fake.Chars.SendPacketsHandler(ctx, list, 1);
     CHECK(tp[230].Completions == 1 && tp[230].Status == NDIS_STATUS_FAILURE);
     Halt();
+    Balanced();
+}
+
+/* 98 SE and ME: what the USB completions bring is indicated and completed
+ * only from the NDIS timer, in order; nothing from a completion routine
+ * (the fake counts that as a violation); Halt cancels the timer, completes
+ * the queued sends and takes back the receives it never indicated. */
+
+/* ---------------- transfers filled by bytes, and task offload ---------------- */
+
+/* Transfers are filled by bytes up to the chip's frame cap (TxBatch 4 in
+ * 4096 bytes behind 4-byte headers): four short frames share one
+ * transfer, three full ones take two. */
+static void FillByBytes(void)
+{
+    PNDIS_PACKET list[8];
+    static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+    int i;
+    Fresh();
+    chip.TxSlots = 1;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    for (i = 0; i < 4; i++) list[i] = MakePacket(i, 100, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 4);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 4 * 104);
+    for (i = 0; i < 4; i++) UNTIL(tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS, 2000);
+    for (i = 0; i < 6; i++) list[i] = MakePacket(10 + i, 60 + i, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 6);      /* six: four, then two (the frame cap) */
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 200 + 67);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 68 + 69);
+    for (i = 0; i < 3; i++) list[i] = MakePacket(20 + i, 1514, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 3);      /* two fit 4096 bytes, the third alone */
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 1518 + 2 + 1518);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 1518);
+    for (i = 0; i < 3; i++) UNTIL(tp[20 + i].Completions == 1 && tp[20 + i].Status == NDIS_STATUS_SUCCESS, 2000);
+    CHECK(chip.Offloads == 0);
+    Halt();
+    Balanced();
+}
+
+/* A TCP/IPv4 frame: Ethernet II, a 20-byte IP header, a 20-byte TCP
+ * header at 34; the per-packet large-send and checksum values given. */
+static PNDIS_PACKET TcpPacket(int i, UINT length, ULONG mss, ULONG checksum, UCHAR protocol)
+{
+    static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+    PNDIS_PACKET p = MakePacket(i, length, peer);
+    TPACKET *t = &tp[i];
+    t->Data[12] = 0x08; t->Data[13] = 0x00; t->Data[14] = 0x45; t->Data[23] = protocol;
+    t->Data[34 + 12] = 0x50;
+    NDIS_PER_PACKET_INFO_FROM_PACKET(p, TcpLargeSendPacketInfo) = (PVOID)(ULONG_PTR)mss;
+    NDIS_PER_PACKET_INFO_FROM_PACKET(p, TcpIpChecksumPacketInfo) = (PVOID)(ULONG_PTR)checksum;
+    return p;
+}
+
+#define CS_TCP 0x05UL       /* Transmit: V4 and TCP */
+#define CS_UDP 0x09UL       /* V4 and UDP */
+#define CS_IP  0x11UL       /* V4 and IP */
+
+static NDIS_STATUS SetTaskList(int checksum, int lso, ULONG encapsulation)
+{
+    union { UCHAR b[256]; ULONG align; } u;
+    NDIS_TASK_OFFLOAD_HEADER *h = (NDIS_TASK_OFFLOAD_HEADER *)u.b;
+    ULONG at = sizeof(*h), r = 0, n = 0;
+    NDIS_TASK_OFFLOAD *last = NULL;
+    memset(&u, 0, sizeof(u));
+    h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
+    h->EncapsulationFormat.Encapsulation = (NDIS_ENCAPSULATION)encapsulation;
+    h->EncapsulationFormat.EncapsulationHeaderSize = 14;
+    if (checksum) {
+        NDIS_TASK_OFFLOAD *t = (NDIS_TASK_OFFLOAD *)(u.b + at);
+        NDIS_TASK_TCP_IP_CHECKSUM *c = (NDIS_TASK_TCP_IP_CHECKSUM *)t->TaskBuffer;
+        h->OffsetFirstTask = at;
+        t->Version = NDIS_TASK_OFFLOAD_VERSION; t->Size = sizeof(*t); t->Task = TcpIpChecksumNdisTask;
+        t->TaskBufferLength = sizeof(*c);
+        c->V4Transmit.TcpChecksum = 1; c->V4Transmit.IpChecksum = 1;
+        c->V4Receive.TcpChecksum = 1; c->V4Receive.UdpChecksum = 1; c->V4Receive.IpChecksum = 1;
+        last = t;
+        at += (FIELD_OFFSET(NDIS_TASK_OFFLOAD, TaskBuffer) + sizeof(*c) + 3) & ~3UL;
+    }
+    if (lso) {
+        NDIS_TASK_OFFLOAD *t = (NDIS_TASK_OFFLOAD *)(u.b + at);
+        NDIS_TASK_TCP_LARGE_SEND *l = (NDIS_TASK_TCP_LARGE_SEND *)t->TaskBuffer;
+        if (last) last->OffsetNextTask = at - (ULONG)((UCHAR *)last - u.b); else h->OffsetFirstTask = at;
+        t->Version = NDIS_TASK_OFFLOAD_VERSION; t->Size = sizeof(*t); t->Task = TcpLargeSendNdisTask;
+        t->TaskBufferLength = sizeof(*l);
+        l->MaxOffLoadSize = 4092 - 134; l->MinSegmentCount = 2;
+        at += (FIELD_OFFSET(NDIS_TASK_OFFLOAD, TaskBuffer) + sizeof(*l) + 3) & ~3UL;
+    }
+    return Fake.Chars.SetInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, at, &r, &n);
+}
+
+static void TaskOffload(void)
+{
+    union { UCHAR b[256]; ULONG align; } u;
+    NDIS_TASK_OFFLOAD_HEADER *h = (NDIS_TASK_OFFLOAD_HEADER *)u.b;
+    NDIS_TASK_OFFLOAD *t;
+    NDIS_TASK_TCP_IP_CHECKSUM *c;
+    NDIS_TASK_TCP_LARGE_SEND *l;
+    ULONG w = 0, n = 0;
+    UCHAR b[2048];
+    PNDIS_PACKET p;
+    int links;
+
+    Fresh();
+    chip.TxSlots = 1;
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_LSO4 | NC_OFFLOAD_RX4;
+    chip.LsoMax = 8000;                              /* capped to one buffer: 4096 - 4 */
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+
+    /* Discovery: listed last in the supported list here, and only here. */
+    {
+        NDIS_OID list[64];
+        ULONG k, found = 0;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS && w % sizeof(NDIS_OID) == 0);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) if (list[k] == OID_TCP_TASK_OFFLOAD) found++;
+        CHECK(found == 1);
+    }
+    /* The query: the header back with a checksum task and a large-send task. */
+    memset(&u, 0, sizeof(u));
+    h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
+    h->EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+    h->EncapsulationFormat.EncapsulationHeaderSize = 14;
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, 8, &w, &n) ==
+          NDIS_STATUS_INVALID_LENGTH && n == sizeof(*h));
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(*h) + 8, &w, &n) ==
+          NDIS_STATUS_INVALID_LENGTH && n > sizeof(*h) + 8);
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_SUCCESS && w > sizeof(*h));
+    CHECK(h->OffsetFirstTask == sizeof(*h) && h->Version == NDIS_TASK_OFFLOAD_VERSION);
+    t = (NDIS_TASK_OFFLOAD *)(u.b + h->OffsetFirstTask);
+    c = (NDIS_TASK_TCP_IP_CHECKSUM *)t->TaskBuffer;
+    CHECK(t->Task == TcpIpChecksumNdisTask && t->TaskBufferLength == sizeof(*c) && t->OffsetNextTask);
+    CHECK(c->V4Transmit.TcpChecksum && c->V4Transmit.IpChecksum && !c->V4Transmit.UdpChecksum);
+    CHECK(c->V4Receive.TcpChecksum && c->V4Receive.UdpChecksum && c->V4Receive.IpChecksum);
+    CHECK(!c->V6Transmit.TcpChecksum && !c->V6Receive.TcpChecksum);
+    t = (NDIS_TASK_OFFLOAD *)((UCHAR *)t + t->OffsetNextTask);
+    l = (NDIS_TASK_TCP_LARGE_SEND *)t->TaskBuffer;
+    CHECK(t->Task == TcpLargeSendNdisTask && t->OffsetNextTask == 0);
+    CHECK(l->MaxOffLoadSize == 4092 - 134 && l->MinSegmentCount == 2 && l->TcpOptions && l->IpOptions);
+    CHECK((UCHAR *)l + sizeof(*l) <= u.b + w);
+    h->EncapsulationFormat.Encapsulation = (NDIS_ENCAPSULATION)0;
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_NOT_SUPPORTED);
+
+    /* Not yet enabled: a send asking for a checksum fails, alone. */
+    p = TcpPacket(0, 200, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(tp[0].Completions == 1, 2000);
+    CHECK(tp[0].Status == NDIS_STATUS_FAILURE && Queued(P_OUT) == 0);
+
+    /* Sets: a bad encapsulation and a task not offered are refused. */
+    CHECK(SetTaskList(1, 1, 0) == NDIS_STATUS_NOT_SUPPORTED);
+    CHECK(SetTaskList(1, 1, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);
+
+    /* A TCP checksum: the chip is asked, the TCP header at 34. */
+    p = TcpPacket(1, 200, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 204 && (dev.Sent[0][3] & 0x80));
+    CHECK(chip.LastInfo.Flags == NC_TX_TCP4 && chip.LastInfo.Transport == 34);
+    UNTIL(tp[1].Completions == 1 && tp[1].Status == NDIS_STATUS_SUCCESS, 2000);
+    /* a short frame with an offload is not padded (the chip pads it);
+     * a plain one is */
+    p = TcpPacket(22, 54, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 4 + 54);
+    UNTIL(tp[22].Completions == 1 && tp[22].Status == NDIS_STATUS_SUCCESS, 2000);
+    p = TcpPacket(23, 54, 0, 0, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 4 + 60);
+    UNTIL(tp[23].Completions == 1 && tp[23].Status == NDIS_STATUS_SUCCESS, 2000);
+    /* the IPv4 header checksum alone */
+    p = TcpPacket(2, 98, 0, CS_IP, 1);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CompleteOut(STATUS_SUCCESS);
+    CHECK(chip.LastInfo.Flags == NC_TX_IP4);
+    UNTIL(tp[2].Completions == 1 && tp[2].Status == NDIS_STATUS_SUCCESS, 2000);
+    /* UDP was not offered: refused; a TCP request on a UDP frame too */
+    p = TcpPacket(3, 98, 0, CS_UDP, 17);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(tp[3].Completions == 1, 2000);
+    CHECK(tp[3].Status == NDIS_STATUS_FAILURE);
+    p = TcpPacket(4, 98, 0, CS_TCP, 17);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(tp[4].Completions == 1, 2000);
+    CHECK(tp[4].Status == NDIS_STATUS_FAILURE);
+
+    /* A large send: alone in its transfer, the MSS passed, and the
+     * per-packet value becomes the payload sent (3000 - 34 - 20). */
+    p = TcpPacket(5, 3000, 1460, 0, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CHECK(CompleteOut(STATUS_SUCCESS) == 3004);
+    CHECK(chip.LastInfo.Flags == NC_TX_LSO4 && chip.LastInfo.Mss == 1460 && chip.LastInfo.Transport == 34);
+    UNTIL(tp[5].Completions == 1 && tp[5].Status == NDIS_STATUS_SUCCESS, 2000);
+    CHECK((ULONG)(ULONG_PTR)NDIS_PER_PACKET_INFO_FROM_PACKET(&tp[5].P, TcpLargeSendPacketInfo) == 2946);
+    /* longer than one buffer holds, or a long frame that is no large send: refused at once */
+    {
+        PNDIS_PACKET two[2];
+        two[0] = TcpPacket(6, 4093, 1460, 0, 6);
+        two[1] = TcpPacket(12, 100, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, two, 2);
+        CHECK(tp[6].Completions == 1 && tp[6].Status == NDIS_STATUS_FAILURE);
+        UNTIL(Queued(P_OUT) == 1, 2000);             /* the next one is not failed with it */
+        CHECK(CompleteOut(STATUS_SUCCESS) == 104);
+        UNTIL(tp[12].Completions == 1 && tp[12].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+    p = TcpPacket(7, 1515, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    CHECK(tp[7].Completions == 1 && tp[7].Status == NDIS_STATUS_FAILURE);
+    /* a large send not on TCP */
+    p = TcpPacket(8, 3000, 1460, 0, 17);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(tp[8].Completions == 1, 2000);
+    CHECK(tp[8].Status == NDIS_STATUS_FAILURE);
+
+    /* Receive: what the chip verified and TCP/IP enabled, as succeeded. */
+    chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 1 && nd.LastChecksum == 0x28);       /* TCP (bit 3) and IP (bit 5) succeeded */
+    chip.RxSum = NC_RX_IP_OK | NC_RX_UDP_OK;
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 2 && nd.LastChecksum == 0x30);
+    chip.RxSum = 0;
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 3 && nd.LastChecksum == 0);
+
+    /* A large send whose transfer fails sent nothing. */
+    p = TcpPacket(9, 3000, 1460, 0, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    links = chip.Links;
+    CompleteOut(STATUS_UNSUCCESSFUL);
+    UNTIL(tp[9].Completions == 1, 3000);
+    CHECK(tp[9].Status == NDIS_STATUS_FAILURE);
+    CHECK(NDIS_PER_PACKET_INFO_FROM_PACKET(&tp[9].P, TcpLargeSendPacketInfo) == NULL);
+    UNTIL(chip.Links > links, 5000);                   /* recovered */
+    UNTIL(Queued(P_IN) == 4 && Queued(P_INT) == 1, 5000);
+
+    /* One refused request in a batch fails alone: the frames before and
+     * after it share the transfer. */
+    {
+        PNDIS_PACKET three[3];
+        three[0] = TcpPacket(13, 100, 0, 0, 6);
+        three[1] = TcpPacket(14, 100, 0, CS_TCP, 17);   /* a TCP request on UDP */
+        three[2] = TcpPacket(15, 120, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, three, 3);
+        UNTIL(Queued(P_OUT) == 1, 2000);
+        CHECK(tp[14].Completions == 1 && tp[14].Status == NDIS_STATUS_FAILURE);
+        CHECK(CompleteOut(STATUS_SUCCESS) == 104 + 124);
+        UNTIL(tp[13].Completions == 1 && tp[13].Status == NDIS_STATUS_SUCCESS, 2000);
+        UNTIL(tp[15].Completions == 1 && tp[15].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+    {
+        /* every send of a batch (four, the frame cap) refused: the one
+         * queued after them still goes, with no further send to kick it */
+        PNDIS_PACKET five[5];
+        int k;
+        for (k = 0; k < 4; k++) five[k] = TcpPacket(30 + k, 100, 0, CS_UDP, 17);
+        five[4] = TcpPacket(34, 100, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, five, 5);
+        for (k = 0; k < 4; k++) CHECK(tp[30 + k].Completions == 1 && tp[30 + k].Status == NDIS_STATUS_FAILURE);
+        CHECK(Queued(P_OUT) == 1);                     /* within the same call */
+        CHECK(CompleteOut(STATUS_SUCCESS) == 104);
+        UNTIL(tp[34].Completions == 1 && tp[34].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+
+    /* Turned off while a large send waits behind a transfer: that send
+     * fails alone, the plain one after it goes. */
+    {
+        PNDIS_PACKET q[2];
+        p = TcpPacket(19, 200, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+        UNTIL(Queued(P_OUT) == 1, 2000);              /* the one slot is busy */
+        q[0] = TcpPacket(20, 3000, 1460, 0, 6);
+        q[1] = TcpPacket(21, 200, 0, 0, 6);
+        Fake.Chars.SendPacketsHandler(ctx, q, 2);
+        CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);   /* no large send */
+        CompleteOut(STATUS_SUCCESS);
+        UNTIL(tp[20].Completions == 1, 2000);
+        CHECK(tp[20].Status == NDIS_STATUS_FAILURE);
+        CHECK(NDIS_PER_PACKET_INFO_FROM_PACKET(&tp[20].P, TcpLargeSendPacketInfo) == NULL);
+        UNTIL(Queued(P_OUT) == 1, 2000);
+        CHECK(CompleteOut(STATUS_SUCCESS) == 204);
+        UNTIL(tp[21].Completions == 1 && tp[21].Status == NDIS_STATUS_SUCCESS, 2000);
+        UNTIL(tp[19].Completions == 1 && tp[19].Status == NDIS_STATUS_SUCCESS, 2000);
+    }
+
+    /* Disabled (a header and no task): nothing reported or asked. */
+    {
+        NDIS_TASK_OFFLOAD_HEADER off;
+        ULONG r = 0, need = 0;
+        memset(&off, 0, sizeof(off));
+        off.Version = NDIS_TASK_OFFLOAD_VERSION; off.Size = sizeof(off);
+        off.EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+        off.EncapsulationFormat.EncapsulationHeaderSize = 14;
+        CHECK(Fake.Chars.SetInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, &off, sizeof(off), &r, &need) ==
+              NDIS_STATUS_SUCCESS);
+    }
+    chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 4);
+    CHECK(nd.LastChecksum == 0);
+    p = TcpPacket(10, 200, 0, CS_TCP, 6);
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(tp[10].Completions == 1, 2000);
+    CHECK(tp[10].Status == NDIS_STATUS_FAILURE);
+    p = TcpPacket(11, 200, 0, 0, 6);                 /* a plain frame still goes */
+    Fake.Chars.SendPacketsHandler(ctx, &p, 1);
+    UNTIL(Queued(P_OUT) == 1, 2000);
+    CompleteOut(STATUS_SUCCESS);
+    UNTIL(tp[11].Completions == 1 && tp[11].Status == NDIS_STATUS_SUCCESS, 2000);
+    Halt();
+    Balanced();
+
+    /* A chip without the IPv4 header checksum: a set asking for it is refused. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
+    CHECK(SetTaskList(0, 1, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);   /* no large send */
+    Halt();
+    Balanced();
+
+    /* A chip with no offload, and 98 SE/ME: no task offload at all. */
+    Fresh();
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    {
+        NDIS_OID list[64];
+        ULONG k;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) CHECK(list[k] != OID_TCP_TASK_OFFLOAD);
+    }
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_NOT_SUPPORTED);
+    Halt();
+    Balanced();
+    Fresh();
+    Fake.Wdm110 = 0;
+    chip.Offload = NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_LSO4 | NC_OFFLOAD_RX4;
+    chip.LsoMax = 4092;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    h->EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_NOT_SUPPORTED);
+    CHECK(SetTaskList(1, 1, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
+    {
+        NDIS_OID list[64];
+        ULONG k;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_GEN_SUPPORTED_LIST, list, sizeof(list), &w, &n) ==
+              NDIS_STATUS_SUCCESS);
+        for (k = 0; k < w / sizeof(NDIS_OID); k++) CHECK(list[k] != OID_TCP_TASK_OFFLOAD);
+    }
+    Halt();
+    Balanced();
+}
+
+static void Deferred98(void)
+{
+    UCHAR b[2048];
+    PNDIS_PACKET list[8];
+    static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+    ULONG at = 0, i;
+    int completed, sets;
+
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(Fake.Timer != NULL && Fake.TimerSets == 0);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CHECK(Fake.TimerSets == 0);                      /* link and filter: nothing queued */
+
+    /* Three frames in one transfer: queued, the timer armed once. */
+    for (i = 0; i < 3; i++) {
+        ULONG len = 100 + i;
+        b[at] = (UCHAR)len; b[at + 1] = 0;
+        memset(b + at + 2, (int)(0x60 + i), len);
+        memcpy(b + at + 2, dev.Mac, 6);
+        at += 2 + len;
+    }
+    CompleteIn(P_IN, b, at);
+    CHECK(nd.Received == 0 && Fake.TimerSets == 1);
+    CHECK(QueryUlong(OID_GEN_RCV_OK) == 3);
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, at);                         /* still armed: not set again */
+    CHECK(nd.Received == 0 && Fake.TimerSets == 1);
+    CHECK(FakeRunTimer() == 1);
+    CHECK(nd.Received == 6 && nd.Resources == 0);
+    CHECK(nd.LastLength == 102 && nd.Last[6] == 0x62);   /* in order: the last one last */
+    CHECK(FakeRunTimer() == 0);
+
+    /* Sends: completed by the timer, once each, with their status. */
+    for (i = 0; i < 4; i++) list[i] = MakePacket((int)i, 300, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 4);
+    for (completed = 0; completed < 100; completed++) {
+        int done = 0, after = 0;
+        for (i = 0; i < 4; i++) done += tp[i].Completions;
+        if (done == 4) break;
+        if (Queued(P_OUT)) {
+            CompleteOut(STATUS_SUCCESS);
+            for (i = 0; i < 4; i++) after += tp[i].Completions;
+            CHECK(after == done);                     /* never from the completion */
+        } else if (!FakeRunTimer()) {
+            FwSleep(10);
+        }
+    }
+    for (i = 0; i < 4; i++) CHECK(tp[i].Completions == 1 && tp[i].Status == NDIS_STATUS_SUCCESS);
+    CHECK(QueryUlong(OID_GEN_XMIT_OK) == 4);
+
+    /* A send that fails at once (bad length) completes from the timer too. */
+    list[0] = MakePacket(10, 10, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 1);
+    CHECK(tp[10].Completions == 0);
+    CHECK(FakeRunTimer() == 1);
+    CHECK(tp[10].Completions == 1 && tp[10].Status == NDIS_STATUS_FAILURE);
+
+    /* Halt with receives and sends still queued: the sends complete once,
+     * the receives are never indicated, the timer is cancelled while set,
+     * and the pool is whole again (Balanced; Halt would wait forever for a
+     * receive left behind). */
+    UNTIL(Queued(P_IN) == 4, 2000);
+    CompleteIn(P_IN, b, at);
+    for (i = 0; i < 2; i++) list[i] = MakePacket(20 + (int)i, 300, peer);
+    Fake.Chars.SendPacketsHandler(ctx, list, 2);
+    UNTIL(Queued(P_OUT) > 0, 2000);
+    while (Queued(P_OUT)) CompleteOut(STATUS_SUCCESS);
+    CHECK(Fake.Timer->Set);
+    sets = Fake.TimerSets;
+    Halt();
+    CHECK(nd.Received == 6);
+    CHECK(tp[20].Completions == 1 && tp[21].Completions == 1);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.TimerSets == sets);
+    CHECK(Fake.Timer == NULL);                        /* freed with the adapter, not set */
+    Balanced();
+}
+
+/* 98 SE and ME: receives completed while the timer's routine is
+ * indicating are delivered by that same run; the timer is never set from
+ * inside its own routine (the fake counts that as a violation), and is not
+ * set again once the run ends with nothing queued. */
+static void DeferredReentry98(void)
+{
+    UCHAR b[64];
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(Fake.TimerSets == 1);
+    nd.Inject = 3;
+    CHECK(FakeRunTimer() == 1);
+    CHECK(nd.Received == 4 && nd.Inject == 0);
+    CHECK(Fake.TimerSets == 1 && !Fake.Timer->Set);
+    {
+        PNDIS_MINIPORT_TIMER first = Fake.Timer;
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));      /* armed anew after the run: the other timer */
+        CHECK(Fake.TimerSets == 2 && Fake.Timer != first && Fake.Timer->Set);
+        CHECK(FakeRunTimer() == 1 && nd.Received == 5);
+        UNTIL(Queued(P_IN) > 0, 2000);
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));      /* and back to the first */
+        CHECK(Fake.TimerSets == 3 && Fake.Timer == first && FakeRunTimer() == 1 && nd.Received == 6);
+    }
+    Halt();
+    Balanced();
+}
+
+/* 98 SE and ME: Halt with more queued receives than one indication's
+ * batch and no queued send (17), and with the whole pool queued (64):
+ * every one goes back to the pool. */
+static void DeferredHalt98(ULONG frames)
+{
+    UCHAR b[64];
+    ULONG i;
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    for (i = 0; i < frames; i++) {
+        UNTIL(Queued(P_IN) > 0, 2000);
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    }
+    CHECK(nd.Received == 0 && QueryUlong(OID_GEN_RCV_OK) == frames);
+    CHECK(Fake.TimerSets == 1 && Fake.Timer->Set);
+    {
+        void *t = FwThread((void (*)(void *))Fake.Chars.HaltHandler, ctx);
+        CHECK(FwWait(t, 5000) == 0);                  /* returns: nothing left out */
+        FwClose(t);
+    }
+    CHECK(nd.Received == 0);
+    CHECK(Fake.TimerCancels == 2 && Fake.TimerSetAtCancel && Fake.Timer == NULL);
     Balanced();
 }
 
@@ -925,6 +1460,43 @@ static void PowerAndReset(void)
     Balanced();
 }
 
+/* 98 SE and ME: a receive queued for the timer when a sleep request
+ * comes is taken back, never indicated, and the timer cancelled, before
+ * the request completes; at D0 the timer serves again. */
+static void Power98(void)
+{
+    UCHAR b[64];
+    int done;
+    Fresh();
+    Fake.Wdm110 = 0;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 0 && Fake.Timer->Set);
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD3) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    CHECK(!Fake.Timer->Set && Fake.TimerSetAtCancel);
+    CHECK(FakeRunTimer() == 0 && nd.Received == 0);   /* taken back, not indicated */
+    {
+        /* A send while asleep fails at once, from SendPackets itself. */
+        static const UCHAR peer[6] = { 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+        PNDIS_PACKET one = MakePacket(30, 10, peer);
+        Fake.Chars.SendPacketsHandler(ctx, &one, 1);
+        CHECK(tp[30].Completions == 1 && tp[30].Status == NDIS_STATUS_FAILURE);
+    }
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD0) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    UNTIL(Queued(P_IN) == 4 && Queued(P_INT) == 1, 3000);
+    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CHECK(nd.Received == 0 && Fake.Timer->Set);
+    CHECK(FakeRunTimer() == 1 && nd.Received == 1);
+    Halt();
+    Balanced();
+}
+
 static void SurpriseRemoval(void)
 {
     PNDIS_PACKET list[4];
@@ -933,7 +1505,7 @@ static void SurpriseRemoval(void)
     Fresh();
     CHECK(Init() == NDIS_STATUS_SUCCESS);
     LinkUp();
-    for (i = 0; i < 4; i++) list[i] = MakePacket(i, 400, peer);
+    for (i = 0; i < 4; i++) list[i] = MakePacket(i, 1514, peer);
     Fake.Chars.SendPacketsHandler(ctx, list, 4);
     UNTIL(Queued(P_OUT) == 2, 2000);
     /* Unplugged: what is queued fails as gone, so do all later requests. */
@@ -1057,8 +1629,15 @@ int main(void)
     InlineStorm();
     HoldAndResources();
     SendPath();
+    FillByBytes();
+    TaskOffload();
+    Deferred98();
+    DeferredReentry98();
+    DeferredHalt98(17);
+    DeferredHalt98(64);
     ZeroLengthPackets();
     PowerAndReset();
+    Power98();
     SurpriseRemoval();
     Addresses();
     Failures();

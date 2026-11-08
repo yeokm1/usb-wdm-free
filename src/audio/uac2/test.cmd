@@ -21,22 +21,22 @@ set LINK=
 set _LINK_=
 pushd "%OUT%"
 type nul > test.log
-cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\desctest.exe" "%SRC%uacdesc.c" "%SRC%uacplan.c" "%SRC%desctest.c" > build.log 2>&1
+cl /nologo /W4 /WX /MD /Od /Zi /I"%SRC%..\common" /Fe"%OUT%\desctest.exe" "%SRC%..\common\uacdesc.c" "%SRC%..\common\uacplan.c" "%SRC%desctest.c" > build.log 2>&1
 if errorlevel 1 goto fail
 .\desctest.exe "%SRC%testdata\sbx4\config0.bin" "%SRC%testdata\sbx4\xpconf.bin" > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
-cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\watchtest.exe" "%SRC%watchtest.c" > build.log 2>&1
+cl /nologo /W4 /WX /MD /Od /Zi /I"%SRC%..\common" /Fe"%OUT%\watchtest.exe" "%SRC%watchtest.c" > build.log 2>&1
 if errorlevel 1 goto fail
 .\watchtest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
-cl /nologo /W4 /WX /MD /Od /Zi /Fe"%OUT%\topotest.exe" "%SRC%uactopo.c" "%SRC%topotest.c" > build.log 2>&1
+cl /nologo /W4 /WX /MD /Od /Zi /I"%SRC%..\common" /Fe"%OUT%\topotest.exe" "%SRC%..\common\uactopo.c" "%SRC%topotest.c" > build.log 2>&1
 if errorlevel 1 goto fail
 .\topotest.exe > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
-cl /nologo /W4 /WX /MD /O2 /Fe"%OUT%\voltest.exe" "%SRC%uacvol.c" "%SRC%uacctl.c" "%SRC%uacdesc.c" "%SRC%voltest.c" > build.log 2>&1
+cl /nologo /W4 /WX /MD /O2 /I"%SRC%..\common" /Fe"%OUT%\voltest.exe" "%SRC%..\common\uacvol.c" "%SRC%..\common\uacctl.c" "%SRC%..\common\uacdesc.c" "%SRC%voltest.c" > build.log 2>&1
 if errorlevel 1 goto fail
 .\voltest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
 if errorlevel 1 goto fail

@@ -9,7 +9,6 @@
 ; Masahiko Morii's x360c and the keyboards/keypads marked XP_F_NOINF in
 ; devtab.c. infchk.ps1 checks them against devtab.c.
 ; Copyright (C) 2026 Yeo Kheng Meng
-; Experimental build; not released, not tested on a guest.
 ;
 ; hidclass.sys and hidparse.sys are not copied: they are Microsoft's and
 ; come with the system's USB HID support. Whether they are present on a
@@ -20,7 +19,7 @@ Signature="$CHICAGO$"
 Class=HIDClass
 ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider=%Provider%
-DriverVer=10/24/2026,0.1.0.0
+DriverVer=11/07/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models

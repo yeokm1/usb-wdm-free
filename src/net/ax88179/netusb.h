@@ -12,7 +12,7 @@
  * - NetUsbStart, NetUsbOpen and NetUsbStop run at PASSIVE_LEVEL, from
  *   MiniportInitialize and MiniportHalt.
  * - NetUsbKick and NetUsbRequest may run at IRQL <= DISPATCH_LEVEL.
- * - Receive, TxTake, TxCopy, TxDone and Link are called at
+ * - Receive, ReceiveEnd, TxTake, TxCopy, TxDone and Link are called at
  *   IRQL <= DISPATCH_LEVEL, from USB completions, the pump or the worker,
  *   never with a lower-edge lock held.
  * - TaskDone is called once per accepted request, at PASSIVE_LEVEL from
@@ -24,7 +24,17 @@
 
 #include "netchip.h"
 
-#define NET_TX_BATCH 32          /* frames per bulk-OUT transfer, at most */
+#define NET_TX_BATCH 64          /* frames per bulk-OUT transfer, at most */
+#define NET_RX_BATCH 16          /* received frames per receive indication, at most */
+
+/* One bulk-IN transfer's frames, gathered by the upper edge into receive
+ * indications of up to NET_RX_BATCH packets. It lives on the stack of the
+ * completion that parses the transfer, so concurrent completions never
+ * share one. */
+typedef struct NET_RX_GATHER {
+    void *Packets[NET_RX_BATCH];
+    nc_u32 Count;
+} NET_RX_GATHER;
 
 /* Requests run on the adapter's passive worker. */
 #define NET_REQ_FILTER     1     /* Value: NDIS packet filter bits */
@@ -34,11 +44,21 @@
 
 typedef struct NET_CALLBACKS {
     void *Context;
-    void (*Receive)(void *context, const nc_u8 *frame, nc_u32 length);
-    /* Dequeue up to max queued NDIS packets; returns the number taken. */
-    nc_u32 (*TxTake)(void *context, void **packets, nc_u32 max);
-    /* Copy one packet's frame; returns its length, 0 if unusable. */
-    nc_u32 (*TxCopy)(void *context, void *packet, nc_u8 *buffer, nc_u32 capacity);
+    /* One frame of a bulk-IN transfer; gather starts empty for each
+     * transfer, and ReceiveEnd follows its last frame. checksum: the
+     * NC_RX_*_OK checksums the chip verified (0 if none). */
+    void (*Receive)(void *context, NET_RX_GATHER *gather, const nc_u8 *frame, nc_u32 length,
+                    nc_u32 checksum);
+    void (*ReceiveEnd)(void *context, NET_RX_GATHER *gather);
+    /* Dequeue, in order, up to max queued NDIS packets that fit one
+     * transfer of room bytes, each at the next multiple of align after
+     * the one before, behind a header of header bytes, and padded to
+     * NC_ETH_PAD; the first packet always fits. Returns the number taken. */
+    nc_u32 (*TxTake)(void *context, void **packets, nc_u32 max, nc_u32 room, nc_u32 header,
+                     nc_u32 align);
+    /* Copy one packet's frame (at most capacity bytes) and fill info with
+     * the offloads it asks for; returns its length, 0 if unusable. */
+    nc_u32 (*TxCopy)(void *context, void *packet, nc_u8 *buffer, nc_u32 capacity, NET_TX_INFO *info);
     void (*TxDone)(void *context, void **packets, nc_u32 count, int success);
     /* connected: 1 up, 0 down, -1 the device is gone. speed in 100 bps. */
     void (*Link)(void *context, int connected, nc_u32 speed100bps);
@@ -55,6 +75,9 @@ typedef struct NET_START {
     nc_u16 Vendor, Product, Revision;  /* out */
     nc_u32 Version;              /* out: chip revision */
     nc_u8 Speed;                 /* out: NC_SPEED_* */
+    nc_u32 Offload;              /* out: NC_OFFLOAD_* (NET_PARAMS.Offload) */
+    nc_u32 LsoMax;               /* out: the largest large-send packet, bytes; 0 if none */
+    nc_u32 TxRoom;               /* out: one transmit buffer, bytes */
     nc_u32 Failure;              /* out: NET_FAIL_* stage, for the log */
     long Status;                 /* out: status of the failing stage */
 } NET_START;

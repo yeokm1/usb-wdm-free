@@ -1,12 +1,15 @@
 @echo off
 rem SPDX-License-Identifier: GPL-2.0-or-later
 rem
-rem build.cmd <profile> <free|checked>
+rem build.cmd <profile> <free|checked|trace>
 rem
 rem Builds the UAC2 M0 experiment for one profile (build.md sections 3 and 4) into
 rem out\audio\uac2\<profile>\<flavour>\. Every path is rooted in
 rem this repository; a missing kit is reported, never searched for.
 rem PASS.TXT is written last, only when every gate has passed.
+rem
+rem   trace   a free build that also writes a stream trace to QEMU's debug
+rem           console port 0xE9: test-only, never released.
 rem
 rem Copyright (C) 2026 Yeo Kheng Meng
 
@@ -28,7 +31,7 @@ set FLAVOUR=%~2
 if "%PROFILE%"=="" goto usage
 if "%FLAVOUR%"=="" goto usage
 if not "%~3"=="" goto usage
-if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" goto usage
+if /I not "%FLAVOUR%"=="free" if /I not "%FLAVOUR%"=="checked" if /I not "%FLAVOUR%"=="trace" goto usage
 if /I "%PROFILE%"=="wdmx86" goto profile_ok
 if /I "%PROFILE%"=="wdm64" goto profile_ok
 goto usage
@@ -56,6 +59,9 @@ if /I "%PROFILE%"=="wdm64" call :env_wdm64 || goto fail
 if /I "%FLAVOUR%"=="free" (
     set CFLAV=%CFREE%
     set LFLAV=/RELEASE
+) else if /I "%FLAVOUR%"=="trace" (
+    set CFLAV=%CFREE% /DUAC_TRACE_E9=1
+    set LFLAV=/RELEASE
 ) else (
     set CFLAV=%CCHK%
     set LFLAV=/RELEASE /DEBUG /PDB:"%OUT%\%PKG%.pdb"
@@ -64,17 +70,17 @@ if /I "%FLAVOUR%"=="free" (
 call :record || goto fail
 
 echo === compile >> "%LOG%"
-set CMDC=cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\%PKG%.obj" "%SRC%%PKG%.cpp"
+set CMDC=cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\%PKG%.obj" "%SRC%..\common\uacwdm.cpp"
 echo %CMDC% >> "%LOG%"
 %CMDC% >> "%LOG%" 2>&1 || goto fail
 
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacdesc.obj" "%SRC%uacdesc.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacrate.obj" "%SRC%uacrate.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacusb.obj" "%SRC%uacusb.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uactopo.obj" "%SRC%uactopo.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacplan.obj" "%SRC%uacplan.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacvol.obj" "%SRC%uacvol.c" >> "%LOG%" 2>&1 || goto fail
-cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacctl.obj" "%SRC%uacctl.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacdesc.obj" "%SRC%..\common\uacdesc.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacrate.obj" "%SRC%..\common\uacrate.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacusb.obj" "%SRC%..\common\uacusb.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uactopo.obj" "%SRC%..\common\uactopo.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacplan.obj" "%SRC%..\common\uacplan.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacvol.obj" "%SRC%..\common\uacvol.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacctl.obj" "%SRC%..\common\uacctl.c" >> "%LOG%" 2>&1 || goto fail
 
 "%RC%" /fo"%OUT%\uac2wdm.res" "%SRC%uac2wdm.rc" >> "%LOG%" 2>&1 || goto fail
 
@@ -144,7 +150,7 @@ call :need "%WDK%\bin\x86\rcdll.dll" "WDK 7.1 (tools\WinDDK71)" || exit /b 1
 set PATH=%WDK%\bin\x86\amd64;%WDK%\bin\x86;%SystemRoot%\system32;%SystemRoot%\System32\WindowsPowerShell\v1.0
 set DUMPBIN=link /dump
 set RC=%WDK%\bin\x86\rc.exe
-set CINC=/I"%WDK%\inc\ddk" /I"%WDK%\inc\api" /I"%WDK%\inc\crt"
+set CINC=/I"%WDK%\inc\ddk" /I"%WDK%\inc\api" /I"%WDK%\inc\crt" /I"%SRC%..\common"
 set CBASE=/GR- /W3 /WX /GS- /Gy /GF /Zl /D_AMD64_=1 /DAMD64=1 /D_WIN64=1 /DNTDDI_VERSION=0x05020000 /D_WIN32_WINNT=0x0502 /DWINVER=0x0502 /DWIN32_LEAN_AND_MEAN=1
 set CFREE=/Oxs /DDBG=0
 set CCHK=/Od /Oi /Zi /Fd"%OUT%\%PKG%.cpdb" /DDBG=1
@@ -174,7 +180,7 @@ exit /b 1
 exit /b 0
 
 :usage
-echo usage: build.cmd ^<wdmx86^|wdm64^> ^<free^|checked^>
+echo usage: build.cmd ^<wdmx86^|wdm64^> ^<free^|checked^|trace^>
 endlocal
 exit /b 2
 

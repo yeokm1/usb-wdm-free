@@ -630,7 +630,7 @@ def execute(args):
     if rate_hash!=RATE_DLL_SHA:raise ValueError('exact reviewed x64 UACRATE.DLL required')
     report=dict(state='STARTING',libusb=str(dll),libusb_sha256=actual_hash,
                 rate_core_sha256=rate_hash,
-                rate_source_sha256=hashlib.sha256(Path(__file__).with_name('uacrate.c').read_bytes()).hexdigest(),
+                rate_source_sha256=hashlib.sha256((Path(__file__).parent.parent / 'common' / 'uacrate.c').read_bytes()).hexdigest(),
                 probe_source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 out_actual_length_caveat='Windows libusbK synthesizes requested OUT lengths; these are API accounting, not measured wire bytes',
                 initial_feedback_policy='ZLP before first valid feedback counted bad; raw bytes/lengths preserved for investigation',

@@ -6,7 +6,8 @@
  * usb100.h, usbioctl.h) and the documented URB functions; no DDK sample
  * was read. Derived from cdcnet's cdcusb.c (same author and licence),
  * with the CDC protocols replaced by the netchip.h chip table. Identical
- * copy in src/net/ax88179/ and src/net/rtl815x/.
+ * copies in src/net/ax88179/, src/net/rtl815x/, src/net/ax88772/ and
+ * src/net/sr9700/ (see netchip.h).
  *
  * - NetUsbStart reads the device and every configuration descriptor, lets
  *   the chip's Probe choose, selects that configuration and runs the
@@ -30,6 +31,8 @@
  *   event before PsTerminateSystemThread; Windows 98 faults a wait on a
  *   thread object (xHCI98 docs/usb-xhci-info/win98-wdm.md), so the thread
  *   object is waited on only where WDM 1.10 (Windows 2000) is available.
+ *   On 98 SE and ME (one processor) the worker sets the event at the
+ *   highest priority, so halt cannot run before it has terminated.
  */
 #include <wdm.h>
 #include <usbdi.h>
@@ -44,7 +47,7 @@
 #define RX_MAX 8
 #define TX_MAX 4
 #define RX_LIMIT 32768UL
-#define TX_LIMIT 16384UL
+#define TX_LIMIT 32768UL
 #define CONFIG_MAX 4096
 #define CONFIGS_MAX 4
 #define CTRL_MAX 512
@@ -114,7 +117,8 @@ struct NET_DEV {
 
     /* Worker-only state. */
     KEVENT Wake;                  /* synchronization */
-    KEVENT Exited;                /* notification, set by the worker last */
+    KEVENT Exited;                /* notification, set by the worker last (NT) */
+    PKEVENT ExitEvent;            /* &Exited on NT; on 98 SE and ME its own block (ExitByKernel) */
     PVOID ThreadObject;           /* referenced on NT only */
     BOOLEAN Worker;               /* the worker thread exists */
     KEVENT CtrlDone;
@@ -124,6 +128,7 @@ struct NET_DEV {
     BOOLEAN FilterValid;
     UCHAR Mc[NC_MULTICAST_MAX * 6];
     ULONG Speed;                  /* 100 bps units */
+    BOOLEAN LinkRetry;            /* the last link read failed: read it again at the next tick */
     ULONG Malformed, Dropped, FcsStripped;
     BOOLEAN FcsLogged;            /* the anomaly was reported (under Lock) */
 };
@@ -287,6 +292,8 @@ static NTSTATUS Sync(NET_DEV *d, PURB urb, ULONG timeoutMs)
         status = irp->IoStatus.Status;
     }
     IoFreeIrp(irp);
+    /* A failure whose URB says the device is gone reads as gone. */
+    if (!NT_SUCCESS(status) && DeviceGone(status, urb->UrbHeader.Status)) status = STATUS_DEVICE_NOT_CONNECTED;
     if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status)) {
         status = DeviceGone(status, urb->UrbHeader.Status) ? STATUS_DEVICE_NOT_CONNECTED : STATUS_UNSUCCESSFUL;
     }
@@ -395,7 +402,9 @@ static void CheckDrained(NET_DEV *d)
     if (!d->Open && !d->Outstanding && !d->PumpActive) KeSetEvent(&d->Drained, IO_NO_INCREMENT, FALSE);
 }
 
-static void Submit(NET_DEV *d, SLOT *s, ULONG length)
+/* Returns FALSE when no IRP could be allocated (the slot is free again);
+ * the caller's pump then stops until the worker's next tick. */
+static BOOLEAN Submit(NET_DEV *d, SLOT *s, ULONG length)
 {
     PIRP irp = IoAllocateIrp(d->Lower->StackSize, FALSE);
     PIO_STACK_LOCATION stack;
@@ -416,7 +425,7 @@ static void Submit(NET_DEV *d, SLOT *s, ULONG length)
         CheckDrained(d);
         KeReleaseSpinLock(&d->Lock, old);
         if (count) d->Cb.TxDone(d->Cb.Context, packets, count, 0);
-        return;
+        return FALSE;
     }
     RtlZeroMemory(&s->Urb, sizeof(s->Urb));
     s->Urb.Hdr.Length = sizeof(s->Urb);
@@ -431,43 +440,72 @@ static void Submit(NET_DEV *d, SLOT *s, ULONG length)
     stack->Parameters.Others.Argument1 = &s->Urb;
     IoSetCompletionRoutine(irp, Done, s, TRUE, TRUE, TRUE);
     (void)IoCallDriver(d->Lower, irp);
+    return TRUE;
 }
 
 static nc_u32 AlignUp(nc_u32 v, nc_u32 a) { return (v + a - 1) & ~(a - 1); }
 
 /* Build the next bulk-OUT transfer in slot s. Called by the pump with
  * s->Stage == TX_BUILD and the lock not held. Returns TRUE if a transfer
- * was queued. */
-static BOOLEAN BuildTx(NET_DEV *d, SLOT *s)
+ * was queued, or if every send taken failed alone (build again); *starved
+ * is set when no IRP could be allocated for it. */
+static BOOLEAN BuildTx(NET_DEV *d, SLOT *s, BOOLEAN *starved)
 {
     void *packets[NET_TX_BATCH];
-    nc_u32 count, i, total = 0;
+    nc_u32 count, i, total = 0, kept = 0;
     nc_u32 header = d->Params.TxHeader, align = d->Params.TxAlign;
     PUCHAR b = s->Buffer;
     BOOLEAN ok = TRUE;
     int zlp = 0;
     KIRQL old;
 
-    count = d->Cb.TxTake(d->Cb.Context, packets, d->TxBatch);
+    count = d->Cb.TxTake(d->Cb.Context, packets, d->TxBatch, s->Size, header, align);
     if (!count) {
         KeAcquireSpinLock(&d->Lock, &old);
         s->Stage = TX_IDLE;
         KeReleaseSpinLock(&d->Lock, old);
         return FALSE;
     }
-    /* TxBatch is sized so that count frames at their largest always fit. */
+    /* TxTake took only what fits, padding included; checked again here. A
+     * send that cannot be copied or asks for an offload the chip lacks
+     * fails alone; the others go on (kept). */
     for (i = 0; i < count && ok; i++) {
         nc_u32 at = AlignUp(total, align), n;
-        if (at + header + NC_ETH_MAX > s->Size) { ok = FALSE; break; }
-        n = d->Cb.TxCopy(d->Cb.Context, packets[i], b + at + header, NC_ETH_MAX);
-        if (n < NC_ETH_MIN) { ok = FALSE; break; }
-        if (n < NC_ETH_PAD) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
+        NET_TX_INFO info;
+        if (at + header + NC_ETH_PAD > s->Size) {
+            /* Never (TxTake's own rule): this and the rest fail below. */
+            while (i < count) packets[kept++] = packets[i++];
+            ok = FALSE;
+            break;
+        }
+        info.Flags = 0; info.Mss = 0; info.Transport = 0;
+        n = d->Cb.TxCopy(d->Cb.Context, packets[i], b + at + header, s->Size - at - header, &info);
+        if (n < NC_ETH_MIN || (info.Flags && !d->Chip->TxOffload)) {
+            d->Malformed++;
+            NetTrace("tx: a send failed alone (length %u, offload %x)", n, info.Flags);
+            d->Cb.TxDone(d->Cb.Context, &packets[i], 1, 0);
+            continue;
+        }
+        /* A frame with an offload is left as it is: the chip pads it (Linux
+         * r8152.c sends such frames unpadded; a padded one came out with a
+         * bad TCP checksum from a real RTL8157). */
+        if (n < NC_ETH_PAD && !info.Flags) { RtlZeroMemory(b + at + header + n, NC_ETH_PAD - n); n = NC_ETH_PAD; }
         if (at > total) RtlZeroMemory(b + total, at - total);
         d->Chip->TxHeader(ChipState(d), b + at, n, d->OutMax, count == 1);
+        if (info.Flags) d->Chip->TxOffload(ChipState(d), b + at, &info);
         total = at + header + n;
+        packets[kept++] = packets[i];
     }
-    if (ok) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
+    count = kept;
+    if (ok && count) zlp = d->Chip->TxEnd(ChipState(d), b, &total, s->Size, d->OutMax);
     KeAcquireSpinLock(&d->Lock, &old);
+    if (!count) {
+        /* Every send taken failed alone: the slot is free again, and the
+         * pump builds once more for what is still queued. */
+        s->Stage = TX_IDLE;
+        KeReleaseSpinLock(&d->Lock, old);
+        return TRUE;
+    }
     if (!ok || !d->Open || !d->LinkUp) {
         s->Stage = TX_IDLE;
         KeReleaseSpinLock(&d->Lock, old);
@@ -482,14 +520,14 @@ static BOOLEAN BuildTx(NET_DEV *d, SLOT *s)
     s->Busy = TRUE;
     d->Outstanding++;
     KeReleaseSpinLock(&d->Lock, old);
-    Submit(d, s, total);
+    if (!Submit(d, s, total)) { *starved = TRUE; return FALSE; }
     return TRUE;
 }
 
 static void Pump(NET_DEV *d)
 {
     KIRQL old;
-    BOOLEAN txTried = FALSE;
+    BOOLEAN txTried = FALSE, starved = FALSE;
     KeAcquireSpinLock(&d->Lock, &old);
     if (d->PumpActive) {
         d->PumpAgain = TRUE;
@@ -501,7 +539,10 @@ static void Pump(NET_DEV *d)
         SLOT *s = NULL, *build = NULL;
         ULONG i, length = 0;
         if (d->PumpAgain) { d->PumpAgain = FALSE; txTried = FALSE; }
-        if (d->Open) {
+        /* After a failed IRP allocation nothing more this pass: the slot
+         * it freed would be picked again at once (the worker's tick and
+         * the next completion pump again). */
+        if (d->Open && !starved) {
             if (d->Int && !d->IntSlot.Busy) { s = &d->IntSlot; length = s->Size; }
             for (i = 0; !s && d->LinkUp && i < d->RxCount; i++)
                 if (!d->Rx[i].Busy) { s = &d->Rx[i]; length = d->RxLength; }
@@ -520,8 +561,8 @@ static void Pump(NET_DEV *d)
         }
         if (s) { s->Busy = TRUE; d->Outstanding++; }
         KeReleaseSpinLock(&d->Lock, old);
-        if (s) Submit(d, s, length);
-        else if (!BuildTx(d, build)) txTried = TRUE;
+        if (s) { if (!Submit(d, s, length)) starved = TRUE; }
+        else if (!BuildTx(d, build, &starved)) txTried = TRUE;
         KeAcquireSpinLock(&d->Lock, &old);
     }
     d->PumpActive = FALSE;
@@ -529,10 +570,17 @@ static void Pump(NET_DEV *d)
     KeReleaseSpinLock(&d->Lock, old);
 }
 
+typedef struct EMIT_CONTEXT {
+    NET_DEV *Dev;
+    NET_RX_GATHER Gather;
+} EMIT_CONTEXT;
+
 static void Emit(void *context, const nc_u8 *frame, nc_u32 length)
 {
-    NET_DEV *d = context;
-    d->Cb.Receive(d->Cb.Context, frame, length);
+    EMIT_CONTEXT *e = context;
+    NET_DEV *d = e->Dev;
+    nc_u32 checksum = d->Chip->RxChecksum ? d->Chip->RxChecksum(ChipState(d), frame) : 0;
+    d->Cb.Receive(d->Cb.Context, &e->Gather, frame, length, checksum);
 }
 
 static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
@@ -542,11 +590,13 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
     NTSTATUS status = irp->IoStatus.Status;
     USBD_STATUS usb = s->Urb.Hdr.Status;
     ULONG length = s->Urb.TransferBufferLength;
+    BOOLEAN lost;
     KIRQL old;
     UNREFERENCED_PARAMETER(unused);
     IoFreeIrp(irp);
     if (NT_SUCCESS(status) && !USBD_SUCCESS(usb)) status = STATUS_UNSUCCESSFUL;
-    if (length > s->Size) length = 0;
+    lost = length > s->Size;
+    if (lost) length = 0;
 
     if (s->Kind != SLOT_TX) {
         /* Parse before the slot becomes free: the pump may reuse it. */
@@ -559,10 +609,18 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
                     KeSetEvent(&d->Wake, IO_NO_INCREMENT, FALSE);
                     KeReleaseSpinLock(&d->Lock, old);
                 }
+            } else if (lost) {
+                /* A length beyond the buffer: the data is dropped, so a
+                 * stream that runs across transfers lost its place. */
+                if (d->Chip->RxReset) d->Chip->RxReset(ChipState(d));
             } else if (length) {
                 NET_RX_STATS st = { 0 };
-                if (d->Chip->RxParse(ChipState(d), s->Buffer, length, Emit, d, &st) < 0) d->Malformed++;
+                EMIT_CONTEXT e;
+                e.Dev = d;
+                e.Gather.Count = 0;
+                if (d->Chip->RxParse(ChipState(d), s->Buffer, length, Emit, &e, &st) < 0) d->Malformed++;
                 else d->Dropped += st.Dropped;
+                d->Cb.ReceiveEnd(d->Cb.Context, &e.Gather);
                 if (st.Dropped) DropSample(s->Buffer, length);
                 if (st.FcsStripped) {
                     /* The chip is configured to deliver frames without
@@ -581,6 +639,12 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
                     }
                 }
             }
+        } else if (s->Kind == SLOT_RX && d->Chip->RxReset) {
+            /* The data never reached RxParse: a stream that runs across
+             * transfers lost its place. The slot is still busy, so no
+             * RxParse runs meanwhile (one bulk-IN transfer for such a
+             * chip: ethernet.md section 6.8). */
+            d->Chip->RxReset(ChipState(d));
         }
         KeAcquireSpinLock(&d->Lock, &old);
         s->Busy = FALSE;
@@ -616,7 +680,18 @@ static NTSTATUS Done(PDEVICE_OBJECT unused, PIRP irp, PVOID context)
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* Close the gate and drain every data IRP. PASSIVE_LEVEL. */
+static void ReportGone(NET_DEV *d);
+
+/* ABORT_PIPE; a device-gone answer marks the device gone. */
+static void AbortPipe(NET_DEV *d, USBD_PIPE_HANDLE pipe)
+{
+    if (DeviceGone(PipeRequest(d, URB_FUNCTION_ABORT_PIPE, pipe), 0)) d->Gone = TRUE;
+}
+
+/* Close the gate and drain every data IRP. PASSIVE_LEVEL. A departure
+ * known before or found during the drain is reported first, from the
+ * worker (not from halt, which runs after the worker has ended): its
+ * sends are released then, which no drain may wait for (ReleaseGone). */
 static void Quiesce(NET_DEV *d)
 {
     KIRQL old;
@@ -635,16 +710,23 @@ static void Quiesce(NET_DEV *d)
         Sleep(1);
     }
     for (;;) {
+        if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
         KeAcquireSpinLock(&d->Lock, &old);
         idle = !d->Outstanding;
         if (!idle) KeClearEvent(&d->Drained);
         KeReleaseSpinLock(&d->Lock, old);
         if (idle) break;
         if (!(waits++ % 4)) {
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->In);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Out);
-            (void)PipeRequest(d, URB_FUNCTION_ABORT_PIPE, d->Int);
-            if (waits > 1) NetTrace("quiesce: %u still outstanding", d->Outstanding);
+            /* A departure found by the abort before is reported before
+             * the next one (a synchronous request; see ReleaseGone). */
+            AbortPipe(d, d->In);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Out);
+            if (d->Gone && !d->GoneReported && !d->Stop) ReportGone(d);
+            AbortPipe(d, d->Int);
+            if (waits > 1) NetTrace("quiesce: %u still outstanding (int %u rx %u%u%u%u tx %u%u%u%u)", d->Outstanding,
+                                    d->IntSlot.Busy, d->Rx[0].Busy, d->Rx[1].Busy, d->Rx[2].Busy, d->Rx[3].Busy,
+                                    d->Tx[0].Busy, d->Tx[1].Busy, d->Tx[2].Busy, d->Tx[3].Busy);
         }
         (void)Wait(&d->Drained, 500);
     }
@@ -676,6 +758,62 @@ static void Reopen(NET_DEV *d)
 /* ------------------------------------------------------------------ */
 /* Chip operations, worker or Start/Open/Stop context. */
 
+/* The device has left. A host controller driver may hold a departed
+ * device's transfers until its pipes are aborted or the device is removed
+ * (xHCI98 parks them on the device), while the protocols above do not let
+ * the adapter be removed - so halted - before every send they made has
+ * completed. So the gate closes and every frame a transmit slot holds is
+ * completed now, failed: its data was copied into the slot, which stays
+ * busy until its IRP ends. The pipes are aborted after the report
+ * (AbortGone); halt's quiesce waits for the IRPs themselves. */
+static void ReleaseGone(NET_DEV *d)
+{
+    KIRQL old;
+    BOOLEAN idle;
+    ULONG i;
+    KeAcquireSpinLock(&d->Lock, &old);
+    d->Open = FALSE;
+    KeReleaseSpinLock(&d->Lock, old);
+    for (;;) {
+        KeAcquireSpinLock(&d->Lock, &old);
+        idle = !d->PumpActive;
+        KeReleaseSpinLock(&d->Lock, old);
+        if (idle) break;
+        Sleep(1);
+    }
+    for (i = 0; i < d->TxCount; i++) {
+        void *packets[NET_TX_BATCH];
+        ULONG count = 0;
+        SLOT *s = &d->Tx[i];
+        KeAcquireSpinLock(&d->Lock, &old);
+        if (s->Stage != TX_IDLE && s->Count) {
+            count = s->Count;
+            RtlCopyMemory(packets, s->Packets, count * sizeof(void *));
+            s->Count = 0;
+        }
+        KeReleaseSpinLock(&d->Lock, old);
+        if (count) d->Cb.TxDone(d->Cb.Context, packets, count, 0);
+    }
+}
+
+/* After the upper edge has been told: the pipes aborted once, so a host
+ * controller driver that holds the transfers lets them go now. These are
+ * synchronous requests, so they come after the report, which nothing may
+ * delay. */
+static void AbortGone(NET_DEV *d)
+{
+    KIRQL old;
+    ULONG outstanding;
+    KeAcquireSpinLock(&d->Lock, &old);
+    outstanding = d->Outstanding;
+    KeReleaseSpinLock(&d->Lock, old);
+    if (!outstanding) return;
+    AbortPipe(d, d->In);
+    AbortPipe(d, d->Out);
+    AbortPipe(d, d->Int);
+    NetTrace("gone: %u of %u transfers still outstanding after the abort", d->Outstanding, outstanding);
+}
+
 static void ReportGone(NET_DEV *d)
 {
     KIRQL old;
@@ -686,7 +824,9 @@ static void ReportGone(NET_DEV *d)
     KeReleaseSpinLock(&d->Lock, old);
     if (report) {
         NetTrace("device gone");
+        ReleaseGone(d);
         d->Cb.Link(d->Cb.Context, -1, d->Speed);
+        AbortGone(d);
     }
 }
 
@@ -710,6 +850,7 @@ static void ApplyLink(NET_DEV *d)
     if (d->Gone || d->Suspended) return;
     link.Up = 0; link.Mbps = 0; link.FullDuplex = 0; link.RxLength = d->RxLength;
     r = d->Chip->Link(ChipState(d), Io(d), &link);
+    d->LinkRetry = (BOOLEAN)(r < 0);
     if (r < 0) {
         NetTrace("link: %d", r);
         link.Up = 0;
@@ -731,6 +872,10 @@ static void ApplyLink(NET_DEV *d)
 static void Recover(NET_DEV *d)
 {
     NTSTATUS status;
+    /* Down for the upper edge while the pipes recover: its queue is
+     * failed and no send is taken in, however long the drain waits; the
+     * link is read again before the gate reopens. */
+    d->Cb.Link(d->Cb.Context, 0, d->Speed);
     Quiesce(d);
     if (d->Gone || d->Suspended) { ReportGone(d); return; }
     if (++d->Recoveries > 30) {
@@ -749,6 +894,7 @@ static void Recover(NET_DEV *d)
         ReportGone(d);
         return;
     }
+    ApplyLink(d);
     Reopen(d);
 }
 
@@ -760,22 +906,15 @@ static void LinkChanged(NET_DEV *d)
     Reopen(d);
 }
 
-/* The chip's bring-up again (resume), then the address, filter and link. */
-static long Restart(NET_DEV *d)
-{
-    NET_PARAMS p;
-    long r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
-    if (r >= 0 && !SameMac(p.Mac, d->Mac))
-        r = d->Chip->SetMac(ChipState(d), Io(d), d->Mac);
-    if (r >= 0) r = ApplyFilter(d);
-    return r;
-}
-
 static long Power(NET_DEV *d, BOOLEAN on)
 {
     KIRQL old;
+    BOOLEAN was;
     long r;
     if (!on) {
+        /* Down for the upper edge first: its queue is failed and no send
+         * is taken in until D0 reads the link again (ApplyLink). */
+        d->Cb.Link(d->Cb.Context, 0, d->Speed);
         Quiesce(d);
         if (!d->Gone) (void)d->Chip->Suspend(ChipState(d), Io(d));
         KeAcquireSpinLock(&d->Lock, &old);
@@ -785,15 +924,49 @@ static long Power(NET_DEV *d, BOOLEAN on)
         return STATUS_SUCCESS;
     }
     KeAcquireSpinLock(&d->Lock, &old);
+    was = d->Suspended;
     d->Suspended = FALSE;
     KeReleaseSpinLock(&d->Lock, old);
     if (d->Gone) return STATUS_SUCCESS;
+    /* D0 while already in D0: nothing to do. A bring-up now would run
+     * beside the data path, and the chip state it resets is the receive
+     * stream's (ethernet.md section 6.8). */
+    if (!was) return STATUS_SUCCESS;
+    Quiesce(d);
     /* The device may have lost power: the whole bring-up again (the
      * Realtek and ASIX resume paths both do), then the cached address,
      * filter and the link. */
-    r = Restart(d);
-    NetTrace("resume: %d", r);
-    if (r < 0 && d->Gone) { ReportGone(d); return STATUS_SUCCESS; }
+    {
+        NET_PARAMS p;
+        int i;
+        /* Up to three tries, a transient failure not carried from one
+         * to the next (Io resets the status); a chip's Resume may retry
+         * on its own too. */
+        for (i = 0; i < 3; i++) {
+            r = d->Chip->Resume(ChipState(d), Io(d), &d->Probe, &p);
+            if (r >= 0 || d->Gone) break;
+            Sleep(100);
+        }
+        NetTrace("resume: %d", r);
+        if (r < 0) {
+            /* The chip did not come back: the data path stays closed and
+             * NDIS is told it is gone, as Recover does when it gives
+             * up. */
+            KeAcquireSpinLock(&d->Lock, &old);
+            d->Gone = TRUE;
+            KeReleaseSpinLock(&d->Lock, old);
+            ReportGone(d);
+            return STATUS_SUCCESS;
+        }
+        /* The address and the filter after a chip that came back: a
+         * failure here is logged, and a chip that keeps a failed address
+         * or filter pending applies it again (ethernet.md section 6.8). */
+        if (!SameMac(p.Mac, d->Mac)) {
+            r = d->Chip->SetMac(ChipState(d), Io(d), d->Mac);
+            if (r < 0) NetTrace("resume: address %d", r);
+        }
+        (void)ApplyFilter(d);
+    }
     ApplyLink(d);
     d->Recoveries = 0;
     Reopen(d);
@@ -814,6 +987,45 @@ static long Reset(NET_DEV *d)
     Reopen(d);
     return STATUS_SUCCESS;
 }
+
+/* The worker's exit on 98 SE and ME (ethernet.md section 6.8, item 6).
+ * Halt has only the exit event to wait on there (a wait on a thread
+ * object faults), and once it has, the image may be unloaded. So no
+ * instruction of this image may run after the event is set: KeSetEvent
+ * is entered with a frame whose return address is PsTerminateSystemThread
+ * and whose next two words are that call's own (a return address it never
+ * uses, STATUS_SUCCESS). KeSetEvent is stdcall with three arguments, so it
+ * returns straight into PsTerminateSystemThread, both of them NTKERN's
+ * code, their addresses read from the import table before the signal.
+ * KeSetEvent may still be touching the event after a halt has woken, so
+ * the event is a block of its own that is never freed: one KEVENT and
+ * its pool header per worker started on those systems, until restart. The host test and the x64 build (NT
+ * only) take the plain calls. */
+#if defined(_M_IX86) && !defined(SHIM_WDM_H)
+static void ExitByKernel(PKEVENT event)
+{
+    PVOID set = (PVOID)KeSetEvent;
+    PVOID term = (PVOID)PsTerminateSystemThread;
+    __asm {
+        mov eax, set
+        mov ecx, term
+        mov edx, event
+        push 0          ; PsTerminateSystemThread: STATUS_SUCCESS
+        push 0          ; its return address, never used
+        push 0          ; KeSetEvent: Wait FALSE
+        push 0          ; Increment
+        push edx        ; Event
+        push ecx        ; its return address: PsTerminateSystemThread
+        jmp eax
+    }
+}
+#else
+static void ExitByKernel(PKEVENT event)
+{
+    KeSetEvent(event, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+#endif
 
 static void Worker(PVOID context)
 {
@@ -861,11 +1073,14 @@ static void Worker(PVOID context)
         } else if (status == STATUS_TIMEOUT && !d->Gone && !d->Suspended && d->Open &&
                    (++d->Ticks % 2) == 0) {
             /* A missed or absent link interrupt: ask the chip. */
-            if (d->Chip->Poll(ChipState(d), Io(d))) LinkChanged(d);
+            if (d->LinkRetry || d->Chip->Poll(ChipState(d), Io(d))) LinkChanged(d);
         }
         if (d->Gone) ReportGone(d);
         Pump(d);   /* retries an IRP allocation that failed */
     }
+    /* 98 SE and ME: no instruction of this image after the event. NT:
+     * halt waits for the thread object too. */
+    if (d->ExitEvent != &d->Exited) ExitByKernel(d->ExitEvent);
     KeSetEvent(&d->Exited, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -1022,10 +1237,11 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
         if (txSize > TX_LIMIT) txSize = TX_LIMIT;
         if (txSlots > TX_MAX) txSlots = TX_MAX;
         if (!txSlots) txSlots = 1;
-        d->TxBatch = txSize / each;
-        if (d->TxBatch > d->Params.TxBatch) d->TxBatch = d->Params.TxBatch;
+        /* Transfers are filled by bytes (TxTake); the chip's TxBatch caps
+         * the frames in one. */
+        d->TxBatch = d->Params.TxBatch;
         if (d->TxBatch > NET_TX_BATCH) d->TxBatch = NET_TX_BATCH;
-        if (!d->TxBatch || txSize < d->Params.TxHeader + NC_ETH_MAX || rxSize < 2048) {
+        if (!d->TxBatch || txSize < each || rxSize < 2048) {
             Fail(start, NET_FAIL_CHIP, STATUS_INVALID_PARAMETER);
             status = STATUS_INVALID_PARAMETER;
             goto fail;
@@ -1051,8 +1267,21 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
             status = STATUS_INSUFFICIENT_RESOURCES;
             goto fail;
         }
-        NetTrace("buffers: rx %u x %u, tx %u x %u (%u frames)", d->RxCount, rxSize, d->TxCount,
-                 txSize, d->TxBatch);
+        /* Offloads: only those the chip has the routines for; a large
+         * send fits one transmit buffer behind its header. */
+        start->Offload = d->Params.Offload;
+        if (!d->Chip->TxOffload)
+            start->Offload &= ~(NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_LSO4);
+        if (!d->Chip->RxChecksum) start->Offload &= ~NC_OFFLOAD_RX4;
+        start->LsoMax = d->Params.LsoMax;
+        if (start->LsoMax > txSize - d->Params.TxHeader) start->LsoMax = txSize - d->Params.TxHeader;
+        if (!(start->Offload & NC_OFFLOAD_LSO4) || start->LsoMax <= NC_ETH_MAX) {
+            start->Offload &= ~NC_OFFLOAD_LSO4;
+            start->LsoMax = 0;
+        }
+        start->TxRoom = txSize;
+        NetTrace("buffers: rx %u x %u, tx %u x %u (%u frames); offload %x, large send %u", d->RxCount,
+                 rxSize, d->TxCount, txSize, d->TxBatch, start->Offload, start->LsoMax);
     }
     RtlCopyMemory(start->DeviceMac, d->Params.Mac, 6);
     start->Vendor = d->Probe.Vendor; start->Product = d->Probe.Product;
@@ -1086,9 +1315,22 @@ long NetUsbOpen(void *device, const nc_u8 mac[6], NET_START *start, int *connect
     }
     d->Speed = 1000000;
     ApplyLink(d);          /* reports through Link before NDIS is ready: ignored there */
+    d->ExitEvent = &d->Exited;
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        /* 98 SE and ME: never freed once the worker runs (ExitByKernel). */
+        d->ExitEvent = ExAllocatePoolWithTag(NonPagedPool, sizeof(KEVENT), TAG);
+        if (!d->ExitEvent) {
+            Fail(start, NET_FAIL_MEMORY, STATUS_INSUFFICIENT_RESOURCES);
+            (void)d->Chip->Stop(ChipState(d), Io(d));
+            Free(d);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        KeInitializeEvent(d->ExitEvent, NotificationEvent, FALSE);
+    }
     status = PsCreateSystemThread(&thread, 0, NULL, NULL, NULL, Worker, d);
     if (!NT_SUCCESS(status)) {
         Fail(start, NET_FAIL_THREAD, status);
+        if (d->ExitEvent != &d->Exited) ExFreePool(d->ExitEvent);
         (void)d->Chip->Stop(ChipState(d), Io(d));
         Free(d);
         return status;
@@ -1116,11 +1358,17 @@ void NetUsbStop(void *device)
     KeSetEvent(&d->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&d->Lock, old);
     if (d->Worker) {
-        Wait(&d->Exited, 0);
+        Wait(d->ExitEvent, 0);
         if (d->ThreadObject) {
             KeWaitForSingleObject(d->ThreadObject, Executive, KernelMode, FALSE, NULL);
             ObDereferenceObject(d->ThreadObject);
         }
+        /* Windows 98 and ME: the event only, set from no instruction of
+         * this image (ExitByKernel), and not freed. */
+#if defined(SHIM_WDM_H)
+        /* The host test's KeSetEvent has returned before its Wait does. */
+        if (d->ExitEvent != &d->Exited) ExFreePool(d->ExitEvent);
+#endif
     }
     Quiesce(d);
     if (!d->Gone && !d->Suspended) (void)d->Chip->Stop(ChipState(d), Io(d));

@@ -83,11 +83,19 @@ class MidiSimulation(unittest.TestCase):
         self.assertEqual(self.codec.echo(bytes.fromhex('0ff000000ff800000ff70000')),
                          bytes.fromhex('0ff8000006f0f700'))
 
-    def test_reject_unaligned_reserved_and_unmapped_cable(self):
-        for data in (b'123', bytes.fromhex('00903c40'), bytes.fromhex('19903c40'),
-                     bytes.fromhex('0990ff40')):
+    def test_reject_unaligned_bad_data_and_unmapped_cable(self):
+        for data in (b'123', bytes.fromhex('19903c40'), bytes.fromhex('0990ff40')):
             with self.assertRaises(ValueError):
                 self.codec.echo(data)
+
+    def test_reserved_cin_skipped(self):
+        # XP's usbaudio.sys pads a 64-byte bulk OUT packet with zero events
+        # (CIN 0); CIN 0 and 1 are reserved and carry no MIDI bytes.
+        data = bytes.fromhex('09900001') + bytes(60)
+        self.assertEqual(self.codec.echo(data), bytes.fromhex('09900001'))
+        self.assertEqual(self.codec.reserved, 15)
+        self.assertEqual(self.codec.echo(bytes.fromhex('00903c4011000000')), b'')
+        self.assertEqual(self.codec.reserved, 2)
 
     def test_pending_cancel_and_repeated_reset(self):
         self.configure()

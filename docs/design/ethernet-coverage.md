@@ -49,7 +49,7 @@ section 2.6 stand as far as free drivers go.
 | ASIX AX88179B | U (id and protocol not read) | U | U | U | U | U | U | ASIX 8+ |
 | ASIX AX88279A | gap (U: id) | gap | gap | gap | gap | gap | gap | ASIX 10+ |
 | ASIX AX88772, AX88772A | nonfree | nonfree | nonfree | nonfree | step 2 | step 2 | step 2 | in box 8 |
-| ASIX AX88772B, AX88772C | **gap** | **gap** | step 2 | step 2 | step 2 | step 2 | step 2 (5.12.12.0, live) | in box 8 |
+| ASIX AX88772B, AX88772C | free `ax88772` (simulated only; 2026-11-06) | free `ax88772` (same) | nonfree (5.4.3.0) | nonfree | nonfree | nonfree | nonfree (5.12.12.0, live) | in box 8 |
 | ASIX AX88772E | gap (U: id) | gap | gap | gap | gap | gap | gap | ASIX 8+ |
 | ASIX AX88178 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | ASIX 7/8 build |
 | ASIX AX88172 | step 2 (U: INF Signature `$Windows NT$`) | step 2 (same U) | step 2 | step 2 | **gap** | **gap** | **gap** | - |
@@ -59,13 +59,13 @@ section 2.6 stand as far as free drivers go.
 | Realtek RTL8153C | free `rtl815x` (chip id `6400`) | same | same | nonfree INF matches (revision-less `0BDA:8153` line; U whether the driver runs it) | same U | same U | nonfree | in box 8.1 |
 | Realtek RTL8153D (`0BDA:8053`) | U (`RTL815X.INF` lists the id; its chip id is not among `rtl815x`'s, which refuses unknown ids) | U | U | gap (no `8053` line) | gap | gap | nonfree | Realtek 8+ |
 | Realtek RTL8155 | gap (`rtl815x` leaves `8155` out) | gap | gap | gap | gap | gap | nonfree | Realtek 8+ |
-| Realtek RTL8156, RTL8156B | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | nonfree | Realtek 8/10 |
+| Realtek RTL8156, RTL8156B (`0BDA:8156`, `0BDA:8056`) | free `rtl815x` (simulated only) | free `rtl815x` | free `rtl815x` | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | free `rtl815x` (`RTLXP7.INF`) | nonfree | Realtek 8/10 |
 | Realtek RTL8157, RTL8159 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | Realtek 10+ |
 | Realtek RTL8150 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | candidate (Vista INF would install, owner question 8) | - |
 | Davicom DM9601 | step 2 | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | - |
 | Davicom DM9620/9621/9621A | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | step 2 | Davicom 8 |
 | Davicom DM9622 (`0A46:9622`) | step 2 | step 2 | step 2 | **gap** | **gap** | **gap** | **gap** | - |
-| CoreChips SR9700, SR9800 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | - |
+| CoreChips SR9700, SR9800 | free `sr9700`, `ax88772` (simulated only; 2026-11-06) | same | same (built, no leg) | same (built, no leg) | same (x64 build, no leg) | same (built, no leg) | same (built, no leg) | - |
 | WCH CH9200 | **gap** | **gap** | **gap** | **gap** | **gap** | **gap** | gap (U: WCH 7+ driver reported) | U |
 | Microchip LAN9500/9505/9530/9730/9900/EC00 | **gap** | **gap** | **gap** | step 2 (U licence) | step 2 (U) | step 2 (U) | step 2 (U) | in box (11; 10 U) |
 | Microchip LAN7500/7505 | **gap** | **gap** | **gap** | gap (U: package not obtained) | gap (U) | gap (U) | gap (U) | in box (11) |
@@ -116,8 +116,8 @@ offers a driver for.
 | AX88279 | `0B95:1790` revs `0400`, `0500` | as AX88179A | Windows 8 (3.18.1.0) | none | as AX88179A |
 | AX88279A | U | U | Windows 10 (4.20.1.0) | none | - |
 | AX88772E | U (not in the Win8 INF's model list; U) | U (`cdc_ncm` if it presents NCM: U) | Windows 8 (3.18.1.0) | none | - |
-| AX88772C | `0B95:772B` (rev `0002`), `0B95:7E2B` | `asix_devices.c` (`ax88772b_info`) | Windows 7 (5.12.12.0 x86, 5.14.12.0 x64, 2015-05-14), live | AX88772B XP/2000 5.4.3.0, XP x64 5.6.3.0, Vista 5.8.2.0/5.10.2.0 (2010-05-21), archived official | none |
-| AX88772B | `0B95:772B` (rev `0001`) | `asix_devices.c` | no page today (EOL) | as AX88772C | none |
+| AX88772C | `0B95:772B` (rev `0002`), `0B95:7E2B` | `asix_devices.c` (`ax88772b_info`) | Windows 7 (5.12.12.0 x86, 5.14.12.0 x64, 2015-05-14), live (read again 2026-11-06: 7 to 11, and an XP-to-10 setup program; no 98, ME or 2000) | AX88772B XP/2000 5.4.3.0, XP x64 5.6.3.0, Vista 5.8.2.0/5.10.2.0 (2010-05-21), archived official | `ax88772b/` 2000 to 7 (since v1.1.0); free `ax88772` on 98 SE and ME |
+| AX88772B | `0B95:772B` (rev `0001`) | `asix_devices.c` | no page today (EOL) | as AX88772C | as AX88772C |
 | AX88772A, AX88760 | `0B95:772A` | `asix_devices.c` (`ax88772_info`) | no page today | 98 SE/ME 3.0.3.12; 2000/XP 3.4.3.38; XP x64 3.6.3.18; Vista 3.8.3.22 / 3.10.3.14; 7 3.12.3.2 / 3.14.3.2, archived official | 98 SE to XP |
 | AX88772 | `0B95:7720` | `asix_devices.c` | no page today | same | 98 SE to XP |
 | AX88178 | `0B95:1780` | `asix_devices.c` (`ax88178_info`) | no page today | 98 SE/ME 1.0.3.46; 2000/XP 1.4.3.64; XP x64 1.6.3.64; Vista 1.8.3.14 / 1.10.3.14; 7 1.12.6.0 / 1.14.6.0, archived official | none |
@@ -146,7 +146,7 @@ on Vista; the AX88772B/C 7 INF adds `2001:1A02` (D-Link DUB-E100 C1).
 | RTL8153C (`6400`) | `0BDA:8153` revs `32xx` (U: from the 7 INF's revision list, not named) | `r8152.c` | 7 (U) | explicit `32xx` lines in the 7 INF only; the XP and Vista INFs also match `0BDA:8153` without a revision, so Windows would offer them (U whether those drivers run the chip) |
 | RTL8153D | `0BDA:8053` (revs `33xx`, the 7 INF's `RTL8153D*` sections); the 7 INF also lists `0BDA:8153` at revs `33xx` (chip not named, U) | `r8152.c` matches `0BDA:8053` | 7 | 7 only |
 | RTL8156 (`7020`, `7030`) | `0BDA:8156` revs `30xx` | `r8152.c` | 7 7.61.20 (2021/12/28) | 7 only |
-| RTL8156B(G) (`7410`, `7420`) | `0BDA:8156` revs `31xx`, `0BDA:8056` | `r8152.c` | 7 7.61.20 | 7 only |
+| RTL8156B(G) (`7400`, `7410`) | `0BDA:8156` revs `31xx`, `0BDA:8056` | `r8152.c` | 7 7.61.20 | 7 only |
 | RTL8155 | `0BDA:8155` | `r8152.c` | 7 | 7 only |
 | RTL8157 (5G) | `0BDA:8157` (`8057`, `A157`) | `r8152.c` (`RTL_VER_16`, `r8157_*` paths) | Windows 10 10.68.20 (2026/08/31); the 8/8.1 package 8.68.20 not read (U) | none: the 7 INF has these lines **commented out** |
 | RTL8159 (10G) | `0BDA:815A` (`805A`, `A15A`) | `r8152.c` (`RTL_VER_17`) | Windows 10 10.68.20 | none (commented out in the 7 INF) |
@@ -187,8 +187,8 @@ Linux's table (none has its own row in `r8152.c`); their dongles match by
 |---|---|---|---|---|
 | Davicom DM9601 | `0A46:9601` and 12 OEM/clone ids | `dm9601.c` | 98/ME 2.0.100706.02 (2010, also 9620/9621/9622); DM9621A package 5.0.1.0 (2012-11-21, "Win98/2K", INF with `$CHICAGO$` and NT sections, 6 ids); ME 1.60, 2000 2.10, XP 1.90 "Logo" drivers (2002); none for XP x64, Vista or 7 (the V1.0.4.0 INFs for those omit `9601`) | none |
 | Davicom DM9620/9621/9621A/9622 | `0A46:9620`, `9621`, `9622`, `0269`, `1269` | `dm9601.c` | the above, plus "DM96xx Driver V1.0.4.0" (2013, one installer): 2000 3.0.2.0416, XP and XP x64 5.0.2.0709, Vista 5.0.2.0406, 7 and 8 5.0.3.0703 | none |
-| CoreChips SR9700 | `0FE6:9700`, `9702` | `sr9700.c` | none found (corechip-sz.com not archived) | none |
-| CoreChips SR9800 | `0FE6:9800` | `sr9800.c` | none found | none |
+| CoreChips SR9700 | `0FE6:9700`, `9702` | `sr9700.c` | none found. 2026-11-06: corechip-sz.com reachable; its SR9700 page offers no driver, its download list (login required) has SR9900 and hub files only; copies said to be SR9700 drivers exist on third-party driver sites only (not makers' sites) | none |
+| CoreChips SR9800 | `0FE6:9800` | `sr9800.c` | none found (2026-11-06: not listed on corechip-sz.com; third-party driver sites only) | none |
 | WCH CH9200 | `1A86:E092` | `ch9200.c` | none read; a 7+ driver (`ch9100nic.inf` 1.0.0.0, 2013) is reported by third-party listings only (U) | none |
 | Microchip LAN9500/9505/9530/9730/9900-9909/EC00 | `0424:9500` and 17 more | `smsc95xx.c` | `lan9500-wdf-v18.12.18.0.zip`: XP x86/x64 2.6.5.0 (NDIS 5.1, KMDF 1.9), Vista 2.11.0.0, 7 2.17.0.0 | none |
 | Microchip LAN7500/7505 | `0424:7500`, `7505` | `smsc75xx.c` | the package `lan7500-wdf-v18.12.18.0.zip` is named in Microchip's readme (XP to 10, per a search summary: U); no copy obtained | none |
@@ -263,15 +263,16 @@ drivers in 44.68).
 
 | Chip | Systems left uncovered | Why |
 |---|---|---|
-| AX88772B, AX88772C | 98 SE, ME | ASIX's 98/ME driver (3.0.3.12, 3.0.1.11) lists only `0B95:7720`/`772A`; no 772B build found. Stays uncovered |
+| AX88772B, AX88772C | 98 SE, ME | ASIX's 98/ME driver (3.0.3.12, 3.0.1.11) lists only `0B95:7720`/`772A`; no 772B build found. Covered by the free `ax88772` from 2026-11-06 (owner: xHCI98 roadmap 47.26; ethernet.md section 6.8) |
 | AX88172 | XP x64, Vista, 7 | no build found. Stays uncovered |
 | AX88172A | 98 SE, ME | no build found. Stays uncovered |
 | AX88772E, AX88279A | 98 SE to 7 | ASIX lists 8 or 10 and later; id not settled (U); `cdcnet` if they present NCM (U). Stays uncovered |
-| RTL8156, RTL8156B | 98 SE, ME, 2000 | `rtl815x` refuses the chip version at start; `cdcnet` only if the dongle offers an ECM/NCM configuration (U). Stays uncovered |
-| RTL8156, RTL8156B | XP, XP x64, Vista | Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`. Stays uncovered |
+| RTL8156, RTL8156B on `0BDA:8156` | none (closed; update of 2026-11-06) | No maker's driver covers 98 SE to Vista: Realtek's XP 5.23 and Vista 6.27 INFs do not list `0BDA:8156`/`8056`, and Realtek offers nothing older than XP. `rtl815x` serves them there: chip ids `7020` to `7410` since task 44.70; `RTL81598.INF`, `RTL815X.INF`, and `RTLXP7.INF` for XP, XP x64 and Vista. Simulated legs only ([testing/2026-11-06-rtl8156.md](../testing/2026-11-06-rtl8156.md)). `0BDA:8056`: the next row |
+| RTL8156B on `0BDA:8056` | none (closed, 2026-11-06) | listed from the maker's INF, no device seen: the id is in Realtek's 7 INF only (its RTL8156B sections), not in Linux's table. Owner, 2026-11-06: `rtl815x` lists it on 98 SE to Vista; the chip is read from its id register. One simulator leg (XP) |
+| Realtek-listed ids of 2026-11-07 (`0BDA:8052`, `8057`, `A157`, `805A`, `A15A`; D-Link, TP-Link, Lenovo and retail rebrands) | as for their chip | listed from the maker's INFs (Realtek's 7 INF 7.61.20, its Windows 10 INF 10.68.20), no device seen. Owner, 2026-11-07: `rtl815x` lists every one on 98 SE, ME and 2000, and on XP to 7 only the RTL8156, 8156B, 8157 and 8159 ones that Realtek's XP to 7 INFs leave out (ethernet.md section 7.6) |
 | RTL8157, RTL8159 | 98 SE to 7 | Realtek: Windows 10 and later; the 7 INF's lines are commented out. Stays uncovered |
 | DM9601 | XP x64, Vista, 7 | Davicom's XP x64/Vista/7 INFs omit `0A46:9601`. Stays uncovered |
-| SR9700, SR9800 | 98 SE to 7 | no maker's driver found. Stays uncovered |
+| SR9700, SR9800 | 98 SE to 7 | no maker's driver found (searched again 2026-11-06). The free drivers of ethernet.md section 6.9 aim at all of these (owner: xHCI98 roadmap 47.27) |
 | CH9200 | 98 SE to 7 | none read (a 7+ driver reported, U). Stays uncovered |
 | LAN9500 family | 98 SE, ME, 2000 | Microchip's oldest is XP. Stays uncovered |
 | LAN7500/7505 | 98 SE to 7 | package not obtained (U); Microchip site refused this host. Stays uncovered until read |

@@ -753,8 +753,15 @@ def main():
                     help='receiver: a pad switches on on SLOT, SECONDS after configuration')
     ap.add_argument('--leave', action='append', default=[], metavar='SLOT:SECONDS',
                     help='receiver: the pad on SLOT switches off')
+    ap.add_argument('--vid', type=lambda v: int(v, 16), help='hex: another vendor id (e.g. 045E for a '
+                    'reference driver that lists only the maker\'s ids)')
+    ap.add_argument('--pid', type=lambda v: int(v, 16), help='hex: another product id (e.g. 028E)')
     args = ap.parse_args()
     VARIANT[0] = args.variant
+    if args.vid is not None:
+        PROFILES[args.profile]['vid'] = args.vid
+    if args.pid is not None:
+        PROFILES[args.profile]['pid'] = args.pid
     events = [(float(t), int(sl), True) for sl, t in (x.split(':') for x in args.join)] + \
         [(float(t), int(sl), False) for sl, t in (x.split(':') for x in args.leave)]
     if any(not 0 <= e[1] <= 3 for e in events):

@@ -20,3 +20,26 @@ SHA-256:
 
 No device serial string was requested. Files are USB descriptor data, not
 driver binaries. HUBDESC.TXT records the acquisition and endpoint facts.
+
+## Added 2026-11-07: the report descriptor and the class answers
+
+`HIDREPORT.BIN` (142 bytes, the length the HID descriptor declares) is
+interface 3's report descriptor as the same unit answered Windows 10
+22H2's own HID driver, the device passed to a QEMU guest by `usb-host`
+(WinUSB on the host, bound by the owner) and read from `usb-host`'s
+`pcap=` capture; the `logi` profile of `uac1emu.py` replays it. SHA-256
+`172cbc17e9a3eb707c22acf242edd005d6e677126bddcbd0ee5b85ea17db6d99`.
+The serial string is not recorded.
+
+The answers the unit gave Windows' own `usbaudio.sys` (XP SP3 and 10):
+
+| Request | Answer |
+|---|---|
+| Feature Unit 2 (microphone) volume MIN/MAX/RES/CUR | `E200` (-30 dB) / `0000` / `0100` / `F102` (off the 1 dB grid); mute and AGC CUR `00` |
+| Feature Unit 5 (speaker, master) volume MIN/MAX/RES/CUR | `CE00` (-50 dB) / `0000` / `0100` / `EF00` (-17 dB); mute CUR `00` |
+| Feature Unit 11 (sidetone) volume MIN/MAX/RES/CUR | `C700` (-57 dB) / `F400` (-12 dB) / `0180` (1.5 dB) / `DD80` |
+| Mixer Unit 12 CUR (`0101` to `0203`) | stall |
+| String 6 (input terminal 10's iTerminal) | "Sidetone" |
+| Device qualifier, string `0xEE` | stall |
+| A volume SET_CUR off the grid (XP sent `DA81`) | taken |
+| SET_CUR sampling frequency (XP: 192000, 48000, 44100 on `0x01`; 16000, 48000 on `0x81`) | taken |

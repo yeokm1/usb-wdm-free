@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ncmemu as n  # noqa: E402
-from rtlemu import HOST_MAC, HOST_IP, GUEST_IP, ipv4, checksum  # noqa: E402
+from axemu import HOST_MAC, HOST_IP, GUEST_IP, ipv4, checksum  # noqa: E402
 
 DLL_PATH = Path(__file__).resolve().parents[3] / 'out/net/cdcnet/hostabi/cdccore.dll'
 U8P = c.POINTER(c.c_ubyte)
@@ -243,6 +243,71 @@ class Tests(unittest.TestCase):
         # A broken NTB is reported, not passed silently.
         datagrams, problems = n.parse_out_ntb(b'NCMH' + bytes(20), m.f)
         self.assertTrue(problems)
+
+    def test_payload_alignment_is_accepted(self):
+        """Linux's cdc_ncm places the payload after the Ethernet header at
+        the remainder; cdcnet places the datagram itself. Both pass."""
+        m = self.model()
+        for at in (16, 14):
+            frame = bytes(60)
+            ndp = (at + len(frame) + 3) & ~3
+            b = bytearray(ndp + 16)
+            struct.pack_into('<IHHHH', b, 0, n.NTH16, 12, 1, len(b), ndp)
+            b[at:at + len(frame)] = frame
+            struct.pack_into('<IHHHHHH', b, ndp, n.NDP16, 16, 0, at, len(frame), 0, 0)
+            datagrams, problems = n.parse_out_ntb(bytes(b), m.f, m.totals)
+            self.assertEqual((len(datagrams), problems), (1, []), at)
+        self.assertEqual((m.totals['tx_aligned_datagram'], m.totals['tx_aligned_payload']), (1, 1))
+        b[14:16] = b'\0\0'
+        struct.pack_into('<H', b, ndp + 8, 15)
+        self.assertTrue(n.parse_out_ntb(bytes(b), m.f)[1])       # neither placement
+
+    def test_packet_at_a_time(self):
+        """A Full Speed host on UHCI sends an NTB a 64-byte packet at a time;
+        it is joined up until its short packet or ZLP."""
+        m = self.model(speed='full')
+        p = self.bring_up(m)
+        whole = m.handle
+
+        def split(kind, ident, packet):
+            if kind != 101 or packet[0] != n.EP_OUT:
+                return whole(kind, ident, packet)
+            data = packet[10:]
+            for at in range(0, len(data), 64):
+                piece = data[at:at + 64]
+                whole(101, ident, struct.pack('<BBHIH', n.EP_OUT, 0, len(piece), 0, 0) + piece)
+            if len(data) % 64 == 0:
+                whole(101, ident, struct.pack('<BBHIH', n.EP_OUT, 0, 0, 0, 0))
+        m.handle = split
+        frames = [n.GUEST_MAC + HOST_MAC + b'\x08\x00' + bytes([k]) * (46 + 150 * k) for k in range(4)]
+        self.tx(m, p, frames)
+        bad = [json.loads(x) for x in self.trace.getvalue().splitlines() if '"ntb_out_bad"' in x]
+        self.assertEqual((bad, m.totals['tx_ntbs'], m.totals['tx_datagrams']), ([], 1, 4))
+
+    def test_packet_joining_ends(self):
+        """A ZLP ends an NTB on a packet boundary, dwNtbOutMaxSize ends one
+        without it, and a data-interface restart drops a cut-off NTB."""
+        m = self.model(speed='full', out_max=256)
+        m.handle(6, 1, b'\x01')
+        m.handle(9, 3, b'\x01\x01')
+        got = []
+        m.transmit = got.append
+
+        def out(data):
+            m.handle(101, 7, struct.pack('<BBHIH', n.EP_OUT, 0, len(data), 0, 0) + data)
+        out(bytes(64))
+        out(bytes(64))
+        self.assertEqual(got, [])
+        out(b'')
+        self.assertEqual([len(x) for x in got], [128])
+        for _ in range(4):
+            out(bytes(64))
+        self.assertEqual([len(x) for x in got], [128, 256])
+        out(b'\1' * 64)
+        m.handle(9, 4, b'\x01\x00')
+        m.handle(9, 5, b'\x01\x01')
+        out(b'\2' * 10)
+        self.assertEqual(got[-1], b'\2' * 10)
 
     def test_arp_icmp_dhcp_round_trip(self):
         m = self.model(caps=0x21)

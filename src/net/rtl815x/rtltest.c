@@ -271,6 +271,7 @@ static void BringUp(nc_u16 id, nc_u8 speed)
     else if (Is8153(id)) CHECK(par.RxSize == (speed == NC_SPEED_SUPER ? 32768UL : 16384UL));
     else CHECK(par.RxSize == 32768);
     CHECK(par.TxHeader == 8 && par.TxAlign == 4 && par.TxSize == 16384 && par.TxSlots == 4);
+    CHECK(par.TxBatch == 64 && par.Offload == 0 && par.LsoMax == 0);   /* no offload on the first format */
     /* After up: receive accept off, RX aggregation on, VLAN untag off,
      * RMS 1522, the MAC not yet receiving (CR RE/TE clear). */
     CHECK((Dword(m->Pla, MR_RX_ACCEPT) & ACC_MASK) == 0);
@@ -673,6 +674,24 @@ static void Datapath(void)
     n = 1024;
     CHECK(NetPackageChip.TxEnd(state, b, &n, sizeof(b), 512) == 0 && n == 1024);
 
+    /* The first format's receive checksum bits (Linux rx_desc), and the
+     * transmit bits in the first two dwords (no chip of this format offers
+     * them yet; the routine is the same). */
+    memset(b, 0, 64);
+    b[4 + 2] = 0x48;                                /* dword 1: IPv4 (bit 19), TCP (bit 22) */
+    CHECK(NetPackageChip.RxChecksum(state, b + 24) == (NC_RX_IP_OK | NC_RX_TCP_OK));
+    b[8 + 2] = 0x20;                                /* dword 2: TCP failed (bit 21) */
+    CHECK(NetPackageChip.RxChecksum(state, b + 24) == NC_RX_IP_OK);
+    b[8 + 2] = 0x80;                                /* IP failed (bit 23) */
+    CHECK(NetPackageChip.RxChecksum(state, b + 24) == 0);
+    {
+        NET_TX_INFO t;
+        t.Flags = NC_TX_LSO4; t.Mss = 1448; t.Transport = 34;
+        NetPackageChip.TxHeader(state, h, 9000, 512, 0);
+        NetPackageChip.TxOffload(state, h, &t);
+        CHECK(Dword(h, 0) == (0xd0000000UL | (34UL << 18) | 9000) && Dword(h, 4) == (1448UL << 17));
+    }
+
     CHECK(NetPackageChip.Status(state, irq, 1) == -1);
     CHECK(NetPackageChip.Status(state, irq, 2) == 0);
     irq[0] = IRQ_LINK;
@@ -715,7 +734,10 @@ static void BringUpV2(nc_u16 id, nc_u8 speed)
     CHECK(m->Count < 3000);
     CHECK(memcmp(par.Mac, backupMac, 6) == 0 && memcmp(m->Pla + MR_NODE_ID, backupMac, 6) == 0);
     CHECK(par.RxSize == 32768UL);
-    CHECK(par.TxHeader == 16 && par.TxAlign == 16 && par.TxSize == 16384 && par.TxSlots == 4);
+    CHECK(par.TxHeader == 16 && par.TxAlign == 16 && par.TxSize == 32768 && par.TxSlots == 4);
+    CHECK(par.TxBatch == 64 && par.LsoMax == 0);                       /* no large send offered */
+    CHECK(par.Offload == (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4));  /* transmit only */
+    CHECK(par.RxCount == 8);
     /* base setup */
     CHECK(m->Usb[0xcffe] & 0x08);
     CHECK((m->Usb[UR_ECM_OP] & 1) == 0 && (Word(m->Usb, UR_ECM_OPTION) & 0x0020));
@@ -938,6 +960,54 @@ static void LinkV2(nc_u16 id)
     CHECK((m->Phy[PR_MGIG_CTRL / 2] & (MGIG_2G5 | MGIG_5G | MGIG_10G)) == 0);
 }
 
+/* Offload bits (V2 started): the transmit values are those Realtek's
+ * Windows driver wrote on a real RTL8157 (TCP and UDP checksums with the
+ * header at 34, the IPv4 checksum alone, a large send with MSS 1460; its
+ * large send left the header offset 0 where Linux gives it); the receive
+ * values are the real chip's third dword for TCP, UDP, ICMP and ARP. */
+static nc_u32 RxSum(nc_u32 d2)
+{
+    nc_u8 rec[16 + 64];
+    memset(rec, 0, sizeof(rec));
+    rec[8] = (nc_u8)d2; rec[9] = (nc_u8)(d2 >> 8); rec[10] = (nc_u8)(d2 >> 16); rec[11] = (nc_u8)(d2 >> 24);
+    return NetPackageChip.RxChecksum(state, rec + 16);
+}
+
+static void OffloadsV2(void)
+{
+    nc_u8 h[16];
+    NET_TX_INFO t;
+    CHECK(NetPackageChip.TxOffload != 0 && NetPackageChip.RxChecksum != 0);
+    NetPackageChip.TxHeader(state, h, 1514, 1024, 0);
+    t.Flags = NC_TX_TCP4; t.Mss = 0; t.Transport = 34;
+    NetPackageChip.TxOffload(state, h, &t);
+    CHECK(Dword(h, 0) == (0xc0000000UL | 1514) && Dword(h, 4) == 0x60440000UL);
+    CHECK(Dword(h, 8) == (1514UL << 4) && Dword(h, 12) == 0xa8000000UL);
+    NetPackageChip.TxHeader(state, h, 1514, 1024, 0);
+    t.Flags = NC_TX_UDP4 | NC_TX_IP4;
+    NetPackageChip.TxOffload(state, h, &t);
+    CHECK(Dword(h, 4) == 0xa0440000UL);
+    NetPackageChip.TxHeader(state, h, 1514, 1024, 0);
+    t.Flags = NC_TX_IP4;
+    NetPackageChip.TxOffload(state, h, &t);
+    CHECK(Dword(h, 4) == 0x20000000UL);
+    NetPackageChip.TxHeader(state, h, 32822, 1024, 0);
+    t.Flags = NC_TX_LSO4; t.Mss = 1460; t.Transport = 34;
+    NetPackageChip.TxOffload(state, h, &t);
+    CHECK(Dword(h, 0) == (0xd0000000UL | (34UL << 18) | 32822) && Dword(h, 4) == 0x0b680000UL);
+    CHECK(Dword(h, 8) == (32822UL << 4) && Dword(h, 12) == 0xa8000000UL);
+    NetPackageChip.TxHeader(state, h, 32822, 1024, 0);
+    t.Mss = 9000;                                   /* the field's largest */
+    NetPackageChip.TxOffload(state, h, &t);
+    CHECK(Dword(h, 4) == (0x7ffUL << 17));
+    CHECK(RxSum(0x02004400UL) == (NC_RX_IP_OK | NC_RX_TCP_OK));
+    CHECK(RxSum(0x01004800UL) == (NC_RX_IP_OK | NC_RX_UDP_OK));
+    CHECK(RxSum(0x03004000UL) == NC_RX_IP_OK);
+    CHECK(RxSum(0x07000000UL) == 0);
+    CHECK(RxSum(0x06004400UL) == 0);               /* IP checksum failed */
+    CHECK(RxSum(0x03004400UL) == NC_RX_IP_OK);     /* TCP checksum failed */
+}
+
 static nc_u32 AggV2(nc_u8 *b, const nc_u32 *len, nc_u32 count)
 {
     nc_u32 at = 0, i, k;
@@ -998,6 +1068,7 @@ static void DatapathV2(nc_u16 id)
     CHECK(Dword(h, 0) == (0xc0000000UL | 1514) && Dword(h, 8) == (1514UL << 4));
     n = 1024;
     CHECK(NetPackageChip.TxEnd(state, b, &n, sizeof(b), 1024) == 0 && n == 1024);
+    OffloadsV2();
 }
 
 /* ---------------- probe ---------------- */

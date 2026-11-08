@@ -24,7 +24,9 @@ NDIS.SYS!NdisFreePacketPool
 NDIS.SYS!NdisFreeSpinLock
 NDIS.SYS!NdisGetCurrentSystemTime
 NDIS.SYS!NdisInitializeWrapper
+NDIS.SYS!NdisMCancelTimer
 NDIS.SYS!NdisMGetDeviceProperty
+NDIS.SYS!NdisMInitializeTimer
 NDIS.SYS!NdisMRegisterMiniport
 NDIS.SYS!NdisMSetAttributesEx
 NDIS.SYS!NdisMSleep
@@ -34,6 +36,7 @@ NDIS.SYS!NdisQueryBufferOffset
 NDIS.SYS!NdisReadConfiguration
 NDIS.SYS!NdisReadNetworkAddress
 NDIS.SYS!NdisReleaseSpinLock
+NDIS.SYS!NdisSetTimer
 NDIS.SYS!NdisTerminateWrapper
 NDIS.SYS!NdisUnchainBufferAtFront
 NDIS.SYS!NdisWriteConfiguration

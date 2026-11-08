@@ -207,3 +207,40 @@ NUSB 3.3 with QEMU's EHCI and `usb-redir`, NUSB polls a 1 ms isochronous
 IN endpoint at every microframe and most polls come back successful and
 empty (in passing `hs24` plays about one value per 600 polls; under NUSB's
 UHCI, `fs`, nearly every poll carries a value).
+
+## Addendum 2026-11-08 (later): candidates D, E and E2
+
+Design 25.7 and 25.8 on `w47-u2nusb-e`. All under 98 SE, NUSB 3.3
+(`w98n2`), the usb4-emu fork, with the stats read after every play
+(mx9x), unless said otherwise.
+
+| Build | Change over the one before | Profile | Plays | PASS | Stops |
+|---|---|---|---|---|---|
+| D `8ac495f` | feedback URB refused for its start frame: resubmitted, up to 8 in a row | fs | 7 | 6 | 1: 9 refusals in a row from the start (no recovery without a reset) |
+| D | | hs24 | 6 | 3 | 0 (3 pace: 6/8 or 7/8 at 15 s, stream running) |
+| E `b2fb4d8` | at the 8th refusal feedback turns off for the stream, which plays on | fs | 24 | 19 | 5: a data URB refused (`DataUrbFailed` 1, `C0000A00`), stream ended; in 2 feedback was already off. 7 guests on the host at the time |
+| E | | hs24 | 11 | 11 | 0 |
+| E2 `2d336fa` | a data URB refused as a whole is a lost interval (1 s run limit) | fs | 6 | 5 | 1: feedback off after 8 refusals and 250 data URBs refused in a row (`DataUrbFailed` 250), ended `C000009C` by the run limit, both pipes refused for 1 s |
+| E2 | | hs24 | 8 | 8 | 0 |
+
+E2's legs ran 3 guests at a time; they were stopped early for a host
+restart, before 12 plays per profile.
+
+Under Windows' own stacks on the fork:
+
+| System | Build | Profiles | Result |
+|---|---|---|---|
+| XP, EHCI/UHCI | E, E2 | x4full then x4, 3 rounds each in one boot | every play PASS, no STOP 0xC2 |
+| XP, EHCI | C | x4full then x4: 2 leg sets and 3 rounds | every play PASS, no STOP |
+| XP, EHCI | 24925d7f (bf92407) | x4full then x4, 3 rounds | no STOP (one x4full play failed) |
+| 7 x86, EHCI/UHCI | E, E2 | x4full, multi, fs | x4full first, replug, restart PASS; multi PASS; fs FAIL |
+| 7 x86 | D / 0.1.8.26 | multi, fs, cx31993, alc4080 | D: FAIL, FAIL, PASS, PASS; 0.1.8.26: FAIL, FAIL, PASS, FAIL |
+| 8 x86, EHCI | E / 0.1.8.26 | uac3dual | E: first, replug, restart PASS; 0.1.8.26: first FAIL, replug and restart PASS |
+
+7's fs (Full Speed on UHCI) and multi fail on 0.1.8.26 too: not
+regressions. The XP STOP 0xC2 seen once on 24925d7f did not recur in 14
+x4 plugs across C, E, E2 and 24925d7f; its cause is not established.
+
+Open: once NUSB's UHCI refuses start frames after a guest stall it keeps
+refusing on both pipes; E2 rides out feedback indefinitely and data for
+1 s. A pipe reset (abort, reset, resubmit) is not done.

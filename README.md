@@ -114,6 +114,10 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   USB audio driver too.
 - **98 SE: after a USB MIDI device is unplugged**, MIDI devices plugged
   in afterwards cannot be opened until Windows is restarted.
+- **98 SE: a USB network adapter plugged into a new port or at a new
+  speed is a new adapter to Windows**, and after five such adapters a
+  new one gets no TCP/IP (Windows' own limit). Remove unused adapters
+  in Network properties, or add TCP/IP to the new one.
 - **XP and XP x64 install their own USB audio driver for a `uac2` device
   first** ("USB Audio Device"). Changing it to `uac2` then hangs, and so
   do disabling it and shutting down after unplugging it; after a restart

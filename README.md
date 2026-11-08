@@ -62,12 +62,12 @@ that Windows.
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
 | `uac1` | Real device (VM); simulator (o) | - | - | - | - | - | - |
-| `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b) | Simulator only | Real device (VM) | Not evaluated |
+| `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b); real device (VM), x64 (q) | Simulator only; real device (VM), x64 (q) | Real device (VM); real device (VM), x64 (q) | Real device (VM), x64 (q) |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
 | `cdcnet` | Simulator only | Simulator only | Simulator only | Simulator only (f) | Not evaluated | Simulator only, x64 (f) | - |
-| `rtl815x` | Simulator only (j) | Simulator only (j) | Simulator only (j) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
+| `rtl815x` | Real device (VM), RTL8157 (p); simulator (j) | Simulator only (j) | Real device (VM), RTL8157 (p); simulator (j) | Real device (VM), RTL8157 (p); simulator, x86 and x64 (k) | Simulator only, x86 and x64 (k) | Simulator only, x86 and x64 (k) | - |
 | `ax88179` | Real PC (l); real device (VM) | Real device (VM) | Not evaluated | - | - | - | - |
 | `ax88772` | Simulator only | Simulator only | Simulator only, SR9800 (m) | Simulator only, SR9800, x86 and x64 (m) | Not evaluated | Simulator only, SR9800, x86 and x64 (m) | - |
 | `sr9700` | Simulator only (n) | Simulator only | Simulator only (m) | Simulator only, x86 and x64 (m) | Not evaluated | Simulator only, x86 and x64 (m) | - |
@@ -91,7 +91,9 @@ that Windows.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 - (m) Under xHCI98.
 - (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
-- (o) Under xHCI98: the Logi USB Headset, and simulated headsets, DACs and a copy of the Sound Blaster Play! 2's layout. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
+- (o) Under xHCI98: the real Logi USB Headset (`046D:0A64`), passed through: install, playback at 48 and 44.1 kHz, volume and mute, recording at 48 kHz (`docs/testing/2026-11-07-uac1-98se.md`); a simulator replaying the real Creative Sound Blaster Play! 2 (`041E:323D`) from its captured descriptors (the real Play! 2 itself not yet run with `uac1`); and simulated headsets and DACs. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
+- (p) A real RTL8157 (`0BDA:8157`) under xHCI98 at 5 Gb/s: link, pings, two-way TCP with every byte checked, unplug under traffic and replug, and Device Manager's disable and enable (`docs/testing/2026-11-07-rtl8157-hardware.md`, `2026-11-07-rtl8157-performance.md`).
+- (q) A real Creative Sound Blaster X4 (`041E:3278`) and X1 (`041E:3286`) on XP x64, Vista x64, 7 x64, 8 x64 and 8.1 x64: playback on both, and recording on the X1 (`docs/testing/2026-11-05-uac2-build26-nt6x64.md`).
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

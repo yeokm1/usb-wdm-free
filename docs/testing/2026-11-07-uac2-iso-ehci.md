@@ -128,3 +128,82 @@ showed.
 - The slow first plugs on 2000 above.
 - 8 x86 under Windows' own stack (an intermittent `x4full` stop seen
   in the matrix, the same family as 7's; not run here).
+
+## Addendum 2026-11-08: 98 SE under NUSB, feedback that comes back empty
+
+The matrix found the release build of this record (`w47-rel019`
+`bf92407`, `uac2wdm.sys` `24925d7f...`) stopping playback on 98 SE under
+NUSB 3.3 (base `w98n2`): one burst of OUT packets in the first 0.2 to
+0.3 s, then none, `completed=0/8`, in 4 of 22 plays (`hs24`, `fs` on
+NUSB's UHCI, `uac3dual`); the build before this work (`8e2b8729...`) in
+0 of 33 at the time, the same build under xHCI98 in 0 of 7.
+
+Two trace legs under NUSB did not catch it (one played, one wedged at
+the plug). A first fix (`w47-u2nusb` `408cd92`: the deadline of 25.3 on
+both clocks, so it can never fire earlier than before this record) still
+stopped one `hs24` play, after 1 s of OUT. A second candidate with the
+pre-record deadline and retirement order (`w47-u2nusb-b` `eae4b91`)
+stopped one too. With `uac2`'s own per-stream stats read from the
+registry after each play (`Uac2UsbStats`), that stop read:
+`LastStatus` `STATUS_IO_TIMEOUT` (the feedback start deadline),
+`GoodFeedback` 0, 6016 feedback packets all successful and zero-length,
+754 feedback URBs over 751 frames, no data URB failed; the simulator sent
+a value in every frame. NUSB polls the 1 ms feedback endpoint at every
+microframe, and the emulator's passthrough answers most polls empty (in
+plays that went on, about one value in 600 polls). Since design 23 an
+empty answer before the first value counted as bad, so the 1 s start
+deadline ended any stream whose first value came late. That rule is the
+same in every build since 23; this record's bus-time deadline (25.3)
+made it fire sooner (its count ran ahead of the time that passed), which
+is how the stall became frequent. The fix (design 25.6, `95f9912` on
+`w47-u2nusb`, forward from `408cd92`): before the first value a
+successful empty packet is not bad and keeps the start deadline away;
+the stream plays at the nominal cadence until a value comes. Shared with
+`uac1`.
+
+Builds of `95f9912` (free): `uac2wdm.sys` x86 `04e88ea2794d628e...`,
+x64 `e1fb6497d32f4240...` (unsigned); `uac1wdm.sys` x86
+`13adbefc44781c4f...`. Host tests: `rtest.cmd` 108583, `test.cmd`,
+`uac1` `test.cmd` 1144.
+
+Legs:
+
+| Build | System, stack, QEMU | Profiles | Result |
+|---|---|---|---|
+| `408cd92` | XP, Windows' EHCI/UHCI, fork (`11080253`) | `multi`, `fs` | every play, record, replug, restart PASS, in real time |
+| `408cd92` | 7, Windows' EHCI, fork (`11080254`) | `x4full` | play, record, replug, restart PASS, in real time |
+| `95f9912` | XP, Windows' EHCI/UHCI, fork (`11080536`) | `multi`, `fs` | every play, record, replug, restart PASS, in real time |
+| `95f9912` | 7, Windows' EHCI, fork (`11080537`) | `x4full` | play, record, replug, restart PASS, in real time |
+| `95f9912` | 98 SE, NUSB 3.3 (`w98n2`), the usb4-emu fork | `hs24` | 12 plays, 12 PASS (6.7 to 15.8 s for a 5 s play: this rig's NUSB High Speed pace; every build is as slow here) |
+| `95f9912` | 98 SE, NUSB's UHCI, fork | `fs` | 20 plays, 18 PASS; 2 stopped after 1.4 and 2.1 s when one feedback URB came back `USBD_STATUS_BAD_START_FRAME` (below) |
+| `95f9912` | 98 SE, NUSB 3.3, fork | `x4full`, `multi` | 1 play each, PASS |
+| `95f9912` | 98 SE, xHCI98, fork | `fs`, `hs24`, `x4full` | 3, 1 and 1 plays, all PASS |
+| `8e2b8729` (control) | 98 SE, NUSB's UHCI, fork, beside the `95f9912` legs | `fs` | 8 plays, 7 PASS; 1 stopped mid-stream at the feedback deadline (`STATUS_IO_TIMEOUT`, the stream active, no URB failed) |
+
+No play of `95f9912` stopped at the feedback start deadline (the
+regression's signature: `completed=0/8` after an OUT burst of 0.2 to 1 s);
+the candidates before it, with their stats: `408cd92` 1 such stop in 15
+`hs24` plays, `eae4b91` 1 in 4.
+
+Mid-stream stops under NUSB's UHCI, in every build (known, not changed in
+0.1.9): after a guest stall, `8e2b8729` ends the stream at its 200 ms
+wall-time deadline, `95f9912` (both clocks, 25.3) rides the stall out but
+ends when NUSB then refuses one feedback URB with
+`USBD_STATUS_BAD_START_FRAME` (`STATUS_DEVICE_DATA_ERROR`, feedback good
+until then). In these legs: `95f9912` 2 in 20 `fs` plays, `8e2b8729` 1 in
+8, so the change is not read as making that stop more likely. A planned
+follow-up (0.1.10), branch `w47-u2nusb-d` `8ac495f` (design 25.7 there):
+a feedback URB, and only a feedback URB, refused for its start frame is
+passed over and resubmitted, up to 8 in a row; its XP (`multi`, `fs`) and
+7 (`x4full`) legs on the fork passed, in real time; its NUSB legs are not
+run.
+
+The unplug-while-playing step left the play stuck on `95f9912` too (NUSB
+`x4full`, xHCI98 `hs24`), as with `8e2b8729` and 0.1.8.26 (design 26.11):
+not changed here.
+
+The feedback finding behind 25.6, for other drivers on this rig: under
+NUSB 3.3 with QEMU's EHCI and `usb-redir`, NUSB polls a 1 ms isochronous
+IN endpoint at every microframe and most polls come back successful and
+empty (in passing `hs24` plays about one value per 600 polls; under NUSB's
+UHCI, `fs`, nearly every poll carries a value).

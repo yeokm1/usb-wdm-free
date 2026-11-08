@@ -220,7 +220,7 @@ Design 25.7 and 25.8 on `w47-u2nusb-e`. All under 98 SE, NUSB 3.3
 | D | | hs24 | 6 | 3 | 0 (3 pace: 6/8 or 7/8 at 15 s, stream running) |
 | E `b2fb4d8` | at the 8th refusal feedback turns off for the stream, which plays on | fs | 24 | 19 | 5: a data URB refused (`DataUrbFailed` 1, `C0000A00`), stream ended; in 2 feedback was already off. 7 guests on the host at the time |
 | E | | hs24 | 11 | 11 | 0 |
-| E2 `2d336fa` | a data URB refused as a whole is a lost interval (1 s run limit) | fs | 5 | 4 | 1: feedback off after 8 refusals and 250 data URBs refused in a row (`DataUrbFailed` 250): the run limit ended it, both pipes refused for 1 s |
+| E2 `2d336fa` | a data URB refused as a whole is a lost interval (1 s run limit) | fs | 6 | 5 | 1: feedback off after 8 refusals and 250 data URBs refused in a row (`DataUrbFailed` 250), ended `C000009C` by the run limit, both pipes refused for 1 s |
 | E2 | | hs24 | 8 | 8 | 0 |
 
 E2's legs ran 3 guests at a time; they were stopped early for a host

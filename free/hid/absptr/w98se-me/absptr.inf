@@ -1,0 +1,186 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; absptr - Windows 98 SE and ME: absolute pointing devices Windows' own HID
+; support does not map to the pointer (docs/design/absptr.md sections 1, 8).
+; Copyright (C) 2026 Yeo Kheng Meng
+;
+; Listed: the Wacom PenPartner (USB\VID_056A&PID_0000) and HID touch
+; screens by id, each group with its source (design section 8). Other HID
+; touch screens and pens: Update Driver, "Have Disk", this folder. The
+; Generic model's id matches no real device; it is the entry "Have Disk"
+; offers for them.
+; hidclass.sys and hidparse.sys are not copied: they are Microsoft's and
+; come with the system's USB HID support, as for xpad98.
+[Version]
+Signature="$CHICAGO$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%Provider%
+DriverVer=11/06/2026,0.1.0.0
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%PenPartner%=ABSPTR,USB\VID_056A&PID_0000
+%Generic%=ABSPTR,USB\VID_FFFF&PID_FFFF&REV_FFFF
+; ids begin: listed by the source named above each group (ids only;
+; docs/design/absptr.md section 8)
+; Linux v6.12 drivers/hid/hid-multitouch.c, mt_devices[]
+; HID multi-touch screens (the HID Digitizer page)
+%T3M%=ABSPTR,USB\VID_0596&PID_0500
+%T3M%=ABSPTR,USB\VID_0596&PID_0502
+%T3M%=ABSPTR,USB\VID_0596&PID_0506
+%TATMEL%=ABSPTR,USB\VID_03EB&PID_2118
+%TBAANTO%=ABSPTR,USB\VID_2453&PID_0100
+%TCANDO%=ABSPTR,USB\VID_2087&PID_0A01
+%TCANDO%=ABSPTR,USB\VID_2087&PID_0F01
+%TCANDO%=ABSPTR,USB\VID_2087&PID_0703
+%TCHUNGHWA%=ABSPTR,USB\VID_2247&PID_0001
+%TCJTOUCH%=ABSPTR,USB\VID_24B8&PID_0020
+%TCJTOUCH%=ABSPTR,USB\VID_24B8&PID_0040
+%TCVTOUCH%=ABSPTR,USB\VID_1FF7&PID_0013
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_480D
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_480E
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_7207
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_720C
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_7224
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_722A
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_725E
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_7262
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_726B
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_72A1
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_72AA
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_72C4
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_72D0
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_72FA
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_7302
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_7349
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_73F7
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_A001
+%TEGALAX%=ABSPTR,USB\VID_0EEF&PID_C002
+%TELITE%=ABSPTR,USB\VID_03FC&PID_05D8
+%TFLATFROG%=ABSPTR,USB\VID_25B5&PID_0002
+%TFOCAL%=ABSPTR,USB\VID_10C4&PID_81B9
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_0003
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_0100
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_0101
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_0102
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_0106
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_010A
+%TGENERAL%=ABSPTR,USB\VID_0DFC&PID_E100
+%TGOOD%=ABSPTR,USB\VID_1AAD&PID_000F
+%THANVON%=ABSPTR,USB\VID_22ED&PID_1010
+%TILITEK%=ABSPTR,USB\VID_222A&PID_0001
+%TLG%=ABSPTR,USB\VID_1FD2&PID_6007
+%TMOSART%=ABSPTR,USB\VID_0486&PID_0185
+%TMOSART%=ABSPTR,USB\VID_0486&PID_0186
+%TMOSART%=ABSPTR,USB\VID_062A&PID_7100
+%TNOVATEK%=ABSPTR,USB\VID_0603&PID_0600
+%TPANA%=ABSPTR,USB\VID_04DA&PID_1044
+%TPANA%=ABSPTR,USB\VID_04DA&PID_104D
+%TPIXART%=ABSPTR,USB\VID_093A&PID_8001
+%TPIXART%=ABSPTR,USB\VID_093A&PID_8002
+%TPIXART%=ABSPTR,USB\VID_093A&PID_8003
+%TQUANTA%=ABSPTR,USB\VID_0408&PID_3001
+%TSMART%=ABSPTR,USB\VID_0B8C&PID_0092
+%TSTANTUM%=ABSPTR,USB\VID_0483&PID_3261
+%TTOUCHINTL%=ABSPTR,USB\VID_1E5E&PID_0313
+%TUNITEC%=ABSPTR,USB\VID_227D&PID_0709
+%TUNITEC%=ABSPTR,USB\VID_227D&PID_0A19
+%TVTL%=ABSPTR,USB\VID_0306&PID_FF3F
+%TWISTRON%=ABSPTR,USB\VID_0FB8&PID_1109
+%TXAT%=ABSPTR,USB\VID_2505&PID_0220
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1006
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1007
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_100E
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1021
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1022
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1023
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1024
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1025
+%TXIROKU%=ABSPTR,USB\VID_1477&PID_1026
+; Linux v6.12 drivers/hid/hid-quirks.c, hid_quirks[]
+; HID touch screens Linux drives with input quirks; whether they send
+; the Digitizer page or an absolute mouse report is not read here, so
+; they are listed for 98 SE and ME only
+%TETURBO%=ABSPTR,USB\VID_22B9&PID_2968
+%TETURBO%=ABSPTR,USB\VID_22B9&PID_0006
+%TNEXIO%=ABSPTR,USB\VID_1870&PID_0110
+%TNEXTWIN%=ABSPTR,USB\VID_1926&PID_0003
+%TPENMOUNT%=ABSPTR,USB\VID_14E1&PID_1610
+%TPENMOUNT%=ABSPTR,USB\VID_14E1&PID_1640
+%TQUANTA2%=ABSPTR,USB\VID_0408&PID_3003
+%TQUANTA2%=ABSPTR,USB\VID_0408&PID_3008
+%TSIS%=ABSPTR,USB\VID_0457&PID_1030
+%TSIS%=ABSPTR,USB\VID_0457&PID_0817
+%TSIS%=ABSPTR,USB\VID_0457&PID_9200
+%TSIS%=ABSPTR,USB\VID_0457&PID_1013
+%TTOUCHPACK%=ABSPTR,USB\VID_1BFD&PID_1688
+%TTPV%=ABSPTR,USB\VID_25AA&PID_8882
+%TTPV%=ABSPTR,USB\VID_25AA&PID_8883
+; ids end
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+absptr.sys=1
+
+[DestinationDirs]
+ABSPTR.Copy=10,system32\drivers
+
+[ABSPTR]
+CopyFiles=ABSPTR.Copy
+AddReg=ABSPTR.AddReg
+
+[ABSPTR.Copy]
+absptr.sys
+
+[ABSPTR.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,absptr.sys
+
+[Strings]
+Provider="usb-wdm-free"
+Disk="absptr driver disk"
+PenPartner="Wacom PenPartner tablet (absptr)"
+Generic="HID touch screen or pen tablet (absptr)"
+; ids begin
+T3M="3M MicroTouch touch screen (absptr)"
+TATMEL="Atmel maXTouch touch screen (absptr)"
+TBAANTO="Baanto touch screen (absptr)"
+TCANDO="Cando touch screen (absptr)"
+TCHUNGHWA="Chunghwa Telecom touch screen (absptr)"
+TCJTOUCH="CJTouch touch screen (absptr)"
+TCVTOUCH="CVTouch touch screen (absptr)"
+TEGALAX="eGalax touch screen (absptr)"
+TELITE="Elitegroup touch screen (absptr)"
+TFLATFROG="FlatFrog touch screen (absptr)"
+TFOCAL="FocalTech touch screen (absptr)"
+TGENERAL="GeneralTouch touch screen (absptr)"
+TGOOD="GoodTouch touch screen (absptr)"
+THANVON="Hanvon touch screen (absptr)"
+TILITEK="Ilitek touch screen (absptr)"
+TLG="LG Melfas touch screen (absptr)"
+TMOSART="MosArt touch screen (absptr)"
+TNOVATEK="Novatek touch screen (absptr)"
+TPANA="Panasonic Panaboard touch screen (absptr)"
+TPIXART="PixArt optical touch screen (absptr)"
+TQUANTA="Quanta optical touch screen (absptr)"
+TSMART="SMART Technologies touch screen (absptr)"
+TSTANTUM="Stantum touch screen (absptr)"
+TTOUCHINTL="Touch International touch screen (absptr)"
+TUNITEC="Unitec touch screen (absptr)"
+TVTL="VTL touch screen (absptr)"
+TWISTRON="Wistron optical touch screen (absptr)"
+TXAT="XAT touch screen (absptr)"
+TXIROKU="Xiroku touch screen (absptr)"
+TETURBO="eTurboTouch touch screen (absptr)"
+TNEXIO="Nexio touch screen (absptr)"
+TNEXTWIN="NextWindow touch screen (absptr)"
+TPENMOUNT="PenMount touch screen (absptr)"
+TQUANTA2="Quanta optical touch screen (absptr)"
+TSIS="SiS touch screen (absptr)"
+TTOUCHPACK="Touchpack touch screen (absptr)"
+TTPV="TPV optical touch screen (absptr)"
+; ids end

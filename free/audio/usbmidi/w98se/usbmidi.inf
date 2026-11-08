@@ -51,16 +51,27 @@ AddReg=Midi.Interface.Reg
 HKR,,CLSID,,%Proxy%
 HKR,,FriendlyName,,%Device%
 
-; Windows 98 SE and ME: the WDM driver is loaded by NTKERN.
+; Windows 98 SE and ME: the WDM driver is loaded by NTKERN, with
+; MMDEVLDR for the multimedia API, as every WDM audio device there.
+; No Microsoft INF is included (docs/design/usbmidi.md, "98 SE and ME:
+; no KS file prompts"): 9x looks for an included INF's files and
+; catalog on this package's disk, never in Windows' CAB files, so
+; Setup asked for ks.cat, ksclockf.ax, wdmaudio.cat and others that
+; the Windows CD does not hold loose. The RunOnce entry has Windows
+; install SysAudio's software device from its own wdmaudio.inf and
+; installation files, which brings the KS files and registration,
+; KMixer and the software synth; Windows' own audio INFs write the same
+; value name, so it runs once.
 [UM]
-Include=ks.inf,wdmaudio.inf
-Needs=KS.Registration,WDMAUDIO.Registration
 CopyFiles=Driver.Copy
-AddReg=Loader9x,MidiSupport
+AddReg=Loader9x,MidiSupport,SysAudio9x
 
 [Loader9x]
-HKR,,DevLoader,,*NTKERN
+HKR,,DevLoader,,"*NTKERN,MMDEVLDR.VXD"
 HKR,,NTMPDriver,,usbmidi.sys
+
+[SysAudio9x]
+HKLM,%RunOnceKey%,WDM_SYSAUDIO,,"rundll32.exe /N streamci.dll,StreamingDeviceSetup %SysAudioDev%,%KsFilterRef%,%SysAudioCat%,%17%\wdmaudio.inf,WDM_SYSAUDIO.Interface.Install"
 
 [UM.Interfaces]
 AddInterface=%KSCATEGORY_AUDIO%,Midi00,Midi.Interface
@@ -109,3 +120,7 @@ KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
 KSCATEGORY_CAPTURE="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
 Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+RunOnceKey="Software\Microsoft\Windows\CurrentVersion\RunOnce"
+SysAudioDev="{A7C7A5B0-5AF3-11D1-9CED-00A024BF0407}"
+KsFilterRef="{9B365890-165F-11D0-A195-0020AFD156E4}"
+SysAudioCat="{A7C7A5B1-5AF3-11D1-9CED-00A024BF0407}"

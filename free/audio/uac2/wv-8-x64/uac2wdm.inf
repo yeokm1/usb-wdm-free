@@ -11,7 +11,7 @@ Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/05/2026,0.1.8.26
+DriverVer=11/07/2026,0.1.10.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86
@@ -58,21 +58,31 @@ uac2wdm.sys=1
 Driver.Copy=10,system32\drivers
 Driver.Copy.NT=12
 
+; 98 SE and ME: no Microsoft INF is included (docs/design/uac2.md, "98
+; SE and ME: no KS file prompts"). 9x looks for an included INF's
+; files and catalog on this package's disk, never in Windows' CAB
+; files, so Setup asked for ks.cat, ksclockf.ax, wdmaudio.cat and
+; others that the Windows CD does not hold loose. The RunOnce entry
+; (SysAudio9x) has Windows install SysAudio's software device from its
+; own wdmaudio.inf and installation files, which brings the KS files
+; and registration, KMixer and the software synth; Windows' own audio
+; INFs write the same value name, so it runs once. The device loader
+; pair is the one every WDM audio device has on 9x: NTKERN, and
+; MMDEVLDR for the multimedia API.
 [UAC2]
-Include=ks.inf,wdmaudio.inf
-Needs=KS.Registration,WDMAUDIO.Registration
 CopyFiles=Driver.Copy
-AddReg=Loader,AudioSupport,Queue9x
+AddReg=Loader,AudioSupport,Queue9x,SysAudio9x
 [Driver.Copy]
 uac2wdm.sys
 [Loader]
-HKR,,DevLoader,,*NTKERN
+HKR,,DevLoader,,"*NTKERN,MMDEVLDR.VXD"
 HKR,,NTMPDriver,,uac2wdm.sys
 [AudioSupport]
 ; Published PortCls multimedia registration contract. WDMAud supplies
 ; wave/mixer API translation. The midi subclass is not the device's
 ; MIDI: it gives WinMM WDMAud's MIDI output, the Microsoft GS Wavetable
-; SW Synth that WDMAUDIO.Registration installs and SysAudio renders
+; SW Synth that WDMAUDIO.Registration (9x: SysAudio9x below) installs
+; and SysAudio renders
 ; through KMixer to this device, as the in-box wdma_usb.inf's playback
 ; sections list it. Without it neither 98 SE nor XP lists a MIDI output
 ; (2026-10-28).
@@ -85,6 +95,10 @@ HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\midi\wdmaud.drv,Description,,%Device%
 HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
 HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
+; Windows makes the device the preferred one for playback, recording and
+; MIDI when it installs it, as Windows' own USB audio INF does; 2 so that
+; Vista, which takes an odd value, keeps its own choice (docs/design/uac2.md 22)
+HKR,,SetupPreferredAudioDevices,3,02,00,00,00
 
 ; Uac2QueueMs (docs/design/uac2.md 19.3): the milliseconds of audio each
 ; stream keeps queued to the USB stack, 16 to 128, default 32. Written at
@@ -96,6 +110,8 @@ HKR,Drivers\mixer\wdmaud.drv,Description,,%Device%
 HKR,,Uac2QueueMs,0x00000003,20,00,00,00
 HKR,,Uac2Realtime,0x00000003,01,00,00,00
 HKR,,Uac2VolAboveZero,0x00000003,00,00,00,00
+[SysAudio9x]
+HKLM,%RunOnceKey%,WDM_SYSAUDIO,,"rundll32.exe /N streamci.dll,StreamingDeviceSetup %SysAudioDev%,%KsFilterRef%,%SysAudioCat%,%17%\wdmaudio.inf,WDM_SYSAUDIO.Interface.Install"
 [QueueNT]
 HKR,,Uac2QueueMs,0x00010003,32
 HKR,,Uac2Realtime,0x00010003,1
@@ -235,6 +251,10 @@ HKR,,CLSID,,%Proxy%
 HKR,,FriendlyName,,%Device%
 
 [Strings]
+RunOnceKey="Software\Microsoft\Windows\CurrentVersion\RunOnce"
+SysAudioDev="{A7C7A5B0-5AF3-11D1-9CED-00A024BF0407}"
+KsFilterRef="{9B365890-165F-11D0-A195-0020AFD156E4}"
+SysAudioCat="{A7C7A5B1-5AF3-11D1-9CED-00A024BF0407}"
 Device2="UAC2 USB audio (experiment) 2"
 Device3="UAC2 USB audio (experiment) 3"
 Device4="UAC2 USB audio (experiment) 4"

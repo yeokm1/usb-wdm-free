@@ -200,6 +200,15 @@ static void LostTests(void)
         for (run = 0; UacPlanFbRefused(UAC_ISO_BAD_START_STATUS, run) == UAC_FB_RESUBMIT; run++) resub++;
         CHECK(resub == 7 && run == 7);
     }
+    /* 25.8: a data URB refused whole for its start frame is lost; no other
+     * status, and not an empty URB. */
+    CHECK(UacPlanDataRefused(UAC_ISO_BAD_START_STATUS, 32));
+    CHECK(UacPlanDataRefused(UAC_ISO_BAD_START_STATUS, 1));
+    CHECK(!UacPlanDataRefused(UAC_ISO_BAD_START_STATUS, 0));
+    CHECK(!UacPlanDataRefused(UAC_ISO_LOST_STATUS, 32));
+    CHECK(!UacPlanDataRefused(0xC0007000UL, 32));
+    CHECK(!UacPlanDataRefused(0xC0000004UL, 32));
+    CHECK(!UacPlanDataRefused(0, 32));
     CHECK(UacPlanFbRefused(UAC_ISO_LOST_STATUS, 0) == UAC_FB_NONE);
     CHECK(UacPlanFbRefused(0xC0007000UL, 0) == UAC_FB_NONE);
     CHECK(UacPlanFbRefused(0xC0000004UL, 7) == UAC_FB_NONE);

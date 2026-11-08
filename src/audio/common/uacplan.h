@@ -188,6 +188,10 @@ unsigned int UacPlanLostLimit(unsigned long spanUs);
  * keeps refusing has halted the pipe; the next start selects the alternate
  * afresh); UAC_FB_NONE for any other status (the rules before). */
 #define UAC_ISO_BAD_START_STATUS 0xC0000A00UL
+/* Design 25.8: a data URB the stack refused as a whole for its start frame
+ * (that URB status, packets > 0) is a lost interval as 25.3's whole-URB
+ * failure is, under the same run limit. 1 when it is, else 0. */
+unsigned int UacPlanDataRefused(unsigned long urbStatus, unsigned int packets);
 #define UAC_FB_RESTART_LIMIT 8U
 #define UAC_FB_NONE 0U
 #define UAC_FB_RESUBMIT 1U

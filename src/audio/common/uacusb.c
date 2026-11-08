@@ -1202,7 +1202,9 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
      * its time passed, the stream going on. Only a run of them covering
      * UAC_LOST_LIMIT_MS of data stops it. */
     lost = !stop && status != STATUS_CANCELLED &&
-        UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot));
+        (UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot)) ||
+         /* 25.8: a data URB refused whole for its start frame, likewise */
+         (!slot->Feedback && UacPlanDataRefused((ULONG)usbStatus, slot->Packets)));
     /* Design 25.7: a feedback URB the stack refused for its start frame
      * is passed over a few times in a row; data keeps the rules above. */
     if (slot->Feedback && !stop && status != STATUS_CANCELLED) {

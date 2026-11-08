@@ -2640,6 +2640,27 @@ device does.
 feedback off at 7 and above (the 8th), the count wrap-safe; any other
 status not handled here.
 
+### 25.8 A data URB refused for its start frame (2026-11-08)
+
+With 25.7 in place, 98 SE under NUSB's UHCI, on a heavily loaded host,
+still ended some streams when a data URB came back with
+`USBD_STATUS_BAD_START_FRAME` (the stats: one failed data URB of that
+status, `STATUS_DEVICE_DATA_ERROR`; in some feedback had already turned
+off). Now a data URB, as a whole, that comes back with that status
+(`UacPlanDataRefused`) is a lost interval, exactly as 25.3's whole-URB
+failure: its packets counted as errors, the render position advanced past
+its bytes, a capture stream delivering nothing for it, and the run of lost
+data URBs in a row still bounded by `UAC_LOST_LIMIT_MS` (1 s), after which
+the stream ends as before. Other data URB statuses still end the stream.
+
+The slot is resubmitted (ASAP) with fresh data, the refused bytes not sent
+again: the time they were for has passed (4.4: never retry time-specific
+PCM), and the stream's position must keep pace with the clock the client
+reads. A pipe the stack keeps halted refuses the next URBs too and reaches
+the run limit, ending the stream as it did at the first refusal, a second
+later at most. `desctest.c`: lost for that status with packets, not with
+none, not for any other status.
+
 ## 26. USB Audio Class 1.0 devices (xHCI98 Phase 47, 2026-11-07)
 
 Status: design, 2026-11-07; the options of 26.5 and 26.6 are the

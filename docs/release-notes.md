@@ -4,93 +4,24 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
-## Next release (after 0.1.8, not yet tagged)
+## Release 0.1.9 (2026-11-08)
 
-- **uac2 and usbmidi on 98 SE and ME, no more prompts for KS files**:
-  installing `uac2` or `usbmidi` on 98 SE made Setup ask for files such
-  as `ks.sys`, `ksclockf.ax` and `ks.cat`, which the Windows 98 Second
-  Edition CD does not hold as loose files. The 98 SE and ME part of both
-  INFs no longer includes Windows' own `ks.inf` and `wdmaudio.inf`; it
-  has Windows set up its own audio components once instead. On a 98 SE
-  with no WDM sound device installed before, Windows may then ask for
-  the Windows 98 Second Edition CD-ROM: point it at the CD's `\WIN98`
-  folder.
-  - The INFs keep 0.1.8's version. A 98 SE system that already has
-    0.1.8's `uac2` keeps it when the device is plugged in again. To
-    take the new INF, remove the device in Device Manager (Remove),
-    then plug it in again: Windows installs the new INF without a
-    prompt. This was run with `uac2`.
-  - On Windows 98 SE, usbmidi's new INF was run with a simulated MIDI
-    device on Windows' own USB 1.1 stack: a clean install asked for no
-    KS file, and over an installed 0.1.8 (Device Manager > Remove, plug
-    the device in again, restart) the new INF took over without
-    prompts; the MIDI loopback test passed in both. On ME it was not
-    run.
-  - If Windows' own request for the Windows 98 SE CD-ROM is cancelled,
-    the device lists no ports until it is removed and plugged in again.
-  - [uac2 design, section 24](design/uac2.md),
-    [usbmidi design, section 19](design/usbmidi.md),
-    [98 SE KS prompts record](testing/2026-11-07-98se-ks-prompts.md).
-- **Known issue, Windows 2000, USB MIDI**: Windows 2000 has no USB MIDI
-  driver of its own. A class-compliant MIDI keyboard or interface that
-  also has an audio control interface (most do) goes to Windows' audio
-  driver, which can stop Windows. Install usbmidi before you plug in the
-  device: for such a device usbmidi takes over only if it lists it. Do
-  not plug such a device into Windows 2000 if usbmidi does not list it
-  and it has no driver of its own. README, Installing, says how to add
-  your device to usbmidi's list.
-  [Windows 2000 MIDI record](testing/2026-11-07-midi-2000.md).
-- **Signing**: every x64 image is signed with a new test certificate,
-  `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
-  `7A3C6E6289EC46E6E128D87BB54E87196B824959`, valid 2020-01-01 to
-  2039-12-31. Trust the `usb-wdm-free-test.cer` of this release (in
-  Trusted Root and Trusted Publishers). 0.1.4's certificate
-  (`E6A2749B78E9E4074260CF79972A57EEB6E76C0A`) no longer applies; it can
-  be removed from both stores.
-  - Why: 0.1.4's certificate is itself signed with SHA-256. Windows 7 x64
-    refused drivers signed with it (Code Integrity event 3004, Code 52)
-    unless Microsoft's SHA-2 code-signing update (KB4490628, then
-    KB4474419) was installed, and Vista x64 has no such update. The new
-    certificate is signed with SHA-1, so 7 x64 needs no update.
-  - Every x64 image is signed again, the unchanged ones too, with a
-    SHA-1 file digest and no timestamp. Their image digests do not
-    change. The x86 images are unsigned, as always.
-  - XP x64 does not enforce kernel-mode signing; its Setup still warns
-    about an unsigned package ("Continue Anyway").
-- **uac1 0.1.0.1, new**: USB Audio Class 1.0 sound cards, headsets and
-  microphones on Windows 98 SE (`free/audio/uac1/w98se/`), in place of
-  Windows' own USB audio driver. Playback and recording in the formats
-  and rates the device lists (16- to 32-bit PCM), with volume and mute.
-  It is built from the driver core `uac2` shares; `uac2` behaves as
-  before.
-  - Optional: Windows' own USB audio driver stays the default. Once you
-    install `uac1` (its folder given to the wizard, or to Update Driver),
-    USB Audio 1.0 devices plugged in for the first time get it, except
-    those Windows' own USB audio INF or `usbmidi` lists by name. xHCI98's
-    installer offers it unticked.
-  - A device Windows' own driver already has keeps it until you choose
-    Update Driver and point it at `w98se\`.
-  - A device in a format `uac1` does not play (8-bit or floating-point
-    samples) gets no sound device and no error; Update Driver back to
-    Windows' own driver for it. A USB MIDI device's audio function gets
-    no driver either: `usbmidi` serves the MIDI devices it lists.
-  - Setup asks for no KS files: the INF includes no Windows INF on 98 SE,
-    and Windows sets up its own audio components itself, asking for the
-    Windows 98 Second Edition CD-ROM once if no WDM sound device was
-    installed before.
-  - Windows 98 SE only: ME keeps Windows' own driver, which xHCI98
-    3.4.2.0 fixes for the unplug. On XP and later the INF matches
-    nothing; ME and 2000 would read it, so do not point them at this
-    folder.
-  - Known issues (README, Known issues): on Windows 98 SE, stop audio
-    playback or recording before unplugging a USB audio device.
-    Unplugging while it plays can stop Windows; unplugging while it
-    records can leave the recording program not responding until the
-    next restart. This happens with Windows' own USB audio driver too.
-    The first audio device plugged in after a start can freeze 98 SE, as
-    with Windows' own driver (4 of 10 first plugs with each in the same
-    test).
-  - [uac2 design, section 26](design/uac2.md).
+- **uac2 0.1.10.0**: plays on through lost intervals and refused start frames; Full Speed explicit feedback in 4 bytes as well as 3; a new device takes Windows' default playback and recording on 98 SE to XP x64. [uac2 design, sections 22, 23, 25](design/uac2.md).
+- **uac1 0.1.0.1, new (opt-in, Windows 98 SE only)**: USB Audio Class 1.0 sound cards, headsets and microphones, in place of Windows' own USB audio driver. It takes devices plugged in for the first time after it is installed; a device Windows' own driver already has keeps it until Update Driver points it at `w98se\`. Formats it does not play (8-bit, floating point) get no sound device. [uac2 design, section 26](design/uac2.md).
+- **cdcnet 0.1.3.0**: the shared network core's fixes: on 98 SE and ME sends and receives are handed to Windows from a timer, no send is failed under load, and an unplug during traffic is noticed and handled.
+- **rtl815x 0.2.1.0**: the shared network core's fixes, faster RTL8157 and RTL8159 transfers, and more Realtek-listed adapter ids; installed automatically on 98 SE, ME, 2000, XP and XP x64.
+- **ax88179 0.1.3.0**: the shared network core's fixes.
+- **xpad98 0.1.1.0**: no "Unsafe Removal of Device" dialog on 2000 when a pad is unplugged.
+- **ax88772 0.1.0.0, new**: ASIX AX88772B and AX88772C on 98 SE and ME, and the CoreChips SR9800 on 98 SE to 7 (x64 from XP).
+- **sr9700 0.1.0.0, new**: CoreChips SR9700 on 98 SE to 7 (x64 from XP).
+- **absptr 0.1.0.0, new**: pen tablets, HID touch screens and absolute mice on 98 SE and ME, what Windows' own driver cannot use on 2000 and XP, and on XP x64 to 7 x64 (folder `xp-7-x64`).
+- **uac1, uac2 and usbmidi on 98 SE and ME, no prompts for KS files**: Setup no longer asks for `ks.sys`, `ksclockf.ax` or `ks.cat`. If no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM: point it at the CD's `\WIN98` folder. If that request is cancelled, the device lists no ports until it is removed and plugged in again. [98 SE KS prompts record](testing/2026-11-07-98se-ks-prompts.md).
+- **Updating on 98 SE**: a device already installed with 0.1.8's `uac2` or `usbmidi` keeps it when plugged in again; to take this release, remove the device in Device Manager, then plug it in again.
+- **Signing**: every x64 image is signed with a new test certificate, `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint `7A3C6E6289EC46E6E128D87BB54E87196B824959`, which Windows 7 x64 accepts without Microsoft's SHA-2 update. Trust this release's `usb-wdm-free-test.cer` (Trusted Root and Trusted Publishers); 0.1.4's certificate (`E6A2749B78E9E4074260CF79972A57EEB6E76C0A`) no longer applies.
+- **Known issue, uac1 and uac2 on 98 SE**: under NUSB or 98 SE's own USB 1.1 driver, playback can stop after the system stalls for over a second; play again.
+- **Known issue, uac1 and uac2 on 98 SE**: stop playback or recording before unplugging a USB audio device; unplugging while it plays can stop Windows, as with Windows' own driver. The first audio device plugged in after a start can freeze 98 SE, as with Windows' own driver.
+- **Known issue, uac1**: a device with a playback and a capture setting on one streaming interface is not supported for both directions at once (no such device is known; `uac2` has the same limit).
+- **Known issue, Windows 2000, USB MIDI**: a class-compliant MIDI keyboard or interface goes to Windows 2000's own audio driver, which can stop Windows. Install `usbmidi` first and add the device to its list as README, Installing, says. [Windows 2000 MIDI record](testing/2026-11-07-midi-2000.md).
 
 ## Release 0.1.8 (2026-11-05): `uac2` under load, its volume and its device names
 

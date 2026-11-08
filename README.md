@@ -138,15 +138,12 @@ every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.8 is signed with the test certificate 0.1.4 introduced. Trust the
-`usb-wdm-free-test.cer` of this release, not one before 0.1.4. Its
-thumbprint is `E6A2749B78E9E4074260CF79972A57EEB6E76C0A`. On 7 x64 it
-needs Microsoft's SHA-2 code-signing update (KB4490628, then KB4474419).
-The release after 0.1.8 changes the certificate to
+0.1.9 is signed with the test certificate
 `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
-`7A3C6E6289EC46E6E128D87BB54E87196B824959`, which needs no update. Trust
-the `usb-wdm-free-test.cer` that release carries
-([release notes](docs/release-notes.md), "Next release").
+`7A3C6E6289EC46E6E128D87BB54E87196B824959`; 7 x64 needs no update for
+it. Trust the `usb-wdm-free-test.cer` of this release; 0.1.4's
+certificate (`E6A2749B78E9E4074260CF79972A57EEB6E76C0A`) no longer
+applies.
 
 `uac2` on 2000 to 7: before plugging a UAC 2.0 device in, put `uac2`
 where Windows looks (`pnputil -a uac2wdm.inf` on Vista and 7; its

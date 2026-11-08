@@ -54,3 +54,10 @@ One VMM fatal exception 0E in 9 legs of the `multi` profile, during the first `M
 ## `uac1`: the real Sound Blaster Play! 2 on 98 SE
 
 Left: the real Creative Sound Blaster Play! 2 (`041E:323D`) not yet run with `uac1` on 98 SE; a simulator replaying its captured descriptors stands in ([uac1-98se](2026-11-07-uac1-98se.md), the 9x matrix).
+
+## `rtl815x` in the 9x matrix: the harness, not the driver
+
+The 9x matrix's `rtl815x` FAILs (no frame sent) were the test setup. On 98 SE, Windows binds TCP/IP to the first five network adapters a guest makes (about nine on ME), and it makes an adapter per device id and root port, so the sixth new adapter has no protocol and sends nothing; the chip list was only the order the shapes ran. On a fresh guest the "failing" shapes pass with 0.1.9 (8157 at High Speed and 8159 at SuperSpeed under xHCI98, 8157 under NUSB's EHCI). Left, in the harness:
+
+- The matrix: at most five new adapters per fresh overlay, counting each id with its port and speed.
+- `rtlemu.py`: join bulk-OUT data across usb-redir packets (QEMU's UHCI hands over each 64-byte packet alone, so a send fails the simulator's length check and it stops; 0.1.8 hits the same), then rerun ME's own UHCI and the 98 SE NUSB Full Speed shapes. With the pieces joined, the 8152 at Full Speed on ME's own UHCI passed ping and TCP on 0.1.9 and 0.1.8.

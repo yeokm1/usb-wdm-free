@@ -871,6 +871,65 @@ static void TestStatus(void)
     CHECK(A7Status(State.Bytes, r, 7) == -1);
 }
 
+/* ---- the Advanced tab's keywords (ethernet.md 4.10) -------------------- */
+
+static long StartValues(MODEL *m, NET_IO *io, nc_u16 vid, nc_u16 pid, const long *v, NET_PARAMS *params)
+{
+    NET_PROBE p = Probe(vid, pid);
+    p.Settings = v;
+    IoInit(io, m);
+    memset(params, 0, sizeof(*params));
+    return A7Start(State.Bytes, io, &p, params);
+}
+
+static void TestSettings(void)
+{
+    MODEL m;
+    NET_IO io;
+    NET_PARAMS par;
+    NET_LINK l;
+    A7_STATE *s = (A7_STATE *)State.Bytes;
+    static long v[2];
+    CHECK(NetPackageChip.SettingCount == 2 && !strcmp(NetPackageChip.Settings[0].Name, "*SpeedDuplex"));
+    CHECK(NetPackageChip.Settings[1].Default == 3);
+    /* Forced 100 half: autonegotiation off; the link from BMCR; no pause. */
+    v[0] = 3; v[1] = 3;
+    ModelInit(&m);
+    CHECK(StartValues(&m, &io, 0x0b95, 0x772b, v, &par) == NC_OK && par.Ignored == 0);
+    CHECK(m.Phy[MII_BMCR] == BMCR_SPEED100);
+    CHECK(A7Link(State.Bytes, &io, &l) == NC_OK && l.Up && l.Mbps == 100 && !l.FullDuplex);
+    CHECK((s->Medium & (AX_MEDIUM_TFC | AX_MEDIUM_RFC)) == 0);
+    /* Flow control off: no pause bits, no pause enables. */
+    v[0] = 0; v[1] = 0;
+    ModelInit(&m);
+    CHECK(StartValues(&m, &io, 0x0b95, 0x772b, v, &par) == NC_OK);
+    CHECK((m.Phy[MII_ADVERTISE] & (ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM)) == 0);
+    CHECK(A7Link(State.Bytes, &io, &l) == NC_OK && l.Up && l.Mbps == 100 && l.FullDuplex);
+    CHECK((s->Medium & (AX_MEDIUM_TFC | AX_MEDIUM_RFC)) == 0);
+    /* Receive only: PAUSE and ASM_DIR; a partner with PAUSE: receive alone. */
+    v[0] = 0; v[1] = 2;
+    ModelInit(&m);
+    CHECK(StartValues(&m, &io, 0x0b95, 0x772b, v, &par) == NC_OK);
+    CHECK((m.Phy[MII_ADVERTISE] & (ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM)) ==
+          (ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM));
+    CHECK(A7Link(State.Bytes, &io, &l) == NC_OK && l.Up);
+    CHECK((s->Medium & (AX_MEDIUM_TFC | AX_MEDIUM_RFC)) == AX_MEDIUM_RFC);
+    /* Transmit only: ASM_DIR; a partner with both: transmit alone. */
+    v[0] = 0; v[1] = 1;
+    ModelInit(&m);
+    m.Lpa |= ADVERTISE_PAUSE_ASYM;
+    CHECK(StartValues(&m, &io, 0x0b95, 0x772b, v, &par) == NC_OK);
+    CHECK((m.Phy[MII_ADVERTISE] & (ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM)) == ADVERTISE_PAUSE_ASYM);
+    CHECK(A7Link(State.Bytes, &io, &l) == NC_OK && l.Up);
+    CHECK((s->Medium & (AX_MEDIUM_TFC | AX_MEDIUM_RFC)) == AX_MEDIUM_TFC);
+    /* The SR9800: a forced speed applies, a flow-control value is
+     * reported and not applied. */
+    v[0] = 2; v[1] = 0;
+    ModelInit(&m);
+    CHECK(StartValues(&m, &io, 0x0fe6, 0x9800, v, &par) == NC_OK && par.Ignored == 2);
+    CHECK(m.Phy[MII_BMCR] == BMCR_FULLDPLX);
+}
+
 int main(void)
 {
     CHECK(sizeof(A7_STATE) <= NET_CHIP_STATE);
@@ -885,6 +944,7 @@ int main(void)
     TestRxSync();
     TestRealign();
     TestStatus();
+    TestSettings();
     printf("ax772f chiptest: %lu checks, %lu failed\n", assertions, failures);
     return failures ? 1 : 0;
 }

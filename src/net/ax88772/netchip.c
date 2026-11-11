@@ -37,6 +37,13 @@ int NcValidMac(const nc_u8 mac[6])
     return (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) != 0;
 }
 
+long NcSetting(const NET_PROBE *probe, nc_u32 index)
+{
+    if (!NetPackageChip.Settings || index >= NetPackageChip.SettingCount) return 0;
+    if (probe && probe->Settings) return probe->Settings[index];
+    return NetPackageChip.Settings[index].Default;
+}
+
 static nc_u16 Le16(const nc_u8 *p) { return (nc_u16)(p[0] | (p[1] << 8)); }
 
 long NcParseDevice(const nc_u8 *d, nc_u32 size, NET_PROBE *probe)

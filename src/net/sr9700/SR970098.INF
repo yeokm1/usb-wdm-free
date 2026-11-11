@@ -16,7 +16,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/06/2026,0.1.0.0
+DriverVer=11/10/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models

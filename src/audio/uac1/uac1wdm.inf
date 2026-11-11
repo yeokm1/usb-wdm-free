@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 ; Copyright (C) 2026 Yeo Kheng Meng
-; Experimental USB Audio Class 1.0 driver for Windows 98 SE only
+; uac1: the USB Audio Class 1.0 driver of usb-wdm-free for Windows 98 SE only
 ; (docs/design/uac2.md section 26): playback and capture in the formats and
 ; rates the device describes, on the driver core uac2 shares.
 [Version]
@@ -8,7 +8,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/07/2026,0.1.0.1
+DriverVer=11/10/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models,NTx86,NTamd64
@@ -103,8 +103,8 @@ HKR,,FriendlyName,,%Device%
 
 [Strings]
 Provider="usb-wdm-free"
-Device="UAC1 USB audio (experiment)"
-Disk="UAC1 experimental build folder"
+Device="USB Audio 1.0 (uac1)"
+Disk="usb-wdm-free uac1 driver"
 Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 Topology="{DDA54A40-1E4C-11D1-A050-405705C10000}"
 Proxy="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"

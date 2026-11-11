@@ -202,8 +202,36 @@ static long PhyStart(A7_STATE *s, NET_IO *io)
     return PhyReset(s, io);
 }
 
+/* The Advanced tab's *SpeedDuplex (ethernet.md 4.10) after a PHY reset:
+ * 1 to 4 force 10 or 100 Mb/s, half or full duplex, autonegotiation off
+ * (mii_ethtool_set_link_ksettings); 0 advertises 10/100 with the pause
+ * bits given and starts autonegotiation (phylib's config_aneg). */
+static void Negotiate(A7_STATE *s, NET_IO *io, nc_u16 pause)
+{
+    if (s->Speed >= 1 && s->Speed <= 4) {
+        MiiWrite(s, io, MII_BMCR, (nc_u16)((s->Speed >= 3 ? BMCR_SPEED100 : 0) |
+                                           (s->Speed % 2 ? 0 : BMCR_FULLDPLX)));
+        return;
+    }
+    MiiWrite(s, io, MII_ADVERTISE, (nc_u16)(ADVERTISE_CSMA | ADVERTISE_10HALF | ADVERTISE_10FULL |
+                                            ADVERTISE_100HALF | ADVERTISE_100FULL | pause));
+    MiiWrite(s, io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+}
+
+/* The AX88772B/C's pause advertisement for *FlowControl: 3 (the default)
+ * both bits, as before; 0 to 2 as phylib's linkmode_set_pause for the
+ * pair allowed (receive: PAUSE; transmit differs from receive: ASM_DIR). */
+static nc_u16 PauseAdvert(const A7_STATE *s)
+{
+    nc_u16 adv = 0;
+    if (s->Flow == 3) return ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
+    if (s->Flow & 2) adv |= ADVERTISE_PAUSE_CAP;
+    if (((s->Flow & 1) != 0) != ((s->Flow & 2) != 0)) adv |= ADVERTISE_PAUSE_ASYM;
+    return adv;
+}
+
 /* asix_soft_reset (BMCR 0, then reset, polled), then advertise 10/100
- * with pause and start autonegotiation (phylib's config_aneg). */
+ * with pause and start autonegotiation (Negotiate). */
 static long PhyReset(A7_STATE *s, NET_IO *io)
 {
     int i;
@@ -216,10 +244,7 @@ static long PhyReset(A7_STATE *s, NET_IO *io)
     }
     if (io->Status < 0) return io->Status;
     if (i == A7_PHY_RESET_POLLS) return NC_E_DEVICE;
-    MiiWrite(s, io, MII_ADVERTISE, ADVERTISE_CSMA | ADVERTISE_10HALF | ADVERTISE_10FULL |
-                                   ADVERTISE_100HALF | ADVERTISE_100FULL |
-                                   ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM);
-    MiiWrite(s, io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+    Negotiate(s, io, PauseAdvert(s));
     return io->Status < 0 ? io->Status : NC_OK;
 }
 
@@ -244,9 +269,7 @@ static void FillParams(A7_STATE *s, NET_PARAMS *params)
 static void SrDefaultMode(A7_STATE *s, NET_IO *io)
 {
     MiiWrite(s, io, MII_BMCR, BMCR_RESET);
-    MiiWrite(s, io, MII_ADVERTISE, ADVERTISE_CSMA | ADVERTISE_10HALF | ADVERTISE_10FULL |
-                                   ADVERTISE_100HALF | ADVERTISE_100FULL);
-    MiiWrite(s, io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+    Negotiate(s, io, 0);                   /* the SR9800 advertises no pause (Linux) */
     Cmd(io, AX_CMD_WRITE_MEDIUM_MODE, S98_MEDIUM_MODE, 0);
     Cmd(io, AX_CMD_WRITE_IPG0, AX88772_IPG0_DEFAULT | AX88772_IPG1_DEFAULT, AX88772_IPG2_DEFAULT);
     Cmd(io, AX_CMD_WRITE_RX_CTL, S98_RX_MODE, 0);
@@ -327,9 +350,15 @@ long A7Start(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
     long r;
 
     Zero(s, sizeof(*s));
+    s->Speed = (nc_u8)NcSetting(probe, S_SPEED);
+    s->Flow = (nc_u8)NcSetting(probe, S_FLOW);
+    params->Ignored = 0;
     if (probe->Vendor == 0x0fe6 && probe->Product == 0x9800) {
         s->Kind = A7_KIND_SR9800;
         s->RxBase = S98_RX_MODE;
+        /* *FlowControl is not the SR9800's (no maker's INF; Linux's
+         * pause is kept): another value is reported, not applied. */
+        if (s->Flow != 3) params->Ignored |= 1UL << S_FLOW;
         return SrStart(s, io, probe, params);
     }
     s->Kind = A7_KIND_AX772B;
@@ -462,11 +491,18 @@ long A7Link(void *chip, NET_IO *io, NET_LINK *link)
         (common & (ADVERTISE_100FULL | ADVERTISE_100HALF | ADVERTISE_10FULL | ADVERTISE_10HALF))) {
         fast = (common & (ADVERTISE_100FULL | ADVERTISE_100HALF)) != 0;
         full = fast ? (common & ADVERTISE_100FULL) != 0 : (common & ADVERTISE_10FULL) != 0;
-        /* IEEE 802.3 Annex 28B (Table 28B-3), with both pause bits
-         * advertised here: a partner with PAUSE pauses both ways; one with
-         * ASM_DIR only sends pause frames, which this end obeys. */
-        if (full && (lpa & ADVERTISE_PAUSE_CAP)) txPause = rxPause = 1;
-        else if (full && (lpa & ADVERTISE_PAUSE_ASYM)) rxPause = 1;
+        /* IEEE 802.3 Annex 28B (Table 28B-3): both ends with PAUSE pause
+         * both ways; this end with PAUSE and ASM_DIR and a partner with
+         * ASM_DIR only: this end obeys pause frames; this end with ASM_DIR
+         * only and a partner with both: this end sends them. Then only
+         * the directions *FlowControl allows. */
+        if (full && (adv & ADVERTISE_PAUSE_CAP) && (lpa & ADVERTISE_PAUSE_CAP)) txPause = rxPause = 1;
+        else if (full && (adv & ADVERTISE_PAUSE_CAP) && (adv & ADVERTISE_PAUSE_ASYM) &&
+                 (lpa & ADVERTISE_PAUSE_ASYM)) rxPause = 1;
+        else if (full && !(adv & ADVERTISE_PAUSE_CAP) && (adv & ADVERTISE_PAUSE_ASYM) &&
+                 (lpa & ADVERTISE_PAUSE_CAP) && (lpa & ADVERTISE_PAUSE_ASYM)) txPause = 1;
+        txPause &= (s->Flow & 1);
+        rxPause &= (s->Flow >> 1) & 1;
     } else {
         /* No common ability read (parallel detection or a forced link):
          * BMCR's speed and duplex. */
@@ -739,10 +775,19 @@ int A7TxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 ma
     return 0;
 }
 
+/* The Advanced tab's keywords (ethernet.md section 4.10): ASIX's 7 INF's
+ * names, values and defaults for the AX88772B, in the order of
+ * NET_PROBE.Settings. */
+static const NET_SETTING Settings[S_COUNT] = {
+    { "*SpeedDuplex", 0, 5, { 0, 1, 2, 3, 4 } },
+    { "*FlowControl", 3, 4, { 0, 1, 2, 3 } },
+};
+
 const NET_CHIP NetPackageChip = {
     "ax772f",
     "usb-wdm-free AX772F (ASIX AX88772B/AX88772C, CoreChips SR9800 USB Fast Ethernet)",
     0x0001,
     A7Probe, A7Start, A7SetMac, A7Link, A7Poll, A7SetFilter, A7Stop, A7Suspend, A7Resume,
-    A7Status, A7RxParse, A7TxHeader, A7TxEnd, A7RxReset
+    A7Status, A7RxParse, A7TxHeader, A7TxEnd, A7RxReset, 0, 0,
+    Settings, S_COUNT
 };

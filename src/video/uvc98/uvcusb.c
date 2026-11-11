@@ -45,12 +45,14 @@ struct UVU {
     UVC_ISO_PLAN Plan;
     UVU_SLOT Slot[MAX_SLOTS];
     ULONG NextSequence, NextComplete, LastStartFrame, FailedRun;
+    ULONG ResyncRun, Resyncs; /* design 5.4a */
     NTSTATUS FirstFailStatus;
     BOOLEAN QuirkBandwidth;
     ULONG ReqFormat, ReqFrame; /* last PROBE request (diagnostics) */
     ULONG BandwidthNeed;
     USBD_STATUS FirstFailUsbd;
-    BOOLEAN HaveStartFrame, Stop, Running;
+    BOOLEAN HaveStartFrame, Stop, Running, Resync;
+    BOOLEAN Filled; /* the start path has submitted every slot (design 5.4a) */
     UVC_PAY Pay;
     UVC_ISO_STATS Iso;
     PUCHAR Assembly, Latest;
@@ -307,7 +309,8 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     KeReleaseSpinLock(&u->Lock, old);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
-static NTSTATUS Submit(UVU *u, UVU_SLOT *slot)
+/* asap TRUE: USBD_START_ISO_TRANSFER_ASAP; else at startFrame (design 5.4a). */
+static NTSTATUS Submit(UVU *u, UVU_SLOT *slot, BOOLEAN asap, ULONG startFrame)
 {
     ULONG i, n = u->Plan.PacketsPerUrb;
     ULONG urbBytes = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) + n * sizeof(USBD_ISO_PACKET_DESCRIPTOR);
@@ -317,7 +320,9 @@ static NTSTATUS Submit(UVU *u, UVU_SLOT *slot)
     slot->Urb->Hdr.Length = (USHORT)urbBytes;
     slot->Urb->Hdr.Function = URB_FUNCTION_ISOCH_TRANSFER;
     slot->Urb->PipeHandle = u->Pipe;
-    slot->Urb->TransferFlags = USBD_START_ISO_TRANSFER_ASAP | USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+    slot->Urb->TransferFlags = (asap ? USBD_START_ISO_TRANSFER_ASAP : 0) |
+        USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+    if (!asap) slot->Urb->StartFrame = startFrame;
     slot->Urb->NumberOfPackets = n;
     slot->Urb->TransferBuffer = slot->Buffer;
     slot->Urb->TransferBufferLength = u->Plan.UrbBytes;
@@ -342,11 +347,13 @@ static NTSTATUS Submit(UVU *u, UVU_SLOT *slot)
     (void)IoCallDriver(u->Lower, slot->Irp);
     return STATUS_SUCCESS;
 }
-static VOID Consume(UVU *u, UVU_SLOT *slot)
+/* refused: the stack refused the transfer for its start frame (design 5.4a);
+ * it is a whole-transfer loss whatever the IRP status says. */
+static VOID Consume(UVU *u, UVU_SLOT *slot, BOOLEAN refused)
 {
     UVC_ISO_PACKET p[MAX_PACKETS];
     ULONG i, n = u->Plan.PacketsPerUrb, frames = u->Speed == UVC_DESC_HIGH_SPEED ? n / 8 : n;
-    int ok = NT_SUCCESS(slot->Status), contiguous = 1;
+    int ok = NT_SUCCESS(slot->Status) && !refused, contiguous = 1;
     if (ok) {
         ULONG start = slot->Urb->StartFrame;
         if (u->HaveStartFrame && start != u->LastStartFrame + frames) contiguous = 0;
@@ -360,13 +367,57 @@ static VOID Consume(UVU *u, UVU_SLOT *slot)
     (void)UvcIsoFeed(&u->Pay, &u->Iso, slot->Buffer, u->Plan.UrbBytes, u->Plan.PacketCapacity,
         p, ok ? n : 0, ok, contiguous);
 }
+/* Design 5.4a: once no transfer of the pipe is with the stack, submit every
+ * slot at an explicit start frame past the current one. Sets Stop (with
+ * LastStatus) when it cannot, or after UVC_ISO_RESYNC_LIMIT resyncs with no
+ * successful transfer between them. */
+static VOID Resync(UVU *u)
+{
+    struct _URB_GET_CURRENT_FRAME_NUMBER frame;
+    ULONG i, frames = u->Speed == UVC_DESC_HIGH_SPEED ? u->Plan.PacketsPerUrb / 8 : u->Plan.PacketsPerUrb;
+    NTSTATUS status = STATUS_SUCCESS;
+    KIRQL old;
+    BOOLEAN busy = FALSE, stop;
+    KeAcquireSpinLock(&u->Lock, &old);
+    stop = u->Stop;
+    busy = !u->Filled;
+    for (i = 0; i < u->Plan.Urbs; i++) if (u->Slot[i].Phase != 0) busy = TRUE;
+    KeReleaseSpinLock(&u->Lock, old);
+    if (stop || busy) return;
+    if (u->ResyncRun >= UVC_ISO_RESYNC_LIMIT) status = STATUS_DEVICE_DATA_ERROR;
+    else {
+        RtlZeroMemory(&frame, sizeof(frame));
+        frame.Hdr.Length = sizeof(frame);
+        frame.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
+        status = UsbRequest(u, (PURB)&frame);
+        UVHEX("UVU_RESYNC_FRAME ", frame.FrameNumber);
+        KeAcquireSpinLock(&u->Lock, &old); stop = u->Stop; KeReleaseSpinLock(&u->Lock, old);
+        if (stop) return; /* the stop's own status is kept */
+    }
+    if (NT_SUCCESS(status)) {
+        u->ResyncRun++; u->Resyncs++;
+        /* The rebase is a gap: drop any frame assembled across it. */
+        UvcPayLost(&u->Pay);
+        u->Resync = FALSE; u->HaveStartFrame = FALSE;
+        for (i = 0; i < u->Plan.Urbs && NT_SUCCESS(status); i++)
+            status = Submit(u, &u->Slot[i], FALSE, UvcIsoResyncFrame(frame.FrameNumber, i, frames));
+        if (status == STATUS_DELETE_PENDING) return; /* Submit saw Stop */
+    }
+    if (!NT_SUCCESS(status)) {
+        UVHEX("UVU_RESYNC_STOP ", status);
+        KeAcquireSpinLock(&u->Lock, &old);
+        if (!u->Stop && NT_SUCCESS(u->LastStatus)) u->LastStatus = STATUS_DEVICE_DATA_ERROR;
+        u->Stop = TRUE;
+        KeReleaseSpinLock(&u->Lock, old);
+    }
+}
 static VOID Worker(PVOID context)
 {
     UVU *u = (UVU *)context;
     ULONG i, outstanding;
     KIRQL old;
     for (;;) {
-        BOOLEAN stop, progressed = TRUE;
+        BOOLEAN stop, progressed = TRUE, refused;
         KeWaitForSingleObject(&u->Wake, Executive, KernelMode, FALSE, NULL);
         KeAcquireSpinLock(&u->Lock, &old); stop = u->Stop; KeReleaseSpinLock(&u->Lock, old);
         if (stop) break;
@@ -389,12 +440,16 @@ static VOID Worker(PVOID context)
             IoFreeIrp(slot->Irp); slot->Irp = NULL;
             /* A failed or unexpectedly cancelled transfer is fed as loss and
              * resubmitted like any other; only Stop ends the stream. */
-            Consume(u, slot);
+            refused = UvcIsoRefused((ULONG)slot->Urb->Hdr.Status);
+            Consume(u, slot, refused);
             slot->Phase = 0; u->NextComplete++;
             /* A gone or stopped device fails every transfer at once; resubmitting
              * forever would spin this thread and starve PnP removal. After a
-             * run of whole-transfer failures, stop and keep the status. */
-            if (NT_SUCCESS(slot->Status)) u->FailedRun = 0;
+             * run of whole-transfer failures, stop and keep the status.
+             * Design 5.4a: a transfer refused for its start frame is not part
+             * of that run; it marks the stream for a resync instead. */
+            if (refused) u->Resync = TRUE;
+            else if (NT_SUCCESS(slot->Status)) { u->FailedRun = 0; u->ResyncRun = 0; }
             else if (++u->FailedRun >= 8) {
                 KeAcquireSpinLock(&u->Lock, &old);
                 if (NT_SUCCESS(u->LastStatus)) u->LastStatus = slot->Status;
@@ -402,15 +457,22 @@ static VOID Worker(PVOID context)
                 KeReleaseSpinLock(&u->Lock, old);
                 break;
             }
-            if (!NT_SUCCESS(Submit(u, slot))) {
-                KeAcquireSpinLock(&u->Lock, &old);
-                if (NT_SUCCESS(u->LastStatus)) u->LastStatus = STATUS_DEVICE_DATA_ERROR;
-                u->Stop = TRUE;
-                KeReleaseSpinLock(&u->Lock, old);
-                break;
+            /* While a resync is pending, completed slots stay idle. A Stop
+             * seen by Submit (STATUS_DELETE_PENDING) keeps its own status. */
+            if (!u->Resync) {
+                NTSTATUS submitted = Submit(u, slot, TRUE, 0);
+                if (submitted == STATUS_DELETE_PENDING) break;
+                if (!NT_SUCCESS(submitted)) {
+                    KeAcquireSpinLock(&u->Lock, &old);
+                    if (!u->Stop && NT_SUCCESS(u->LastStatus)) u->LastStatus = STATUS_DEVICE_DATA_ERROR;
+                    u->Stop = TRUE;
+                    KeReleaseSpinLock(&u->Lock, old);
+                    break;
+                }
             }
             progressed = TRUE;
         }
+        if (u->Resync) Resync(u);
         KeAcquireSpinLock(&u->Lock, &old); stop = u->Stop; KeReleaseSpinLock(&u->Lock, old);
         if (stop) break; /* includes a resubmission failure set above */
     }
@@ -608,6 +670,7 @@ NTSTATUS UvuStartFrame(UVU *u, unsigned int f)
     status = SelectAlt(u, (UCHAR)alt->Alternate, u->Plan.UrbBytes, (UCHAR)alt->Endpoint);
     if (!NT_SUCCESS(status)) return status;
     u->Stop = FALSE; u->NextSequence = u->NextComplete = 0; u->HaveStartFrame = FALSE;
+    u->Resync = FALSE; u->ResyncRun = u->Resyncs = u->FailedRun = 0; u->Filled = FALSE;
     /* 98 SE: no OBJ_KERNEL_HANDLE, and no wait on a thread object (it
      * faulted there in usbmidi's stop path); the stop waits for Exited. */
     UNREFERENCED_PARAMETER(a);
@@ -629,8 +692,13 @@ NTSTATUS UvuStartFrame(UVU *u, unsigned int f)
     }
     u->Running = TRUE;
     for (i = 0; i < u->Plan.Urbs; i++) {
-        status = Submit(u, &u->Slot[i]);
+        status = Submit(u, &u->Slot[i], TRUE, 0);
         if (!NT_SUCCESS(status)) { u->LastStatus = status; UvuStop(u); return status; }
+    }
+    {   /* design 5.4a: a resync may run only after this fill */
+        KIRQL old;
+        KeAcquireSpinLock(&u->Lock, &old); u->Filled = TRUE; KeReleaseSpinLock(&u->Lock, old);
+        KeSetEvent(&u->Wake, IO_NO_INCREMENT, FALSE);
     }
     return STATUS_SUCCESS;
 }
@@ -722,4 +790,5 @@ VOID UvuGetStats(UVU *u, UVU_STATS *s)
     s->Eofs = u->Pay.Eofs; s->FidFlips = u->Pay.FidFlips; s->DropBad = u->Pay.DropBad;
     s->DropSize = u->Pay.DropSize; s->LastDropUsed = u->Pay.LastDropUsed;
     s->ErrorPackets = u->Pay.ErrorPackets; s->Overflows = u->Pay.Overflows;
+    s->Resyncs = u->Resyncs;
 }

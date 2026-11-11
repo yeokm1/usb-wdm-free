@@ -36,88 +36,88 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/06/2026,0.2.1.0
+DriverVer=11/10/2026,0.2.2.0
 
 [Manufacturer]
 %Provider%=Models
 
 [Models]
-%D00%=RTL,USB\VID_0BDA&PID_8050
-%D01%=RTL,USB\VID_0BDA&PID_8053
-%D02%=RTL,USB\VID_0BDA&PID_8152
-%D03%=RTL,USB\VID_0BDA&PID_8153
-%D04%=RTL,USB\VID_045E&PID_07AB
-%D05%=RTL,USB\VID_045E&PID_07C6
-%D06%=RTL,USB\VID_045E&PID_0927
-%D07%=RTL,USB\VID_045E&PID_0C5E
-%D08%=RTL,USB\VID_04E8&PID_A101
-%D09%=RTL,USB\VID_17EF&PID_304F
-%D10%=RTL,USB\VID_17EF&PID_3054
-%D11%=RTL,USB\VID_17EF&PID_3062
-%D12%=RTL,USB\VID_17EF&PID_3069
-%D13%=RTL,USB\VID_17EF&PID_3082
-%D14%=RTL,USB\VID_17EF&PID_3098
-%D15%=RTL,USB\VID_17EF&PID_7205
-%D16%=RTL,USB\VID_17EF&PID_720C
-%D17%=RTL,USB\VID_17EF&PID_7214
-%D18%=RTL,USB\VID_17EF&PID_721E
-%D19%=RTL,USB\VID_17EF&PID_A359
-%D20%=RTL,USB\VID_17EF&PID_A387
-%D21%=RTL,USB\VID_13B1&PID_0041
-%D22%=RTL,USB\VID_0955&PID_09FF
-%D23%=RTL,USB\VID_2357&PID_0601
-%D24%=RTL,USB\VID_2357&PID_0602
-%D25%=RTL,USB\VID_2001&PID_B301
-%D26%=RTL,USB\VID_413C&PID_B097
-%D27%=RTL,USB\VID_0B05&PID_1976
-%D28%=RTL,USB\VID_20F4&PID_E02B
-%D29%=RTL,USB\VID_20F4&PID_E02C
-%D30%=RTL,USB\VID_0BDA&PID_8155
-%D31%=RTL,USB\VID_0BDA&PID_8156
-%D31%=RTL,USB\VID_0BDA&PID_8056
-%D32%=RTL,USB\VID_0BDA&PID_8157
-%D33%=RTL,USB\VID_0BDA&PID_815A
-%D02%=RTL,USB\VID_0BDA&PID_8052
-%D32%=RTL,USB\VID_0BDA&PID_8057
-%D32%=RTL,USB\VID_0BDA&PID_A157
-%D33%=RTL,USB\VID_0BDA&PID_805A
-%D33%=RTL,USB\VID_0BDA&PID_A15A
-%D25%=RTL,USB\VID_2001&PID_B302
-%D23%=RTL,USB\VID_2357&PID_0603
-%D24%=RTL,USB\VID_2357&PID_0604
-%D09%=RTL,USB\VID_17EF&PID_3052
-%D09%=RTL,USB\VID_17EF&PID_3057
-%D09%=RTL,USB\VID_17EF&PID_3065
-%D09%=RTL,USB\VID_17EF&PID_30FA
-%D09%=RTL,USB\VID_17EF&PID_720A
-%D09%=RTL,USB\VID_17EF&PID_8153
-%D09%=RTL,USB\VID_17EF&PID_A3C1
-%D09%=RTL,USB\VID_17EF&PID_309B
-%D09%=RTL,USB\VID_17EF&PID_309C
-%D09%=RTL,USB\VID_17EF&PID_309D
-%D34%=RTL,USB\VID_050D&PID_047A
-%D34%=RTL,USB\VID_050D&PID_048A
-%D35%=RTL,USB\VID_043E&PID_9819
-%D35%=RTL,USB\VID_043E&PID_9820
-%D36%=RTL,USB\VID_056E&PID_4013
-%D36%=RTL,USB\VID_056E&PID_4017
-%D36%=RTL,USB\VID_056E&PID_9013
-%D27%=RTL,USB\VID_0B05&PID_18D1
-%D27%=RTL,USB\VID_0B05&PID_65F1
-%D27%=RTL,USB\VID_0B05&PID_1AED
-%D27%=RTL,USB\VID_0B05&PID_1D91
-%D37%=RTL,USB\VID_065F&PID_3200
-%D38%=RTL,USB\VID_0DF4&PID_0025
-%D39%=RTL,USB\VID_310E&PID_0060
-%D39%=RTL,USB\VID_310E&PID_0061
-%D39%=RTL,USB\VID_310E&PID_0062
-%D40%=RTL,USB\VID_2D01&PID_0030
-%D40%=RTL,USB\VID_2D01&PID_0031
-%D40%=RTL,USB\VID_2D01&PID_0032
-%D41%=RTL,USB\VID_2D1C&PID_8153
-%D42%=RTL,USB\VID_0F21&PID_8153
-%D43%=RTL,USB\VID_208E&PID_D003
-%D44%=RTL,USB\VID_2BAF&PID_0012
+%D00%=RTL_FE,USB\VID_0BDA&PID_8050
+%D01%=RTL_GE,USB\VID_0BDA&PID_8053
+%D02%=RTL_FE,USB\VID_0BDA&PID_8152
+%D03%=RTL_GE,USB\VID_0BDA&PID_8153
+%D04%=RTL_GE,USB\VID_045E&PID_07AB
+%D05%=RTL_GE,USB\VID_045E&PID_07C6
+%D06%=RTL_GE,USB\VID_045E&PID_0927
+%D07%=RTL_GE,USB\VID_045E&PID_0C5E
+%D08%=RTL_GE,USB\VID_04E8&PID_A101
+%D09%=RTL_GE,USB\VID_17EF&PID_304F
+%D10%=RTL_GE,USB\VID_17EF&PID_3054
+%D11%=RTL_GE,USB\VID_17EF&PID_3062
+%D12%=RTL_GE,USB\VID_17EF&PID_3069
+%D13%=RTL_GE,USB\VID_17EF&PID_3082
+%D14%=RTL_GE,USB\VID_17EF&PID_3098
+%D15%=RTL_GE,USB\VID_17EF&PID_7205
+%D16%=RTL_GE,USB\VID_17EF&PID_720C
+%D17%=RTL_GE,USB\VID_17EF&PID_7214
+%D18%=RTL_GE,USB\VID_17EF&PID_721E
+%D19%=RTL_GE,USB\VID_17EF&PID_A359
+%D20%=RTL_GE,USB\VID_17EF&PID_A387
+%D21%=RTL_GE,USB\VID_13B1&PID_0041
+%D22%=RTL_GE,USB\VID_0955&PID_09FF
+%D23%=RTL_GE,USB\VID_2357&PID_0601
+%D24%=RTL_FE,USB\VID_2357&PID_0602
+%D25%=RTL_G25,USB\VID_2001&PID_B301
+%D26%=RTL_G25,USB\VID_413C&PID_B097
+%D27%=RTL_G25,USB\VID_0B05&PID_1976
+%D28%=RTL_G25,USB\VID_20F4&PID_E02B
+%D29%=RTL_G25,USB\VID_20F4&PID_E02C
+%D30%=RTL_G25,USB\VID_0BDA&PID_8155
+%D31%=RTL_G25,USB\VID_0BDA&PID_8156
+%D31%=RTL_G25,USB\VID_0BDA&PID_8056
+%D32%=RTL_G5,USB\VID_0BDA&PID_8157
+%D33%=RTL_G10,USB\VID_0BDA&PID_815A
+%D02%=RTL_FE,USB\VID_0BDA&PID_8052
+%D32%=RTL_G5,USB\VID_0BDA&PID_8057
+%D32%=RTL_G5,USB\VID_0BDA&PID_A157
+%D33%=RTL_G10,USB\VID_0BDA&PID_805A
+%D33%=RTL_G10,USB\VID_0BDA&PID_A15A
+%D25%=RTL_G25,USB\VID_2001&PID_B302
+%D23%=RTL_FE,USB\VID_2357&PID_0603
+%D24%=RTL_GE,USB\VID_2357&PID_0604
+%D09%=RTL_GE,USB\VID_17EF&PID_3052
+%D09%=RTL_GE,USB\VID_17EF&PID_3057
+%D09%=RTL_GE,USB\VID_17EF&PID_3065
+%D09%=RTL_GE,USB\VID_17EF&PID_30FA
+%D09%=RTL_GE,USB\VID_17EF&PID_720A
+%D09%=RTL_GE,USB\VID_17EF&PID_8153
+%D09%=RTL_GE,USB\VID_17EF&PID_A3C1
+%D09%=RTL_GE,USB\VID_17EF&PID_309B
+%D09%=RTL_GE,USB\VID_17EF&PID_309C
+%D09%=RTL_GE,USB\VID_17EF&PID_309D
+%D34%=RTL_FE,USB\VID_050D&PID_047A
+%D34%=RTL_GE,USB\VID_050D&PID_048A
+%D35%=RTL_GE,USB\VID_043E&PID_9819
+%D35%=RTL_FE,USB\VID_043E&PID_9820
+%D36%=RTL_GE,USB\VID_056E&PID_4013
+%D36%=RTL_G25,USB\VID_056E&PID_4017
+%D36%=RTL_GE,USB\VID_056E&PID_9013
+%D27%=RTL_G25,USB\VID_0B05&PID_18D1
+%D27%=RTL_GE,USB\VID_0B05&PID_65F1
+%D27%=RTL_GE,USB\VID_0B05&PID_1AED
+%D27%=RTL_G10,USB\VID_0B05&PID_1D91
+%D37%=RTL_G25,USB\VID_065F&PID_3200
+%D38%=RTL_G25,USB\VID_0DF4&PID_0025
+%D39%=RTL_GE,USB\VID_310E&PID_0060
+%D39%=RTL_GE,USB\VID_310E&PID_0061
+%D39%=RTL_G25,USB\VID_310E&PID_0062
+%D40%=RTL_GE,USB\VID_2D01&PID_0030
+%D40%=RTL_GE,USB\VID_2D01&PID_0031
+%D40%=RTL_G25,USB\VID_2D01&PID_0032
+%D41%=RTL_GE,USB\VID_2D1C&PID_8153
+%D42%=RTL_GE,USB\VID_0F21&PID_8153
+%D43%=RTL_GE,USB\VID_208E&PID_D003
+%D44%=RTL_G25,USB\VID_2BAF&PID_0012
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -131,9 +131,25 @@ rtl815x.sys=1
 [DestinationDirs]
 Copy9x=11
 
-[RTL]
+[RTL_FE]
 CopyFiles=Copy9x
-AddReg=Reg9x,Params
+AddReg=Reg9x,Params,Speed4,Flow,Eee
+
+[RTL_GE]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params,Speed6,Flow,Eee,Green,AdvEee,Idle
+
+[RTL_G25]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params,Speed25,Flow,Eee,EeeMax,Green,AdvEee,Idle
+
+[RTL_G5]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params,Speed5G,Flow,Eee,Green,AdvEee
+
+[RTL_G10]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params,Speed10G,Flow,Eee,Green,AdvEee
 
 [Copy9x]
 rtl815x.sys
@@ -157,7 +173,16 @@ HKR,Ndi\Install,ndis5,,RTL.ndis
 [RTL.ndis]
 CopyFiles=Copy9x
 
-; The Advanced tab: a locally administered address (ethernet.md 4.8).
+; The Advanced tab (ethernet.md section 4.10): Realtek's 7 INF's keywords,
+; values and defaults, each written to the driver key at its default
+; (no-clobber, so a reinstall keeps a changed value). One install section
+; per speed class, chosen by id: RTL_FE the RTL8152 ids, RTL_G25 the
+; RTL8155, 8156 and 8156B ids (Realtek's 7 INF's sections), RTL_G5 the
+; RTL8157's, RTL_G10 the RTL8159's, RTL_GE every other id. The chip is read
+; at start; a keyword the chip has no function for is left as the chip
+; runs without it.
+
+; The locally administered address (ethernet.md 4.8).
 [Params]
 HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
 HKR,Ndi\params\NetworkAddress,type,,edit
@@ -166,10 +191,151 @@ HKR,Ndi\params\NetworkAddress,UpperCase,,1
 HKR,Ndi\params\NetworkAddress,optional,,1
 HKR,Ndi\params\NetworkAddress,default,,""
 
+[Speed4]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,,*SpeedDuplex,2,"0"
+
+[Flow]
+HKR,Ndi\params\*FlowControl,ParamDesc,,%FlowDesc%
+HKR,Ndi\params\*FlowControl,type,,enum
+HKR,Ndi\params\*FlowControl,default,,3
+HKR,Ndi\params\*FlowControl\enum,0,,%Off%
+HKR,Ndi\params\*FlowControl\enum,3,,%On%
+HKR,,*FlowControl,2,"3"
+
+[Eee]
+HKR,Ndi\params\*EEE,ParamDesc,,%EeeDesc%
+HKR,Ndi\params\*EEE,type,,enum
+HKR,Ndi\params\*EEE,default,,0
+HKR,Ndi\params\*EEE\enum,0,,%Off%
+HKR,Ndi\params\*EEE\enum,1,,%On%
+HKR,,*EEE,2,"0"
+
+[Speed6]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,,*SpeedDuplex,2,"0"
+
+[Green]
+HKR,Ndi\params\EnableGreenEthernet,ParamDesc,,%GreenDesc%
+HKR,Ndi\params\EnableGreenEthernet,type,,enum
+HKR,Ndi\params\EnableGreenEthernet,default,,0
+HKR,Ndi\params\EnableGreenEthernet\enum,0,,%Off%
+HKR,Ndi\params\EnableGreenEthernet\enum,1,,%On%
+HKR,,EnableGreenEthernet,2,"0"
+
+[AdvEee]
+HKR,Ndi\params\AdvancedEEE,ParamDesc,,%AdvEeeDesc%
+HKR,Ndi\params\AdvancedEEE,type,,enum
+HKR,Ndi\params\AdvancedEEE,default,,0
+HKR,Ndi\params\AdvancedEEE\enum,0,,%Off%
+HKR,Ndi\params\AdvancedEEE\enum,1,,%On%
+HKR,,AdvancedEEE,2,"0"
+
+[Idle]
+HKR,Ndi\params\EnableExtraPowerSaving,ParamDesc,,%IdleDesc%
+HKR,Ndi\params\EnableExtraPowerSaving,type,,enum
+HKR,Ndi\params\EnableExtraPowerSaving,default,,0
+HKR,Ndi\params\EnableExtraPowerSaving\enum,0,,%Off%
+HKR,Ndi\params\EnableExtraPowerSaving\enum,1,,%On%
+HKR,,EnableExtraPowerSaving,2,"0"
+
+[Speed25]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,Ndi\params\*SpeedDuplex\enum,2500,,%S2500%
+HKR,,*SpeedDuplex,2,"0"
+
+[EeeMax]
+HKR,Ndi\params\EEEMaxSupportSpeed,ParamDesc,,%EeeMaxDesc%
+HKR,Ndi\params\EEEMaxSupportSpeed,type,,enum
+HKR,Ndi\params\EEEMaxSupportSpeed,default,,1000
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,10,,%M10%
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,100,,%M100%
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,1000,,%M1000%
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,2500,,%M2500%
+HKR,,EEEMaxSupportSpeed,2,"1000"
+
+[Speed5G]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,Ndi\params\*SpeedDuplex\enum,2500,,%S2500%
+HKR,Ndi\params\*SpeedDuplex\enum,5000,,%S5000%
+HKR,,*SpeedDuplex,2,"0"
+
+[Speed10G]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,Ndi\params\*SpeedDuplex\enum,2500,,%S2500%
+HKR,Ndi\params\*SpeedDuplex\enum,5000,,%S5000%
+HKR,Ndi\params\*SpeedDuplex\enum,10000,,%S10000%
+HKR,,*SpeedDuplex,2,"0"
+
 [Strings]
 Provider="usb-wdm-free"
 Disk="RTL815X installation disk"
 AddressDesc="Network Address"
+SpeedDesc="Speed and duplex"
+Auto="Automatic"
+S10H="10 Mb/s half duplex"
+S10F="10 Mb/s full duplex"
+S100H="100 Mb/s half duplex"
+S100F="100 Mb/s full duplex"
+S1000F="1 Gb/s full duplex"
+S2500="2.5 Gb/s full duplex"
+S5000="5 Gb/s full duplex"
+S10000="10 Gb/s full duplex"
+FlowDesc="Flow control"
+Off="Off"
+On="On"
+EeeDesc="Energy-Efficient Ethernet (EEE)"
+EeeMaxDesc="EEE up to"
+M10="10 Mb/s"
+M100="100 Mb/s"
+M1000="1 Gb/s"
+M2500="2.5 Gb/s"
+GreenDesc="Green Ethernet"
+AdvEeeDesc="Advanced EEE"
+IdleDesc="Idle power saving"
+IpCsDesc="IPv4 checksum offload"
+TcpCsDesc="TCP checksum offload (IPv4)"
+UdpCsDesc="UDP checksum offload (IPv4)"
+TxOn="On, transmit"
 D00="Realtek RTL8152-based USB Ethernet (RTL815X)"
 D01="Realtek RTL8153-based USB Ethernet (RTL815X)"
 D02="Realtek RTL8152 USB Fast Ethernet (RTL815X)"

@@ -2132,7 +2132,11 @@ Not used:
   places, replacing a name from an earlier start. Like every write
   here, this is best effort: a failed interface write is not recorded,
   and the start goes on. The driver's copy of that name is checked
-  against both INFs' `Device` string by `infchk.ps1`.
+  against both INFs' `Device` string by `infchk.ps1`. The name is
+  "USB Audio 2.0 (uac2)" (`uac1`: "USB Audio 1.0 (uac1)"), a later pair
+  " 2" to " 4", and the install disk "usb-wdm-free uac2 driver" (owner,
+  2026-11-09); before that it was "UAC2 USB audio (experiment)"
+  ("UAC1 USB audio (experiment)"), as the records up to 2026-11-09 show.
 - **Recorded** in the driver key:
   - `Uac2Name`: the name chosen for pair 0, recorded before it is
     written (not proof that the writes succeeded).
@@ -2544,7 +2548,8 @@ under its UHCI:
 ### 25.4 Not changed
 
 - Explicit `StartFrame` scheduling: the URBs after a lost one were placed
-  by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays.
+  by `USBD_START_ISO_TRANSFER_ASAP` and completed, so 4.4's rule stays
+  (except after a refused start frame: 26.13).
 - Packet counts (multiples of 8 at High Speed `bInterval` 1) and the
   queue (19.4).
 - The deadline's lengths. Under QEMU on a loaded host a controller that
@@ -2616,7 +2621,8 @@ that the status halts the pipe.
 
 Now, for a feedback URB, and only a feedback URB, that comes back with
 that status (`UacPlanFbRefused`): the first 7 in a row are passed over and
-their slot resubmitted (ASAP), and a good feedback URB ends the run; at the
+their slot resubmitted (ASAP; since 26.13 at the resync's explicit frames),
+and a good feedback URB ends the run; at the
 8th the stream stops polling feedback for the rest of the stream instead
 of ending: no feedback slot is resubmitted, the deadline (25.3) no longer
 applies, and the data cadence keeps its last good feedback value, or the
@@ -2653,7 +2659,8 @@ its bytes, a capture stream delivering nothing for it, and the run of lost
 data URBs in a row still bounded by `UAC_LOST_LIMIT_MS` (1 s), after which
 the stream ends as before. Other data URB statuses still end the stream.
 
-The slot is resubmitted (ASAP) with fresh data, the refused bytes not sent
+The slot is resubmitted (ASAP; since 26.13 at the resync's explicit
+frames) with fresh data, the refused bytes not sent
 again: the time they were for has passed (4.4: never retry time-specific
 PCM), and the stream's position must keep pace with the clock the client
 reads. A pipe the stack keeps halted refuses the next URBs too and reaches
@@ -3197,3 +3204,522 @@ names a synch OUT endpoint (UAC 1.0 Table 4-22; the `adsrc` fixture) is
 read as a plain IN endpoint: the synch endpoint is selected with its
 alternate and never fed, as Windows' own driver does on XP (record
 [uac1-models](../testing/2026-11-07-uac1-models.md)).
+
+### 26.12 The layouts `uac1` did not run (xHCI98 Phase 48, task 48.1, 2026-11-09)
+
+Status: design, 2026-11-09, reviewed and revised. Owner, 2026-11-09:
+close `uac1`'s format gap against Windows 98 SE's own `usbaudio.sys` (the
+layouts of 26.6, "What a costs", that `uac1` 0.1.0.1 does not run);
+decide in the design whether the driver converts or exposes the device's
+own format. `uac1` stays a 98 SE package for testing in QEMU (README,
+owner 2026-11-09).
+
+**Where 0.1.0.1 stands.**
+
+| Layout | 0.1.0.1 | Where |
+|---|---|---|
+| PCM8 (`wFormatTag` 2) | parsed, not carried: a function with nothing else starts as a null function (26.11, G3) | `uac1model.c` |
+| IEEE_FLOAT (3) | skipped by the parser | `uac1desc.c` |
+| ALAW (4), MULAW (5) | skipped by the parser | `uac1desc.c` |
+| Adaptive source with a synch OUT endpoint | carried as a plain IN endpoint; the synch endpoint is selected with its alternate and never sent anything (26.11) | `uac1desc.c`, `uacusb.c` |
+| MaxPacketsOnly IN (capture) | skipped by the parser | `uac1desc.c` |
+| MaxPacketsOnly OUT (playback) | parsed, not carried | `uac1model.c` |
+
+**What the specifications ask.**
+
+- FMT-1 2.2.5 and 2.2.6: a Type I subframe is 1 to 4 bytes
+  (`bSubframeSize`) holding `bBitResolution` significant bits,
+  left-justified (the most significant byte of the little-endian
+  subframe); PCM is signed two's complement; PCM8 is unsigned, 8 bits,
+  0 to 255 (2.2.6.2); IEEE_FLOAT is IEEE-754 single precision, 32 bits in
+  4 bytes (2.2.6.3); ALAW and MULAW are 8 bits a sample companded by
+  ITU-T G.711 (2.2.6.4). All are Type I: the same format descriptor,
+  frames of channels times subframe bytes, the same packet cadence as
+  PCM. The G.711 octet is taken as G.711 transmits it (A-law with its
+  even bits inverted, mu-law with all bits inverted), the form Linux
+  exchanges for these two tags (`sound/usb/format.c` maps them to its
+  A_LAW and MU_LAW sample formats; PCM8 to U8, IEEE_FLOAT to FLOAT_LE:
+  facts only).
+- FMT-1 2.2.1: at a constant rate a packet holds INT(nav) or INT(nav) + 1
+  samples, nav the average a frame; where nav is a whole number, nav - 1,
+  nav or nav + 1; the cumulative difference between nav and the packets
+  stays within 1.5 samples.
+- ADC-1 3.7.2.2: an adaptive source IN endpoint "is accompanied by an
+  associated isochronous synch OUT endpoint that carries Ff", the
+  average number of samples a frame the source must produce, 3 bytes in
+  10.14 at Full Speed; a new value every 2^(10-P) frames, `bRefresh`
+  reporting that exponent (1 to 9). USB 3.2 4.4.8.4.1, which restates USB
+  2.0 5.12.4 (USB 2.0's own 5.12.4.2 and 5.12.4.3, which the owner
+  named, were not at hand for this design): "an adaptive source endpoint
+  must receive explicit feedback from the host so that it can accurately
+  generate the number of samples required by the host", and each bus
+  interval the source adds Ff to the fraction left from the previous one
+  and sends the integer part. At High Speed the value is 4 bytes, 16.16
+  samples a microframe (the form `uac2` reads from a feedback endpoint
+  there, 23).
+- ADC-1 4.6.1.2: with D7 (MaxPacketsOnly) set the host pads "all
+  potential short packets (except null packets) with zero bytes to
+  `wMaxPacketSize`" before sending to an OUT endpoint, and from an IN
+  endpoint "must be prepared to receive more bytes than expected and
+  discard the superfluous zero bytes".
+
+**What 98 SE's audio stack takes above the driver.** `uac1` is a PortCls
+WaveCyclic driver; on 98 SE every client reaches it through KMixer
+(SysAudio builds the graph; WDMAud for waveOut and waveIn; DirectSound
+and DirectSoundCapture through the same KMixer pin, as `uac1` offers no
+hardware mixing pins). Read before (5.2): KMixer opens a device pin in
+the first data range it can and converts between the client's PCM and
+the pin's, capture included. Not read, and not knowable from headers:
+whether 98 SE's KMixer opens a device pin in 8-bit PCM, in IEEE float
+(`KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` is defined in the 98 DDK's headers,
+5.2), or in A-law or mu-law (no KS conversion filter for G.711 is in 98
+SE's kernel audio stack; G.711 there is the user-mode ACM codec's).
+What every 98 SE leg of `uac1` and `uac2` has run is a 16-bit PCM pin.
+
+**Decision: convert in the driver, expose 16-bit PCM.** For an alternate
+of PCM8, IEEE_FLOAT, ALAW or MULAW the pin offers 16-bit PCM (container
+16, 16 valid bits) with the alternate's channels, channel mask and rates,
+and `uac1` converts each sample between that and the wire format.
+
+- It is the one pin format known to work on 98 SE for waveOut, waveIn
+  and DirectSound alike; the alternatives each rest on an unread KMixer
+  behaviour, and for A-law and mu-law there is none.
+- Nothing is lost against exposing the native format: for playback
+  KMixer mixes in at least 16 bits and would itself reduce to 8 bits or
+  compand; for capture, PCM8 and G.711 decode exactly into 16 bits (G.711
+  reconstructs at most 13 or 14 significant bits). IEEE_FLOAT capture is
+  rounded to 16 bits (a float device's resolution beyond 16 bits is not
+  carried; a 24-bit pin would rest on 5.2's open question).
+- `UacStream` (`uacstream.h`) already takes only 16/24/32-bit PCM; WAVE's
+  8-bit is unsigned and would need its own path there.
+- The conversion is integer only (the driver uses no floating point and
+  links no floating-point support): float bits are built and read with
+  shifts.
+
+**Where conversion happens.** In `uac1`'s build only (`#ifdef UAC_V1` in
+the shared files, as 26.11; `uac2`'s compiler input unchanged):
+
+- A new shared file `src/audio/common/uacconv.c` (`uacconv.h`), pure C
+  with no Windows types, host-tested: `UacConvOut` (16-bit PCM to the
+  wire format, n samples of the alternate's subframe), `UacConvIn` (the
+  wire format to 16-bit PCM), the MaxPacketsOnly count below, `UacConvFf`
+  (the synch value). Compiled by `uac1`'s `build.cmd`
+  and test only.
+- The plan (`uacplan.c`): a `UAC_FORMAT` holds the pin view in `Subslot`
+  and `Bits` (2 and 16 for a converted format), so `Lookup`,
+  `BuildRanges` and `DataRangeIntersection` work on what the pin offers
+  unchanged, and the wire's subframe, bits and tag beside them;
+  `UacPlanPick` matches the tag as well as channels, subframe and bits
+  (PCM8, A-law and mu-law can share a subframe layout, IEEE_FLOAT and
+  32-bit PCM do).
+- The USB layer (`uacusb.c`) keeps counting wire bytes: its frame size
+  is the alternate's (channels times subframe), its cadence, queue and
+  statistics as now.
+- The wave side (`uacwdm.cpp`) converts in its callbacks, in chunks of
+  whole frames through a small buffer on the worker's stack: render
+  (`Fill`) reads 16-bit frames from the ring, applies the software
+  volume (`Soften`, on the 16-bit samples, as for a PCM device), and
+  writes the wire format into the URB; capture (`Captured`) converts the
+  received frames and writes 16-bit frames into the ring; render's
+  `Progress` turns the wire bytes a URB completed into ring bytes (frames
+  times the pin's block). Every wire byte of a render packet is written
+  by the conversion, so silence goes out as the format's own (0x80 for
+  PCM8, 0.0, 0xD5 for A-law, 0xFF for mu-law), not as the zeros the USB
+  layer clears a buffer with.
+- The queue (19.4) compares URB bytes with the client's ring: `Run`
+  passes the ring's size in wire bytes (its frames times the wire frame).
+  The queue's floor of two URBs stands as for PCM (a ring shrunk below
+  two URBs is not followed, 17.4 item 5); with the ring's minimum of 16
+  KiB and a Full Speed packet of at most 1023 bytes, two URBs of four
+  packets fit any ratio here (at most 2 wire bytes per ring byte, IEEE
+  float).
+
+Sample rules (16-bit sample s, wire sample w, its significant byte b, the
+other bytes of the subframe zero on output and ignored on input):
+
+| Format | Render (s to w) | Capture (w to s) |
+|---|---|---|
+| PCM8 | b = (s + 128) >> 8, saturated to 127, plus 128 | (b - 128) << 8 |
+| IEEE_FLOAT | s / 32768, exact (0 as +0.0) | w x 32768 rounded to nearest (half away from zero), saturated to -32768..32767; NaN, zero and denormals as 0 |
+| ALAW | b = G.711 A-law of s >> 3 (13-bit) | G.711 A-law decode, << 3 |
+| MULAW | b = G.711 mu-law of s >> 2 (14-bit) | G.711 mu-law decode, << 2 |
+
+PCM8 out and back is s rounded to a multiple of 256 (saturating at the
+top); float is exact both ways; G.711 decode then encode returns every
+octet but mu-law's negative zero `7F`, which comes back as `FF` (both
+decode to 0).
+
+**Which formats a pin offers.** Per direction, as now, the first
+terminal that a runnable alternate serves (26.4), its formats in
+descriptor order, plus the converted ones. A converted format is offered
+at a rate only where no format of the same pin view (16-bit, the same
+channels and mask) ranked above it carries that rate; the rank is native
+PCM, then IEEE_FLOAT, then ALAW and MULAW, then PCM8. So a terminal with
+16-bit PCM alternates is offered what 0.1.0.1 offered, and among wire
+formats with the same pin view the most precise is used. One change for
+a device 0.1.0.1 did run: a function whose first terminal of a direction
+had only formats 0.1.0.1 skipped, before a PCM terminal, now exposes that
+first terminal (its alternates run now); the rule (the first runnable
+terminal) is unchanged. A host test covers it.
+
+**MaxPacketsOnly.**
+
+- *OUT.* Each packet whose cadence count is not zero is laid out as
+  `wMaxPacketSize` bytes: its audio first, zero bytes after (zero bytes
+  as 4.6.1.2 says, for PCM8 too: the device discards them); a null
+  packet stays null. The ring is read, the position advanced and
+  completions counted by the audio bytes only, kept per URB beside its
+  USB length (26.3).
+- *IN, synchronous and adaptive sources, PCM and IEEE_FLOAT.* Padding
+  cannot be told from audio by content, so the count rests on the rate,
+  which the host knows for these sources: a synchronous one produces at
+  the bus's rate, an adaptive one at the Ff it is sent (the cadence is
+  then Ff itself, 10.14 or 16.16, not the nominal rate it was rounded
+  from: 44.1 kHz's `0B0666` asks 44099.98 Hz). The stream keeps the
+  frames owed: the cadence's sum (a running fraction advanced every
+  interval) since the stream started or a packet was lost, less the
+  frames taken. Each packet's audio is the count nearest the frames
+  owed within FMT-1 2.2.1's bounds (INT(nav) to INT(nav) + 1, or nav - 1
+  to nav + 1 for a whole nav), never fewer than up to its last frame with
+  a nonzero byte, never more than it holds. A failed, lost or null
+  packet starts the balance afresh (the frames it held are unknown;
+  writing off a nominal count would carry a frame of debt per loss when
+  losses fall on the short packets). Against a source within 2.2.1 the
+  balance stays within a frame or two; it is held to two packets' worth
+  against one that is not (the excess dropped, never repaid). So every
+  frame with a nonzero byte is taken (inside the bounds), the frames
+  taken follow the source's rate with no drift, and only frames of zero
+  bytes at a packet's end are ever moved between packets, counted or
+  dropped: in PCM and IEEE_FLOAT a frame of zero bytes is silence, so
+  what moves is a frame of silence.
+- *IN, asynchronous sources, and PCM8, ALAW or MULAW* stay not carried:
+  an asynchronous source's rate is the device's, which the host can only
+  estimate, and a content rule fails on silence (a source sending a zero
+  last frame in every packet would lose a frame each packet); in PCM8 and
+  G.711 a zero byte is a full-scale sample (PCM8 `00` is -1.0, mu-law
+  `00` -32124), so a padding frame taken for audio, or a run of genuine
+  `00` samples taken for padding, would be a loud error. A function with
+  nothing else starts as a null function, as 0.1.0.1 did.
+  Known limit (owner, 2026-11-09): these two cases stay not carried;
+  such a device loads under `uac1` with no sound device (no hang).
+
+**The synch endpoint of an adaptive source.** A capture stream whose
+alternate is adaptive and names a synch OUT endpoint sends Ff on it for
+as long as it runs: at Full Speed 3 bytes, round(rate x 16384 / 1000) in
+10.14 (48 kHz is `0C0000`, 44.1 kHz `0B0666`); at High Speed 4 bytes,
+round(rate x 65536 / 8000) in 16.16 a microframe. The value is the
+nominal rate in bus time, which is the rate the host takes: the stream's
+position is the frames received (17), with no host clock of its own to
+report a difference against. It is sent in every service interval of
+the synch endpoint (two URBs of eight packets kept in flight, the slots
+the feedback of an asynchronous sink uses), not only every 2^`bRefresh`
+frames: USBD has no per-endpoint interval to skip frames with, and the
+value never changes within a stream, so repeating it carries the same
+information. A failed or refused synch URB is counted (`Uac2UsbStats`'
+feedback counters) and the slot sent again; 8 in a row end the stream
+with an error, as the loss of an asynchronous sink's feedback does
+(26.10, U4): a source that waits for Ff would otherwise leave a
+recording that never advances.
+
+**What does not change.** `uac2` (its build defines no `UAC_V1`: the
+image built after this change must equal the one built before, as 26.11
+checked); `uac1`'s PCM devices but for the terminal case above (their
+pin formats, rates and transfers are those of 0.1.0.1); MIDI-only
+functions (null start, 26.10); the gates' rulings of 26.11.
+
+**Tests.**
+
+- Host (`src/audio/uac1/test.cmd`): each conversion against fixed
+  values (G.711 reference points: mu-law `FF` is 0, `80` is +32124, `00`
+  is -32124; A-law `D5` is +8, `55` is -8, `AA` is +32256, `2A` is
+  -32256; float `3F800000` saturates to 32767, `BF800000` is -32768, NaN
+  is 0) and round trips as stated above (every 16-bit value through PCM8
+  and float; every octet through A-law and mu-law decode and encode);
+  wider subframes; the MaxPacketsOnly count (bounds, the frames owed,
+  nonzero frames kept, a second of silence without drift, a lost packet,
+  2.2.1's 47/49 sizes with every short packet lost then silence, and an
+  adaptive source following Ff `0B0666` for five minutes with one
+  packet in seven silent); the Ff values; the parser and model carrying
+  the four tags and MaxPacketsOnly both ways (and not a MaxPacketsOnly
+  source that is asynchronous or in PCM8); the format ranking; the
+  terminal case.
+- Simulator (`uac1emu.py`): `pcm8` and `float` (playback) and `adsrc`
+  (capture) become positive profiles; new profiles `alaw` and `mulaw`
+  (playback and capture), `pcm8in` and `floatin` (capture), `mpoin`
+  (MaxPacketsOnly capture, synchronous, 44.1 and 48 kHz) and `mpoout`
+  (MaxPacketsOnly playback in PCM8, so padding and conversion meet). The
+  model decodes every format, reports the received level and the tone's
+  frequency (zero crossings) for playback, sends its 1 kHz capture tone
+  in the format (padded for MaxPacketsOnly, with FMT-1 2.2.1's packet
+  sizes), and an adaptive source produces its frames at the Ff it was
+  last sent, logging the values.
+- Legs, 98 SE under xHCI98 in QEMU, each profile: installed from the
+  folder on `DevicePath`, `uac1` bound, not a null start; playback at 48
+  and 44.1 kHz with the model reading UACWAV's -20 dBFS 440 Hz tone
+  within 1 dB and 2% and every buffer completed in its time (the
+  position across ring wraps), played twice (stop and restart);
+  recording with UACWAV reading the 1 kHz tone within 2% and its level
+  within 1 dB of the model's -6 dBFS (UACWAV's `rec` gains a peak level
+  line); `adsrc`'s synch values equal to the rate, also at High Speed.
+  The legs under NUSB's EHCI (UHCI for Full Speed in QEMU) and 98 SE's
+  own UHCI, and failure injection on the synch pipe, are owed unless run
+  and recorded. `uac2`: the image comparison above, its host tests, and
+  a play and record of `hs24` on the same base.
+
+### 26.13 A pipe the stack refuses start frames on: a resync at explicit frames (xHCI98 Phase 48, task 48.1, 2026-11-09)
+
+Status: design and code, 2026-11-09, reviewed and revised; revised
+2026-11-10 (items 4, 5 and 8: a recording's empty URBs, and frame requests
+the worker does not wait for; build stamps `uac2` 28, `uac1` 4). Applies to
+`uac2` and `uac1` alike (`uacusb.c` is shared).
+
+**The report.** Under 98 SE's own UHCI driver some `uac1` streams stopped
+completing buffers mid-stream (A-law play at 44.1 kHz: 1 of 8 buffers, the
+stream stopped after 240 packets; mu-law `ramp`; the adaptive source's
+recording at 48 kHz: 0 of 8), the next stream of the same device passing
+([uac1-formats](../testing/2026-11-09-uac1-formats.md), "Under 98 SE's own
+UHCI"). `uvc98` met the same stack refusing every transfer resubmitted
+with `USBD_START_ISO_TRANSFER_ASAP` after a guest stall, as a whole, with
+`USBD_STATUS_BAD_START_FRAME`, and recovered by resubmitting at explicit
+start frames ([uvc.md](uvc.md) 5.4a).
+
+**What the counters showed.** `uac2` 0.1.10.0 (the release image) with
+`uacemu.py --profile fs` on 98 SE's own UHCI, a recording at 44.1 kHz that
+completed none of its buffers (`Uac2UsbStatsIn`, read from the registry
+after the step): 384 data URBs, of which 250 failed as a whole, every one
+with URB status `C0000A00` (`USBD_STATUS_BAD_START_FRAME`), and 134 did
+not; `LastStatus` `C000009C` (`STATUS_DEVICE_DATA_ERROR`). 250 is
+`UacPlanLostLimit` for 4 ms URBs: 25.8's run limit ended the stream. (The
+packet counter `DataPktOk` is no measure here: it counts packet status
+fields, and those of a URB refused whole are left at 0, success.) The
+simulator polled the endpoint for 0.49 s of the stream (486 packets) and
+not again until the client closed it 13 s later: the 250 refusals came
+back within that half second. The same device's other 23 streams in the
+leg passed, as in the report.
+
+**Why 25.8 does not recover.** 25.8 makes a data URB refused for its start
+frame a lost interval and resubmits the slot ASAP. Once this stack
+refused one, it refused every resubmission at once, so the run of lost
+URBs reached `UAC_LOST_LIMIT_MS` (250 URBs of 4 ms) in under half a second
+of real time and the stream ended with `STATUS_DEVICE_DATA_ERROR`. Read
+(as `uvc98`'s 5.4a reads it; a reading, not shown from the stack's own
+code) as the stack placing an ASAP transfer after the last frame it had
+scheduled for the pipe, a frame already past after a stall. 25.7 does the same for feedback (the
+pipe turned off after 8) and 26.12's synch OUT endpoint ends the stream
+after 8 failed synch URBs in a row.
+
+**The change.** For a URB that comes back with URB status
+`USBD_STATUS_BAD_START_FRAME`, on any pipe of the stream:
+
+1. It is handled as before: a data URB is a lost interval (25.8: counted,
+   the render position advanced past its bytes, nothing delivered for
+   capture, the run of lost URBs bounded by `UAC_LOST_LIMIT_MS`); a
+   feedback URB counts toward 25.7's run of 8 (at the 8th feedback turns
+   off for the stream, as before); a synch URB to an adaptive source
+   counts toward 26.12's run of 8.
+2. The stream is marked for a resync. While marked, no idle slot of the
+   stream (data or feedback) is resubmitted; the worker goes on retiring
+   completions and waiting as before, so a Stop wakes it and drains as
+   before.
+3. Once no slot is with the stack, the worker reads the bus's frame
+   number (`URB_FUNCTION_GET_CURRENT_FRAME_NUMBER`, as `UacUsbStart`
+   already does; sent and not waited for, item 8) and, once it is back
+   with no Stop seen, submits every slot of each pipe, in slot order,
+   without `USBD_START_ISO_TRANSFER_ASAP`, slot k of a pipe at
+   `current + 8 + k * F` (`UacPlanResyncFrame`), F being the frames one
+   URB of that pipe covers (`UacPlanSpanFrames`: a data URB's span, 4 or
+   8 ms; a feedback or synch URB's packets times their service interval),
+   rounded up to whole 1 ms frames. A render slot is filled afresh as it
+   is submitted (4.4: the refused bytes are not sent again). Later
+   resubmissions are ASAP again: the stack continues after the explicit
+   ones, which lie ahead.
+4. Bounded: `UAC_RESYNC_LIMIT` (4) resyncs with no data URB that carried
+   audio between them end the stream with `STATUS_DEVICE_DATA_ERROR`, as
+   do a failed frame request and a failed submission. A render URB
+   carries audio when it comes back successful; a capture URB only when
+   it delivered at least one PCM frame to the client: a successful capture
+   URB with nothing in it is no evidence the stream recovered (98 SE's own
+   UHCI returns a recording's URBs placed behind the bus so, between its
+   refusals; one recording resynced 22 times and captured 192 bytes,
+   [uac-uhci-stalls](../testing/2026-11-09-uac-uhci-stalls.md)). The hold
+   too: a resync still wanted `UAC_RESYNC_WAIT_MS` (1 s, interrupt time)
+   after the hold began ends the stream the same way
+   (`UacPlanHoldExpired`), whether a slot or the resync's frame request is
+   still with the stack or the frame came back only after the deadline;
+   it is read again just before the resync runs (the stop's drain then
+   cancels what is out), where before 25.8's run limit ended it. A Stop
+   seen during the resync keeps its own status.
+5. A data URB lost whole (25.3: URB status `USBD_STATUS_ISOCH_REQUEST_FAILED`,
+   every packet failed), or a capture URB back successful that delivered
+   no PCM frame, that the stack had placed on frames ending more than 8
+   frames before the bus frame read before it was submitted
+   (`UacPlanBehind`) marks the resync too (below, "The lag before the
+   refusal"). The frame is read (one frame request before each ASAP data
+   submission) only from such a URB until the next data URB that carried
+   audio (item 4), so a stream that loses none makes no extra request;
+   the first such URB of a run only arms it, and empty capture URBs keep
+   it armed. A frame read before the submission can only make a URB look
+   less behind than it was. `UacPlanDataDone` holds the rules of items 4
+   and 5, `UacPlanResyncStart` the limit.
+6. Stats words 95 to 97 (`Resyncs`, `ResyncFrame`, `ResyncBehind`): the
+   resyncs of the stream, the frame the last one read, and how many of
+   them a URB behind the bus began.
+7. `uac1`, an adaptive source's synch OUT endpoint (26.12): a synch URB
+   that comes back successful with at least one packet delivered ends
+   26.12's run of 8 failures, as a whole good one does (its failed packets
+   counted, code `10000000`). Once a synch packet has been delivered in the
+   stream, a failed synch URB, whatever its status, is a lost interval:
+   counted (`BadFeedback`; its URB status with bit 28 set, and its IRP
+   status when that failed), never ending the stream; the source runs at
+   the last Ff it was sent (26.12), and the data stream's own rules still
+   end a stream whose data fails. Before the first delivery the run of 8
+   stands, so a source that never gets an Ff (26.12: it would never start)
+   still ends the stream. A refused start frame marks the resync either
+   way. Read on 98 SE's own UHCI: with 0.1.1.0 (leg `uac1-w98-own-b2`) 7 of
+   8 recordings from `adsrc` failed, four at 25.8's run limit as above and
+   three within 26 data URBs of their start, at 26.12's run (8 to 10 of
+   their 9 to 13 synch URBs back failed, no data URB failed, `LastStatus`
+   `C000009C`); with the build before this item (leg `uac1-w98-own-a4`) a
+   recording ended after 121 data URBs, none failed, at the same run: 51
+   synch URBs delivered, then 9 failed in a row, URB status `00000B00`
+   (`USBD_STATUS_ISOCH_REQUEST_FAILED`'s code without its error state).
+8. The worker never waits on a frame request (item 3's and item 5's).
+   It sends one (an IRP of its own, the URB in the stream's storage, one
+   out at a time), goes on retiring completions, enforcing the hold's
+   deadline and seeing a Stop, and takes the frame when the request comes
+   back (`FrameDone` wakes it; the worker takes it, freeing its IRP, at
+   the start of a pass or wherever it next wants a frame). A request back
+   and not yet taken still holds the storage: no other is sent over it.
+   A synchronous request (`UsbRequest`'s 5 s
+   wait, then a drain with no deadline) on the sole worker would have
+   left it unable to cancel the data IRPs out, keep the 1 s hold or
+   answer a Stop, and `UacUsbStop` waits for the worker. While item 5's
+   frame is wanted, an idle data slot is not submitted until the request
+   is back (`UacPlanDataGate`); the slot is published as the stack's only
+   in the step that passes it on, and a Stop is read after the frame is
+   taken and again, under the stream's lock, just before the slot is
+   published. A Stop cancels the request out at once, and a request for
+   item 5 out more than `UAC_FRAME_WAIT_MS` (100 ms) is cancelled too, the
+   data slots then going without a frame (their completions cannot start
+   a resync by lag) and no other request sent until it is back; the
+   resync's own request is bounded by the hold (item 4). The stack reads
+   the frame somewhere in the time the request was out, so the resync
+   takes the frame read plus those milliseconds when they are at most
+   `UAC_FRAME_FRESH_MS` (64) (`UacPlanResyncAhead`): the first slot is then
+   never behind the bus, and the last slot of the largest queue (32 URBs
+   of 8 frames) at most 64 + 8 + 31 x 8 = 320 frames ahead, inside
+   the stack's start frame range (`USBD_ISO_START_FRAME_RANGE`, 1024). A
+   request out longer is read afresh, the hold bounding the retries. A cancelled
+   request keeps its storage until the stack gives it back, and the
+   worker does not exit while one is out (`UacPlanWorkerExit`), as for a
+   data IRP. A frame not used in the pass that took it is dropped: a
+   submission or a resync reads one afresh.
+
+**The lag before the refusal (read with the first build of this
+section).** That build resynced only at a refusal, and its streams went
+on where the release's ended (a 5 s play: 8 resyncs, no stream end), but
+the simulator saw about 1.3 s with no packet before each resync. The
+trace build (`build.cmd wdmx86 trace`) read why: after a stall the stack
+went on placing ASAP URBs right after the last frame it had scheduled,
+by then behind the bus (start frame `0x31259` with the bus at `0x312b2`,
+then `0x312a5` at `0x3180c`), so each came back lost whole (URB status
+`C0000B00`, every packet `C000000F`, not accessed), and the lag grew until
+the stack refused a start frame, about a frame list (1024 frames) later.
+The resync then ran at once (the held slots came back within 70 ms) and
+the explicit URBs played. A URB lost whole on frames that far behind the
+bus is therefore taken as the same state, and resynced at once. The
+test is against the frame at submission, not at completion: a stack that
+holds URBs and gives them back late (7's EHCI, 25.2) or a controller that
+skips frames under load placed those URBs ahead of the bus when they were
+submitted, and is not resynced (the trace's URBs after the resync: placed
+ahead, some skipped by the emulated controller, none behind).
+
+A stack that never refuses a start frame (xHCI98; Windows' EHCI and UHCI on
+2000 and later in the legs of section 25) never takes this path. Explicit
+`StartFrame` scheduling for normal running stays as 25.4 has it (ASAP);
+this section is the one exception to 25.4's first item and to the ASAP
+resubmissions of 25.7 and 25.8.
+
+**Recordings behind the bus.** On this stack a recording's URBs placed
+behind the bus came back successful with empty packets, not lost. The
+first revision did not see them: the lag test took only URBs lost whole,
+and such a URB reset the resync limit's run, so a recording resynced 22
+times with nothing captured between. Items 4 and 5 now take them (an
+empty capture URB arms the lag test and, placed behind the bus, starts a
+resync; it never clears the run). Not yet read on the stack with a trace
+([uac-uhci-stalls](../testing/2026-11-09-uac-uhci-stalls.md), "Left").
+
+**Tests.** `desctest.c`: the recorded failure as a sequence (refusals
+alternating with successful empty capture URBs: four resyncs, the fifth
+ends the stream; with an audio URB between, never), the lag test armed
+and kept by empty URBs, started once by one behind the bus, cleared only
+by audio; `UacPlanFrameCancel`, `UacPlanDataGate`, `UacPlanResyncGate`
+and `UacPlanWorkerExit`, and the worker's passes modelled with a frame
+request the stack holds for 300 ms, a Stop arriving 30 ms in (cancelled
+in that pass, no slot submitted, the worker leaving only once the request
+is back) and with no Stop (cancelled after 100 ms, the slots going without
+a frame, no second request until it is back); the request completing
+at every point of the worker's passes (before and after a pass's take,
+between idle slots, inline), none sent over one back and not taken, each
+taken exactly once; the hold's deadline with the resync's frame back
+just before it (the resync runs) and just after it (the stream ends, no
+resync), and the resync's frame aged while fresh, read afresh past 64 ms,
+never behind the bus and inside 1024 frames for the largest queue
+wherever in the time out the stack read it. These are vectors of the
+worker's rules, not of `uacusb.c` itself: no host harness runs it. Also
+the constants; `UacPlanResyncFrame` at index 0,
+later slots, the 32-bit wrap, 32 slots back to back; `UacPlanBehind` on
+the trace's frames, at and past the slack, ahead, across the wrap and
+past 2^31; `UacPlanSpanFrames` for 4 and 8 ms spans, a part frame
+rounded up, and 0. Legs: 98 SE's own UHCI with `uac1`'s Full Speed
+profiles and `uac2`'s `fs`, several rounds of playback and recording,
+before and after, with the stream counters read after every failed step
+([uac-uhci-stalls](../testing/2026-11-09-uac-uhci-stalls.md)).
+
+## 27. A pin opened while the one before is still being destroyed (xHCI98 task 49.8, 2026-11-11)
+
+Status: design and code, 2026-11-11; build stamps `uac2` 29, `uac1` 5.
+Applies to `uac2` and `uac1` alike (`uacstream.h` and `uacwdm.cpp` are
+shared).
+
+**The report.** Under ME's own UHCI driver `UACWAV rec 1 16 44100 3` came
+back `open=8` 3 times in 18, the pin's `NewStream` refused with
+`STATUS_DEVICE_BUSY` at the capture direction's one-stream gate
+([uac-uhci-stalls](../testing/2026-11-09-uac-uhci-stalls.md), "ME's,
+2000's and NUSB's UHCI"). ME's audio stack creates and closes several
+capture pins at each 44.1 kHz open.
+
+**The cause, by reading.** The gate (`UAC_DIR.Active`) is taken by
+`UacStream::Create` and freed only in the stream's destructor, after the
+transport's `Close` hook. A published stream's final `Release` never
+destroys inline (the transport may be its caller): it queues the destroy
+to a work item (`DelayedWorkQueue`; on x86 an executive work item). Until
+that item runs, the gate stays held, so a pin created right after the
+close of the one before is refused busy. On 98 SE, 2000 and NUSB the item
+ran in time in every leg; ME's back-to-back pin creation at 44.1 kHz met
+it 3 times in 18. `Close` takes the wave filter's operation mutex, which
+`NewStream` holds around `Create`, so waiting under that mutex would only
+delay the refusal.
+
+**The change.**
+
+1. The gate has three values: free (0), open (1), and closing (2). A
+   published stream's final `Release` sets closing before it queues the
+   destroy; the destructor frees the gate as before, after `Close`.
+2. `NewStream`, before it takes the operation mutex, waits while the gate
+   reads closing (`UacStream::WaitClosing`: 10 ms sleeps at PASSIVE, up to
+   `UAC_CLOSE_WAIT_MS`, 2 s), then takes the mutex and calls `Create` as
+   before. A gate held by an open stream is refused at once, as before: a
+   second stream a direction is still busy. A destroy that has not run
+   after 2 s leaves the refusal as before.
+3. Diagnostics, written and never read: `Uac2Waits` (REG_BINARY, three
+   DWORDs of the direction last opened: opens that met a closing stream,
+   those still closing after the wait, the last wait in milliseconds).
+
+**Tests.** `streamtest.cpp`: an open gate returns from the wait at once
+and stays refused; a closing gate is waited for until its queued destroy
+frees it (the clock moved only by the waits), then the open succeeds; a
+destroy that never runs ends the wait at the bound and the open is refused
+busy; no wait above PASSIVE. Legs: ME's own UHCI, 18 or more recordings at
+44.1 kHz with the counters and `Uac2Waits` read, a regression round at
+48 kHz and on 98 SE.

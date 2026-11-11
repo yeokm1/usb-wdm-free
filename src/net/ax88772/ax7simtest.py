@@ -41,13 +41,14 @@ class NetProbe(c.Structure):
                                          'NumInterfaces', 'In', 'Out', 'Interrupt')] + \
         [(n, c.c_ushort) for n in ('InMax', 'OutMax', 'IntMax')] + \
         [('IntInterval', c.c_ubyte), ('Speed', c.c_ubyte)] + \
-        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')]
+        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')] + \
+        [('Settings', c.POINTER(c.c_long))]   # NULL: the keywords' defaults (ethernet.md 4.10)
 
 
 class NetParams(c.Structure):
     _fields_ = [('Mac', c.c_ubyte * 6)] + [(n, c.c_ulong) for n in (
         'RxSize', 'RxCount', 'TxSize', 'TxSlots', 'TxBatch', 'TxHeader', 'TxAlign', 'Version',
-        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax')]
+        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax', 'Ignored')]
 
 
 class NetLink(c.Structure):

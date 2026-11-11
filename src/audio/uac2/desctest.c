@@ -18,6 +18,27 @@ static void Check(int ok, const char *expression, unsigned int line)
 }
 #define CHECK(x) Check((x), #x, __LINE__)
 
+/* 26.13: the worker's frame request as uacusb.c holds it (FrameSend,
+ * FrameDone, FrameTake): Phase 0 none, 1 with the stack, 2 back and not
+ * taken; the stack completes it mDue ticks after it was sent. */
+static unsigned int mPhase, mAllocs, mFrees, mDue, mClock, mBad;
+static void ModelTick(void)
+{
+    mClock++;
+    if (mPhase == 1 && mClock >= mDue) mPhase = 2;
+}
+static unsigned int ModelTake(void)
+{
+    if (mPhase != 2) return 0;
+    mPhase = 0; mFrees++;
+    return 1;
+}
+static void ModelSend(unsigned int delay)
+{
+    if (mPhase) { mBad++; return; }   /* storage reused before FrameTake */
+    mAllocs++; mPhase = delay ? 1 : 2; mDue = mClock + delay;
+}
+
 static UAC_DESC parsed;
 static UAC_BYTE original[65536], mutated[65536];
 static UAC_BYTE captured[65536];
@@ -213,6 +234,245 @@ static void LostTests(void)
     CHECK(UacPlanFbRefused(0xC0007000UL, 0) == UAC_FB_NONE);
     CHECK(UacPlanFbRefused(0xC0000004UL, 7) == UAC_FB_NONE);
     CHECK(UacPlanFbRefused(0, 0) == UAC_FB_NONE);
+    /* 26.13: the resync's explicit frames and a URB's span in frames. */
+    CHECK(UAC_RESYNC_LEAD == 8UL && UAC_RESYNC_LIMIT == 4U && UAC_RESYNC_WAIT_MS == 1000U);
+    CHECK(UacPlanResyncFrame(100UL, 0, 4) == 108UL);
+    CHECK(UacPlanResyncFrame(100UL, 3, 4) == 120UL);
+    CHECK(UacPlanResyncFrame(100UL, 1, 8) == 116UL);
+    CHECK(UacPlanResyncFrame(0xFFFFFFFCUL, 1, 4) == 8UL);
+    CHECK(UacPlanResyncFrame(0xFFFFFFFFUL, 0, 1) == 7UL);
+    CHECK(UacPlanSpanFrames(4000UL) == 4UL);
+    CHECK(UacPlanSpanFrames(8000UL) == 8UL);
+    CHECK(UacPlanSpanFrames(4001UL) == 5UL);
+    CHECK(UacPlanSpanFrames(999UL) == 1UL);
+    CHECK(UacPlanSpanFrames(1UL) == 1UL);
+    CHECK(UacPlanSpanFrames(0) == 1UL);
+    /* the 98 SE trace: submitted at 0x312d1, placed at 0x31275 (4 frames) */
+    CHECK(UacPlanBehind(0x312d1UL, 0x31275UL, 4, UAC_RESYNC_LEAD));
+    /* submitted at 0x318f7, placed ahead at 0x3190f, then skipped: not behind */
+    CHECK(!UacPlanBehind(0x318f7UL, 0x3190fUL, 4, UAC_RESYNC_LEAD));
+    /* the same frames read at retirement, slack 40 */
+    CHECK(UacPlanBehind(0x3180cUL, 0x312a5UL, 4, 40));
+    CHECK(UacPlanBehind(0x312b2UL, 0x31259UL, 4, 40));
+    CHECK(!UacPlanBehind(0x31924UL, 0x3190fUL, 4, 40));     /* frames skipped, not behind */
+    CHECK(!UacPlanBehind(100UL, 56UL, 4, 40));               /* lag 40: at the slack */
+    CHECK(UacPlanBehind(101UL, 56UL, 4, 40));                /* lag 41 */
+    CHECK(!UacPlanBehind(100UL, 200UL, 4, 40));              /* ahead */
+    CHECK(!UacPlanBehind(100UL, 100UL, 4, 0));               /* ends ahead of the bus */
+    CHECK(UacPlanBehind(50UL, 0xFFFFFFF0UL, 4, 40));         /* across the wrap: lag 62 */
+    CHECK(!UacPlanBehind(20UL, 0xFFFFFFF0UL, 4, 40));        /* across the wrap: lag 32 */
+    CHECK(!UacPlanBehind(0x80000010UL, 0x00000000UL, 4, 40)); /* lag over 2^31 */
+    {
+        /* 32 slots of 4 ms: consecutive, no overlap, the first 8 frames ahead */
+        unsigned long k, prev = UacPlanResyncFrame(1000UL, 0, UacPlanSpanFrames(4000UL));
+        CHECK(prev == 1008UL);
+        for (k = 1; k < 32; k++) {
+            unsigned long f = UacPlanResyncFrame(1000UL, k, UacPlanSpanFrames(4000UL));
+            CHECK(f - prev == 4UL);
+            prev = f;
+        }
+    }
+    {
+        /* 26.13, the recorded failure (uac-uhci-stalls, leg a7u2, rec48 #2):
+         * refusals alternating with successful empty capture URBs. Each
+         * refusal is resynced; the empty URBs carry no audio, so the run
+         * holds and the fifth resync ends the stream (it had resynced 22
+         * times and captured 192 bytes). */
+        UAC_RECOVERY r;
+        unsigned int n, ran = 0, ended = 0;
+        memset(&r, 0, sizeof(r));
+        for (n = 0; n < 22 && !ended; n++) {
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_REFUSED, 0));
+            CHECK(r.Resync);
+            if (UacPlanResyncStart(&r)) { ran++; CHECK(!r.Resync); }
+            else ended = 1;
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 0));
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 0));
+            CHECK(r.LagSuspect);
+        }
+        CHECK(ended && ran == UAC_RESYNC_LIMIT && n == UAC_RESYNC_LIMIT + 1);
+        /* with a URB that carried audio between refusals: never ends */
+        memset(&r, 0, sizeof(r));
+        for (n = 0, ran = 0; n < 22; n++) {
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_REFUSED, 0));
+            if (UacPlanResyncStart(&r)) ran++;
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 0));
+            CHECK(!UacPlanDataDone(&r, UAC_DATA_AUDIO, 0));
+            CHECK(!r.ResyncRun && !r.LagSuspect);
+        }
+        CHECK(ran == 22);
+        /* the lag test: an empty URB arms it, empty URBs keep it, an empty
+         * URB behind the bus begins the resync once, audio clears it */
+        memset(&r, 0, sizeof(r));
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 0));
+        CHECK(r.LagSuspect && !r.Resync);
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 0));
+        CHECK(r.LagSuspect && !r.Resync);
+        CHECK(UacPlanDataDone(&r, UAC_DATA_EMPTY, 1));
+        CHECK(r.Resync && r.LagSuspect);
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_LOST, 1));   /* wanted already */
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_EMPTY, 1));
+        CHECK(UacPlanResyncStart(&r) && !r.Resync && r.LagSuspect && r.ResyncRun == 1);
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_AUDIO, 0));
+        CHECK(!r.LagSuspect && !r.ResyncRun && !r.Resync);
+        /* lost whole, as before: arms, and behind begins the resync */
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_LOST, 0));
+        CHECK(r.LagSuspect && !r.Resync);
+        CHECK(UacPlanDataDone(&r, UAC_DATA_LOST, 1));
+        CHECK(r.Resync);
+        /* a refusal wants a resync without arming the lag test */
+        memset(&r, 0, sizeof(r));
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_REFUSED, 1));
+        CHECK(r.Resync && !r.LagSuspect);
+        /* a stop or cancellation changes nothing */
+        r.LagSuspect = 1; r.ResyncRun = 2; r.Resync = 0;
+        CHECK(!UacPlanDataDone(&r, UAC_DATA_OTHER, 1));
+        CHECK(r.LagSuspect == 1 && r.ResyncRun == 2 && !r.Resync);
+        /* the limit, then nothing more runs */
+        r.ResyncRun = UAC_RESYNC_LIMIT; r.Resync = 1;
+        CHECK(!UacPlanResyncStart(&r) && r.Resync && r.ResyncRun == UAC_RESYNC_LIMIT);
+    }
+    {
+        /* 26.13: the worker's frame request, sent and not waited for. */
+        CHECK(UAC_FRAME_WAIT_MS == 100U);
+        CHECK(UacPlanFrameCancel(1, 0, 0, 0));          /* a stop: at once */
+        CHECK(UacPlanFrameCancel(1, 0, 1, 0));          /* the resync's too */
+        CHECK(!UacPlanFrameCancel(1, 1, 0, 5000));      /* once */
+        CHECK(!UacPlanFrameCancel(0, 0, 0, UAC_FRAME_WAIT_MS));
+        CHECK(UacPlanFrameCancel(0, 0, 0, UAC_FRAME_WAIT_MS + 1));
+        CHECK(!UacPlanFrameCancel(0, 0, 1, 60000UL));   /* the hold bounds the resync's */
+        CHECK(UacPlanDataGate(0, 0, 1, 0) == UAC_GATE_SUBMIT);
+        CHECK(UacPlanDataGate(0, 1, 0, 0) == UAC_GATE_SUBMIT);
+        CHECK(UacPlanDataGate(1, 1, 0, 0) == UAC_GATE_FRAME);
+        CHECK(UacPlanDataGate(1, 0, 0, 0) == UAC_GATE_ASK);
+        CHECK(UacPlanDataGate(1, 0, 1, 0) == UAC_GATE_HOLD);
+        CHECK(UacPlanDataGate(1, 0, 1, 1) == UAC_GATE_SUBMIT);
+        CHECK(UacPlanResyncGate(1, 0) == UAC_RSY_RUN);
+        CHECK(UacPlanResyncGate(0, 0) == UAC_RSY_ASK);
+        CHECK(UacPlanResyncGate(0, 1) == UAC_RSY_WAIT);
+        CHECK(!UacPlanWorkerExit(0, 0, 0));
+        CHECK(!UacPlanWorkerExit(1, 1, 0));
+        CHECK(!UacPlanWorkerExit(1, 0, 1));
+        CHECK(UacPlanWorkerExit(1, 0, 0));
+    }
+    {
+        /* 26.13, a frame request the stack holds during a stop or removal,
+         * the worker's passes modelled as Worker() makes them (10 ms each):
+         * four idle data slots while LagSuspect; the stack keeps the request
+         * until pass 30; the Stop comes at pass 3. The worker cancels the
+         * request in the pass the Stop comes, submits nothing (no frame came
+         * before the Stop), and leaves only once the request is back. */
+        unsigned int pass, k, out = 0, back = 0, cancelled = 0, stop = 0, exited = 0;
+        unsigned int cancelPass = 0, asked = 0, submitted = 0;
+        unsigned long sentMs = 0;
+        for (pass = 0; pass < 60 && !exited; pass++) {
+            unsigned long now = pass * 10UL;
+            unsigned int taken = 0;
+            if (out && pass == 30) { out = 0; back = 1; }
+            if (back) { back = 0; taken = 1; }          /* FrameTake */
+            if (pass == 3) stop = 1;
+            if (out && UacPlanFrameCancel(stop, cancelled, 0, now - sentMs)) { cancelled = 1; cancelPass = pass; }
+            for (k = 0; k < 4 && !stop; k++) {
+                unsigned int g = UacPlanDataGate(1, taken, out, cancelled);
+                if (g == UAC_GATE_ASK) { out = 1; cancelled = 0; sentMs = now; asked++; continue; }
+                if (g != UAC_GATE_HOLD) submitted++;
+            }
+            exited = UacPlanWorkerExit(stop, 0, out || back);
+        }
+        CHECK(asked == 1 && cancelPass == 3 && !submitted);
+        CHECK(exited && pass == 31);
+        /* no Stop: past UAC_FRAME_WAIT_MS the request is cancelled and the
+         * slots go without a frame while it is still out; no second one is
+         * sent until it is back; then the next goes with its frame */
+        out = back = cancelled = stop = asked = submitted = cancelPass = 0;
+        for (pass = 0; pass < 40; pass++) {
+            unsigned long now = pass * 10UL;
+            unsigned int taken = 0;
+            if (out && pass == 30) { out = 0; back = 1; }
+            if (back) { back = 0; taken = 1; }
+            if (out && UacPlanFrameCancel(stop, cancelled, 0, now - sentMs)) { cancelled = 1; cancelPass = pass; }
+            for (k = 0; k < 1; k++) {
+                unsigned int g = UacPlanDataGate(1, taken, out, cancelled);
+                if (g == UAC_GATE_ASK) { out = 1; cancelled = 0; sentMs = now; asked++; continue; }
+                if (g == UAC_GATE_SUBMIT && pass < 11) submitted = 99;   /* never before the cancel */
+                if (g != UAC_GATE_HOLD) submitted++;
+            }
+        }
+        CHECK(cancelPass == 11 && asked == 2 && submitted == 20);
+    }
+    {
+        /* 26.13: the request completing at every point of the worker's
+         * passes (before the pass's take, after it, between idle slots,
+         * inline): a request back and not taken occupies the storage, so
+         * none is sent over it, and every one sent is taken (its IRP
+         * freed) exactly once. */
+        unsigned int delay, pass, k, taken, g;
+        for (delay = 0; delay < 24; delay++) {
+            mPhase = mAllocs = mFrees = mClock = mBad = 0;
+            for (pass = 0; pass < 8; pass++) {
+                ModelTick();
+                taken = ModelTake();
+                ModelTick();
+                for (k = 0; k < 4; k++) {
+                    ModelTick();
+                    if (!taken) taken = ModelTake();
+                    g = UacPlanDataGate(1, taken, mPhase != 0, 0);
+                    if (g == UAC_GATE_ASK) { ModelSend(delay); if (ModelTake()) taken = 1; }
+                }
+            }
+            for (k = 0; k < 64 && mPhase; k++) { ModelTick(); (void)ModelTake(); }
+            CHECK(!mBad && !mPhase && mAllocs == mFrees && mAllocs >= 1);
+        }
+    }
+    {
+        /* 26.13: the hold's deadline holds for a frame back after it. A
+         * resync wanted at 0 ms; the last slot back at 990 ms, the resync's
+         * request sent then; it comes back at t ms. The worker's order:
+         * take, the deadline, the resync's gate (taking a request back
+         * since), the deadline again before the resync runs. */
+        unsigned long t, back, since = 0;
+        unsigned int resyncs, fails, taken, out, rsy;
+        CHECK(!UacPlanHoldExpired(1, UAC_RESYNC_WAIT_MS));
+        CHECK(UacPlanHoldExpired(1, UAC_RESYNC_WAIT_MS + 1));
+        CHECK(!UacPlanHoldExpired(0, 60000UL));
+        {
+            /* the resync's frame: aged while fresh, else read afresh; the
+             * stack read it anywhere in the time out, so the first slot is
+             * never behind the bus and the last slot of the largest queue
+             * (32 URBs of 8 frames) inside the stack's range */
+            unsigned long ahead = 0, bus, read, last;
+            CHECK(UAC_FRAME_FRESH_MS == 64U);
+            CHECK(UacPlanResyncAhead(1000UL, 0, &ahead) && ahead == 1000UL);
+            CHECK(UacPlanResyncAhead(1000UL, 37, &ahead) && ahead == 1037UL);
+            CHECK(UacPlanResyncAhead(0xFFFFFFFEUL, 5, &ahead) && ahead == 3UL);
+            CHECK(UacPlanResyncAhead(1000UL, UAC_FRAME_FRESH_MS, &ahead) && ahead == 1000UL + UAC_FRAME_FRESH_MS);
+            ahead = 7;
+            CHECK(!UacPlanResyncAhead(1000UL, UAC_FRAME_FRESH_MS + 1, &ahead) && ahead == 7);
+            CHECK(!UacPlanResyncAhead(1000UL, 990UL, &ahead));
+            for (read = 0; read <= UAC_FRAME_FRESH_MS; read++) {
+                /* sent at bus 5000, read read ms later, taken at 5000 + 64 */
+                bus = 5000UL + UAC_FRAME_FRESH_MS;
+                CHECK(UacPlanResyncAhead(5000UL + read, UAC_FRAME_FRESH_MS, &ahead));
+                CHECK(ahead >= bus);                                       /* never behind */
+                last = UacPlanResyncFrame(ahead, UAC_QUEUE_MAX_URBS - 1, UacPlanSpanFrames(8000UL));
+                CHECK(last - bus < 1024UL);                                /* inside the range */
+            }
+        }
+        for (back = 991; back <= 1030; back++) {
+            out = 1; resyncs = fails = 0; rsy = 1;
+            for (t = 990; t <= 1040 && rsy && !fails; t++) {
+                /* one pass a millisecond */
+                taken = out && back <= t;
+                if (taken) out = 0;
+                if (UacPlanHoldExpired(rsy, t - since)) { fails++; break; }
+                if (UacPlanResyncGate(taken, out) != UAC_RSY_RUN) continue;
+                if (UacPlanHoldExpired(rsy, t - since)) { fails++; break; }
+                resyncs++; rsy = 0;
+            }
+            if (back <= UAC_RESYNC_WAIT_MS) CHECK(resyncs == 1 && !fails);
+            else CHECK(!resyncs && fails == 1);
+        }
+    }
 
     /* Windows 2000's USB 1.1 hub driver, by its driver object's name. */
     {

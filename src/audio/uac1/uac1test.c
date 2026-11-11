@@ -5,7 +5,9 @@
  * that runs on it (src/audio/common: uacplan.c, uacvol.c, uacrate.c), on
  * two recorded devices (the Brio 100 microphone, the Logi USB Headset),
  * QEMU 11.1.0's usb-audio layout, an asynchronous headset, a MIDI-only
- * function, a mixed UAC 1.0 / 2.0 configuration and hostile variants.
+ * function, a mixed UAC 1.0 / 2.0 configuration and hostile variants;
+ * the converted formats, MaxPacketsOnly and the synch value (uacconv.c,
+ * docs/design/uac2.md 26.12).
  * usage: uac1test <brio100.bin> <logi0a64.bin> <play2.bin>
  */
 #include <stdio.h>
@@ -17,6 +19,7 @@
 #include "uacplan.h"
 #include "uacvol.h"
 #include "uacrate.h"
+#include "uacconv.h"
 
 static unsigned int checks;
 static void Check(int ok, const char *expression, unsigned int line)
@@ -329,8 +332,8 @@ static void Adaptive(void)
     unsigned int index;
     CHECK(sizeof(adsrc) == 129);
     Model(adsrc, sizeof(adsrc), 0, 0);
-    /* Read as a plain IN endpoint; the synch OUT endpoint is kept so the
-     * alternate's pipes are all selected, and is never fed. */
+    /* The synch OUT endpoint is kept with the alternate; the driver
+     * feeds it Ff (docs/design/uac2.md 26.12). */
     CHECK(m.AltCount == 1 && m.Alt[0].DataEndpoint == 0x81 && m.Alt[0].FeedbackEndpoint == 0x02);
     CHECK(UacPlanSync(&m.Alt[0]) == 2);
     CHECK(UacPlanPick(&m, 1, 4, 1, 2, 16, 0, 48000, 0, &index) == UAC_OK);
@@ -384,27 +387,345 @@ static void Play2(void)
     CHECK(UacVolJack(&m, 0, 2) == 0x0301 && UacVolJack(&m, 1, 3) == 0x0201);
 }
 
-static void Unsupported(void)
+/* The format tag of the qemu layout's one alternate, with its format
+ * type descriptor's subframe and bits, and its wMaxPacketSize. */
+static unsigned int QemuAs(unsigned int tag, unsigned int subframe, unsigned int bits, unsigned int maxPacket)
 {
-    unsigned int i, n;
-    /* IEEE float (wFormatTag 3): the parser skips it. */
-    memcpy(work, qemu, sizeof(qemu)); n = sizeof(qemu);
-    for (i = 9; i < n; i += work[i])
-        if (work[i + 1] == 0x24 && work[i + 2] == 1 && work[i] == 7) work[i + 5] = 3;
-    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
-    /* PCM8: parsed, not carried by the model. */
-    memcpy(work, qemu, sizeof(qemu));
+    unsigned int i, n = sizeof(qemu);
+    memcpy(work, qemu, n);
     for (i = 9; i < n; i += work[i]) {
-        if (work[i + 1] == 0x24 && work[i + 2] == 1 && work[i] == 7) work[i + 5] = 2;
-        if (work[i + 1] == 0x24 && work[i + 2] == 2 && work[i] == 11) { work[i + 5] = 1; work[i + 6] = 8; }
+        if (work[i + 1] == 0x24 && work[i + 2] == 1 && work[i] == 7) {
+            work[i + 5] = (unsigned char)tag; work[i + 6] = (unsigned char)(tag >> 8);
+        }
+        if (work[i + 1] == 0x24 && work[i + 2] == 2 && work[i] == 11) {
+            work[i + 5] = (unsigned char)subframe; work[i + 6] = (unsigned char)bits;
+        }
+        if (work[i + 1] == 5 && work[i] == 9) {
+            work[i + 4] = (unsigned char)maxPacket; work[i + 5] = (unsigned char)(maxPacket >> 8);
+        }
     }
-    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_OK && d.AltCount == 1);
-    CHECK(Uac1Model(&d, 0, &m) == UAC1_NO_AUDIO && m.Skipped == 1);
-    /* MaxPacketsOnly on an OUT endpoint: not carried in this version. */
-    memcpy(work, qemu, sizeof(qemu));
-    work[n - 7 + 3] = 0x80;
-    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_OK && d.AltCount == 1);
-    CHECK(Uac1Model(&d, 0, &m) == UAC1_NO_AUDIO && m.Skipped == 1);
+    return n;
+}
+
+/* Two playback terminals, the first with a float alternate only. */
+static void Terminals(void)
+{
+    UAC_DESC t2;
+    memset(&t2, 0, sizeof(t2));
+    t2.AltCount = 2; t2.Speed = 1;
+    t2.Alt[0].Interface = 1; t2.Alt[0].Alternate = 1; t2.Alt[0].Terminal = 1; t2.Alt[0].Channels = 2;
+    t2.Alt[0].Subslot = 4; t2.Alt[0].Bits = 32; t2.Alt[0].FormatTag = UAC_TAG_FLOAT;
+    t2.Alt[0].DataEndpoint = 0x01; t2.Alt[0].Attributes = 0x09; t2.Alt[0].Interval = 1; t2.Alt[0].MaxPacket = 392;
+    t2.Alt[1] = t2.Alt[0];
+    t2.Alt[1].Interface = 2; t2.Alt[1].Terminal = 4; t2.Alt[1].Subslot = 2; t2.Alt[1].Bits = 16;
+    t2.Alt[1].FormatTag = UAC_TAG_PCM; t2.Alt[1].DataEndpoint = 0x02; t2.Alt[1].MaxPacket = 196;
+    CHECK(UacPlanTerminal(&t2, 0, 0) == 1);
+}
+
+/* docs/design/uac2.md 26.12: the four converted formats are carried with
+ * their tag; the pin view is 16-bit; UacPlanPick matches the tag. */
+static void Formats(void)
+{
+    static const unsigned int tags[4] = { UAC_TAG_PCM8, UAC_TAG_FLOAT, UAC_TAG_ALAW, UAC_TAG_MULAW };
+    unsigned int i, n, index, wire;
+    UAC_FORMAT f[4];
+    for (i = 0; i < 4; i++) {
+        wire = tags[i] == UAC_TAG_FLOAT ? 4 : 1;
+        n = QemuAs(tags[i], wire, wire * 8, 48 * 2 * wire);
+        Model(work, n, 0, 0);
+        CHECK(m.AltCount == 1 && m.Skipped == 0 && m.Alt[0].FormatTag == tags[i]);
+        CHECK(m.Alt[0].Subslot == wire && m.Alt[0].Bits == wire * 8);
+        CHECK(UacPlanFormats(&m, 0, 0, f, 4) == 1 && f[0].FormatTag == tags[i]);
+        CHECK(f[0].Subslot == 2 && f[0].Bits == 16 && f[0].WireSubslot == wire && f[0].WireBits == wire * 8);
+        CHECK(f[0].Channels == 2 && f[0].Terminal == 1);
+        CHECK(UacPlanPick(&m, 0, 1, 2, wire, UAC_PLAN_BITS(tags[i], wire * 8), UAC_PLAN_ANY_CONFIG,
+                          48000, 0, &index) == UAC_OK && index == 0);
+        /* As PCM (tag 0 or 1 in the bits): not this alternate. */
+        CHECK(UacPlanPick(&m, 0, 1, 2, wire, wire * 8, UAC_PLAN_ANY_CONFIG, 48000, 0, &index) == UAC_NO_AUDIO);
+        CHECK(UacPlanPick(&m, 0, 1, 2, 2, UAC_PLAN_BITS(tags[i], 16), UAC_PLAN_ANY_CONFIG, 48000, 0, &index) ==
+              UAC_NO_AUDIO);
+    }
+    /* A-law with 16 bits, a tag beyond MULAW, 8-bit PCM: not run. */
+    n = QemuAs(UAC_TAG_ALAW, 2, 16, 192);
+    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    n = QemuAs(6, 1, 8, 96);
+    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    n = QemuAs(UAC_TAG_PCM, 1, 8, 96);
+    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    n = QemuAs(UAC_TAG_FLOAT, 4, 24, 384);
+    CHECK(Uac1Parse(work, n, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    /* MaxPacketsOnly OUT: carried now. */
+    n = QemuAs(UAC_TAG_PCM, 2, 16, 192);
+    work[n - 7 + 3] = UAC_CONV_MPO;
+    Model(work, n, 0, 0);
+    CHECK(m.AltCount == 1 && m.Alt[0].EpControls == UAC_CONV_MPO && m.Alt[0].FormatTag == UAC_TAG_PCM);
+    /* MaxPacketsOnly IN on the adaptive source: carried, its synch
+     * endpoint kept. */
+    memcpy(work, adsrc, sizeof(adsrc));
+    work[sizeof(adsrc) - 9 - 7 + 3] = UAC_CONV_MPO;
+    Model(work, sizeof(adsrc), 0, 0);
+    CHECK(m.AltCount == 1 && m.Alt[0].EpControls == UAC_CONV_MPO && m.Alt[0].FeedbackEndpoint == 0x02);
+    /* ... and on a synchronous source; not on an asynchronous one. */
+    memcpy(work, adsrc, sizeof(adsrc));
+    work[sizeof(adsrc) - 9 - 7 + 3] = UAC_CONV_MPO;
+    work[sizeof(adsrc) - 9 - 7 - 9 + 3] = 0x0d;      /* synchronous */
+    work[sizeof(adsrc) - 9 - 7 - 9 + 8] = 0;         /* no bSynchAddress */
+    work[9 + 9 + 9 + 12 + 12 + 8 + 9 + 9 + 4] = 1;   /* one endpoint */
+    work[2] = (unsigned char)(sizeof(adsrc) - 9);     /* wTotalLength */
+    Model(work, sizeof(adsrc) - 9, 0, 0);
+    CHECK(m.AltCount == 1 && UacPlanSync(&m.Alt[0]) == 3 && m.Alt[0].EpControls == UAC_CONV_MPO);
+    work[sizeof(adsrc) - 9 - 7 - 9 + 3] = 0x05;      /* asynchronous */
+    CHECK(Uac1Parse(work, sizeof(adsrc) - 9, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    /* ... nor in PCM8 (a zero byte is a sample there), synchronous again. */
+    work[sizeof(adsrc) - 9 - 7 - 9 + 3] = 0x0d;
+    work[86 + 5] = UAC_TAG_PCM8; work[93 + 5] = 1; work[93 + 6] = 8;
+    CHECK(Uac1Parse(work, sizeof(adsrc) - 9, 0, 0, &d) == UAC1_NO_AUDIO && d.Skipped == 1);
+    work[86 + 5] = UAC_TAG_FLOAT; work[93 + 5] = 4; work[93 + 6] = 32;
+    work[sizeof(adsrc) - 9 - 7 - 9 + 4] = 200;        /* wMaxPacketSize for 48 floats */
+    Model(work, sizeof(adsrc) - 9, 0, 0);
+    CHECK(m.AltCount == 1 && m.Alt[0].FormatTag == UAC_TAG_FLOAT && m.Alt[0].EpControls == UAC_CONV_MPO);
+    /* PCM8 and mu-law in 2-byte subframes: carried. */
+    n = QemuAs(UAC_TAG_PCM8, 2, 8, 192);
+    Model(work, n, 0, 0);
+    CHECK(m.AltCount == 1 && m.Alt[0].Subslot == 2 && m.Alt[0].Bits == 8 && m.Alt[0].FormatTag == UAC_TAG_PCM8);
+    CHECK(UacPlanFormats(&m, 0, 0, f, 4) == 1 && f[0].Subslot == 2 && f[0].Bits == 16 && f[0].WireSubslot == 2);
+    CHECK(UacPlanPick(&m, 0, 1, 2, 2, UAC_PLAN_BITS(UAC_TAG_PCM8, 8), UAC_PLAN_ANY_CONFIG, 48000, 0, &index) == UAC_OK);
+    /* The first runnable terminal: a float-only one ahead of PCM. */
+    Terminals();
+}
+
+static void Conversions(void)
+{
+    unsigned int a;
+    long s;
+    unsigned char in[8], out[16];
+    /* G.711 reference points. */
+    CHECK(UacConvMulawDecode(0xff) == 0 && UacConvMulawDecode(0x80) == 32124 && UacConvMulawDecode(0x00) == -32124);
+    CHECK(UacConvMulawDecode(0x7f) == 0 && UacConvMulaw(0) == 0xff);
+    CHECK(UacConvAlawDecode(0xd5) == 8 && UacConvAlawDecode(0x55) == -8);
+    CHECK(UacConvAlawDecode(0xaa) == 32256 && UacConvAlawDecode(0x2a) == -32256);
+    CHECK(UacConvAlaw(0) == 0xd5 && UacConvAlaw(32767) == 0xaa && UacConvAlaw(-32768) == 0x2a);
+    CHECK(UacConvMulaw(32767) == 0x80 && UacConvMulaw(-32768) == 0x00);
+    for (a = 0; a < 256; a++) {
+        CHECK(UacConvAlaw(UacConvAlawDecode(a)) == a);
+        CHECK(UacConvMulaw(UacConvMulawDecode(a)) == (a == 0x7f ? 0xffU : a));
+    }
+    /* Encoders are monotonic in the decoded value. */
+    for (s = -32768; s < 32767; s++) {
+        CHECK(UacConvAlawDecode(UacConvAlaw((int)s)) <= UacConvAlawDecode(UacConvAlaw((int)s + 1)));
+        CHECK(UacConvMulawDecode(UacConvMulaw((int)s)) <= UacConvMulawDecode(UacConvMulaw((int)s + 1)));
+    }
+    /* Float: exact both ways for every 16-bit value. */
+    CHECK(UacConvFloat(0) == 0 && UacConvFloat(-32768) == 0xbf800000UL && UacConvFloat(16384) == 0x3f000000UL);
+    CHECK(UacConvFloat(1) == 0x38000000UL && UacConvFloat(-1) == 0xb8000000UL);
+    for (s = -32768; s <= 32767; s++) CHECK(UacConvFloatDecode(UacConvFloat((int)s)) == s);
+    CHECK(UacConvFloatDecode(0x3f800000UL) == 32767 && UacConvFloatDecode(0xbf800000UL) == -32768);
+    CHECK(UacConvFloatDecode(0x7fc00000UL) == 0 && UacConvFloatDecode(0xffc00000UL) == 0);
+    CHECK(UacConvFloatDecode(0x7f800000UL) == 32767 && UacConvFloatDecode(0xff800000UL) == -32768);
+    CHECK(UacConvFloatDecode(0x40000000UL) == 32767 && UacConvFloatDecode(0x00000001UL) == 0);
+    CHECK(UacConvFloatDecode(0x37800000UL) == 1 && UacConvFloatDecode(0x37000000UL) == 0);
+    CHECK(UacConvFloatDecode(0x3f000001UL) == 16384 && UacConvFloatDecode(0xb7800000UL) == -1);
+    /* PCM8: offset binary, rounded, saturated. */
+    in[0] = 0; in[1] = 0; in[2] = 0xff; in[3] = 0x7f; in[4] = 0; in[5] = 0x80; in[6] = 0x80; in[7] = 0;
+    UacConvOut(UAC_TAG_PCM8, 1, in, 4, out);
+    CHECK(out[0] == 0x80 && out[1] == 0xff && out[2] == 0x00 && out[3] == 0x81);
+    UacConvIn(UAC_TAG_PCM8, 1, out, 4, in);
+    CHECK(in[0] == 0 && in[1] == 0 && in[2] == 0x00 && in[3] == 0x7f && in[4] == 0 && in[5] == 0x80);
+    CHECK(in[6] == 0x00 && in[7] == 0x01);
+    /* The array forms, little-endian. */
+    in[0] = 0x00; in[1] = 0x40; in[2] = 0x00; in[3] = 0x80;
+    UacConvOut(UAC_TAG_FLOAT, 4, in, 2, out);
+    CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0 && out[3] == 0x3f && out[7] == 0xbf && out[6] == 0x80);
+    UacConvIn(UAC_TAG_FLOAT, 4, out, 2, in);
+    CHECK(in[0] == 0x00 && in[1] == 0x40 && in[2] == 0x00 && in[3] == 0x80);
+    in[0] = 0; in[1] = 0; in[2] = 0xff; in[3] = 0x7f;
+    UacConvOut(UAC_TAG_ALAW, 1, in, 2, out);
+    CHECK(out[0] == 0xd5 && out[1] == 0xaa);
+    UacConvOut(UAC_TAG_MULAW, 1, in, 2, out);
+    CHECK(out[0] == 0xff && out[1] == 0x80);
+    UacConvIn(UAC_TAG_MULAW, 1, out, 2, in);
+    CHECK(in[0] == 0 && in[1] == 0 && in[2] == 0x7c && in[3] == 0x7d);
+    /* 8 bits left-justified in a wider subframe: the last byte. */
+    in[0] = 0x00; in[1] = 0x80; in[2] = 0xff; in[3] = 0x7f;
+    UacConvOut(UAC_TAG_PCM8, 2, in, 2, out);
+    CHECK(out[0] == 0 && out[1] == 0x00 && out[2] == 0 && out[3] == 0xff);
+    out[0] = 0x5a; out[2] = 0xa5;   /* ignored low bytes */
+    UacConvIn(UAC_TAG_PCM8, 2, out, 2, in);
+    CHECK(in[0] == 0 && in[1] == 0x80 && in[2] == 0 && in[3] == 0x7f);
+    UacConvOut(UAC_TAG_MULAW, 3, in, 1, out);
+    CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0x00);
+    /* PCM8 out and back: s rounded to a multiple of 256, saturating. */
+    for (s = -32768; s <= 32767; s++) {
+        long back, want = s >= 32640 ? 32512 : ((s + 128 + 32768) / 256) * 256 - 32768;
+        in[0] = (unsigned char)(s & 0xff); in[1] = (unsigned char)((s >> 8) & 0xff);
+        UacConvOut(UAC_TAG_PCM8, 1, in, 1, out);
+        UacConvIn(UAC_TAG_PCM8, 1, out, 1, in + 2);
+        back = (long)(short)(in[2] | (in[3] << 8));
+        CHECK(back == want);
+    }
+    CHECK(UacConvKnown(UAC_TAG_PCM, 3, 24) && !UacConvKnown(UAC_TAG_PCM, 1, 8) && UacConvKnown(UAC_TAG_MULAW, 1, 8));
+    CHECK(UacConvKnown(UAC_TAG_PCM8, 2, 8) && UacConvKnown(UAC_TAG_ALAW, 4, 8) && !UacConvKnown(UAC_TAG_PCM8, 2, 16));
+    CHECK(!UacConvKnown(UAC_TAG_FLOAT, 2, 16) && !UacConvKnown(UAC_TAG_MULAW, 5, 8) && !UacConvKnown(6, 1, 8));
+    CHECK(UacConvRank(UAC_TAG_PCM) < UacConvRank(UAC_TAG_FLOAT) && UacConvRank(UAC_TAG_FLOAT) < UacConvRank(UAC_TAG_ALAW));
+    CHECK(UacConvRank(UAC_TAG_ALAW) == UacConvRank(UAC_TAG_MULAW) && UacConvRank(UAC_TAG_MULAW) < UacConvRank(UAC_TAG_PCM8));
+    /* Ff (26.12). */
+    CHECK(UacConvFf(48000, 0) == 0x0c0000UL && UacConvFf(44100, 0) == 0x0b0666UL && UacConvFf(16000, 0) == 0x040000UL);
+    CHECK(UacConvFf(48000, 1) == 0x060000UL && UacConvFf(44100, 1) == 0x058333UL && UacConvFf(7999, 0) == 0);
+}
+
+static void Mpo(void)
+{
+    UAC_CONV_CADENCE c;
+    unsigned char p[52 * 4];
+    unsigned int i, sum = 0, last, total = 0, owed = 0;
+    CHECK(UacConvCadence(&c, 44100, 0, 1, 0) && c.Low == 44 && c.High == 45);
+    for (i = 0; i < 10; i++) sum += UacConvNominal(&c);
+    CHECK(sum == 441 && c.Owed == 2 * 45 + 2);   /* held to a few packets */
+    CHECK(UacConvCadence(&c, 48000, 0, 1, 0) && c.Low == 47 && c.High == 49);   /* 2.2.1, whole nav */
+    CHECK(UacConvCadence(&c, 48000, 1, 4, 0) && c.Low == 47 && c.High == 49);
+    CHECK(UacConvCadence(&c, 8000, 1, 1, 0) && c.Low == 0 && c.High == 2);
+    CHECK(!UacConvCadence(&c, 48000, 0, 2, 0) && !UacConvCadence(&c, 7000, 0, 1, 0));
+    /* 44.1 kHz, frames of 4 bytes, packets of 52 frames padded. */
+    CHECK(UacConvCadence(&c, 44100, 0, 1, 0));
+    memset(p, 0, sizeof(p));
+    for (i = 0; i < 45 * 4; i++) p[i] = (unsigned char)(i | 1);
+    (void)UacConvNominal(&c);                                      /* owed 44 */
+    CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 45 && last == 45 && c.Owed == -1);
+    p[44 * 4] = p[44 * 4 + 1] = p[44 * 4 + 2] = p[44 * 4 + 3] = 0;
+    (void)UacConvNominal(&c);                                      /* owed 43 */
+    CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 44 && last == 44 && c.Owed == -1);
+    memset(p, 0, sizeof(p));                                       /* silence */
+    (void)UacConvNominal(&c);                                      /* owed 43 */
+    CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 44 && last == 0 && c.Owed == -1);
+    p[51 * 4] = 9;                                                 /* past High */
+    (void)UacConvNominal(&c);
+    CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 45 && last == 52);
+    p[51 * 4] = 0;
+    CHECK(UacConvMpoFrames(&c, p, 40 * 4 + 2, 4, &last) == 40);  /* whole frames received */
+    /* Silence over a second: the nominal 44100 frames, no drift. */
+    CHECK(UacConvCadence(&c, 44100, 0, 1, 0));
+    memset(p, 0, sizeof(p));
+    for (i = 0; i < 1000; i++) {
+        (void)UacConvNominal(&c);
+        total += UacConvMpoFrames(&c, p, sizeof(p), 4, &last);
+    }
+    CHECK(total == 44100 && c.Owed == 0);
+    /* A synchronous 48 kHz source sending 47, 49, 48 (2.2.1), every frame
+     * of each nonzero to its end: all taken; the 47 gets one frame of
+     * silence (48 were owed), which leaves the stream one frame ahead,
+     * within the bounds, not drifting. */
+    CHECK(UacConvCadence(&c, 48000, 0, 1, 0));
+    for (i = 0; i < 3; i++) {
+        unsigned int n = i == 0 ? 47 : i == 1 ? 49 : 48;
+        memset(p, 0, sizeof(p));
+        memset(p, 0x11, n * 4);
+        (void)UacConvNominal(&c);
+        owed += UacConvMpoFrames(&c, p, sizeof(p), 4, &last);
+        CHECK(last == n);
+    }
+    CHECK(owed == 145 && c.Owed == -1);
+    /* A source one frame late whose packet ends in zeros: the frame owed
+     * is counted (silence), and the next packet's frames are not cut. */
+    CHECK(UacConvCadence(&c, 48000, 0, 1, 0));
+    memset(p, 0, sizeof(p)); memset(p, 0x22, 47 * 4);
+    (void)UacConvNominal(&c);
+    CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 48 && last == 47 && c.Owed == 0);
+    /* A lost packet starts the balance afresh. */
+    (void)UacConvNominal(&c);
+    UacConvLost(&c);
+    CHECK(c.Owed == 0);
+    /* 47 and 49 alternating at 48 kHz, every 47 lost: no debt builds up,
+     * and silence afterwards is counted at 48 a packet. */
+    CHECK(UacConvCadence(&c, 48000, 0, 1, 0));
+    for (i = 0; i < 1000; i++) {
+        (void)UacConvNominal(&c);
+        if (i & 1) {
+            memset(p, 0, sizeof(p)); memset(p, 0x33, 49 * 4);
+            CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == 49);
+        } else UacConvLost(&c);
+    }
+    memset(p, 0, sizeof(p));
+    for (i = 0; i < 100; i++) {
+        (void)UacConvNominal(&c);
+        CHECK(UacConvMpoFrames(&c, p, sizeof(p), 4, &last) == (i ? 48U : 47U));
+    }
+    /* 44.1 kHz with every fifth transfer of four packets lost: each lost
+     * interval still advances the cadence, so its phase stays that of a
+     * stream that lost nothing, and silence afterwards counts 44100 a
+     * second. */
+    {
+        UAC_CONV_CADENCE ref;
+        memset(&ref, 0, sizeof(ref));
+        CHECK(UacConvCadence(&c, 44100, 0, 1, 0));
+        CHECK(UacConvCadence(&ref, 44100, 0, 1, 0));
+        memset(p, 0, sizeof(p));
+        for (i = 0; i < 1000; i++) {
+            unsigned int k;
+            if (i % 5 == 4) UacConvLostPackets(&c, 4);
+            else for (k = 0; k < 4; k++) {
+                (void)UacConvNominal(&c);
+                (void)UacConvMpoFrames(&c, p, sizeof(p), 4, &last);
+            }
+            for (k = 0; k < 4; k++) (void)UacConvNominal(&ref);
+            CHECK(c.Acc == ref.Acc);
+        }
+        CHECK(c.Owed == 0);
+        total = 0;
+        for (i = 0; i < 1000; i++) {
+            (void)UacConvNominal(&c);
+            total += UacConvMpoFrames(&c, p, sizeof(p), 4, &last);
+        }
+        CHECK(total == 44100 && c.Owed == 0);
+    }
+    /* An adaptive source following Ff 0B0666 (44.1 kHz) for five minutes,
+     * one packet in seven silent: the frames taken track the frames sent
+     * (Ff's rate, not 44100), never more than a frame or two apart. */
+    {
+        unsigned long acc = 0, sent = 0, taken = 0;
+        CHECK(UacConvCadence(&c, 44100, 0, 1, 0x0b0666UL) && c.Low == 44 && c.High == 45);
+        for (i = 0; i < 300000; i++) {
+            unsigned int n;
+            acc += 0x0b0666UL; n = (unsigned int)(acc >> 14); acc &= 0x3fff;
+            memset(p, 0, sizeof(p));
+            if (i % 7) memset(p, 0x44, n * 4);
+            sent += n;
+            (void)UacConvNominal(&c);
+            taken += UacConvMpoFrames(&c, p, sizeof(p), 4, &last);
+            CHECK(taken + 2 >= sent && taken <= sent + 2);
+        }
+    }
+}
+
+static void Offer(void)
+{
+    UAC_FORMAT f[5];
+    unsigned long count[5], rate[5][4];
+    unsigned int i;
+    memset(f, 0, sizeof(f)); memset(rate, 0, sizeof(rate));
+    for (i = 0; i < 5; i++) {
+        f[i].Channels = 2; f[i].Subslot = 2; f[i].Bits = 16; f[i].Terminal = 1; f[i].ChannelConfig = 3;
+        f[i].WireSubslot = 1; f[i].WireBits = 8;
+    }
+    f[0].FormatTag = UAC_TAG_PCM8; count[0] = 2; rate[0][0] = 44100; rate[0][1] = 48000;
+    f[1].FormatTag = UAC_TAG_PCM; f[1].WireSubslot = 2; f[1].WireBits = 16; count[1] = 1; rate[1][0] = 48000;
+    f[2].FormatTag = UAC_TAG_MULAW; count[2] = 3; rate[2][0] = 44100; rate[2][1] = 48000; rate[2][2] = 8000;
+    f[3].FormatTag = UAC_TAG_FLOAT; f[3].WireSubslot = 4; f[3].WireBits = 32; count[3] = 1; rate[3][0] = 44100;
+    f[4].FormatTag = UAC_TAG_PCM; f[4].Subslot = 3; f[4].Bits = 24; f[4].WireSubslot = 3; f[4].WireBits = 24;
+    count[4] = 1; rate[4][0] = 96000;
+    CHECK(UacPlanOffer(f, count, &rate[0][0], 4, 5) == 4);
+    CHECK(f[0].FormatTag == UAC_TAG_PCM && f[0].Subslot == 2 && count[0] == 1 && rate[0][0] == 48000);
+    CHECK(f[1].FormatTag == UAC_TAG_PCM && f[1].Subslot == 3 && count[1] == 1 && rate[1][0] == 96000);
+    CHECK(f[2].FormatTag == UAC_TAG_FLOAT && count[2] == 1 && rate[2][0] == 44100);
+    CHECK(f[3].FormatTag == UAC_TAG_MULAW && count[3] == 1 && rate[3][0] == 8000);
+    /* PCM only: unchanged. */
+    f[0].FormatTag = f[1].FormatTag = UAC_TAG_PCM;
+    count[0] = 2; rate[0][1] = 44100;
+    CHECK(UacPlanOffer(f, count, &rate[0][0], 4, 2) == 2 && count[0] == 2 && rate[0][1] == 44100 &&
+          f[1].Subslot == 3);
+    /* Another channel count is another pin view. */
+    f[0].FormatTag = UAC_TAG_PCM; count[0] = 1; rate[0][0] = 48000;
+    f[1] = f[0]; f[1].FormatTag = UAC_TAG_ALAW; f[1].Channels = 1; count[1] = 1; rate[1][0] = 48000;
+    CHECK(UacPlanOffer(f, count, &rate[0][0], 4, 2) == 2 && f[1].Channels == 1);
 }
 
 static unsigned int Copy(void) { memcpy(work, logi, logiLen); return logiLen; }
@@ -449,7 +770,8 @@ int main(int argc, char **argv)
     brioLen = Load(argv[1], brio, sizeof(brio));
     logiLen = Load(argv[2], logi, sizeof(logi));
     play2Len = Load(argv[3], play2, sizeof(play2));
-    Brio(); Logi(); Play2(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Unsupported(); Hostile();
-    printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback)\n", checks);
+    Brio(); Logi(); Play2(); Qemu(); Async(); Midi(); Mixed(); Selector(); ManyRates(); Adaptive(); SelectorCycle(); Formats(); Hostile();
+    Conversions(); Mpo(); Offer();
+    printf("PASS uac1test: %u checks (parser, model, plan, volume walk, feedback, conversions)\n", checks);
     return 0;
 }

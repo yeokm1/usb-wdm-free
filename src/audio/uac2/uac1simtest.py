@@ -6,6 +6,7 @@ its profiles; no physical USB. Run: python -B uac1simtest.py
 """
 import io
 import json
+import math
 import socket
 import struct
 import subprocess
@@ -79,6 +80,7 @@ class Base(unittest.TestCase):
 
 
 BUILT = [n for n in uac1emu.PROFILE_NAMES if n not in uac1emu.REPLAY]
+TAGS = {'pcm8': 2, 'float': 3, 'alaw': 4, 'mulaw': 5, 'pcm8in': 2, 'floatin': 3, 'mpoout': 2}
 
 
 class DescriptorTest(unittest.TestCase):
@@ -107,7 +109,7 @@ class DescriptorTest(unittest.TestCase):
                 for (i, a), alt in p.alts.items():
                     info = p.stream_alt(i, a)
                     self.assertIsNotNone(info)
-                    self.assertEqual(alt['format_tag'], {'pcm8': 2, 'float': 3}.get(name, 1))
+                    self.assertEqual(alt['format_tag'], TAGS.get(name, 1))
                     data = info['data']
                     self.assertEqual(data['attributes'] & 3, 1)
                     self.assertEqual(data['interval'], 4 if p.speed == 'high' else 1)
@@ -644,8 +646,8 @@ class DualDescriptorTest(Base):
 
 
 class NegativeFormatTest(Base):
-    """uac1's G3 fixtures: formats a driver must refuse, which Windows'
-    own driver may still play."""
+    """uac1's G3 fixtures of 0.1.0.1 (formats it refused; run since
+    docs/design/uac2.md 26.12)."""
     profile = 'pcm8'
 
     def general_and_format(self, p):
@@ -714,6 +716,165 @@ class NegativeFormatTest(Base):
         model.handle(13, 5, b'\x81')
         stop = [json.loads(l) for l in self.trace.getvalue().splitlines() if '"iso_stop"' in l][-1]
         self.assertEqual(stop['synch_out']['01']['packets'], 3)
+
+
+class ConvertedFormatTest(unittest.TestCase):
+    """docs/design/uac2.md 26.12: the formats uac1 converts, MaxPacketsOnly
+    both ways and an adaptive source fed Ff."""
+
+    def make(self, name):
+        self.time = 100.0
+        self.wire, self.trace = Wire(), io.StringIO()
+        p = uac1emu.Profile1(name)
+        model = uac1emu.Model1(self.wire, self.trace, lambda: self.time, profile=p)
+        model.peer_caps = uacemu.CAPS
+        model.handle(6, 1, b'\x01')
+        return p, model
+
+    def events(self, name):
+        return [e for e in map(json.loads, self.trace.getvalue().splitlines()) if e['event'] == name]
+
+    def test_g711_tables(self):
+        self.assertEqual((uac1emu.MULAW[0xff], uac1emu.MULAW[0x80], uac1emu.MULAW[0x00]), (0, 32124, -32124))
+        self.assertEqual((uac1emu.ALAW[0xd5], uac1emu.ALAW[0x55], uac1emu.ALAW[0xaa], uac1emu.ALAW[0x2a]),
+                         (8, -8, 32256, -32256))
+        for code in range(256):
+            self.assertEqual(uac1emu.ALAW[uac1emu.g711(4, uac1emu.ALAW[code])], uac1emu.ALAW[code])
+
+    def play(self, name, ep=1, packets=200, rate=48000):
+        p, model = self.make(name)
+        model.handle(9, 2, b'\x01\x01')
+        model.handle(12, 3, bytes((ep, 8, 4)))
+        info = p.stream_alt(1, 1)
+        for k in range(packets):
+            data = uac1emu.encode_sine(rate // 1000, info, rate, k * (rate // 1000))
+            model.handle(102, 0, struct.pack('<BBH', ep, 0, len(data)) + data)
+            self.time += 0.001
+        model.report('iso_out_totals')
+        return p, model, self.events('iso_out_totals')[-1]
+
+    def test_playback_formats_level_and_tone(self):
+        for name in ('pcm8', 'float', 'alaw', 'mulaw'):
+            with self.subTest(profile=name):
+                p, model, totals = self.play(name)
+                self.assertAlmostEqual(totals['received_peak_dbfs'][0], -6.02, delta=0.3)
+                self.assertAlmostEqual(totals['tone_hz']['01'], 1000, delta=10)
+                self.assertEqual(model.ostate[1]['misframed'], 0)
+
+    def capture(self, name, interface, ep, ms=20):
+        p, model = self.make(name)
+        model.handle(9, 2, bytes((interface, 1)))
+        model.handle(12, 3, bytes((ep, 8, 4)))
+        for _ in range(ms):
+            model.capture()
+            self.time += 0.001
+        info = p.stream_alt(interface, 1)
+        packets = [m[2][4:] for m in self.wire.messages if m[0] == 102 and m[2][0] == ep]
+        return p, model, info, packets
+
+    def test_capture_formats(self):
+        for name, interface, ep in (('alaw', 2, 0x82), ('mulaw', 2, 0x82), ('pcm8in', 1, 0x81),
+                                    ('floatin', 1, 0x81)):
+            with self.subTest(profile=name):
+                p, model, info, packets = self.capture(name, interface, ep)
+                self.assertEqual(len(packets), 20)
+                values = uac1emu.decode16(b''.join(packets), info['format_tag'], info['subslot'], info['bits'])
+                peak = max(abs(v) for v in values)
+                self.assertAlmostEqual(20 * math.log10(peak / 32768), -6.02, delta=0.3)
+                if name == 'pcm8in':
+                    self.assertEqual(info['subslot'], 2)
+                    self.assertTrue(all(packets[0][i] == 0 for i in range(0, len(packets[0]), 2)))
+
+    def test_mpo_capture_pads_with_2_2_1_sizes(self):
+        sizes = []
+        real = uac1emu.encode_sine
+
+        def counting(samples, info, rate, phase):
+            sizes.append(samples)
+            return real(samples, info, rate, phase)
+        uac1emu.encode_sine = counting
+        try:
+            p, model, info, packets = self.capture('mpoin48', 1, 0x81, ms=12)
+        finally:
+            uac1emu.encode_sine = real
+        self.assertTrue(info['mpo'])
+        self.assertTrue(all(len(x) == 52 * 4 for x in packets))
+        # Exactly 2.2.1's 48, 47, 49, 48 at 48 kHz (never 50: the jitter
+        # does not carry into the accumulator).
+        self.assertEqual(sizes, [48, 47, 49, 48] * 3)
+        for x, n in zip(packets, sizes):
+            self.assertEqual(x[n * 4:], bytes(len(x) - n * 4))
+
+    def test_mpo_playback_audio_and_bad_length(self):
+        p, model = self.make('mpoout')
+        model.handle(9, 2, b'\x01\x01')
+        model.handle(12, 3, b'\x01\x08\x04')
+        info = p.stream_alt(1, 1)
+        self.assertTrue(info['mpo'])
+        audio = bytes([0x90, 0x70] * 48) + bytes(2 * 2)
+        model.handle(102, 0, struct.pack('<BBH', 1, 0, len(audio)) + audio)
+        self.assertEqual(model.ostate[1]['frames'], 48)
+        self.assertEqual(model.ostate[1]['mpo_bad'], 0)
+        short = bytes([0x90, 0x70] * 48)
+        model.handle(102, 0, struct.pack('<BBH', 1, 0, len(short)) + short)
+        self.assertEqual((model.ostate[1]['frames'], model.ostate[1]['mpo_bad']), (96, 1))
+        model.stop(1)
+        self.assertEqual((model.closed[-1]['mpo_bad_length'], model.closed[-1]['ok']), (1, False))
+
+    def test_mpo_playback_padded_stream_passes(self):
+        p, model = self.make('mpoout')
+        model.handle(9, 2, b'')
+        model.handle(12, 3, b'')
+        audio = bytes([0x90, 0x70] * 48) + bytes(2 * 2)
+        for _ in range(4):
+            model.handle(102, 0, struct.pack('<BBH', 1, 0, len(audio)) + audio)
+        model.stop(1)
+        self.assertEqual((model.closed[-1]['mpo_bad_length'], model.closed[-1]['ok']), (0, True))
+
+    def test_mpo_playback_pcm8_full_scale_negative_is_audio(self):
+        # PCM8 0x00 is -1.0: a padded packet of 48 such frames is 48 frames
+        # of audio (the cadence's whole frames), not an empty packet.
+        p, model = self.make('mpoout')
+        model.handle(9, 2, b'')
+        model.handle(12, 3, b'')
+        audio = bytes(50 * 2)
+        for _ in range(4):
+            model.handle(102, 0, struct.pack('<BBH', 1, 0, len(audio)) + audio)
+        self.assertEqual((model.ostate[1]['frames'], model.ostate[1]['mpo_zero']), (4 * 48, 4 * 48))
+        tail = bytes([0x90, 0x70] * 45) + bytes(5 * 2)    # 45 frames, then 3 of 0x00, then padding
+        model.handle(102, 0, struct.pack('<BBH', 1, 0, len(tail)) + tail)
+        self.assertEqual(model.ostate[1]['frames'], 5 * 48)
+        model.stop(1)
+        self.assertEqual((model.closed[-1]['mpo_zero_audio'], model.closed[-1]['ok']), (4 * 48 + 3, True))
+
+    def test_mpo_playback_pcm8_full_scale_negative_44100(self):
+        # At 44.1 kHz the ambiguous packets follow the cadence (nine 44,
+        # one 45): a second of them is 44100 frames, no FIFO drift.
+        p, model = self.make('mpoout')
+        model.handle(100, 7, struct.pack('<BBBBHHH', 0, 0x01, 0x22, 0, 0x0100, 0x0001, 3) + uac1emu.u24(44100))
+        model.handle(9, 2, b'')
+        model.handle(12, 3, b'')
+        audio = bytes(50 * 2)
+        for _ in range(1000):
+            model.handle(102, 0, struct.pack('<BBH', 1, 0, len(audio)) + audio)
+        s = model.ostate[1]
+        self.assertEqual((s['frames'], s['under'], s['over'], s['outside']), (44100, 0, 0, 0))
+        model.stop(1)
+        self.assertEqual((model.closed[-1]['rate'], model.closed[-1]['ok']), (44100, True))
+
+    def test_adaptive_source_follows_ff(self):
+        p, model = self.make('adsrc')
+        model.handle(9, 2, b'\x01\x01')
+        model.handle(12, 3, bytes((0x81, 8, 4)))
+        model.handle(12, 4, bytes((0x01, 8, 4)))
+        for value in (0x0c0000, 0x0b0000):
+            data = value.to_bytes(3, 'little')
+            model.handle(102, 0, struct.pack('<BBH', 0x01, 0, 3) + data)
+        sync = model.synch_out[0x01]
+        self.assertEqual((sync['off'], sync['expected'], sync['last']), (1, 48.0, 44.0))
+        model.capture()
+        sent = [m for m in self.wire.messages if m[0] == 102]
+        self.assertEqual(struct.unpack('<BBH', sent[-1][2][:4]), (0x81, 0, 88))    # 44 samples
 
 
 class SocketTest(unittest.TestCase):

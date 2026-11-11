@@ -78,6 +78,8 @@
 /* IEEE 802.3 clause 22 registers and bits. */
 #define MII_BMCR                   0x00
 #define   BMCR_RESET               0x8000
+#define   BMCR_SPEED100            0x2000
+#define   BMCR_FULLDPLX            0x0100
 #define   BMCR_ANENABLE            0x1000
 #define   BMCR_PDOWN               0x0800
 #define   BMCR_ANRESTART           0x0200
@@ -135,6 +137,10 @@ typedef struct A7_STATE {
     nc_u8 WantMac[6];            /* the address SetMac was asked for */
     nc_u8 FilterPending;         /* the last SetFilter failed: Link's caller applies it again */
     nc_u8 Mbps100, Full, Pause;  /* the link Link last applied */
+    /* The Advanced tab (ethernet.md 4.10), from the probe at each start:
+     * *SpeedDuplex (0 auto, 1-4 forced 10/100) and, on the AX88772B/C,
+     * *FlowControl (bit 0 transmit, bit 1 receive pause). */
+    nc_u8 Speed, Flow;
     nc_u16 RxCtl, RxCtlRead, MediumRead;
     nc_u16 RxBase;               /* RX_CTL before the filter bits (AX_DEFAULT_RX_CTL or S98_RX_MODE) */
     nc_u32 RxTransfer;           /* bulk-IN transfer length: the chip's burst */
@@ -147,7 +153,8 @@ typedef struct A7_STATE {
     nc_u8 Frame[A7_FRAME_MAX];   /* the frame being collected */
 } A7_STATE;
 
-/* The chip table is NetPackageChip (netchip.h). */
+/* The chip table is NetPackageChip (netchip.h); its Settings, in order: */
+enum { S_SPEED, S_FLOW, S_COUNT };
 
 long A7Probe(const nc_u8 *device, nc_u32 deviceSize, const nc_u8 *const *config,
              const nc_u32 *size, nc_u32 count, NET_PROBE *probe);

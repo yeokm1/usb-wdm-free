@@ -5,10 +5,15 @@
  *   UACWAV play <ch> <bits> <rate> <s>   a quiet 440 Hz sine on the first
  *                                        "UAC2" output, queued buffers
  *   UACWAV rec <ch> <bits> <rate> <s>    record from the first "UAC2"
- *                                        input; non-silent frames and the
+ *                                        input; non-silent frames, the
  *                                        tone's frequency from zero crossings
+ *                                        and its peak level
  *   UACWAV mix                           the mixer of the first "UAC2"
- *                                        output: lines, controls, values
+ *                                        output: lines (destinations and
+ *                                        their sources), controls, values
+ *   UACWAV srcvol <name|*> <v>           the volume of its speaker line's
+ *                                        sources whose name holds <name>
+ *                                        (any case; * every one), 0-65535
  *   UACWAV vol <v> [right]               its speaker line's volume, 0-65535
  *   UACWAV mute <0|1>                    its speaker line's mute
  *   UACWAV ramp <s>                      play 2ch 16-bit 48 kHz while the
@@ -223,6 +228,23 @@ static MMRESULT Values(HMIXER mx, const MIXERLINE *line, const MIXERCONTROL *c, 
                : mixerGetControlDetails((HMIXEROBJ)mx, &d, MIXER_GETCONTROLDETAILSF_VALUE);
 }
 
+/* Every control of one line, with its values (multiple-item controls: none read). */
+static void LineControls(HMIXER mx, MIXERLINE *l, const char *indent)
+{
+    MIXERLINECONTROLS lc; MIXERCONTROL c[16]; DWORD k;
+    ZeroMemory(&lc, sizeof(lc)); lc.cbStruct = sizeof(lc); lc.dwLineID = l->dwLineID;
+    lc.cControls = l->cControls > 16 ? 16 : l->cControls; lc.cbmxctrl = sizeof(c[0]); lc.pamxctrl = c;
+    if (!lc.cControls || mixerGetLineControls((HMIXEROBJ)mx, &lc, MIXER_GETLINECONTROLSF_ALL)) return;
+    for (k = 0; k < lc.cControls; k++) {
+        DWORD v[8] = { 0 };
+        MMRESULT r = (c[k].fdwControl & MIXERCONTROL_CONTROLF_MULTIPLE) || l->cChannels > 8 ?
+                     MMSYSERR_NOTSUPPORTED : Values(mx, l, &c[k], v, 0);
+        printf("%scontrol \"%s\" type=%08lX flags=%08lX min=%ld max=%ld steps=%lu value=%lu,%lu (%u)\n",
+               indent, c[k].szName, c[k].dwControlType, c[k].fdwControl, c[k].Bounds.lMinimum,
+               c[k].Bounds.lMaximum, c[k].Metrics.cSteps, v[0], v[1], r);
+    }
+}
+
 static int Mix(void)
 {
     HMIXER mx; MIXERLINE line; MIXERCAPS caps; UINT d;
@@ -230,25 +252,57 @@ static int Mix(void)
     mixerGetDevCaps((UINT)mx, &caps, sizeof(caps));
     printf("mixer \"%s\" destinations=%lu\n", caps.szPname, caps.cDestinations);
     for (d = 0; d < caps.cDestinations; d++) {
-        MIXERLINE l; MIXERLINECONTROLS lc; MIXERCONTROL c[16]; DWORD k;
+        MIXERLINE l; DWORD s;
         ZeroMemory(&l, sizeof(l)); l.cbStruct = sizeof(l); l.dwDestination = d;
         if (mixerGetLineInfo((HMIXEROBJ)mx, &l, MIXER_GETLINEINFOF_DESTINATION)) continue;
         printf(" destination %u \"%s\" type=%08lX channels=%lu sources=%lu controls=%lu\n", d,
                l.szName, l.dwComponentType, l.cChannels, l.cConnections, l.cControls);
-        ZeroMemory(&lc, sizeof(lc)); lc.cbStruct = sizeof(lc); lc.dwLineID = l.dwLineID;
-        lc.cControls = l.cControls > 16 ? 16 : l.cControls; lc.cbmxctrl = sizeof(c[0]); lc.pamxctrl = c;
-        if (lc.cControls && !mixerGetLineControls((HMIXEROBJ)mx, &lc, MIXER_GETLINECONTROLSF_ALL))
-            for (k = 0; k < lc.cControls; k++) {
-                DWORD v[8] = { 0 };
-                MMRESULT r = Values(mx, &l, &c[k], v, 0);
-                printf("  control \"%s\" type=%08lX flags=%08lX min=%ld max=%ld steps=%lu value=%lu,%lu (%u)\n",
-                       c[k].szName, c[k].dwControlType, c[k].fdwControl, c[k].Bounds.lMinimum,
-                       c[k].Bounds.lMaximum, c[k].Metrics.cSteps, v[0], v[1], r);
-            }
+        LineControls(mx, &l, "  ");
+        /* The source lines (98 SE: the Wave and SW Synth lines it adds). */
+        for (s = 0; s < l.cConnections; s++) {
+            MIXERLINE sl;
+            ZeroMemory(&sl, sizeof(sl)); sl.cbStruct = sizeof(sl); sl.dwDestination = d; sl.dwSource = s;
+            if (mixerGetLineInfo((HMIXEROBJ)mx, &sl, MIXER_GETLINEINFOF_SOURCE)) continue;
+            printf("  source %lu \"%s\" type=%08lX channels=%lu controls=%lu\n", s,
+                   sl.szName, sl.dwComponentType, sl.cChannels, sl.cControls);
+            LineControls(mx, &sl, "   ");
+        }
     }
     mixerClose(mx);
     printf("PASS: mixer listed\n");
     return 0;
+}
+
+/* The volume of every source line of the speaker line whose name holds
+ * text (any case; "*" every one), set to v on each channel. */
+static int SourceLevel(const char *text, DWORD v)
+{
+    HMIXER mx; MIXERLINE line; DWORD s, set = 0, failed = 0;
+    if (!Mixer(&mx, &line)) return 1;
+    for (s = 0; s < line.cConnections; s++) {
+        MIXERLINE sl; MIXERCONTROL c; DWORD was[8] = { 0 }, want[8], now[8] = { 0 }, k;
+        char name[MIXER_LONG_NAME_CHARS + 1], pat[64];
+        MMRESULT r;
+        ZeroMemory(&sl, sizeof(sl)); sl.cbStruct = sizeof(sl);
+        sl.dwDestination = line.dwDestination; sl.dwSource = s;
+        if (mixerGetLineInfo((HMIXEROBJ)mx, &sl, MIXER_GETLINEINFOF_SOURCE)) continue;
+        lstrcpyn(name, sl.szName, sizeof(name)); CharUpper(name);
+        lstrcpyn(pat, text, sizeof(pat)); CharUpper(pat);
+        if (lstrcmp(pat, "*") && !strstr(name, pat)) continue;
+        if (sl.cChannels > 8 || !Control(mx, &sl, MIXERCONTROL_CONTROLTYPE_VOLUME, &c)) {
+            printf("source \"%s\": no volume control\n", sl.szName); continue;
+        }
+        for (k = 0; k < 8; k++) want[k] = v;
+        Values(mx, &sl, &c, was, 0);
+        r = Values(mx, &sl, &c, want, 1);
+        Values(mx, &sl, &c, now, 0);
+        printf("source \"%s\" volume \"%s\": was %lu,%lu set %lu (%u) now %lu,%lu\n",
+               sl.szName, c.szName, was[0], was[1], v, r, now[0], now[1]);
+        if (r) failed++; else set++;
+    }
+    mixerClose(mx);
+    printf(set && !failed ? "PASS: set\n" : "FAIL: set\n");
+    return set && !failed ? 0 : 1;
 }
 
 static int SetLevel(int mute, DWORD left, DWORD right)
@@ -351,7 +405,7 @@ static int Rec(unsigned ch, unsigned bits, unsigned rate, unsigned secs)
     UINT dev = List(0, 1), i, done = 0, frames, f;
     unsigned char *buf[BLOCKS];
     DWORD start, bytes = 0, nonzero = 0, crossings = 0;
-    long last = 0;
+    long last = 0, peak = 0;
     if (dev == (UINT)-1) { printf("FAIL: no UAC2 input\n"); return 1; }
     Format(&w, ch, bits, rate);
     frames = rate * secs / BLOCKS;
@@ -379,6 +433,8 @@ static int Rec(unsigned ch, unsigned bits, unsigned rate, unsigned secs)
         for (f = 0; f + w.Format.nBlockAlign <= hdr[i].dwBytesRecorded; f += w.Format.nBlockAlign) {
             long s = Get(buf[i] + f, bits);
             if (s) nonzero++;
+            if (s > peak) peak = s;
+            if (-s > peak) peak = -s;
             if (last < 0 && s >= 0) crossings++;
             last = s;
         }
@@ -388,6 +444,10 @@ static int Rec(unsigned ch, unsigned bits, unsigned rate, unsigned secs)
     printf("bytes=%lu frames=%lu nonzero=%lu crossings=%lu tone_hz=%lu\n", bytes,
            bytes / w.Format.nBlockAlign, nonzero, crossings,
            bytes ? (DWORD)((double)crossings * rate / (bytes / w.Format.nBlockAlign)) : 0);
+    /* The first channel's largest sample against full scale: 2^15
+     * (16-bit), 2^23 (24 and 32, read as 24). */
+    printf("peak=%ld peak_dbfs=%.1f\n", peak,
+           peak ? 20.0 * log10((double)peak / (bits == 16 ? 32768.0 : 8388608.0)) : -999.0);
     printf(done == BLOCKS && nonzero ? "PASS: all buffers recorded, signal present\n" :
                                        "FAIL: buffers not completed or silent\n");
     return done == BLOCKS && nonzero ? 0 : 1;
@@ -409,12 +469,16 @@ int main(int argc, char **argv)
         return SetLevel(0, left > 65535 ? 65535 : left, right > 65535 ? 65535 : right);
     }
     if (argc == 3 && !lstrcmpi(argv[1], "mute")) return SetLevel(1, atoi(argv[2]) ? 1 : 0, atoi(argv[2]) ? 1 : 0);
+    if (argc == 4 && !lstrcmpi(argv[1], "srcvol")) {
+        DWORD v = (DWORD)atol(argv[3]);
+        return SourceLevel(argv[2], v > 65535 ? 65535 : v);
+    }
     if (argc == 3 && !lstrcmpi(argv[1], "ramp")) {
         unsigned secs = atoi(argv[2]);
         if (!secs || secs > 10) { printf("FAIL: arguments\n"); return 2; }
         return Ramp(secs);
     }
     printf("usage: UACWAV list | play|rec <ch> <bits> <rate> <seconds> | mix | vol <v> [right] |\n"
-           "       mute <0|1> | ramp <seconds>\n");
+           "       mute <0|1> | ramp <seconds> | srcvol <name|*> <v>\n");
     return 2;
 }

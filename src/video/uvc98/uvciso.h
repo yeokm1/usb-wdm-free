@@ -56,4 +56,18 @@ int UvcIsoPlan(unsigned int speed, unsigned int type, unsigned int packetBytes,
     unsigned int transactions, unsigned int serviceMicroframes,
     unsigned int maxUrbs, UVC_ISO_PLAN *plan);
 
+/* Design section 5.4a: a data transfer the stack refused as a whole for its
+ * start frame (URB status USBD_STATUS_BAD_START_FRAME) starts a resync: once
+ * no transfer of the pipe is with the stack, every slot is submitted with an
+ * explicit start frame, slot k at UvcIsoResyncFrame(current, k, frames).
+ * UvcIsoRefused: 1 for that URB status, else 0. UvcIsoResyncFrame:
+ * current + UVC_ISO_RESYNC_LEAD + index * framesPerUrb, wrapping as a 32-bit
+ * frame number. UVC_ISO_RESYNC_LIMIT resyncs in a row with no successful
+ * transfer between them stop the stream. */
+#define UVC_ISO_BAD_START_STATUS 0xC0000A00UL
+#define UVC_ISO_RESYNC_LEAD 8UL
+#define UVC_ISO_RESYNC_LIMIT 4UL
+int UvcIsoRefused(unsigned long urbStatus);
+unsigned long UvcIsoResyncFrame(unsigned long current, unsigned int index, unsigned int framesPerUrb);
+
 #endif

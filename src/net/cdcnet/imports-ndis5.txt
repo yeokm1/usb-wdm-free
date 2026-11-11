@@ -30,6 +30,7 @@ NDIS.SYS!NdisOpenConfiguration
 NDIS.SYS!NdisQueryBuffer
 NDIS.SYS!NdisQueryBufferOffset
 NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReadNetworkAddress
 NDIS.SYS!NdisReleaseSpinLock
 NDIS.SYS!NdisSetTimer
 NDIS.SYS!NdisTerminateWrapper

@@ -440,6 +440,68 @@ need them, each with its NOTICE row.
   size; the default is `PAGE_SIZE` (`USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`,
   `usbdi.h` line 324).
 
+### 5.4a A stream the stack refuses for its start frame
+
+Found on 98 SE's own UHCI driver and on NUSB's UHCI companion, Full Speed
+(`docs/testing/2026-11-07-matrix-9x.md`, "`uvc98` on 98 SE with the current
+`M1CAP`"; cause read 2026-11-09 with the trace build,
+`docs/testing/2026-11-09-uvc98-fs-uhci.md`). The guest stalls for longer than
+the 48 ms the three Full Speed URBs cover (the test tool writes a 38 KB frame
+to the floppy between reads). Every URB queued for the stall's frames comes
+back, and each one resubmitted with `USBD_START_ISO_TRANSFER_ASAP` then comes
+back at once, as a whole, with `USBD_STATUS_BAD_START_FRAME` (`0xC0000A00`;
+NTSTATUS `STATUS_DEVICE_DATA_ERROR`; 8 in a row in the trace): read as the
+stack placing an ASAP transfer after the last one it scheduled for the pipe,
+a frame already past. Section 5.4's rule (a run of 8
+whole-transfer failures stops the stream) then stopped it after 8 such
+refusals, and every later read came back empty. Under xHCI98 and EHCI the
+same stall did not end the stream.
+
+The rule, for a data transfer that completes with URB status
+`USBD_STATUS_BAD_START_FRAME` (the URB's own `Hdr.Status`; packets of it are
+not read):
+
+1. It is a lost interval, whatever the IRP's own status: fed to the payload
+   core as a failed transfer (the frame in progress is dropped, as for any
+   whole-transfer failure; its packets are not read), and not resubmitted.
+   It is not counted in the run of 8 whole-transfer failures, nor does it
+   clear that run.
+2. The stream is marked for a resync. While so marked, no completed slot is
+   resubmitted; the resync runs once no transfer of the pipe is with the
+   stack (every slot has completed and been consumed) and once the start
+   path has submitted every slot (the worker runs from before the first
+   submission, so an early refusal must not let it submit a slot the start
+   path has yet to submit; the start path marks the fill done and wakes the
+   worker). The worker does not block for this: it goes back to waiting for
+   completions, so a Stop wakes it and goes to the existing drain (abort
+   the pipe, cancel, wait) as before. Stop always wins: the worker checks it
+   before the resync, after the frame-number request and in every
+   submission, and a resync cut short by a Stop ends quietly (the stop's own
+   status is kept).
+3. Then it reads the current frame number (`URB_FUNCTION_GET_CURRENT_FRAME_NUMBER`,
+   documented in the 98 and 2000 DDKs' `usb100.h`/`usbdi.h` as the frame
+   counter of the bus) and submits every slot without
+   `USBD_START_ISO_TRANSFER_ASAP`, with explicit `StartFrame` values
+   `current + 8 + k * F` for slot k (k = 0, 1, ... in slot order), F being
+   the frames one URB covers (its packets at Full Speed, its packets / 8 at
+   High Speed). 8 frames of lead leaves the stack time to take the first
+   one. The rebase is reported to the payload core as a loss before the
+   first explicit transfer, so no frame is assembled across it (transfers
+   that completed while the resync waited may have begun one). A frame
+   number is 32 bits wide; the sums wrap as unsigned.
+4. Later resubmissions use `USBD_START_ISO_TRANSFER_ASAP` again: the stack
+   then continues after the explicit ones, which lie in the future.
+5. A resync counts once toward a limit: 4 resyncs in a row with no transfer
+   completed successfully in between stop the stream with
+   `STATUS_DEVICE_DATA_ERROR`, as the 8-failure rule does, so a stack that
+   refuses explicit start frames as well does not spin the worker. A
+   successful transfer clears the count. A failure of the frame-number
+   request or of a submission stops the stream the same way.
+6. A transfer that comes back with any other failure follows section 5.4 as
+   before. Nothing here depends on the host controller driver: it is the
+   status and the requests USBD documents, so it applies to every stack, and
+   a stack that never refuses a start frame never meets it.
+
 ### 5.5 Payload headers
 
 UVC 1.1 section 2.4.3.3 and Table 2-5: byte 0 `bHeaderLength`, byte 1 flags

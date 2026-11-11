@@ -26,7 +26,10 @@ The maintainer's rules for this repository. `README.md` says what it is.
 ## Sources
 
 The repository is GPL-2.0-or-later (owner, 2026-10-25; GPL-2.0-only
-before). As `docs/status.md`, "Where the code comes from": specifications,
+before). Its documentation (every tracked `.md` file outside
+`src/video/uvcdec/turbo/`) is CC BY 4.0 instead (`LICENSE-docs.md`;
+owner, 2026-11-09); a new Markdown file falls under it.
+As `docs/status.md`, "Where the code comes from": specifications,
 Microsoft's published driver kit documentation and headers, xHCI98's own
 code (as above), and open-source code (Linux, ReactOS and others) adapted
 with its notices and SPDX tags kept and a row in `NOTICE.md` per file,

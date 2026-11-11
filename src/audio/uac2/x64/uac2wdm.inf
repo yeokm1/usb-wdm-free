@@ -3,15 +3,14 @@
 ; x64 copy of ..\uac2wdm.inf, identical but for the Signature and these three
 ; lines: 64-bit Windows refuses a $CHICAGO$ INF (7 x64 pnputil: "Invalid INF
 ; passed as parameter", 2026-10-24). release\release.ps1 checks they agree.
-; Experimental UAC 2.0 WaveCyclic/USB playback and capture: the formats
-; and rates the device describes. 98 SE, XP and 7 x86 run in VMs; others
-; unverified.
+; uac2: the USB Audio Class 2.0 driver of usb-wdm-free (docs/design/uac2.md),
+; playback and capture in the formats and rates the device describes.
 [Version]
 Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/07/2026,0.1.10.0
+DriverVer=11/10/2026,0.1.11.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86
@@ -255,12 +254,12 @@ RunOnceKey="Software\Microsoft\Windows\CurrentVersion\RunOnce"
 SysAudioDev="{A7C7A5B0-5AF3-11D1-9CED-00A024BF0407}"
 KsFilterRef="{9B365890-165F-11D0-A195-0020AFD156E4}"
 SysAudioCat="{A7C7A5B1-5AF3-11D1-9CED-00A024BF0407}"
-Device2="UAC2 USB audio (experiment) 2"
-Device3="UAC2 USB audio (experiment) 3"
-Device4="UAC2 USB audio (experiment) 4"
+Device2="USB Audio 2.0 (uac2) 2"
+Device3="USB Audio 2.0 (uac2) 3"
+Device4="USB Audio 2.0 (uac2) 4"
 Provider="usb-wdm-free"
-Device="UAC2 USB audio (experiment)"
-Disk="UAC2 experimental build folder"
+Device="USB Audio 2.0 (uac2)"
+Disk="usb-wdm-free uac2 driver"
 Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 Render="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
 Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"

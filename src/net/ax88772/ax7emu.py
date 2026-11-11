@@ -255,7 +255,7 @@ class Chip:
             v = self.phy[BMSR] & ~(BMSR_LINK | BMSR_ANDONE)
             return v | (BMSR_LINK | BMSR_ANDONE if self.link else 0)
         if reg == LPA:
-            return self.lpa()
+            return self.lpa() if self.phy[BMCR] & BMCR_ANENABLE else 0    # none with a forced speed
         if reg == BMCR and self.link and self.phy[BMCR] & BMCR_ANENABLE:
             # INFERRED (see the header): after autonegotiation BMCR's speed and duplex bits
             # read as the mode it resolved, which ASIX's drivers program the medium from.
@@ -771,7 +771,11 @@ class Model:
             got = self.chip.read(request, value, index, length)
             status, data = (0, got) if got is not None else (4, b'')
         elif rt == 0x40:
+            medium = getattr(self.chip, 'medium', None)
             status = 0 if self.chip.write(request, value, index, payload) else 4
+            phy = getattr(self.chip, 'phy', None)   # the AX88772's (sremu's chip has none)
+            if phy is not None and self.chip.medium != medium:   # the medium the driver set (legs' logs)
+                self.log('medium', value=self.chip.medium, bmcr=phy[BMCR], an_adv=phy[ADVERTISE])
             if not status and request == WRITE_RX_CTL and not value & RX_SO:
                 self.clear_rx()                     # INFERRED: receive off empties the buffer
             if not status:

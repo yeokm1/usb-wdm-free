@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 Yeo Kheng Meng
- * Experimental UAC 2.0 WaveCyclic/USB streaming: render and capture in
+ * uac2's (and uac1's) WaveCyclic/USB streaming: render and capture in
  * the formats and rates the device's descriptors and clocks offer.
  * Original code from DDK headers and published PortCls documentation.
  * Built as uac2wdm.sys (USB Audio 2.0) and, with UAC_V1 defined, as
@@ -26,6 +26,7 @@ extern "C" {
 #include "uacvol.h"
 #ifdef UAC_V1
 #include "uac1desc.h"
+#include "uacconv.h"
 #endif
 }
 #ifndef KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL
@@ -75,6 +76,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status);
 static void RecordStats(PDEVICE_OBJECT fdo, UAC_USB_STATS *stats, BOOLEAN capture);
 static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo);
 static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULONG closed, ULONG active);
+static void RecordWaits(PDEVICE_OBJECT fdo, ULONG waits, ULONG timeouts, ULONG ms);
 static void PutValue(PDEVICE_OBJECT fdo, PWSTR name, const void *data, ULONG size);
 static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
 static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value);
@@ -119,6 +121,8 @@ static VOID UacQueueItem(PIO_WORKITEM i, PIO_WORKITEM_ROUTINE r, WORK_QUEUE_TYPE
 #include "uacstream.h"
 
 #define UAC_PAIRS 4
+/* 27: how long an open waits for the previous stream's queued destroy. */
+#define UAC_CLOSE_WAIT_MS 2000
 
 class Wave;
 /* One direction of the wave filter: its formats, its one-stream gate and
@@ -128,11 +132,18 @@ struct UAC_DIR {
     BOOLEAN Capture;
     LONG Active;
     ULONG Attempts, Created, Closed;
+    ULONG Waits, WaitTimeouts, WaitMs; /* 27: opens that met a closing stream */
     UAC_USB *Usb;
     UacStream *Stream;          /* the stream Usb serves */
     ULONG Channels, Subslot;    /* its device format */
     ULONG QueueRead, QueueMs;   /* Uac2QueueMs as the open pin read it (19.3) */
     UAC_DIR_FORMATS Formats;
+#ifdef UAC_V1
+    /* 26.12: the open stream's wire format (UAC_TAG_PCM: none converted),
+     * and a frame's bytes on the wire and in the ring (Subslot above is
+     * the ring's, 2, for a converted format). */
+    ULONG Tag, WireSub, WireFrame, RingFrame;
+#endif
 };
 
 /* Playback volume and mute: the topology filter's VOLUME and MUTE nodes
@@ -223,6 +234,47 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     PCFILTER_DESCRIPTOR filter;
 
     /* The USB callbacks' context is the direction (Run). */
+#ifdef UAC_V1
+    /* 26.12: a converted format passes through a buffer of whole frames
+     * on the worker's stack: 16-bit frames from the ring, the software
+     * volume on them, the wire format out (every wire byte written, so
+     * silence is the format's own); and the other way for capture. */
+    enum { ConvSamples = 128 };
+    static void Fill(PVOID context, PUCHAR bytes, ULONG count) {
+        UAC_DIR *d = (UAC_DIR *)context;
+        if (d->Tag == UAC_TAG_PCM) {
+            d->Stream->FillBytes(bytes, count);
+            if (!d->Capture) d->Owner->Soften(d, bytes, count);
+            return;
+        }
+        UCHAR ring[2 * ConvSamples];
+        ULONG frames = count / d->WireFrame, step = ConvSamples / d->Channels;
+        while (frames) {
+            ULONG n = frames < step ? frames : step;
+            d->Stream->FillBytes(ring, n * d->RingFrame);
+            d->Owner->Soften(d, ring, n * d->RingFrame);
+            UacConvOut(d->Tag, d->WireSub, ring, n * d->Channels, bytes);
+            bytes += n * d->WireFrame; frames -= n;
+        }
+    }
+    static void Captured(PVOID context, const UCHAR *bytes, ULONG count) {
+        UAC_DIR *d = (UAC_DIR *)context;
+        if (d->Tag == UAC_TAG_PCM) { d->Stream->WriteBytes(bytes, count); return; }
+        UCHAR ring[2 * ConvSamples];
+        ULONG frames = count / d->WireFrame, step = ConvSamples / d->Channels;
+        while (frames) {
+            ULONG n = frames < step ? frames : step;
+            UacConvIn(d->Tag, d->WireSub, bytes, n * d->Channels, ring);
+            d->Stream->WriteBytes(ring, n * d->RingFrame);
+            bytes += n * d->WireFrame; frames -= n;
+        }
+    }
+    static void Progress(PVOID context, ULONG bytes, ULONG errors) {
+        UAC_DIR *d = (UAC_DIR *)context;
+        if (d->Tag != UAC_TAG_PCM) bytes = bytes / d->WireFrame * d->RingFrame;
+        d->Stream->CompleteBytes(bytes, errors);
+    }
+#else
     static void Fill(PVOID context, PUCHAR bytes, ULONG count) {
         UAC_DIR *d = (UAC_DIR *)context;
         d->Stream->FillBytes(bytes, count);
@@ -234,6 +286,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     static void Progress(PVOID context, ULONG bytes, ULONG errors) {
         ((UAC_DIR *)context)->Stream->CompleteBytes(bytes, errors);
     }
+#endif
     /* The software part of the levels, on the USB worker. */
     void Soften(UAC_DIR *d, PUCHAR bytes, ULONG count) {
         unsigned long gain[UAC_VOL_CHANNELS];
@@ -862,10 +915,23 @@ private:
                 d->Stream = stream;
                 d->Channels = pcm->Channels;
                 d->Subslot = d->Formats.Format[i].Subslot;
+#ifdef UAC_V1
+                /* 26.12: the wire format; the ring's size passed in wire
+                 * bytes, so the queue stays below the ring (19.4). */
+                const UAC_FORMAT *f = &d->Formats.Format[i];
+                d->Tag = f->FormatTag; d->WireSub = f->WireSubslot;
+                d->WireFrame = pcm->Channels * f->WireSubslot;
+                d->RingFrame = pcm->Channels * f->Subslot;
+                status = UacUsbCreate(w->dev, d->Capture, f->Terminal, pcm->Channels, f->WireSubslot,
+                    UAC_PLAN_BITS(f->FormatTag, f->WireBits), f->ChannelConfig, pcm->Rate,
+                    Fill, Captured, Progress, d, d->QueueRead, d->QueueMs,
+                    stream->BufferSize() / d->RingFrame * d->WireFrame, &d->Usb);
+#else
                 status = UacUsbCreate(w->dev, d->Capture, d->Formats.Format[i].Terminal,
                     pcm->Channels, d->Formats.Format[i].Subslot, d->Formats.Format[i].Bits,
                     d->Formats.Format[i].ChannelConfig, pcm->Rate, Fill, Captured, Progress, d,
                     d->QueueRead, d->QueueMs, stream->BufferSize(), &d->Usb);
+#endif
             }
             /* 19.6: at every RUN, a stream kept from a pause or stop
              * (Drain without destroy) included. */
@@ -968,9 +1034,15 @@ private:
             if (!NT_SUCCESS(UacUsbRates(dev, all[i].Terminal, rates, UAC_USB_RATES, &count))) continue;
             for (ULONG k = 0; k < count; k++) {
                 unsigned int index;
+#ifdef UAC_V1
+                if (UacPlanPick(descriptor, d->Capture, terminal, all[i].Channels, all[i].WireSubslot,
+                                UAC_PLAN_BITS(all[i].FormatTag, all[i].WireBits), all[i].ChannelConfig,
+                                rates[k], UacUsbHighSpeed(dev), &index) == UAC_OK)
+#else
                 if (UacPlanPick(descriptor, d->Capture, terminal, all[i].Channels, all[i].Subslot,
                                 all[i].Bits, all[i].ChannelConfig, rates[k],
                                 UacUsbHighSpeed(dev), &index) == UAC_OK)
+#endif
                     f->Rate[f->Count][kept++] = rates[k];
             }
             if (!kept) continue;
@@ -978,6 +1050,11 @@ private:
             f->RateCount[f->Count] = kept;
             f->Count++;
         }
+#ifdef UAC_V1
+        /* 26.12: native PCM first, a converted format only at the rates
+         * nothing of its pin view ranked above it carries. */
+        f->Count = UacPlanOffer(f->Format, f->RateCount, &f->Rate[0][0], UAC_USB_RATES, f->Count);
+#endif
         BuildRanges(f, d->Capture);
     }
     static void Pin(PCPIN_DESCRIPTOR *p, ULONG instances, ULONG ranges, PKSDATARANGE *list,
@@ -1282,9 +1359,19 @@ public:
             return STATUS_INVALID_PARAMETER;
         if (!dir[capture ? 1 : 0].Formats.Count) return STATUS_INVALID_PARAMETER;
         UAC_DIR *d = &dir[capture ? 1 : 0];
+        /* 27: the stream of the pin closed just before may still hold the
+         * gate until its queued destroy runs Close, which takes the
+         * operation mutex: wait for it here, before taking the mutex. */
+        ULONG waitedMs = 0;
+        BOOLEAN waited = UacStream::WaitClosing(&d->Active, UAC_CLOSE_WAIT_MS, &waitedMs);
         KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
         UAC_STREAM_HOOKS hooks = { d, Run, Halt, Close, Notify, Accept };
         d->Attempts++;
+        if (waited) {
+            d->Waits++; d->WaitMs = waitedMs;
+            if (d->Active == UacStream::GateClosing) d->WaitTimeouts++;
+            if (!removed) RecordWaits(device, d->Waits, d->WaitTimeouts, d->WaitMs);
+        }
         /* One reading sizes this pin's ring and, at RUN, its queue (19.3).
          * The gate admits one stream a direction, so nothing else uses
          * d->Queue* while this one is open. */
@@ -1474,7 +1561,7 @@ static void Record(PDEVICE_OBJECT fdo, ULONG stage, NTSTATUS status)
 #ifdef UAC_V1
     ULONG build = UAC1_BUILD;   /* uac1's own build number (uac1wdm.rc) */
 #else
-    ULONG build = 26;
+    ULONG build = 29;
 #endif
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
@@ -1518,6 +1605,21 @@ static void RecordStreams(PDEVICE_OBJECT fdo, ULONG attempts, ULONG created, ULO
     HANDLE key;
     ULONG counts[4] = { attempts, created, closed, active };
     UNICODE_STRING name = { 22, 24, L"Uac2Streams" };
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
+            PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
+        ZwSetValueKey(key, &name, 0, REG_BINARY, counts, sizeof(counts));
+        ZwClose(key);
+    }
+}
+
+/* 27: Uac2Waits, three DWORDs of the direction last opened: the opens
+ * that met a closing stream, those still closing after the wait (refused
+ * busy), and the last wait in milliseconds. Written, never read. */
+static void RecordWaits(PDEVICE_OBJECT fdo, ULONG waits, ULONG timeouts, ULONG ms)
+{
+    HANDLE key;
+    ULONG counts[3] = { waits, timeouts, ms };
+    UNICODE_STRING name = { 18, 20, L"Uac2Waits" };
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(Extension(fdo)->Pdo,
             PLUGPLAY_REGKEY_DRIVER, KEY_SET_VALUE, &key))) {
         ZwSetValueKey(key, &name, 0, REG_BINARY, counts, sizeof(counts));
@@ -1622,9 +1724,9 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
 /* The INF's name (its Device string; infchk.ps1 checks they agree): what a
  * device without a usable product string is named, a later pair " N". */
 #ifdef UAC_V1
-static const char NameFallback[] = "UAC1 USB audio (experiment)";
+static const char NameFallback[] = "USB Audio 1.0 (uac1)";
 #else
-static const char NameFallback[] = "UAC2 USB audio (experiment)";
+static const char NameFallback[] = "USB Audio 2.0 (uac2)";
 #endif
 
 /* Windows Vista and later (WDM 6.00) name the audio endpoints after the

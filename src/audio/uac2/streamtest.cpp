@@ -33,6 +33,12 @@ extern "C" LONG FASTCALL InterlockedDecrement(PLONG p){return --*p;}
 extern "C" LONG FASTCALL InterlockedExchange(PLONG p,LONG n){LONG old=*p;*p=n;return old;}
 extern "C" LONG FASTCALL InterlockedCompareExchange(PLONG p,LONG n,LONG c){LONG old=*p;if(old==c)*p=n;return old;}
 extern "C" void NTAPI KeInitializeSpinLock(PKSPIN_LOCK p){*p=0;}
+/* docs/design/uac2.md 27: a clock that moves only when the open waits; the
+ * queued destroy runs after runAfterDelays waits (-1: never). */
+static ULONGLONG fakeTime=0;static LONG delays=0,runAfterDelays=-1;
+static void RunQueued();
+extern "C" ULONGLONG KeQueryInterruptTime(){return fakeTime;}
+extern "C" NTSTATUS KeDelayExecutionThread(KPROCESSOR_MODE,BOOLEAN,PLARGE_INTEGER t){assert(testIrql==PASSIVE_LEVEL&&t->QuadPart<0);fakeTime+=(ULONGLONG)(-t->QuadPart);++delays;if(runAfterDelays>=0&&delays==runAfterDelays)RunQueued();return 0;}
 extern "C" KIRQL FASTCALL KfAcquireSpinLock(PKSPIN_LOCK p){assert(!*p);*p=1;return 0;}
 extern "C" void FASTCALL KfReleaseSpinLock(PKSPIN_LOCK p,KIRQL){assert(*p);*p=0;}
 class Group:public IServiceGroup{
@@ -110,7 +116,7 @@ int main(){
  for(i=0;i<sizeof(values)/sizeof(values[0]);++i){LONGLONG n=values[i],expected=(n/12)*625+((n%12)*625)/12;assert(!stream->NormalizePhysicalPosition(&n)&&n==expected);}
  for(i=0;i<5000;++i){LARGE_INTEGER random;random.HighPart=(LONG)((ULONG)rand()%0x02752546);random.LowPart=((ULONG)rand()<<17)^((ULONG)rand()<<2)^(ULONG)rand();LONGLONG n=random.QuadPart,expected=(n/12)*625+((n%12)*625)/12;assert(!stream->NormalizePhysicalPosition(&n)&&n==expected);}
  LONGLONG invalid=-1;assert(!NT_SUCCESS(stream->NormalizePhysicalPosition(&invalid)));invalid=177088743107611696i64;assert(!NT_SUCCESS(stream->NormalizePhysicalPosition(&invalid)));
- service->Release();stream->Release();assert(active==1);testIrql=DISPATCH_LEVEL;dma->Release();assert(active==1&&queued&&owner.refs==2&&closes==0&&deviceRefs==2);testIrql=PASSIVE_LEVEL;RunQueued();assert(!active&&owner.refs==1&&!allocations&&!groups&&closes==1&&!deviceRefs&&!workItems);
+ service->Release();stream->Release();assert(active==1);testIrql=DISPATCH_LEVEL;dma->Release();assert(active==UacStream::GateClosing&&queued&&owner.refs==2&&closes==0&&deviceRefs==2);testIrql=PASSIVE_LEVEL;RunQueued();assert(!active&&owner.refs==1&&!allocations&&!groups&&closes==1&&!deviceRefs&&!workItems);
  /* PASSIVE final reference drops inside the actual CompleteBytes->Notify
   * call stack. Close must not execute inline (would join its USB caller).
   * The production header queues it; simulate native execution after return. */
@@ -119,6 +125,19 @@ int main(){
  inProgress=TRUE;s->CompleteBytes(1920,0);inProgress=FALSE;
  assert(notifyReturned&&queued&&closes==1&&owner.refs==2&&active&&deviceRefs==2);
  RunQueued();assert(closes==2&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
+ /* docs/design/uac2.md 27: an open gate never waits; a closing one is
+  * waited for until its destroy frees it, or refused busy after the bound. */
+ {ULONG ms=99;assert(!UacStream::WaitClosing(&active,2000,&ms)&&!ms&&!delays);
+  assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device));
+  assert(!UacStream::WaitClosing(&active,2000,&ms)&&!ms&&!delays&&active==UacStream::GateOpen);
+  service->Release();stream->Release();dma->Release();assert(active==UacStream::GateClosing&&queued);
+  runAfterDelays=3;assert(UacStream::WaitClosing(&active,2000,&ms)&&ms==30&&delays==3&&!active&&!queued&&closes==3);
+  assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device));
+  service->Release();stream->Release();dma->Release();delays=0;runAfterDelays=-1;
+  assert(UacStream::WaitClosing(&active,2000,&ms)&&ms==2000&&delays==200&&active==UacStream::GateClosing);
+  assert(UacStream::Create(&owner,&active,&f.DataFormat,&second,&d2,&g2,&hooks,device)==STATUS_DEVICE_BUSY&&!second);
+  testIrql=DISPATCH_LEVEL;assert(!UacStream::WaitClosing(&active,2000,&ms)&&!ms);testIrql=PASSIVE_LEVEL;
+  RunQueued();assert(closes==4&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);delays=0;}
  UAC_STREAM_HOOKS capHooks={NULL,Start,Stop,Close,Notify,AcceptAll};
  assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&capHooks,device,TRUE));
  s=(UacStream*)stream;assert(s->Capture());dma->SetBufferSize(16);ring=(PUCHAR)dma->SystemAddress();
@@ -126,7 +145,7 @@ int main(){
  assert(!stream->SetState(KSSTATE_PAUSE));assert(!stream->GetPosition(&pos)&&pos==12);
  s->WriteBytes(input,8);assert(!stream->GetPosition(&pos)&&pos==4&&ring[15]==3&&ring[0]==4);
  assert(!stream->SetState(KSSTATE_STOP));assert(!stream->GetPosition(&pos)&&pos==0);
- service->Release();stream->Release();dma->Release();RunQueued();assert(closes==3&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
+ service->Release();stream->Release();dma->Release();RunQueued();assert(closes==5&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);
  /* docs/design/uac2.md 19.5: the ring is about 62 ms (16 KiB at least) up to a 32 ms queue, and grows by
   * 1.25 times the queue above 32 ms, whole frames, within 1 MiB (the cap,
   * multichannel, is UacPlanQueue's to bound: desctest). */
@@ -138,5 +157,5 @@ int main(){
   UAC_STREAM_HOOKS anyHooks={NULL,Start,Stop,Close,Notify,AcceptAll};assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&anyHooks,device,FALSE,128));
   assert(dma->AllocatedBufferSize()==420480);
   service->Release();stream->Release();dma->Release();RunQueued();assert(!active&&owner.refs==1&&!allocations);}
- puts("PASS: stream format/allocation/ring (and its size from the queue); render position = fetch cursor, taken bytes cleared, no rewind on pause; capture position = written; deferred DISPATCH and PASSIVE-in-Notify final release; native callback-return FDO guard and exactly-once close");return 0;
+ puts("PASS: stream format/allocation/ring (and its size from the queue); render position = fetch cursor, taken bytes cleared, no rewind on pause; capture position = written; deferred DISPATCH and PASSIVE-in-Notify final release; a closing gate waited for, an open one refused at once; native callback-return FDO guard and exactly-once close");return 0;
 }

@@ -47,13 +47,14 @@ class NetProbe(c.Structure):
                                          'NumInterfaces', 'In', 'Out', 'Interrupt')] + \
         [(n, c.c_ushort) for n in ('InMax', 'OutMax', 'IntMax')] + \
         [('IntInterval', c.c_ubyte), ('Speed', c.c_ubyte)] + \
-        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')]
+        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')] + \
+        [('Settings', c.POINTER(c.c_long))]   # NULL: the keywords' defaults (ethernet.md 4.10)
 
 
 class NetParams(c.Structure):
     _fields_ = [('Mac', c.c_ubyte * 6)] + [(n, c.c_ulong) for n in (
         'RxSize', 'RxCount', 'TxSize', 'TxSlots', 'TxBatch', 'TxHeader', 'TxAlign', 'Version',
-        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax')]
+        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax', 'Ignored')]
 
 
 class NetLink(c.Structure):
@@ -122,7 +123,7 @@ class CoreCase(unittest.TestCase):
         cls.chip = NetChip.in_dll(c.CDLL(str(DLL_PATH)), 'NetPackageChip')
 
     # -- the driver core over the model's usbredir control path ---------------
-    def setup(self, chip='8153', speed='high', **kw):
+    def setup(self, chip='8153', speed='high', values=None, **kw):
         self.wire, self.trace, self.clock = Wire(), io.StringIO(), Clock()
         self.m = r.Model(self.wire, self.trace, chip, speed, now=self.clock, **kw)
         self.m.peer_caps = r.CAPS & ~(1 << r.CAP_ID64)
@@ -155,6 +156,9 @@ class CoreCase(unittest.TestCase):
 
         self.io = NetIo(None, CONTROL(control), SLEEP(sleep), 0, 0)
         self.probe = self.probe_model()
+        if values is not None:                      # the Advanced tab's values (ethernet.md 4.10)
+            self.values = (c.c_long * len(values))(*values)
+            self.probe.Settings = c.cast(self.values, c.POINTER(c.c_long))
         self.params = NetParams()
         return self.chip.Start(self.state, c.byref(self.io), c.byref(self.probe), c.byref(self.params))
 
@@ -241,6 +245,42 @@ class Tests(CoreCase):
                 self.assertTrue(self.m.chip.receiving())
                 events = [json.loads(x) for x in self.trace.getvalue().splitlines()]
                 self.assertFalse([e for e in events if e['event'] == 'vendor_refused'])
+
+    def test_advanced_tab_settings_through_the_model(self):
+        """The keywords (ethernet.md 4.10) as the model's PHY sees them: the
+        link a forced or single speed gives, the pause bits, EEE and green
+        Ethernet. Values: *SpeedDuplex, *FlowControl, *EEE,
+        EEEMaxSupportSpeed, EnableGreenEthernet, AdvancedEEE,
+        EnableExtraPowerSaving."""
+        def up_event():
+            ups = [json.loads(l) for l in self.trace.getvalue().splitlines()]
+            ups = [e for e in ups if e['event'] == 'link' and e['up']]
+            return ups[-1]
+        for chip, speed, values, mbps, full in (
+                ('8153', 'high', None, 1000, True),
+                ('8153', 'high', [2, 3, 0, 1000, 0, 0, 0], 10, True),
+                ('8152', 'high', [3, 3, 0, 1000, 0, 0, 0], 100, False),
+                ('8153', 'high', [6, 0, 1, 1000, 0, 0, 0], 1000, True),
+                ('8156b', 'super', [2500, 3, 1, 1000, 1, 0, 1], 2500, True),
+                ('8157', 'super', [1, 3, 1, 1000, 1, 1, 0], 10, False)):
+            with self.subTest(chip=chip, values=values):
+                self.assertEqual(self.setup(chip, speed, values), 0)
+                self.settle(1.2)
+                e = up_event()
+                self.assertEqual((e['mbps'], e['full']), (mbps, full))
+                v = values or [0, 3, 0, 1000, 0, 0, 0]
+                forced = 1 <= v[0] <= 4
+                self.assertEqual(bool(e['bmcr'] & 0x1000), not forced)
+                if not forced:
+                    self.assertEqual(e['an_adv'] & 0x0c00, 0x0c00 if v[1] else 0)
+                self.assertEqual(e['eee_mac'], 3 if v[2] else 0)
+                if chip in ('8156b', '8157'):
+                    self.assertEqual(bool(e['green'] & 0x8000), bool(v[4]))
+                if chip == '8156b':
+                    self.assertEqual(e['u2p3'], v[6])
+                    self.assertEqual(e['eee_adv2'] & 1, 0)            # 2.5G EEE beyond EEEMaxSupportSpeed 1000
+                link = self.link()
+                self.assertEqual((link.Up, link.Mbps, bool(link.FullDuplex)), (1, mbps, full))
 
     def test_interrupt_reports_link_changes(self):
         self.assertEqual(self.setup(flap_after=3.0, flap_for=1.0), 0)
@@ -1065,6 +1105,30 @@ class NewerModelTests(unittest.TestCase):
                         self.m.transmit(bytes(bad))
                 with self.assertRaises(ValueError):
                     self.m.transmit(tx_record(bytes(60), wide)[:-1])
+
+    def test_bulk_out_joined_across_packets(self):
+        """QEMU's UHCI hands a bulk-OUT transfer over one 64-byte packet at
+        a time: the pieces make one transfer, sent once; a transfer that
+        comes whole is not held back."""
+        for chip, wide in (('8152', False), ('8157', True)):
+            with self.subTest(chip=chip):
+                self.make(chip, 'full')
+                out = bytearray()
+                for n in (60, 98, 1000):
+                    out += tx_record(bytes([n & 255]) * n, wide)
+                    out += bytes(-len(out) % (16 if wide else 4))
+                pieces = [bytes(out[k:k + 64]) for k in range(0, len(out), 64)]
+                for k, piece in enumerate(pieces):
+                    self.m.handle(101, 20 + k, struct.pack('<BBHIH', r.EP_OUT, 0, len(piece), 0, 0) + piece)
+                    if k < len(pieces) - 1:
+                        self.assertEqual(self.m.totals['tx_frames'], 0)
+                self.assertEqual(self.m.totals['tx_frames'], 3)
+                self.assertEqual(self.m.totals['tx_joined'], 1)
+                whole = tx_record(bytes(112 if wide else 120), wide)   # whole, 128 bytes
+                self.m.handle(101, 90, struct.pack('<BBHIH', r.EP_OUT, 0, len(whole), 0, 0) + whole)
+                self.assertEqual(self.m.totals['tx_frames'], 4)
+                self.m.handle(101, 91, struct.pack('<BBHIH', r.EP_OUT, 0, 0, 0, 0))   # a ZLP after it
+                self.assertEqual(self.m.totals['tx_frames'], 4)
 
     def test_wide_receive_needs_the_16_byte_mode(self):
         for chip in ('8157', '8159'):

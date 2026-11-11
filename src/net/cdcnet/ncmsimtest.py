@@ -193,6 +193,18 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.control(m, 0x86, 0x21, length=8, payload=bytes(8))[0], 4)
         self.assertEqual(self.control(m, 0x43, 0x21, value=0x0c)[0], 4)     # no filter without D0
 
+    def test_refused_ntb_read(self):
+        """--refuse-ntb-read 2: the second GET_NTB_PARAMETERS stalls, once; the first and third answer."""
+        m = self.model()
+        m.refuse_ntb_read = 2
+        m.handle(6, 1, b'\x01')
+        self.assertEqual(self.control(m, 0x80, 0xa1, length=28)[0], 0)
+        self.assertEqual(self.control(m, 0x80, 0xa1, length=28)[0], 4)
+        st, got = self.control(m, 0x80, 0xa1, length=28)
+        self.assertEqual((st, len(got)), (0, 28))
+        events = [json.loads(x) for x in self.trace.getvalue().splitlines()]
+        self.assertEqual([e['read'] for e in events if e['event'] == 'ntb_parameters_refused'], [2])
+
     def test_notifications_after_the_data_alternate(self):
         m = self.model(flap_after=5.0)
         self.bring_up(m)

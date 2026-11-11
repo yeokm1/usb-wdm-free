@@ -76,11 +76,12 @@ cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacctl.obj" "%SRC%..\common\uacct
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uac1desc.obj" "%SRC%uac1desc.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacfmt.obj" "%SRC%uacfmt.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uac1model.obj" "%SRC%uac1model.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacconv.obj" "%SRC%..\common\uacconv.c" >> "%LOG%" 2>&1 || goto fail
 
 "%RC%" /fo"%OUT%\uac1wdm.res" "%SRC%uac1wdm.rc" >> "%LOG%" 2>&1 || goto fail
 
 echo === link >> "%LOG%"
-set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uacvol.obj" "%OUT%\uacctl.obj" "%OUT%\uac1desc.obj" "%OUT%\uacfmt.obj" "%OUT%\uac1model.obj" "%OUT%\uac1wdm.res" %LLIBS%
+set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uacvol.obj" "%OUT%\uacctl.obj" "%OUT%\uac1desc.obj" "%OUT%\uacfmt.obj" "%OUT%\uac1model.obj" "%OUT%\uacconv.obj" "%OUT%\uac1wdm.res" %LLIBS%
 echo %CMDL% >> "%LOG%"
 %CMDL% >> "%LOG%" 2>&1 || goto fail
 
@@ -121,7 +122,7 @@ set RC=%DDK%\bin\rc.exe
 rem The DDK headers first; VC98\Include only supplies excpt.h and the
 rem other compiler headers wdm.h includes.
 set CINC=/I"%SRC%." /I"%SRC%..\common" /I"%DDK%\inc\ddk" /I"%DDK%\inc" /I"%VC%\Include"
-set CBASE=/DUAC_V1=1 /DUAC1_BUILD=1 /GR- /W3 /WX /Gz /Gy /GF /Zp8 /Zl /D_X86_=1 /Di386=1 /DSTD_CALL /DCONDITION_HANDLING=1 /DNT_UP=1 /DNT_INST=0 /DWIN32=100 /D_NT1X_=100 /DWINNT=1 /D_WIN32_WINNT=0x0500 /DWIN32_LEAN_AND_MEAN=1 /DDEVL=1
+set CBASE=/DUAC_V1=1 /DUAC1_BUILD=5 /GR- /W3 /WX /Gz /Gy /GF /Zp8 /Zl /D_X86_=1 /Di386=1 /DSTD_CALL /DCONDITION_HANDLING=1 /DNT_UP=1 /DNT_INST=0 /DWIN32=100 /D_NT1X_=100 /DWINNT=1 /D_WIN32_WINNT=0x0500 /DWIN32_LEAN_AND_MEAN=1 /DDEVL=1
 set CFREE=/Oxs /DDBG=0
 set CCHK=/Od /Oi /Zi /Fd"%OUT%\%PKG%.cpdb" /DDBG=1
 set LBASE=/DRIVER /SUBSYSTEM:NATIVE,4.00 /ENTRY:DriverEntry@8 /BASE:0x10000 /ALIGN:0x20 /NODEFAULTLIB /INCREMENTAL:NO /OPT:REF /OPT:ICF /MERGE:_PAGE=PAGE /MERGE:_TEXT=.text /MACHINE:IX86

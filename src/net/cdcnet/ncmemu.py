@@ -206,6 +206,7 @@ class Model:
         self.f = function or Function()
         self.speed = self.f.speed
         self.in_layout, self.flap_after, self.flap_for = in_layout, flap_after, flap_for
+        self.ntb_reads, self.refuse_ntb_read = 0, None
         self.net = Network(self.log, now=self.now)
         self.peer_caps = 0
         self.config = self.alt = 0
@@ -237,6 +238,7 @@ class Model:
         self.crc = 0
         self.filter = FILTER_DIRECTED | FILTER_BROADCAST | FILTER_ALL_MULTICAST
         self.mc = []
+        self.net_address = GUEST_MAC                   # SetNetAddress may change it
         self.sequence = 0
         self.connected = False
         self.flap_at = self.restore_at = None
@@ -321,7 +323,7 @@ class Model:
             return bool(flt & FILTER_BROADCAST)
         if dest[0] & 1:
             return bool(flt & FILTER_ALL_MULTICAST) or (bool(flt & FILTER_MULTICAST) and dest in self.mc)
-        return bool(flt & FILTER_DIRECTED) and dest == GUEST_MAC
+        return bool(flt & FILTER_DIRECTED) and dest == self.net_address
 
     def deliver(self, frame):
         if not (self.alt and self.connected and self.accepts(frame)):
@@ -376,9 +378,22 @@ class Model:
     def class_request(self, request, rt, value, length, payload):
         f = self.f
         if rt == 0xa1 and request == 0x80:
+            # --refuse-ntb-read N: the Nth GET_NTB_PARAMETERS is stalled,
+            # once (a function that misses a request while it wakes; the
+            # first is the driver's start, the second its first resume).
+            self.ntb_reads += 1
+            if self.ntb_reads == self.refuse_ntb_read:
+                self.log('ntb_parameters_refused', read=self.ntb_reads)
+                return 4, b''
             return 0, f.ntb_parameters()
         if rt == 0xa1 and request == 0x81:
-            return 0, GUEST_MAC
+            return 0, self.net_address
+        if rt == 0x21 and request == 0x82 and f.caps & 0x02 and len(payload) == 6 and not self.alt:
+            if payload[0] & 1 or not any(payload):
+                return 4, b''
+            self.net_address = bytes(payload)             # SetNetAddress (CDC NCM 1.0, D1)
+            self.log('net_address', value=self.net_address.hex())
+            return 0, b''
         if rt == 0xa1 and request == 0x83:
             return 0, struct.pack('<H', self.ntb_format)
         if rt == 0x21 and request == 0x84 and value in (0, 1) and (value == 0 or f.ntb32) and not self.alt:
@@ -623,6 +638,8 @@ def main():
     ap.add_argument('--vid', type=lambda s: int(s, 16), default=0x0525)
     ap.add_argument('--pid', type=lambda s: int(s, 16), default=0xa4a2)
     ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
+    ap.add_argument('--refuse-ntb-read', type=int, metavar='N',
+                    help='stall the Nth GET_NTB_PARAMETERS, once (2 = the first resume after the start)')
     args = ap.parse_args()
     function = Function(args.speed, args.caps, args.ntb32, out_divisor=args.out_divisor,
                         out_remainder=args.out_remainder, out_alignment=args.out_alignment,
@@ -637,6 +654,7 @@ def main():
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, function, in_layout=args.in_layout,
                           flap_after=args.flap_after, flap_for=args.flap_for)
+            model.refuse_ntb_read = args.refuse_ntb_read
             if args.udp:
                 local, remote = (int(x) for x in args.udp.split(':'))
                 udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -39,13 +39,14 @@ class NetProbe(c.Structure):
                                          'NumInterfaces', 'In', 'Out', 'Interrupt')] + \
         [(n, c.c_ushort) for n in ('InMax', 'OutMax', 'IntMax')] + \
         [('IntInterval', c.c_ubyte), ('Speed', c.c_ubyte)] + \
-        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')]
+        [(n, c.c_ushort) for n in ('Vendor', 'Product', 'Revision')] + \
+        [('Settings', c.POINTER(c.c_long))]   # NULL: the keywords' defaults (ethernet.md 4.10)
 
 
 class NetParams(c.Structure):
     _fields_ = [('Mac', c.c_ubyte * 6)] + [(n, c.c_ulong) for n in (
         'RxSize', 'RxCount', 'TxSize', 'TxSlots', 'TxBatch', 'TxHeader', 'TxAlign', 'Version',
-        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax')]
+        'RxConfig', 'RxConfigRead', 'Offload', 'LsoMax', 'Ignored')]
 
 
 class NetLink(c.Structure):
@@ -109,7 +110,7 @@ class CoreCase(unittest.TestCase):
     def setUpClass(cls):
         cls.chip = NetChip.in_dll(c.CDLL(str(DLL_PATH)), 'NetPackageChip')
 
-    def setup(self, speed='super', **kw):
+    def setup(self, speed='super', values=None, **kw):
         self.wire, self.trace, self.clock = Wire(), io.StringIO(), Clock()
         self.m = a.Model(self.wire, self.trace, speed, now=self.clock, **kw)
         self.m.peer_caps = a.CAPS & ~(1 << a.CAP_ID64)
@@ -142,6 +143,9 @@ class CoreCase(unittest.TestCase):
 
         self.io = NetIo(None, CONTROL(control), SLEEP(sleep), 0, 0)
         self.probe = self.probe_model()
+        if values is not None:                      # the Advanced tab's values (ethernet.md 4.10)
+            self.values = (c.c_long * len(values))(*values)
+            self.probe.Settings = c.cast(self.values, c.POINTER(c.c_long))
         self.params = NetParams()
         return self.chip.Start(self.state, c.byref(self.io), c.byref(self.probe), c.byref(self.params))
 
@@ -260,6 +264,24 @@ class Tests(CoreCase):
                 link = self.up('high', mbps=mbps)
                 self.assertEqual((link.Mbps, link.FullDuplex), (mbps, 1))
                 self.assertEqual(bytes(self.m.chip.mac_regs[a.R_QCTRL:a.R_QCTRL + 5]), row)
+
+    def test_advanced_tab_settings_through_the_model(self):
+        """*SpeedDuplex, *FlowControl, *EEE (ethernet.md 4.10) as the
+        model's PHY sees them, and the link they give."""
+        for values, mbps, full, pause, eee in (
+                (None, 1000, True, 0x30, 6),
+                ([0, 3, 0], 1000, True, 0x30, 0),
+                ([3, 3, 0], 100, False, 0, 0),             # forced: no pause, also with 3
+                ([6, 0, 1], 1000, True, 0, 6),
+                ([0, 2, 1], 1000, True, 0x10, 6)):
+            with self.subTest(values=values):
+                link = self.up('super', values=values)
+                self.assertEqual((link.Mbps, bool(link.FullDuplex)), (mbps, full))
+                ups = [json.loads(l) for l in self.trace.getvalue().splitlines()]
+                e = [x for x in ups if x['event'] == 'link' and x['up']][-1]
+                self.assertEqual((e['mbps'], e['full']), (mbps, full))
+                self.assertEqual(self.m.chip.word(a.R_MEDIUM) & 0x30, pause)   # as Link set it
+                self.assertEqual(e['eee_adv'], eee)
 
     def test_interrupt_reports_link_changes(self):
         self.assertEqual(self.setup(flap_after=3.0, flap_for=1.0), 0)

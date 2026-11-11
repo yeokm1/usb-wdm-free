@@ -130,6 +130,31 @@ class Tests(unittest.TestCase):
         link = self.link()
         self.assertEqual((link.Up, link.Mbps, link.FullDuplex), (1, 10, 0))
 
+    def test_composite_9702(self):
+        """The 0FE6:9702 composite (--composite): class 0 at the device, the
+        driver disc's interface 0, the Ethernet on interface 1, which the
+        driver's probe takes and brings up as the 0FE6:9700."""
+        self.assertEqual(self.setup(composite=True), 0)
+        self.assertEqual((self.m.device[4], self.m.device[5]), (0, 0))
+        self.assertEqual(self.m.config_desc[4], 2)                       # bNumInterfaces
+        self.assertEqual((self.probe.Vendor, self.probe.Product, self.probe.Interface), (0x0fe6, 0x9702, 1))
+        self.assertEqual((self.probe.In, self.probe.Out, self.probe.Interrupt), (0x81, 0x02, 0x83))
+        self.settle(1.1)
+        link = self.link()
+        self.assertEqual((link.Up, link.Mbps), (1, 10))
+        # usb-redir: the endpoints belong to interface 1; both interfaces answer alternate 0
+        self.m.info()
+        ep_info = [x for x in self.wire.messages if x[0] == 5][-1][2]
+        for slot in (16 + (s.EP_IN & 15), s.EP_OUT, 16 + (s.EP_INT & 15)):
+            self.assertEqual(ep_info[64 + slot], 1)
+        iface = [x for x in self.wire.messages if x[0] == 4][-1][2]
+        self.assertEqual(iface[0], 2)
+        for number in (0, 1):
+            self.m.handle(10, 50 + number, bytes((number,)))
+            self.assertEqual(self.wire.take(11)[-1][2], bytes((0, number, 0)))
+        self.m.handle(10, 52, bytes((2,)))
+        self.assertEqual(self.wire.take(11)[-1][2][0], 4)
+
     def test_traffic(self):
         self.up()
         self.tx(t.arp_request(s.MODEL_MAC))

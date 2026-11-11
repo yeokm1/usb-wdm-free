@@ -189,13 +189,16 @@ static void StartSequence(int eeprom)
     R(1, 0x0b, 2, 2);
     W(1, 0x24, 1, 1, "64");
     W(1, 0x22, 2, 2, "33 01");
+    /* *EEE 1 (ASIX's 7 default): ax88179_enable_eee, EEE at 100 and 1000 */
     W(2, 3, 0x1f, 2, "03 00");
-    W(2, 3, 0x19, 2, "46 32");
+    W(2, 3, 0x19, 2, "47 32");
+    W(2, 3, 0x1f, 2, "05 00");
+    W(2, 3, 0x01, 2, "80 06");
     W(2, 3, 0x1f, 2, "00 00");
     W(2, 3, 0x0d, 2, "07 00");
     W(2, 3, 0x0e, 2, "3c 00");
     W(2, 3, 0x0d, 2, "07 40");
-    W(2, 3, 0x0e, 2, "00 00");
+    W(2, 3, 0x0e, 2, "06 00");
     R(2, 3, 0x00, 2);
     W(2, 3, 0x00, 2, "00 12");
     CHECK(at == m.Count);
@@ -206,6 +209,84 @@ static void StartSequence(int eeprom)
     CHECK(((AX_STATE *)state)->RxLength == 20480);
     /* The receive mode is written and read back for the log. */
     CHECK(p.RxConfig == 0x03aa && p.RxConfigRead == 0x03aa);
+}
+
+/* The Advanced tab's keywords (ethernet.md 4.10): *SpeedDuplex,
+ * *FlowControl, *EEE. */
+static void SettingsCases(void)
+{
+    static long v[3];
+    NET_PROBE probe = superProbe;
+    MOCK m;
+    NET_IO io;
+    NET_PARAMS p;
+    NET_LINK l;
+    nc_u32 i;
+    int sawEeeOff = 0, sawForced = 0, sawAdv = 0;
+    CHECK(NetPackageChip.SettingCount == 3 && !strcmp(NetPackageChip.Settings[2].Name, "*EEE"));
+    CHECK(NetPackageChip.Settings[0].Default == 0 && NetPackageChip.Settings[1].Default == 3 &&
+          NetPackageChip.Settings[2].Default == 1);
+    probe.Settings = v;
+    /* Linux's own: EEE disabled (0x3246), advertisement 0; no
+     * advertisement write; both pause enables. */
+    v[0] = 0; v[1] = 3; v[2] = 0;
+    Fresh(&m, &io);
+    CHECK(NetPackageChip.Start(state, &io, &probe, &p) == NC_OK);
+    for (i = SETTLE_REQUESTS; i < m.Count; i++) {
+        ENTRY *e = &m.Log[i];
+        if (e->Request == 2 && e->Index == 0x19) sawEeeOff = e->Data[0] == 0x46;
+        if (e->Request == 2 && e->Index == 0x04) sawAdv = 1;
+    }
+    CHECK(sawEeeOff && !sawAdv && m.Phy[0x0e] == 0);
+    /* Forced 10 full: autonegotiation off. */
+    v[0] = 2; v[1] = 3; v[2] = 0;
+    Fresh(&m, &io);
+    CHECK(NetPackageChip.Start(state, &io, &probe, &p) == NC_OK);
+    for (i = SETTLE_REQUESTS; i < m.Count; i++)
+        if (m.Log[i].Request == 2 && m.Log[i].Index == 0 && !m.Log[i].In)
+            sawForced = m.Log[i].Data[0] == 0x00 && m.Log[i].Data[1] == 0x01;
+    CHECK(sawForced && m.Phy[MII_BMCR] == BMCR_FULLDPLX);
+    /* ... and no pause enables, also with *FlowControl 3. */
+    m.Phy[GMII_PHY_PHYSR] = 0x2000 | 0x400;
+    m.Mac[AX_PHYSICAL_LINK_STATUS] = 0x04;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up && l.Mbps == 10 && l.FullDuplex);
+    CHECK((m.Mac[AX_MEDIUM_STATUS_MODE] & (AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN)) == 0);
+    /* 1000 full alone; pause off: no pause bits, no medium pause enables. */
+    v[0] = 6; v[1] = 0; v[2] = 0;
+    Fresh(&m, &io);
+    m.Phy[MII_ADVERTISE] = 0x0de1;
+    CHECK(NetPackageChip.Start(state, &io, &probe, &p) == NC_OK);
+    CHECK(m.Phy[MII_ADVERTISE] == 0x0001 && m.Phy[MII_CTRL1000] == ADVERTISE_1000FULL);
+    CHECK(m.Phy[MII_BMCR] == (BMCR_ANENABLE | BMCR_ANRESTART));
+    m.Phy[GMII_PHY_PHYSR] = 0x8000 | 0x2000 | 0x400;
+    m.Phy[MII_LPA] = ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
+    m.Mac[AX_PHYSICAL_LINK_STATUS] = 0x04;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up && l.Mbps == 1000);
+    CHECK((m.Mac[AX_MEDIUM_STATUS_MODE] & (AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN)) == 0);
+    /* Receive only: PAUSE and ASM_DIR advertised; a partner with PAUSE
+     * gives both directions, of which receive is allowed. */
+    v[0] = 0; v[1] = 2; v[2] = 1;
+    Fresh(&m, &io);
+    CHECK(NetPackageChip.Start(state, &io, &probe, &p) == NC_OK);
+    CHECK((m.Phy[MII_ADVERTISE] & 0x0de0) == (0x01e0 | ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM));
+    m.Phy[GMII_PHY_PHYSR] = 0x4000 | 0x2000 | 0x400;
+    m.Phy[MII_LPA] = ADVERTISE_PAUSE_CAP;
+    m.Mac[AX_PHYSICAL_LINK_STATUS] = 0x04;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up && l.Mbps == 100);
+    CHECK((m.Mac[AX_MEDIUM_STATUS_MODE] & (AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN)) ==
+          AX_MEDIUM_RXFLOW_CTRLEN);
+    /* Transmit only: ASM_DIR alone; a partner with PAUSE and ASM_DIR lets
+     * this end send pause frames. */
+    v[0] = 0; v[1] = 1; v[2] = 1;
+    Fresh(&m, &io);
+    CHECK(NetPackageChip.Start(state, &io, &probe, &p) == NC_OK);
+    CHECK((m.Phy[MII_ADVERTISE] & 0x0c00) == ADVERTISE_PAUSE_ASYM);
+    m.Phy[GMII_PHY_PHYSR] = 0x4000 | 0x2000 | 0x400;
+    m.Phy[MII_LPA] = ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
+    m.Mac[AX_PHYSICAL_LINK_STATUS] = 0x04;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
+    CHECK((m.Mac[AX_MEDIUM_STATUS_MODE] & (AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN)) ==
+          AX_MEDIUM_TXFLOW_CTRLEN);
 }
 
 static void StartFailures(void)
@@ -262,6 +343,7 @@ static void LinkCase(nc_u16 phy, nc_u8 usb, const char *queue, const char *mediu
         return;
     }
     W(1, 0x2e, 5, 5, queue);
+    if (phy & GMII_PHY_PHYSR_FULL) R(2, 3, 0x00, 2);   /* BMCR: pause only when autonegotiated */
     W(1, 0x22, 2, 2, medium);
     CHECK(at == m.Count);
     CHECK(l.Up && l.Mbps == mbps && l.RxLength == rxLength);
@@ -278,12 +360,12 @@ static void Links(void)
     LinkCase(0x8000 | 0x2000 | 0x400, 0x04, "07 4f 00 12 ff", "3b 01", 1000, 20480);
     LinkCase(0x8000 | 0x2000 | 0x400, 0x02, "07 20 03 16 ff", "3b 01", 1000, 24576);
     LinkCase(0x8000 | 0x2000 | 0x400, 0x00, "07 cc 4c 18 08", "3b 01", 1000, 26624);
-    LinkCase(0x8000 | 0x400, 0x04, "07 4f 00 12 ff", "39 01", 1000, 20480);
+    LinkCase(0x8000 | 0x400, 0x04, "07 4f 00 12 ff", "09 01", 1000, 20480);   /* half: no pause */
     LinkCase(0x4000 | 0x2000 | 0x400, 0x04, "07 ae 07 18 ff", "32 03", 100, 26624);
     LinkCase(0x4000 | 0x2000 | 0x400, 0x02, "07 ae 07 18 ff", "32 03", 100, 26624);
-    LinkCase(0x4000 | 0x400, 0x00, "07 cc 4c 18 08", "30 03", 100, 26624);
+    LinkCase(0x4000 | 0x400, 0x00, "07 cc 4c 18 08", "00 03", 100, 26624);
     LinkCase(0x2000 | 0x400, 0x04, "07 cc 4c 18 08", "32 01", 10, 26624);
-    LinkCase(0x0400, 0x02, "07 cc 4c 18 08", "30 01", 10, 26624);
+    LinkCase(0x0400, 0x02, "07 cc 4c 18 08", "00 01", 10, 26624);
     LinkCase(0x8000 | 0x2000, 0x04, NULL, NULL, 0, 0);
     LinkCase(0, 0x04, NULL, NULL, 0, 0);
     {
@@ -304,7 +386,7 @@ static void Links(void)
         m.Count = 0;
         m.FifoBusy = 2;
         CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK);
-        CHECK(l.Up && m.Count == 9 + 4);
+        CHECK(l.Up && m.Count == 9 + 5);          /* with the BMCR read of a full-duplex link */
     }
 }
 
@@ -420,7 +502,7 @@ static void Lifecycle(void)
     /* Resume is the whole reset sequence again. */
     m.Count = 0;
     CHECK(NetPackageChip.Resume(state, &io, &superProbe, &p) == NC_OK);
-    CHECK(m.Count == SETTLE_REQUESTS + 23);   /* settle, 22, the RX_CTL read-back */
+    CHECK(m.Count == SETTLE_REQUESTS + 25);   /* settle, 24 (EEE on: two more), the RX_CTL read-back */
 }
 
 /* ---------------- interrupt, receive, transmit ---------------- */
@@ -610,6 +692,7 @@ int main(int argc, char **argv)
     StartSequence(0x0100);
     StartSequence(0xffff);
     StartFailures();
+    SettingsCases();
     Links();
     Filters();
     Lifecycle();

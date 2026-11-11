@@ -26,6 +26,14 @@
  * - Resume: the whole of Start but the id read, since a 98 or 2000 system
  *   sleep may have cut the chip's power.
  *
+ * The Advanced tab's keywords (ethernet.md section 4.10; the table Settings
+ * below) are taken from NET_PROBE at each start (TakeSettings): speed and
+ * duplex and the pause advertisement in Negotiate; EEE, its 8156-core
+ * advertisement limit, green Ethernet, EEE+ and the USB 2 PHY's P3 state
+ * by the guards of the sequences (Run's EEE substitution, IF steps,
+ * hooks). A keyword the chip has no function for is left as the chip runs
+ * without it, and reported in NET_PARAMS.Ignored.
+ *
  * Choices of this core: no PHY firmware patch is loaded (ethernet.md 6.4);
  * VLAN tags are left in received frames; no checksum offload or TSO; no
  * wake-up source; the chip's runtime power saving (UPS) stays off. The
@@ -189,8 +197,9 @@ enum {
     OP_PATCH_DONE,  /* end the patch window */
     OP_TRIM,        /* Space Reg Size: clear Clear, written only if any of it was set */
     OP_SLEEP,       /* Ms */
-    OP_RUN,         /* the sequence Seq[Count] */
-    OP_HOOK         /* Hook(Count) */
+    OP_RUN,         /* the sequence Seq[Count] (Q_EEE_ON is Q_EEE_OFF while EEE is off) */
+    OP_HOOK,        /* Hook(Count) */
+    OP_IF           /* the next Count steps run only when every F_* bit of Clear is set */
 };
 
 typedef struct STEP {
@@ -229,6 +238,14 @@ typedef struct STEP {
 #define SLEEP(ms)                { OP_SLEEP, 0, ms, 0, 0, 0, 0, 0 }
 #define RUN(q)                   { OP_RUN, 0, 0, 0, 0, q, 0, 0 }
 #define HOOK(h)                  { OP_HOOK, 0, 0, 0, 0, h, 0, 0 }
+#define IF(flags, n)             { OP_IF, 0, 0, 0, 0, (nc_u16)(n), (flags), 0 }
+
+/* The Advanced tab's on/off keywords as applied (RTL_STATE.Flags). */
+#define F_EEE      0x01             /* *EEE */
+#define F_GREEN    0x02             /* EnableGreenEthernet */
+#define F_EEE_PLUS 0x04             /* AdvancedEEE (EEE+) */
+#define F_IDLE     0x08             /* EnableExtraPowerSaving (the USB 2 PHY's P3 state) */
+#define F_PAUSE    0x10             /* *FlowControl: pause advertised */
 
 /* Sequence numbers (Seq[]) */
 enum {
@@ -248,7 +265,7 @@ enum {
     H_PHY_WAKE, H_BURST, H_LINK_FLAGS, H_PACKAGE, H_UPS_CHECK,
     H_BIAS, H_ADC_TRIM, H_SAW_TIMER, H_EEE_CLOCKS, H_EEE_PLUS, H_GAP,
     H_FLASH_WAIT, H_RESTORE_WAIT, H_EXT_INIT, H_EXT_INIT_PHY, H_FW_CTRL, H_UPS_CHECK_MG,
-    H_MDI_SWAP, H_RX_EARLY, H_IDLE_2G5, H_EEE_TW, H_L1_NYET
+    H_MDI_SWAP, H_RX_EARLY, H_IDLE_2G5, H_EEE_TW, H_L1_NYET, H_EEE_MAX, H_GREEN
 };
 
 /* PHY states a wait accepts (PR_STATE low bits, as bits of a set). */
@@ -337,9 +354,18 @@ static const STEP SqAldpsOn[] = {
     END
 };
 
-/* Energy-efficient Ethernet: MAC side, PHY side, advertisement. */
-static const STEP SqEeeOff[] = {                       /* 8153 and later only */
+/* Energy-efficient Ethernet: MAC side, PHY side, advertisement. Off on the
+ * 8152 family through its own three PHY registers and MMD 7.60, as on. */
+static const STEP SqEeeOff[] = {
     CLR(MAC, 2, MR_EEE, 0x0003),
+    ONLY(K_8152, U_ANY, 8),
+    PHY_EDIT(PR_EEE_A1, 0x3370, 0x0070),            /* the EEE capabilities and quiet off, rise time 7 */
+    PHY_CLR(PR_EEE_A2, 0x0600),
+    PHY_EDIT(PR_EEE_A3, 0xff80, 0xff80),            /* fast SNR 511 */
+    PHY_PUT(PR_MMD_CTRL, 0x0007), PHY_PUT(PR_MMD_DATA, 60),
+    PHY_PUT(PR_MMD_CTRL, 0x4007), PHY_PUT(PR_MMD_DATA, 0),
+    PHY_PUT(PR_MMD_CTRL, 0x0000),
+    ONLY(K_GIG | K_MG, U_ANY, 4),
     PHY_CLR(PR_EEE_CFG, 0x0010),
     ONLY(K_MG, U_ANY, 1), PHY_CLR(PR_EEE_ADV2, EEEADV2_2G5 | EEEADV2_5G),
     PHY_PUT(PR_EEE_ADV, 0),
@@ -359,10 +385,11 @@ static const STEP SqEeeOn[] = {
     PHY_SET(PR_EEE_CFG, 0x0010),
     PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
     /* The 8156 core: 2.5G EEE advertised too (also by the 1G 8153D) */
-    ONLY(K_56, U_ANY, 3),
+    ONLY(K_56, U_ANY, 4),
     PHY_SET(PR_EEE_CFG, 0x0010),
     PHY_EDIT(PR_EEE_ADV2, EEEADV2_2G5 | EEEADV2_5G, EEEADV2_2G5),
     PHY_PUT(PR_EEE_ADV, EEEADV_1000T | EEEADV_100TX),
+    HOOK(H_EEE_MAX),                                /* EEEMaxSupportSpeed */
     /* The 8157 and 8159: 2.5G and 5G, and on the 8159 10G */
     ONLY(K_57, U_ANY, 2),
     PHY_SET(PR_EEE_CFG, 0x0010),
@@ -515,7 +542,7 @@ static const STEP SqPhy8153[] = {
     RUN(Q_EEE_ON),
     RUN(Q_ALDPS_ON),
     PHY_SET(MII(MII_AN_ADV), ANADV_PAUSE),
-    ONLY(K_5C20 | K_5C30, U_ANY, 1), SET(USB, 2, UR_U2P3, 0x0001),
+    ONLY(K_5C20 | K_5C30, U_ANY, 2), IF(F_IDLE, 1), SET(USB, 2, UR_U2P3, 0x0001),
     END
 };
 
@@ -598,7 +625,7 @@ static const STEP SqWake8153[] = {
     CLR(MAC, 1, MR_LANWAKE, 0x80),
     CLR(USB, 2, UR_SS_LINK1, 0x0002),
     RUN(Q_ALDPS_ON),
-    ONLY(K_5C20 | K_5C30, U_ANY, 1), SET(USB, 2, UR_U2P3, 0x0001),
+    ONLY(K_5C20 | K_5C30, U_ANY, 2), IF(F_IDLE, 1), SET(USB, 2, UR_U2P3, 0x0001),
     RUN(Q_U1U2_ON),
     END
 };
@@ -782,7 +809,7 @@ static const STEP SqPhy56A[] = {
     ONLY(K_7020, U_ANY, 1), RUN(Q_PHY_7020),
     ONLY(K_7030, U_ANY, 1), RUN(Q_PHY_7030),
     RUN(Q_PHY_MG_TAIL),
-    SET(USB, 2, UR_U2P3, 0x0001),
+    IF(F_IDLE, 1), SET(USB, 2, UR_U2P3, 0x0001),
     END
 };
 
@@ -877,7 +904,7 @@ static const STEP SqPhy56B[] = {
     PHY_CLR(PR_POWER, 0x8000),
     PATCH_CLOSE,
     RUN(Q_PHY_MG_TAIL),
-    SET(USB, 2, UR_U2P3, 0x0001),
+    IF(F_IDLE, 1), SET(USB, 2, UR_U2P3, 0x0001),
     END
 };
 
@@ -990,7 +1017,7 @@ static const STEP SqPhy7420[] = {                      /* 7410 and 7420 */
 /* The end of every 8156-core PHY setup: green Ethernet on, reduced
  * ("lite") modes off, EEE (not on the 7020), ALDPS, pause advertised. */
 static const STEP SqPhyMGTail[] = {
-    SRAM_SET(SR_GREEN, 0x8000),
+    HOOK(H_GREEN),
     PHY_CLR(PR_LITE_A, 0x0200),
     ONLY(K_56, U_ANY, 1), PHY_CLR(PR_LITE_B, 0x0001),
     ONLY(K_57, U_ANY, 1), PHY_CLR(PR_LITE_B, 0x0003),
@@ -1052,7 +1079,7 @@ static const STEP SqWakeMG[] = {
     ONLY(K_56, U_ANY, 1), CLR(USB, 2, UR_SPEED_OPT, 0x0300),
     PUT(USB, 4, UR_RX_BUF_TH, 0x00600400UL),
     RUN(Q_ALDPS_ON),
-    ONLY(K_56, U_ANY, 1), SET(USB, 2, UR_U2P3, 0x0001),
+    ONLY(K_56, U_ANY, 2), IF(F_IDLE, 1), SET(USB, 2, UR_U2P3, 0x0001),
     ONLY(K_56, U_SUPER, 1), SET(USB, 2, UR_LPM_CFG, 0x0001),
     END
 };
@@ -1537,7 +1564,12 @@ static void Run(RTL_STATE *s, NET_IO *io, int q)
         case OP_PATCH_ASK: if (!PatchAsk(s, io)) s->Abort = 1; break;
         case OP_PATCH_DONE: PatchDone(s, io); break;
         case OP_SLEEP: NcIoSleep(io, p->Ms); break;
-        case OP_RUN: Run(s, io, p->Count); break;
+        case OP_RUN:
+            Run(s, io, (p->Count == Q_EEE_ON && !(s->Flags & F_EEE)) ? Q_EEE_OFF : p->Count);
+            break;
+        case OP_IF:
+            if ((s->Flags & p->Clear) != p->Clear) p += p->Count;
+            break;
         case OP_HOOK: Hook(s, io, p->Count); break;
         }
     }
@@ -1557,24 +1589,92 @@ static nc_u16 MultiGig(const RTL_STATE *s)
     return 0;
 }
 
-/* Autonegotiation: 10/100 (and 1000 full on a gigabit chip, and the
- * multi-gigabit speeds on a chip that has them) advertised, then the PHY
- * reset with autonegotiation enabled and restarted. */
+/* The Advanced tab's keywords (ethernet.md section 4.10), in the order of
+ * NET_PROBE.Settings. Realtek's 7 INF's names, values and defaults. */
+enum { S_SPEED, S_FLOW, S_EEE, S_EEE_MAX, S_GREEN, S_EEE_PLUS, S_IDLE, S_COUNT };
+static const NET_SETTING Settings[S_COUNT] = {
+    { "*SpeedDuplex", 0, 9, { 0, 1, 2, 3, 4, 6, 2500, 5000, 10000 } },
+    { "*FlowControl", 3, 4, { 0, 1, 2, 3 } },
+    { "*EEE", 0, 2, { 0, 1 } },
+    { "EEEMaxSupportSpeed", 1000, 4, { 10, 100, 1000, 2500 } },
+    { "EnableGreenEthernet", 0, 2, { 0, 1 } },
+    { "AdvancedEEE", 0, 2, { 0, 1 } },
+    { "EnableExtraPowerSaving", 0, 2, { 0, 1 } },
+};
+
+/* The keywords this chip, on this USB link, applies (Flags, Speed,
+ * EeeMax); the others are left as the chip runs without them and named
+ * in *ignored (bit per entry) when they ask for something else. */
+static void TakeSettings(RTL_STATE *s, const NET_PROBE *probe, nc_u32 *ignored)
+{
+    long speed = NcSetting(probe, S_SPEED);
+    nc_u16 mg = MultiGig(s);
+    *ignored = 0;
+    s->Flags = 0;
+    s->Speed = 0;
+    if ((speed >= 1 && speed <= 4) ||
+        (speed == 6 && (s->Kind & (K_GIG | K_MG))) ||
+        (speed == 2500 && (mg & MGIG_2G5)) || (speed == 5000 && (mg & MGIG_5G)) ||
+        (speed == 10000 && (mg & MGIG_10G)))
+        s->Speed = (nc_u16)speed;
+    else if (speed) *ignored |= 1UL << S_SPEED;
+    if (NcSetting(probe, S_FLOW)) s->Flags |= F_PAUSE;
+    if (NcSetting(probe, S_EEE)) {
+        if (s->Kind & K_7020) *ignored |= 1UL << S_EEE;     /* its setup never turns EEE on (Linux) */
+        else s->Flags |= F_EEE;
+    }
+    s->EeeMax = (nc_u16)NcSetting(probe, S_EEE_MAX);
+    if (!(s->Kind & K_56) || (s->Kind & K_7020)) {
+        if (s->EeeMax != (nc_u16)Settings[S_EEE_MAX].Default) *ignored |= 1UL << S_EEE_MAX;
+    }
+    if (NcSetting(probe, S_GREEN)) {
+        if (s->Kind & (K_LATER | K_MG)) s->Flags |= F_GREEN;
+        else *ignored |= 1UL << S_GREEN;
+    }
+    if (NcSetting(probe, S_EEE_PLUS)) {
+        if (s->Kind & (K_LATER | K_MG)) s->Flags |= F_EEE_PLUS;
+        else *ignored |= 1UL << S_EEE_PLUS;
+    }
+    if (NcSetting(probe, S_IDLE)) {
+        if (s->Kind & (K_5C20 | K_5C30 | K_56)) s->Flags |= F_IDLE;
+        else *ignored |= 1UL << S_IDLE;
+    }
+}
+
+/* Autonegotiation: what *SpeedDuplex leaves (by default 10/100, 1000 full
+ * on a gigabit chip, and the multi-gigabit speeds on a chip that has
+ * them; one speed alone from 6 up) advertised, the pause bits as
+ * *FlowControl says, then the PHY reset with autonegotiation enabled and
+ * restarted. *SpeedDuplex 1 to 4 instead force 10 or 100 Mb/s, half or
+ * full duplex, with autonegotiation off (Linux rtl8152_set_speed). */
 static void Negotiate(RTL_STATE *s, NET_IO *io)
 {
     static const STEP reset = PHY_WAIT(PR_MII, MIICTL_RESET, 0, 50, 20);
-    nc_u16 was = PhyGet(s, io, MII(MII_AN_ADV));
-    if ((was | ANADV_10_100) != was) PhyPut(s, io, MII(MII_AN_ADV), (nc_u16)(was | ANADV_10_100));
+    nc_u16 adv = ANADV_10_100, gig = GIGCTL_1000_FULL, mg = MultiGig(s), ctl, was, now;
+    if (s->Speed >= 1 && s->Speed <= 4) {
+        ctl = (nc_u16)((s->Speed >= 3 ? MIICTL_SPEED100 : 0) | (s->Speed % 2 ? 0 : MIICTL_FULL));
+        if (!s->NoReset) ctl |= MIICTL_RESET;
+        PhyPut(s, io, MII(MII_CONTROL), ctl);
+        if (!s->NoReset) WaitFor(s, io, &reset, 0);
+        s->NoReset = 0;
+        return;
+    }
+    if (s->Speed == 6) { adv = 0; mg = 0; }
+    else if (s->Speed >= 2500) {
+        adv = 0; gig = 0;
+        mg = (nc_u16)(s->Speed == 2500 ? MGIG_2G5 : s->Speed == 5000 ? MGIG_5G : MGIG_10G);
+    }
+    was = PhyGet(s, io, MII(MII_AN_ADV));
+    now = (nc_u16)((was & ~(ANADV_10_100 | ANADV_PAUSE)) | adv | ((s->Flags & F_PAUSE) ? ANADV_PAUSE : 0));
+    if (now != was) PhyPut(s, io, MII(MII_AN_ADV), now);
     if (s->Kind & (K_GIG | K_MG)) {
-        nc_u16 now;
         was = PhyGet(s, io, MII(MII_GIG_CONTROL));
-        now = (nc_u16)((was & ~GIGCTL_1000_MASK) | GIGCTL_1000_FULL);
+        now = (nc_u16)((was & ~GIGCTL_1000_MASK) | gig);
         if (now != was) PhyPut(s, io, MII(MII_GIG_CONTROL), now);
     }
     if (s->Kind & (K_2G5 | K_57)) {
-        nc_u16 now;
         was = PhyGet(s, io, PR_MGIG_CTRL);
-        now = (nc_u16)((was & ~(MGIG_2G5 | MGIG_5G | MGIG_10G)) | MultiGig(s));
+        now = (nc_u16)((was & ~(MGIG_2G5 | MGIG_5G | MGIG_10G)) | mg);
         if (now != was) PhyPut(s, io, PR_MGIG_CTRL, now);
     }
     if (s->NoReset) {
@@ -1712,9 +1812,22 @@ static void Hook(RTL_STATE *s, NET_IO *io, int h)
             Negotiate(s, io);
         }
         break;
-    case H_BIAS:        /* PHY bias: lower once the chip has been set up */
-        Run(s, io, s->SetUpOnce ? Q_BIAS_LOW : Q_BIAS_FULL);
+    case H_BIAS:        /* PHY bias: lower (green Ethernet) once the chip has been set up */
+        Run(s, io, s->SetUpOnce && (s->Flags & F_GREEN) ? Q_BIAS_LOW : Q_BIAS_FULL);
         break;
+    case H_GREEN:       /* the 8156 core's green Ethernet enable */
+        PhyPut(s, io, PR_SRAM_ADDR, SR_GREEN);
+        v = PhyGet(s, io, PR_SRAM_DATA);
+        PhyPut(s, io, PR_SRAM_DATA, (nc_u16)((s->Flags & F_GREEN) ? (v | 0x8000) : (v & ~0x8000)));
+        break;
+    case H_EEE_MAX: {   /* the 8156 core's EEE advertisement up to EEEMaxSupportSpeed */
+        nc_u16 adv = (nc_u16)(s->EeeMax >= 1000 ? (EEEADV_1000T | EEEADV_100TX) :
+                              s->EeeMax >= 100 ? EEEADV_100TX : 0);
+        PhyPut(s, io, PR_EEE_ADV, adv);
+        if (s->EeeMax < 2500)
+            PhyPut(s, io, PR_EEE_ADV2, (nc_u16)(PhyGet(s, io, PR_EEE_ADV2) & ~(EEEADV2_2G5 | EEEADV2_5G)));
+        break;
+    }
     case H_ADC_TRIM: {  /* ADC offset from efuse word 0x7d (17 bits, bit 3 unused) */
         nc_u16 trim;
         Put(io, RTL_SPACE_MAC, MR_EFUSE_CMD, 2, 0x8000 | 0x7d);
@@ -1739,8 +1852,10 @@ static void Hook(RTL_STATE *s, NET_IO *io, int h)
         PatchDone(s, io);
         break;
     }
-    case H_EEE_PLUS:    /* EEE+ on at 10 Mb/s only (never on the RTL8159) */
-        if (!(s->Kind & K_2020) && (Get(io, RTL_SPACE_MAC, MR_LINK, 2) & LNK_10))
+    case H_EEE_PLUS:    /* EEE+ on at 10 Mb/s only (never on the RTL8159); from the
+                         * 8153B on, only with AdvancedEEE */
+        if (!(s->Kind & K_2020) && (!(s->Kind & (K_LATER | K_MG)) || (s->Flags & F_EEE_PLUS)) &&
+            (Get(io, RTL_SPACE_MAC, MR_LINK, 2) & LNK_10))
             Edit(io, RTL_SPACE_MAC, MR_EEE_PLUS, 2, 0, 0x0002);
         else Edit(io, RTL_SPACE_MAC, MR_EEE_PLUS, 2, 0x0002, 0);
         break;
@@ -1905,6 +2020,7 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
     s->Abort = 0;
     s->Failed = 0;
     s->Desc = (nc_u8)((s->Kind & K_57) ? DESC_V2 : DESC_V1);
+    TakeSettings(s, probe, &params->Ignored);
 
     Run(s, io, SeqFor(s, R_SETUP));
     if (s->Failed) {
@@ -2229,5 +2345,6 @@ const NET_CHIP NetPackageChip = {
     "usb-wdm-free RTL815X (Realtek RTL8152/8153/8156/8157/8159 USB Ethernet)",
     0x0001,
     RtlProbe, RtlStart, RtlSetMac, RtlLink, RtlPoll, RtlSetFilter, RtlStop, RtlSuspend, RtlResume,
-    RtlStatus, RtlRxParse, RtlTxHeader, RtlTxEnd, 0, RtlTxOffload, RtlRxChecksum
+    RtlStatus, RtlRxParse, RtlTxHeader, RtlTxEnd, 0, RtlTxOffload, RtlRxChecksum,
+    Settings, S_COUNT
 };

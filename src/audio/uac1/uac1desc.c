@@ -5,6 +5,7 @@
  * Formats" 1.0 (FMT-1) Table 2-1. No DDK sample or third-party code used.
  */
 #include "uac1desc.h"
+#include "uacconv.h"
 
 static unsigned int Word(const unsigned char *p)
 {
@@ -159,12 +160,12 @@ static int Finish(UAC1_DESC *d, CANDIDATE *c, int highSpeed)
     }
     if (!c->General || !c->Format || c->Type != 1 || c->Bad || data == 2 ||
         c->Endpoints != c->Expected ||
-        (a->FormatTag != 1 && a->FormatTag != 2) ||
         !a->Channels || a->Channels > 8 || !a->Subframe || a->Subframe > 4 ||
         !a->Bits || a->Bits > a->Subframe * 8 || !a->RateMin || a->RateMax < a->RateMin)
         goto skip;
-    /* PCM8 is unsigned 8-bit, left-justified in its subframe (FMT-1 2.2.6.2). */
-    if (a->FormatTag == 2 && a->Bits != 8) goto skip;
+    /* FMT-1 2.2.6: PCM in 2 to 4-byte subframes; PCM8, ALAW and MULAW 8
+     * bits in 1 byte; IEEE_FLOAT 32 bits in 4 (docs/design/uac2.md 26.12). */
+    if (!UacConvKnown(a->FormatTag, a->Subframe, a->Bits)) goto skip;
     e = &c->Ep[data];
     /* ADC-1 Table 4-20: a 9-byte isochronous endpoint, synchronization type
      * asynchronous, adaptive or synchronous, bInterval 1 at Full Speed;
@@ -184,12 +185,14 @@ static int Finish(UAC1_DESC *d, CANDIDATE *c, int highSpeed)
     a->EpControls = e->Controls;
     a->LockUnits = e->LockUnits;
     a->LockDelay = e->LockDelay;
-    /* Not carried (docs/design/uac2.md 26.3): a MaxPacketsOnly source's
-     * padding cannot be told from samples by a count rule. An adaptive
-     * source is read as a plain IN endpoint and its synch OUT endpoint
-     * (ADC-1 3.7.2.2) is opened but sent nothing, as Windows' own driver
-     * does on XP (read with the simulator, 2026-11-07). */
-    if (a->Capture && (a->EpControls & UAC_EP_MAXPACKETSONLY))
+    /* A MaxPacketsOnly endpoint is carried (ADC-1 4.6.1.2): OUT padded;
+     * IN from a synchronous or adaptive source, whose rate the host knows,
+     * in PCM or IEEE_FLOAT, where a zero frame is silence, counted against
+     * the rate (docs/design/uac2.md 26.12); not from an asynchronous
+     * source, nor in PCM8, ALAW or MULAW. An adaptive source's synch OUT
+     * endpoint (ADC-1 3.7.2.2) is kept and fed Ff. */
+    if (a->Capture && (a->EpControls & UAC_EP_MAXPACKETSONLY) &&
+        (a->Sync == UAC_SYNC_ASYNC || (a->FormatTag != UAC_TAG_PCM && a->FormatTag != UAC_TAG_FLOAT)))
         goto skip;
     /* An asynchronous sink has its synch IN endpoint (ADC-1 3.7.2.2);
      * implicit feedback is not supported in v1. */

@@ -7,6 +7,7 @@
  */
 #include "uac1desc.h"
 #include "uacdesc.h"
+#include "uacconv.h"
 
 static void Clear(void *p, unsigned int n)
 {
@@ -86,10 +87,9 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
     for (i = 0; i < s->AltCount; i++) {
         const UAC_FMT_ALT *a = &s->Alt[i];
         UAC_ALT *o;
-        /* PCM only; 8-bit PCM8 and the rest are not carried (5.2). */
-        if (a->FormatTag != 1 || a->Subframe < 2 || a->Subframe > 4 ||
-            (!a->Capture && (a->EpControls & UAC_EP_MAXPACKETSONLY)) ||
-            d->AltCount == UAC_MAX_ALTS) {
+        /* PCM, PCM8, IEEE_FLOAT, ALAW and MULAW (the last four converted
+         * to and from 16-bit PCM, section 26.12); MaxPacketsOnly both ways. */
+        if (!UacConvKnown(a->FormatTag, a->Subframe, a->Bits) || d->AltCount == UAC_MAX_ALTS) {
             d->Skipped++;
             continue;
         }
@@ -107,6 +107,7 @@ int Uac1Model(const UAC1_DESC *s, int highSpeed, struct UAC_DESC *d)
         o->RateCount = a->RateCount > UAC1_RATES ? UAC1_RATES : a->RateCount;
         for (k = 0; k < o->RateCount; k++) o->Rate[k] = (unsigned int)a->Rate[k];
         o->EpControls = a->EpControls;
+        o->FormatTag = (UAC_BYTE)a->FormatTag;
     }
     return d->AltCount ? UAC1_OK : UAC1_NO_AUDIO;
 }

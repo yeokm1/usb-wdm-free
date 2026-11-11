@@ -35,6 +35,10 @@ typedef struct FAKE {
     int HaveNetworkAddress;
     WCHAR Fallback[16];
     int HaveFallback, FallbackWrites;
+    /* Advanced-tab keywords NdisReadConfiguration answers: Text as a
+     * string, or (IsInteger) Integer as an integer-typed value */
+    struct { const char *Name, *Text; int IsInteger; unsigned long Integer; } Keywords[8];
+    int KeywordCount, KeywordReads;
     /* NDIS state */
     NDIS_MINIPORT_CHARACTERISTICS Chars;
     NDIS_HANDLE Context;              /* from NdisMSetAttributesEx */

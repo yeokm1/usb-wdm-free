@@ -69,8 +69,25 @@
 #define   GMII_PHY_PGSEL_PAGE0   0x0000
 #define   GMII_PHY_PGSEL_PAGE3   0x0003
 #define MII_BMCR                 0x00
+#define   BMCR_FULLDPLX          0x0100
 #define   BMCR_ANRESTART         0x0200
 #define   BMCR_ANENABLE          0x1000
+#define   BMCR_SPEED100          0x2000
+#define MII_BMSR                 0x01
+#define MII_ADVERTISE            0x04
+#define MII_LPA                  0x05
+#define   ADVERTISE_10HALF       0x0020
+#define   ADVERTISE_10FULL       0x0040
+#define   ADVERTISE_100HALF      0x0080
+#define   ADVERTISE_100FULL      0x0100
+#define   ADVERTISE_PAUSE_CAP    0x0400
+#define   ADVERTISE_PAUSE_ASYM   0x0800
+#define MII_CTRL1000             0x09
+#define   ADVERTISE_1000HALF     0x0100
+#define   ADVERTISE_1000FULL     0x0200
+#define   GMII_PHY_PGSEL_PAGE5   0x0005
+#define MDIO_EEE_100TX           0x0002
+#define MDIO_EEE_1000T           0x0004
 #define MII_MMD_CTRL             0x0d
 #define MII_MMD_DATA             0x0e
 #define   MII_MMD_CTRL_NOINCR    0x4000
@@ -92,9 +109,16 @@ typedef struct AX_STATE {
     nc_u16 Medium;               /* last medium mode written */
     nc_u8 Queue[5];              /* last bulk-IN queue control written */
     nc_u32 FifoBusy;             /* link_reset FIFO polls that timed out */
+    /* The Advanced tab (ethernet.md 4.10), from the probe at each start:
+     * *SpeedDuplex (0 auto, 1-4 forced 10/100, 6 1000 full alone),
+     * *FlowControl (bit 0 transmit, bit 1 receive pause), *EEE. */
+    nc_u16 Speed;
+    nc_u8 Flow, Eee;
+    nc_u8 Pause;                 /* pause directions last applied (bit 0 transmit, bit 1 receive) */
 } AX_STATE;
 
-/* The chip table is NetPackageChip (netchip.h). */
+/* The chip table is NetPackageChip (netchip.h); its Settings, in order: */
+enum { S_SPEED, S_FLOW, S_EEE, S_COUNT };
 
 long AxProbe(const nc_u8 *device, nc_u32 deviceSize, const nc_u8 *const *config,
              const nc_u32 *size, nc_u32 count, NET_PROBE *probe);

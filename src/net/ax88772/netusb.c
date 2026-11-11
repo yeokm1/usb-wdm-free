@@ -1206,6 +1206,7 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
         if (NT_SUCCESS(status) && got == header.wTotalLength) sizes[i] = got;
     }
     r = d->Chip->Probe(dev, 18, (const nc_u8 *const *)configs, sizes, count, &d->Probe);
+    d->Probe.Settings = start->Settings;     /* for Start and Resume (netchip.h) */
     NetTrace("device %x:%x rev %x, %u configurations: probe %d", d->Probe.Vendor, d->Probe.Product,
              d->Probe.Revision, count, r);
     if (r < 0) { Fail(start, NET_FAIL_PROBE, STATUS_NOT_SUPPORTED); status = STATUS_NOT_SUPPORTED; goto fail; }
@@ -1220,6 +1221,7 @@ long NetUsbStart(void *lowerDevice, const NET_CALLBACKS *callbacks, NET_START *s
     if (d->Params.RxConfig || d->Params.RxConfigRead)
         NetTrace("rx config: wrote %x, read back %x%s", d->Params.RxConfig, d->Params.RxConfigRead,
                  d->Params.RxConfig == d->Params.RxConfigRead ? "" : " (MISMATCH)");
+    if (d->Params.Ignored) NetTrace("settings this chip cannot apply (table bits): %x", d->Params.Ignored);
     if (r < 0) {
         Fail(start, NET_FAIL_CHIP, d->Gone ? STATUS_DEVICE_NOT_CONNECTED : STATUS_DEVICE_DATA_ERROR);
         status = STATUS_DEVICE_DATA_ERROR;

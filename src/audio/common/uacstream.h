@@ -39,6 +39,12 @@ struct UAC_PCM {
 
 class UacStream : public IMiniportWaveCyclicStream, public IDmaChannel {
     enum { MinCapacity = 16384, MaxCapacity = 1048576 };
+public:
+    /* The one-stream gate's values: free, held by an open stream, and held
+     * by a stream whose final release has queued its destroy (Close, then
+     * the gate freed, on a work item: docs/design/uac2.md 27). */
+    enum { GateFree = 0, GateOpen = 1, GateClosing = 2 };
+private:
     ULONG Capacity, BlockAlign, BytesPerSecond;
     UAC_PCM pcm;
     BOOLEAN capture;
@@ -86,7 +92,7 @@ class UacStream : public IMiniportWaveCyclicStream, public IDmaChannel {
         if (hooks.Close) hooks.Close(hooks.Context, this);
         if (group) group->Release();
         if (buffer) ExFreePool(buffer);
-        InterlockedExchange(active, 0);
+        InterlockedExchange(active, GateFree);
         owner->Release();
     }
     BOOLEAN Contains(PVOID address, ULONG count) {
@@ -170,11 +176,11 @@ public:
         /* A transport Close hook can wait. Its final release must always
          * have a preallocated, device-associated passive cleanup path. */
         if (!cleanupDevice) return STATUS_INVALID_PARAMETER;
-        if (InterlockedCompareExchange(gate, 1, 0) != 0)
+        if (InterlockedCompareExchange(gate, GateOpen, GateFree) != GateFree)
             return STATUS_DEVICE_BUSY;
         PVOID memory = ExAllocatePoolWithTag(NonPagedPool, sizeof(UacStream), 's2aU');
         if (!memory) {
-            InterlockedExchange(gate, 0);
+            InterlockedExchange(gate, GateFree);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         UacStream *s = new(memory) UacStream(parent, gate, &pcm, input, queueMs);
@@ -201,6 +207,31 @@ public:
         s->group->AddRef();
         *service = s->group;
         return STATUS_SUCCESS;
+    }
+    /* docs/design/uac2.md 27: a pin opened right after the close of the
+     * one before can find the gate still held by that stream's queued
+     * destroy. Wait, at PASSIVE and holding no lock the destroy's Close
+     * takes, while the gate reads GateClosing, up to ms milliseconds.
+     * TRUE when the gate was closing at entry; *waited gets the
+     * milliseconds spent. A gate held by an open stream returns at once:
+     * a second stream is refused as before. */
+    static BOOLEAN WaitClosing(LONG *gate, ULONG ms, ULONG *waited) {
+        ULONG spent = 0;
+        BOOLEAN closing = FALSE;
+        if (waited) *waited = 0;
+        if (!gate || KeGetCurrentIrql() != PASSIVE_LEVEL) return FALSE;
+        ULONGLONG start = KeQueryInterruptTime();
+        while (InterlockedCompareExchange(gate, GateClosing, GateClosing) == GateClosing) {
+            closing = TRUE;
+            ULONGLONG now = KeQueryInterruptTime();
+            spent = (ULONG)((now - start) >> 4) / 625; /* 100 ns -> ms, no 64-bit divide */
+            if (spent >= ms) break;
+            LARGE_INTEGER tick; tick.QuadPart = -10 * 10000; /* 10 ms, relative */
+            KeDelayExecutionThread(KernelMode, FALSE, &tick);
+        }
+        if (closing) spent = (ULONG)((KeQueryInterruptTime() - start) >> 4) / 625;
+        if (waited) *waited = spent;
+        return closing;
     }
     /* Structure of a PCM format: WAVE_FORMAT_PCM or EXTENSIBLE/PCM, 1-32
      * channels, 16/24/32-bit containers (8-bit PCM is unsigned in WAVE and
@@ -285,6 +316,9 @@ public:
              * Native IoWorkItem retains the device/image through return. */
             if (published) {
                 ASSERT(cleanupWork != NULL);
+                /* The gate stays held until the destroy has run Close;
+                 * marked closing so the next open can wait for it (27). */
+                InterlockedExchange(active, GateClosing);
                 IoQueueWorkItem(cleanupWork, Cleanup, DelayedWorkQueue, this);
             } else {
                 /* Only Create's unpublished failure paths reach this arm.

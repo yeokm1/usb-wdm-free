@@ -76,6 +76,11 @@ typedef struct UAC_USB_STATS {
     /* Design 25.7, word 94: 1 when the stream stopped polling feedback
      * after UAC_FB_RESTART_LIMIT refusals in a row (UAC_FB_OFF). */
     ULONG FeedbackOff;
+    /* Design 26.13, words 95 to 97: the resyncs at explicit start frames
+     * (after a URB refused for its start frame, or one lost whole on frames
+     * behind the bus), the bus frame the last one read, and how many of
+     * them a URB behind the bus began. */
+    ULONG Resyncs, ResyncFrame, ResyncBehind;
 } UAC_USB_STATS;
 
 #define UAC_USB_RATES 16

@@ -18,6 +18,9 @@
 #include "uacusb.h"
 #include "uacrate.h"
 #include "uacwatch.h"
+#ifdef UAC_V1
+#include "uacconv.h"
+#endif
 
 /* At most UAC_QUEUE_MAX_URBS data URBs (docs/design/uac2.md 19.4); a
  * stream uses DataSlots of them. */
@@ -165,13 +168,30 @@ typedef struct USB_SLOT {
     ULONG Packets, Bytes, BufferBytes, Sequence;
     LONG Phase; /* 0 idle,1 lower-owned,2 completed and caller-owned */
     ULONG DoneStamp; /* section 25: the stream's completion count when it came back */
-    BOOLEAN Feedback, CancelIssued, Used;
+    ULONG SubmitFrame; /* 26.13: the bus frame at submission, while SubmitFrameValid */
+    BOOLEAN Feedback, CancelIssued, Used, SubmitFrameValid;
     NTSTATUS Status;
+#ifdef UAC_V1
+    ULONG Pcm;      /* render: the audio bytes of Bytes (26.12, MaxPacketsOnly) */
+#endif
 } USB_SLOT;
 
 /* A clock entity a running stream depends on: a source at a rate, or a
  * selector at an input. Streams share an entity only at the same value. */
 typedef struct CLAIM { UAC_BYTE Id; ULONG Value, Users; } CLAIM;
+
+/* 26.13: the worker's one frame request, sent and not waited for. Its URB
+ * is the stream's, kept until the request is back (Phase 2); the worker
+ * never exits while one is with the stack. */
+typedef struct FRAME_REQ {
+    PIRP Irp;
+    struct _URB_GET_CURRENT_FRAME_NUMBER Urb;
+    LONG Phase;             /* 0 none, 1 with the stack, 2 back and not yet taken */
+    NTSTATUS Status;
+    BOOLEAN Cancelled, ForResync;
+    ULONGLONG SentAt;       /* interrupt time */
+    ULONG AgeMs;            /* sent to taken, set by FrameTake */
+} FRAME_REQ;
 
 struct UAC_DEV {
     PDEVICE_OBJECT Lower;
@@ -206,11 +226,22 @@ struct UAC_USB {
     ULONG LostRun, LostLimit; /* section 25: lost data URBs in a row, and the most ridden out */
     ULONG FbRestartRun;       /* 25.7: feedback URBs refused for their start frame, in a row */
     BOOLEAN FeedbackOff;      /* 25.7: feedback polling stopped for the rest of the stream */
+    UAC_RECOVERY Rec;         /* 26.13: Resync (slots held until all are back), ResyncRun, LagSuspect */
+    ULONGLONG ResyncSince;    /* 26.13: interrupt time the hold began (0: none) */
+    FRAME_REQ Frame;          /* 26.13 */
     UAC_WATCH_TICK LastFeedbackPacket, LastFeedbackValueAt;
     ULONG FeedbackUnusableUs, FeedbackQuietUs, FeedbackPacketUs; /* section 25: the deadline in bus time */
     ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
+#ifdef UAC_V1
+    /* docs/design/uac2.md 26.12: an adaptive source's synch OUT endpoint
+     * fed Ff (the feedback slots, sending), MaxPacketsOnly either way, and
+     * the nominal cadence a MaxPacketsOnly IN packet is counted against. */
+    BOOLEAN Feedforward, MpoOut, MpoIn, FfDelivered; /* FfDelivered: 26.13 */
+    ULONG FfValue, FfRun;
+    UAC_CONV_CADENCE Cadence;
+#endif
     USB_SLOT Slot[SLOTS];
 };
 
@@ -991,6 +1022,9 @@ static NTSTATUS SelectAlt(UAC_USB *s, BOOLEAN active)
         }
         if (active && (!s->DataPipe || (s->Feedback && !s->FeedbackPipe)))
             status = STATUS_DEVICE_CONFIGURATION_ERROR;
+#ifdef UAC_V1
+        if (active && s->Feedforward && !s->FeedbackPipe) status = STATUS_DEVICE_CONFIGURATION_ERROR;
+#endif
     }
     ExFreePool(urb);
     return status;
@@ -1014,7 +1048,11 @@ static NTSTATUS SlotDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
+/* asap FALSE: at the explicit frame start (26.13's resync); else ASAP.
+ * frameValid: frame is the bus frame the worker read before this
+ * submission (26.13's lag test). */
+static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot, BOOLEAN asap, ULONG start,
+                           BOOLEAN frameValid, ULONG frame)
 {
     ULONG i, size = 0, n, nonzero = 0;
     PIO_STACK_LOCATION stack;
@@ -1026,8 +1064,19 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
                     slot->Packets * sizeof(USBD_ISO_PACKET_DESCRIPTOR));
     urb->Hdr.Function = URB_FUNCTION_ISOCH_TRANSFER;
     urb->PipeHandle = slot->Feedback ? s->FeedbackPipe : s->DataPipe;
+#ifdef UAC_V1
+    /* 26.12: an adaptive source's synch slots send. */
+    urb->TransferFlags = USBD_START_ISO_TRANSFER_ASAP |
+        ((slot->Feedback ? !s->Feedforward : s->Capture) ?
+         USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK : 0);
+#else
     urb->TransferFlags = USBD_START_ISO_TRANSFER_ASAP |
         (slot->Feedback || s->Capture ? USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK : 0);
+#endif
+    if (!asap) {
+        urb->TransferFlags &= ~USBD_START_ISO_TRANSFER_ASAP;
+        urb->StartFrame = start;
+    }
     urb->NumberOfPackets = slot->Packets;
     urb->TransferBuffer = slot->Buffer;
     for (i = 0; i < slot->Packets; i++) {
@@ -1039,11 +1088,41 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
         if (n > (slot->Feedback ? s->FeedbackBytes : s->Capacity) || size > slot->BufferBytes - n)
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         urb->IsoPacket[i].Offset = size;
+#ifdef UAC_V1
+        /* 26.12, ADC-1 4.6.1.2: a MaxPacketsOnly OUT packet that is not
+         * null is wMaxPacketSize long, its audio first; the audio length
+         * waits in Length (unused for OUT) until the fill below. */
+        if (s->MpoOut && !slot->Feedback && n) {
+            if (size > slot->BufferBytes - s->Capacity) return STATUS_DEVICE_CONFIGURATION_ERROR;
+            urb->IsoPacket[i].Length = n;
+            n = s->Capacity;
+        }
+#endif
         size += n;
     }
     urb->TransferBufferLength = size;
     slot->Bytes = size;
     RtlZeroMemory(slot->Buffer, size); /* playback: defensive underrun silence */
+#ifdef UAC_V1
+    slot->Pcm = size;
+    if (slot->Feedback && s->Feedforward) {
+        /* Ff in every packet: 3 bytes 10.14, or 4 bytes 16.16 (26.12). */
+        for (i = 0; i < slot->Packets; i++) {
+            ULONG k, at = urb->IsoPacket[i].Offset;
+            for (k = 0; k < s->FeedbackBytes; k++) slot->Buffer[at + k] = (UCHAR)(s->FfValue >> (8 * k));
+        }
+    } else if (!slot->Feedback && !s->Capture && s->MpoOut) {
+        slot->Pcm = 0;
+        for (i = 0; i < slot->Packets; i++) {
+            n = urb->IsoPacket[i].Length;
+            urb->IsoPacket[i].Length = 0;
+            if (!n) continue;
+            s->Fill(s->CallbackContext, slot->Buffer + urb->IsoPacket[i].Offset, n);
+            slot->Pcm += n;
+        }
+        for (i = 0; i < size; i++) if (slot->Buffer[i]) nonzero++;
+    } else
+#endif
     if (!slot->Feedback && !s->Capture) {
         s->Fill(s->CallbackContext, slot->Buffer, size);
         for (i = 0; i < size; i++) if (slot->Buffer[i]) nonzero++;
@@ -1057,6 +1136,16 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
     stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_INTERNAL_USB_SUBMIT_URB;
     stack->Parameters.Others.Argument1 = urb;
     IoSetCompletionRoutine(slot->Irp, SlotDone, slot, TRUE, TRUE, TRUE);
+    /* 26.13: the frame read before this submission, so the completion can
+     * tell a URB the stack placed behind the bus from one it held or the
+     * controller skipped. Read earlier than the call, it can only make a
+     * URB look less behind. */
+    slot->SubmitFrameValid = !slot->Feedback && asap && frameValid;
+    slot->SubmitFrame = frame;
+    TR_EVENT_(('S', (ULONG)(slot - s->Slot), slot->Feedback ? 0xffffffff : s->NextSequence, slot->Packets,
+               size, TrFrame(s), urb->TransferFlags, (ULONG)urb->StartFrame));
+    /* Published as the stack's only here, a Stop seen last, and passed on
+     * at once: nothing waits between. */
     KeAcquireSpinLock(&s->Lock, &old);
     if (s->Stop) {
         KeReleaseSpinLock(&s->Lock, old);
@@ -1072,8 +1161,6 @@ static NTSTATUS SubmitSlot(UAC_USB *s, USB_SLOT *slot)
         }
     }
     KeReleaseSpinLock(&s->Lock, old);
-    TR_EVENT_(('S', (ULONG)(slot - s->Slot), slot->Feedback ? 0xffffffff : slot->Sequence, slot->Packets,
-               size, TrFrame(s), urb->TransferFlags, (ULONG)urb->StartFrame));
     (void)IoCallDriver(s->Dev->Lower, slot->Irp);
     return STATUS_SUCCESS;
 }
@@ -1163,6 +1250,78 @@ static VOID FeedbackDiag(UAC_USB *s, USB_SLOT *slot, NTSTATUS status)
     }
 }
 
+static NTSTATUS FrameDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    UAC_USB *s = context;
+    KIRQL old;
+    UNREFERENCED_PARAMETER(device);
+    KeAcquireSpinLock(&s->Lock, &old);
+    s->Frame.Status = irp->IoStatus.Status;
+    s->Frame.Phase = 2;
+    KeSetEvent(&s->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&s->Lock, old);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static LONG FramePhase(UAC_USB *s)
+{
+    KIRQL old;
+    LONG phase;
+    KeAcquireSpinLock(&s->Lock, &old); phase = s->Frame.Phase; KeReleaseSpinLock(&s->Lock, old);
+    return phase;
+}
+
+/* 26.13, the worker only: sends a frame request and returns without
+ * waiting for it (FrameDone wakes the worker). FALSE when one is still
+ * out or back and not taken (its storage is not reused before FrameTake),
+ * or no IRP could be had. */
+static BOOLEAN FrameSend(UAC_USB *s, BOOLEAN forResync)
+{
+    PIO_STACK_LOCATION stack;
+    KIRQL old;
+    PIRP irp;
+    if (FramePhase(s)) return FALSE;
+    irp = IoAllocateIrp(s->Dev->Lower->StackSize, FALSE);
+    if (!irp) return FALSE;
+    RtlZeroMemory(&s->Frame.Urb, sizeof(s->Frame.Urb));
+    s->Frame.Urb.Hdr.Length = sizeof(s->Frame.Urb);
+    s->Frame.Urb.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    stack = IoGetNextIrpStackLocation(irp);
+    RtlZeroMemory(stack, sizeof(*stack));
+    stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_INTERNAL_USB_SUBMIT_URB;
+    stack->Parameters.Others.Argument1 = &s->Frame.Urb;
+    IoSetCompletionRoutine(irp, FrameDone, s, TRUE, TRUE, TRUE);
+    s->Frame.Irp = irp;
+    s->Frame.Cancelled = FALSE;
+    s->Frame.ForResync = forResync;
+    s->Frame.SentAt = KeQueryInterruptTime();
+    KeAcquireSpinLock(&s->Lock, &old); s->Frame.Phase = 1; KeReleaseSpinLock(&s->Lock, old);
+    (void)IoCallDriver(s->Dev->Lower, irp);
+    return TRUE;
+}
+
+/* The worker only: a request that is back is taken (its IRP freed): TRUE,
+ * with *ok, the frame and what it was sent for. FALSE when none is back. */
+static BOOLEAN FrameTake(UAC_USB *s, BOOLEAN *ok, ULONG *frame, BOOLEAN *forResync)
+{
+    KIRQL old;
+    NTSTATUS status;
+    KeAcquireSpinLock(&s->Lock, &old);
+    if (s->Frame.Phase != 2) { KeReleaseSpinLock(&s->Lock, old); return FALSE; }
+    status = s->Frame.Status;
+    KeReleaseSpinLock(&s->Lock, old);
+    IoFreeIrp(s->Frame.Irp); s->Frame.Irp = NULL;
+    *ok = NT_SUCCESS(status) && USBD_SUCCESS(s->Frame.Urb.Hdr.Status) ? TRUE : FALSE;
+    *frame = s->Frame.Urb.FrameNumber;
+    *forResync = s->Frame.ForResync;
+    s->Frame.AgeMs = (ULONG)((KeQueryInterruptTime() - s->Frame.SentAt) / 10000);
+    KeAcquireSpinLock(&s->Lock, &old); s->Frame.Phase = 0; KeReleaseSpinLock(&s->Lock, old);
+    TR_LINE(("frameq", (ULONG)status, *frame, s->Frame.AgeMs << 2 | (ULONG)*forResync << 1 | s->Frame.Cancelled));
+    return TRUE;
+}
+
 static VOID Completed(UAC_USB *s, USB_SLOT *slot)
 {
     KIRQL old;
@@ -1205,6 +1364,43 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
         (UacPlanIsoLost((ULONG)usbStatus, slot->Packets, FailedPackets(slot)) ||
          /* 25.8: a data URB refused whole for its start frame, likewise */
          (!slot->Feedback && UacPlanDataRefused((ULONG)usbStatus, slot->Packets)));
+#ifdef UAC_V1
+    if (slot->Feedback && s->Feedforward) {
+        /* 26.12: a synch URB to an adaptive source. A failure is counted
+         * and the slot sent again; 8 in a row end the stream, as a lost
+         * feedback does (26.10, U4): a source waiting for Ff would leave
+         * a recording that never advances. */
+        BOOLEAN end = FALSE;
+        ULONG failed = FailedPackets(slot);
+        /* 26.13: a synch URB with some packets delivered ends the run. Once
+         * Ff has reached the source it runs at the last Ff it was sent, so a
+         * failed synch URB is a lost interval: counted, never ending the
+         * stream (the data's own rules still do). Before the first delivery
+         * the run of 8 stands: a source waiting for Ff never starts. A
+         * refused start frame marks the resync either way. */
+        KeAcquireSpinLock(&s->Lock, &old);
+        s->Stats.FeedbackUrbs++;
+        if (!stop && status != STATUS_CANCELLED) {
+            if (good && failed < slot->Packets) {
+                s->FfRun = 0; s->FfDelivered = TRUE; s->Stats.GoodFeedback++;
+                if (failed) FbCount(s, 0x10000000UL);   /* some packets failed */
+            } else {
+                s->Stats.BadFeedback++;
+                FbCount(s, (ULONG)usbStatus | (s->FfDelivered ? 0x10000000UL : 0));
+                if (!NT_SUCCESS(status)) FbCount(s, (ULONG)status);
+                if (!s->FfDelivered) end = ++s->FfRun >= UAC_FB_RESTART_LIMIT;
+                if (usbStatus == (USBD_STATUS)UAC_ISO_BAD_START_STATUS) s->Rec.Resync = 1;
+            }
+        }
+        KeReleaseSpinLock(&s->Lock, old);
+        slot->Phase = 0;
+        if (end) {
+            TR_LINE(("fflost", s->FfRun, (ULONG)usbStatus, (ULONG)status));
+            Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
+        }
+        return;
+    }
+#endif
     /* Design 25.7: a feedback URB the stack refused for its start frame
      * is passed over a few times in a row; data keeps the rules above. */
     if (slot->Feedback && !stop && status != STATUS_CANCELLED) {
@@ -1301,9 +1497,27 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             for (i = 0; i < slot->Packets; i++) {
                 PUSBD_ISO_PACKET_DESCRIPTOR packet = &slot->Urb->IsoPacket[i];
                 ULONG length = packet->Length;
+#ifdef UAC_V1
+                /* 26.12: every interval's nominal frames are owed; a
+                 * failed or null packet starts the balance afresh. */
+                if (s->MpoIn) {
+                    (void)UacConvNominal(&s->Cadence);
+                    if (!USBD_SUCCESS(packet->Status) || !length ||
+                        length > s->Capacity || packet->Offset > slot->Bytes - length)
+                        UacConvLost(&s->Cadence);
+                }
+#endif
                 if (!USBD_SUCCESS(packet->Status) || !length) continue;
                 if (length > s->Capacity || packet->Offset > slot->Bytes - length) continue;
                 length -= length % s->FrameBytes;
+#ifdef UAC_V1
+                /* ADC-1 4.6.1.2: the padding after a MaxPacketsOnly
+                 * source's audio is discarded (the counting rule of 26.12;
+                 * PCM and IEEE_FLOAT only, where zero bytes are silence). */
+                if (s->MpoIn)
+                    length = UacConvMpoFrames(&s->Cadence, slot->Buffer + packet->Offset, length,
+                                              s->FrameBytes, NULL) * s->FrameBytes;
+#endif
                 if (length) s->Captured(s->CallbackContext, slot->Buffer + packet->Offset, length);
                 delivered += length;
             }
@@ -1312,14 +1526,45 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
             KeReleaseSpinLock(&s->Lock, old);
             s->Progress(s->CallbackContext, 0, errors);
         } else if (lost && s->Capture) {
+#ifdef UAC_V1
+            /* 26.12: the transfer's intervals pass all the same. */
+            if (s->MpoIn) UacConvLostPackets(&s->Cadence, slot->Packets);
+#endif
             s->Progress(s->CallbackContext, 0, errors);
         } else if (good || lost) {
             /* Advance in submission order, including failed/lost scheduled
              * packets. Never retry time-specific PCM or synthesize a timer. */
+#ifdef UAC_V1
+            s->Progress(s->CallbackContext, slot->Pcm, errors);  /* audio bytes (26.12) */
+#else
             s->Progress(s->CallbackContext, slot->Bytes, errors);
+#endif
         }
         if (lost) s->LostRun++;
         else if (good) s->LostRun = 0;
+        {
+            /* 26.13: a refusal wants a resync at explicit frames. A URB
+             * lost whole, or a recording's URB back successful and empty,
+             * that the stack had placed on frames already past when it was
+             * submitted: its ASAP chain lags the bus, and only a resync ends
+             * that sooner than its refusal a frame list later; the first
+             * such URB arms the submission frames. Only a URB that carried
+             * audio (render: any good one) clears the resync limit's run and
+             * the lag test: 98 SE's own UHCI returns a recording's URBs
+             * placed behind the bus successful and empty between its
+             * refusals. */
+            unsigned int kind = UAC_DATA_OTHER, behind = 0;
+            if (lost && UacPlanDataRefused((ULONG)usbStatus, slot->Packets)) kind = UAC_DATA_REFUSED;
+            else if (lost) kind = UAC_DATA_LOST;
+            else if (good) kind = !s->Capture || delivered ? UAC_DATA_AUDIO : UAC_DATA_EMPTY;
+            if ((kind == UAC_DATA_LOST || kind == UAC_DATA_EMPTY) && slot->SubmitFrameValid)
+                behind = UacPlanBehind(slot->SubmitFrame, slot->Urb->StartFrame,
+                                       UacPlanSpanFrames(s->TransferUs), UAC_RESYNC_LEAD);
+            if (UacPlanDataDone(&s->Rec, kind, behind)) {
+                TR_LINE(("behind", slot->SubmitFrame, (ULONG)slot->Urb->StartFrame, slot->Sequence));
+                KeAcquireSpinLock(&s->Lock, &old); s->Stats.ResyncBehind++; KeReleaseSpinLock(&s->Lock, old);
+            }
+        }
         /* Section 25: bus time since the last usable feedback, also while
          * feedback URBs are held or come back unusable. */
         if (s->Feedback && (good || lost) && UacFeedbackAfter(slot->DoneStamp, s->QuietFrom))
@@ -1331,7 +1576,8 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
         if (!slot->Feedback && s->LostRun >= s->LostLimit)
             Fail(s, NT_SUCCESS(status) ? STATUS_DEVICE_DATA_ERROR : status);
     } else if (restart) {
-        /* passed over: the slot is resubmitted ASAP by the worker */
+        /* passed over: the slot is resubmitted at the resync (26.13) */
+        s->Rec.Resync = 1;
     } else if (fbOff) {
         /* 25.7: no more feedback polls in this stream; the cadence keeps
          * its last good value (or the nominal one) and the deadline is off. */
@@ -1343,14 +1589,58 @@ static VOID Completed(UAC_USB *s, USB_SLOT *slot)
     else if (!stop && !USBD_SUCCESS(usbStatus)) Fail(s, STATUS_DEVICE_DATA_ERROR);
 }
 
+/* Design 26.13: the worker, once no slot is with the stack after a URB was
+ * refused for its start frame, has read the bus's frame (its own request,
+ * back: ok and frame) with no Stop seen since, and submits every slot of
+ * each pipe at explicit frames past it (UacPlanResyncFrame); ASAP after
+ * that. UAC_RESYNC_LIMIT resyncs with no data URB that carried audio between
+ * them, or a failed frame request or submission, end the stream. A Stop
+ * wins (SubmitSlot sees it last, under the lock). */
+static VOID Resync(UAC_USB *s, BOOLEAN ok, ULONG frame)
+{
+    ULONG i, k = 0, kf = 0, start;
+    NTSTATUS status;
+    KIRQL old;
+    if (!ok) {
+        TR_LINE(("rsyframe", 0, 0, 0));
+        Fail(s, STATUS_DEVICE_DATA_ERROR);
+        return;
+    }
+    if (!UacPlanResyncStart(&s->Rec)) {
+        TR_LINE(("rsylimit", s->Rec.ResyncRun, s->CompletedSequence, 0));
+        Fail(s, STATUS_DEVICE_DATA_ERROR);
+        return;
+    }
+    s->ResyncSince = 0; /* the next hold has its own deadline */
+    KeAcquireSpinLock(&s->Lock, &old);
+    s->Stats.Resyncs++; s->Stats.ResyncFrame = frame;
+    KeReleaseSpinLock(&s->Lock, old);
+    TR_LINE(("resync", frame, s->Rec.ResyncRun, s->CompletedSequence));
+    for (i = 0; i < SLOTS; i++) {
+        USB_SLOT *slot = &s->Slot[i];
+        if (!slot->Used || (slot->Feedback && s->FeedbackOff)) continue;
+        start = slot->Feedback ?
+            UacPlanResyncFrame(frame, kf++, UacPlanSpanFrames(slot->Packets * s->FeedbackPacketUs)) :
+            UacPlanResyncFrame(frame, k++, UacPlanSpanFrames(s->TransferUs));
+        status = SubmitSlot(s, slot, FALSE, start, FALSE, 0);
+        if (status == STATUS_DELETE_PENDING) return; /* SubmitSlot saw Stop */
+        if (!NT_SUCCESS(status)) {
+            TR_LINE(("rsysub", i, (ULONG)status, 0));
+            Fail(s, status);
+            return;
+        }
+    }
+}
+
 static VOID Worker(PVOID context)
 {
     UAC_USB *s = context;
-    ULONG i, pending;
+    ULONG i, pending, frame = 0;
     KIRQL old;
-    BOOLEAN stop, progress;
+    BOOLEAN stop, progress, taken, ok = FALSE, forResync = FALSE, frameOut;
     LONG phase;
     NTSTATUS status;
+    unsigned int gate;
     LARGE_INTEGER timeout;
     KPRIORITY basePriority = 0;
     LARGE_INTEGER hz;
@@ -1413,10 +1703,23 @@ static VOID Worker(PVOID context)
                 }
             }
         } while (progress);
+        /* 26.13: a frame request back is taken first, so the Stop read
+         * below is read after it: a frame is never used past a Stop. What
+         * this pass does not use is dropped (a frame is read afresh). */
+        taken = FrameTake(s, &ok, &frame, &forResync);
         KeAcquireSpinLock(&s->Lock, &old); stop = s->Stop; KeReleaseSpinLock(&s->Lock, old);
+        /* A request with the stack is cancelled at a stop, and a submission's
+         * past UAC_FRAME_WAIT_MS; its storage is kept until it is back. */
+        if (FramePhase(s) == 1 &&
+            UacPlanFrameCancel(stop, s->Frame.Cancelled, s->Frame.ForResync,
+                               (ULONG)((KeQueryInterruptTime() - s->Frame.SentAt) / 10000))) {
+            s->Frame.Cancelled = TRUE;
+            (void)IoCancelIrp(s->Frame.Irp);
+        }
         pending = 0;
         for (i = 0; i < SLOTS; i++) {
             USB_SLOT *slot = &s->Slot[i];
+            BOOLEAN useFrame = FALSE;
             if (!slot->Used) continue;
             KeAcquireSpinLock(&s->Lock, &old); phase = slot->Phase; KeReleaseSpinLock(&s->Lock, old);
             if (stop && phase == 1 && !slot->CancelIssued) {
@@ -1424,13 +1727,90 @@ static VOID Worker(PVOID context)
                 (void)IoCancelIrp(slot->Irp);
             }
             if (phase) pending++;
-            if (!stop && !phase && !(slot->Feedback && s->FeedbackOff)) {
-                status = SubmitSlot(s, slot);
-                if (!NT_SUCCESS(status)) { TR_LINE(("subfail", i, (ULONG)status, 0)); Fail(s, status); stop = TRUE; }
-                else pending++;
+            /* 26.13: while a resync is pending, an idle slot stays idle. */
+            if (stop || phase || s->Rec.Resync || (slot->Feedback && s->FeedbackOff)) continue;
+            if (!slot->Feedback) {
+                /* 26.13: while LagSuspect, a data slot goes with the frame
+                 * read before it, the worker going on meanwhile. A request
+                 * that came back since the pass began is taken here; one
+                 * back and not taken still occupies the storage. */
+                if (s->Rec.LagSuspect && !taken) taken = FrameTake(s, &ok, &frame, &forResync);
+                gate = UacPlanDataGate(s->Rec.LagSuspect, taken && !forResync, FramePhase(s) != 0,
+                                       s->Frame.Cancelled);
+                if (gate == UAC_GATE_ASK) {
+                    if (!FrameSend(s, FALSE)) gate = UAC_GATE_SUBMIT;
+                    else if (FrameTake(s, &ok, &frame, &forResync)) {
+                        /* back at once, as most stacks give it; the Stop
+                         * is read again after it */
+                        taken = TRUE;
+                        KeAcquireSpinLock(&s->Lock, &old); stop = s->Stop; KeReleaseSpinLock(&s->Lock, old);
+                        if (stop) continue;
+                        gate = UAC_GATE_FRAME;
+                    } else gate = UAC_GATE_HOLD;
+                }
+                if (gate == UAC_GATE_HOLD) continue;
+                useFrame = gate == UAC_GATE_FRAME && ok;
             }
+            status = SubmitSlot(s, slot, TRUE, 0, useFrame, useFrame ? frame : 0);
+            if (status == STATUS_DELETE_PENDING) stop = TRUE; /* a Stop: its own status kept */
+            else if (!NT_SUCCESS(status)) { TR_LINE(("subfail", i, (ULONG)status, 0)); Fail(s, status); stop = TRUE; }
+            else pending++;
         }
-        if (stop && !pending) break;
+        frameOut = FramePhase(s) ? TRUE : FALSE;
+        /* 26.13: the hold is bounded. A resync still wanted UAC_RESYNC_WAIT_MS
+         * of interrupt time after the hold began (a slot or the resync's
+         * frame request the stack kept, or a frame back only after it) ends
+         * the stream, as 25.8's run limit did before; the stop's drain
+         * cancels what is out. Read again before the resync runs. */
+        if (!s->Rec.Resync) s->ResyncSince = 0;
+        else if (!s->ResyncSince) s->ResyncSince = KeQueryInterruptTime();
+        if (!stop && UacPlanHoldExpired(s->Rec.Resync,
+                                        (ULONG)((KeQueryInterruptTime() - s->ResyncSince) / 10000))) {
+            TR_LINE(("rsywait", pending, s->CompletedSequence, frameOut));
+            Fail(s, STATUS_DEVICE_DATA_ERROR);
+            stop = TRUE;
+        }
+        if (!stop && s->Rec.Resync && !pending) {
+            /* the resync's own request, sent once every slot is back; one
+             * back since the pass began is taken, the Stop read after it */
+            if (!taken && FrameTake(s, &ok, &frame, &forResync)) {
+                taken = TRUE;
+                KeAcquireSpinLock(&s->Lock, &old); stop = s->Stop; KeReleaseSpinLock(&s->Lock, old);
+            }
+            gate = stop ? UAC_RSY_WAIT : UacPlanResyncGate(taken && forResync, FramePhase(s) != 0);
+            /* a frame out longer than UAC_FRAME_FRESH_MS is read afresh:
+             * the slots could not be placed by it inside the stack's range */
+            if (gate == UAC_RSY_RUN && ok && !UacPlanResyncAhead(frame, s->Frame.AgeMs, &frame)) {
+                TR_LINE(("rsystale", frame, s->Frame.AgeMs, 0));
+                gate = UAC_RSY_ASK;
+            }
+            if (gate == UAC_RSY_ASK) {
+                if (!FrameSend(s, TRUE)) {
+                    TR_LINE(("rsyirp", 0, 0, 0));
+                    Fail(s, STATUS_INSUFFICIENT_RESOURCES);
+                } else if (FrameTake(s, &ok, &frame, &forResync)) {
+                    KeAcquireSpinLock(&s->Lock, &old); stop = s->Stop; KeReleaseSpinLock(&s->Lock, old);
+                    if (!stop) gate = UAC_RSY_RUN;
+                    /* stale even so: the next pass asks again (FrameDone
+                     * left Wake set), the hold bounding it */
+                    if (gate == UAC_RSY_RUN && ok && !UacPlanResyncAhead(frame, s->Frame.AgeMs, &frame))
+                        gate = UAC_RSY_WAIT;
+                }
+            }
+            if (gate == UAC_RSY_RUN &&
+                UacPlanHoldExpired(s->Rec.Resync, (ULONG)((KeQueryInterruptTime() - s->ResyncSince) / 10000))) {
+                TR_LINE(("rsywait", 0, s->CompletedSequence, s->Frame.AgeMs));
+                Fail(s, STATUS_DEVICE_DATA_ERROR);
+            } else if (gate == UAC_RSY_RUN)
+                Resync(s, ok, frame);
+            KeAcquireSpinLock(&s->Lock, &old); stop = s->Stop; KeReleaseSpinLock(&s->Lock, old);
+            for (pending = 0, i = 0; i < SLOTS; i++) {
+                KeAcquireSpinLock(&s->Lock, &old); phase = s->Slot[i].Phase; KeReleaseSpinLock(&s->Lock, old);
+                if (s->Slot[i].Used && phase) pending++;
+            }
+            frameOut = FramePhase(s) ? TRUE : FALSE;
+        }
+        if (UacPlanWorkerExit(stop, pending, frameOut)) break;
         /* The deadline is in bus time (section 25), never system time:
          * NTP or SetSystemTime must not create a feedback loss or hide one. */
         if (!stop && s->Feedback && !s->FeedbackOff &&
@@ -1582,6 +1962,25 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
      * packet and is decoded as such. */
     s->FeedbackBytes = UacRateFeedbackStride(d->HighSpeed, UacPlanCapacity(a->FeedbackMaxPacket));
     if (s->Feedback && !s->FeedbackBytes) { ExFreePool(s); return STATUS_NOT_SUPPORTED; }
+#ifdef UAC_V1
+    /* 26.12: an adaptive source with a synch OUT endpoint is sent Ff (3
+     * bytes at Full Speed, 4 at High Speed, as its wMaxPacketSize allows);
+     * MaxPacketsOnly OUT is padded, IN counted against the cadence. */
+    if (capture && UacPlanSync(a) == 2 && a->FeedbackEndpoint && !(a->FeedbackEndpoint & 0x80) &&
+        UacPlanCapacity(a->FeedbackMaxPacket) >= (d->HighSpeed ? 4U : 3U)) {
+        s->Feedforward = TRUE;
+        s->FeedbackBytes = d->HighSpeed ? 4 : 3;
+        s->FfValue = UacConvFf(rate, d->HighSpeed);
+    }
+    s->MpoOut = !capture && (a->EpControls & UAC_CONV_MPO) ? TRUE : FALSE;
+    s->MpoIn = capture && (a->EpControls & UAC_CONV_MPO) ? TRUE : FALSE;
+    if (s->MpoIn && (UacPlanSync(a) == 1 ||
+                     (a->FormatTag != UAC_TAG_PCM && a->FormatTag != UAC_TAG_FLOAT) ||
+                     !UacConvCadence(&s->Cadence, rate, d->HighSpeed, a->Interval,
+                                     s->Feedforward ? s->FfValue : 0))) {
+        ExFreePool(s); return STATUS_NOT_SUPPORTED;
+    }
+#endif
     /* About 4 ms per data URB at High Speed bInterval 1-3 and at Full
      * Speed; 8 ms at bInterval 4, as High Speed packet counts stay a
      * multiple of 8 (one frame) for the older stacks. As many URBs as
@@ -1729,7 +2128,11 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         slot->Owner = s;
         /* First slots are feedback, hence processed/submitted first. */
         slot->Feedback = i < FEEDBACK_SLOTS;
+#ifdef UAC_V1
+        slot->Used = slot->Feedback ? s->Feedback || s->Feedforward : i < FEEDBACK_SLOTS + s->DataSlots;
+#else
         slot->Used = slot->Feedback ? s->Feedback : i < FEEDBACK_SLOTS + s->DataSlots;
+#endif
         if (!slot->Used) continue;
         slot->Packets = slot->Feedback ? FEEDBACK_PACKETS : s->DataPackets;
         size = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket) +
@@ -1742,6 +2145,11 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     s->NextSequence = s->CompletedSequence = 0;
     s->LostRun = 0; s->LostLimit = UacPlanLostLimit(s->TransferUs);
     s->FbRestartRun = 0; s->FeedbackOff = FALSE;
+    RtlZeroMemory(&s->Rec, sizeof(s->Rec)); s->ResyncSince = 0;
+    RtlZeroMemory(&s->Frame, sizeof(s->Frame));
+#ifdef UAC_V1
+    s->FfRun = 0; s->FfDelivered = FALSE; s->Cadence.Acc = 0; s->Cadence.Owed = 0;
+#endif
     s->Stop = FALSE; s->Stats.Running = 1;
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;

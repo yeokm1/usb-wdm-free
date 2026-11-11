@@ -4,6 +4,9 @@
  * or third-party code used.
  */
 #include "uacplan.h"
+#ifdef UAC_V1
+#include "uacconv.h"
+#endif
 
 unsigned int UacPlanChannelMask(unsigned int config, unsigned int channels)
 {
@@ -77,6 +80,93 @@ unsigned int UacPlanFbRefused(unsigned long urbStatus, unsigned int run)
 {
     if (urbStatus != UAC_ISO_BAD_START_STATUS) return UAC_FB_NONE;
     return run < UAC_FB_RESTART_LIMIT - 1 ? UAC_FB_RESUBMIT : UAC_FB_OFF;
+}
+
+unsigned long UacPlanResyncFrame(unsigned long current, unsigned long index, unsigned long frames)
+{
+    return (current + UAC_RESYNC_LEAD + index * frames) & 0xFFFFFFFFUL;
+}
+
+unsigned long UacPlanSpanFrames(unsigned long spanUs)
+{
+    unsigned long n = spanUs / 1000UL + (spanUs % 1000UL ? 1UL : 0UL);
+    return n ? n : 1UL;
+}
+
+unsigned int UacPlanBehind(unsigned long current, unsigned long start, unsigned long frames,
+                           unsigned long slack)
+{
+    unsigned long lag = (current - ((start + frames) & 0xFFFFFFFFUL)) & 0xFFFFFFFFUL;
+    return lag <= 0x7FFFFFFFUL && lag > slack;
+}
+
+unsigned int UacPlanDataDone(UAC_RECOVERY *r, unsigned int kind, unsigned int behind)
+{
+    unsigned int began = 0;
+    switch (kind) {
+    case UAC_DATA_AUDIO:
+        r->ResyncRun = 0;
+        r->LagSuspect = 0;
+        break;
+    case UAC_DATA_REFUSED:
+        r->Resync = 1;
+        break;
+    case UAC_DATA_LOST:
+    case UAC_DATA_EMPTY:
+        if (!r->Resync && behind) { r->Resync = 1; began = 1; }
+        r->LagSuspect = 1;
+        break;
+    default:
+        break;
+    }
+    return began;
+}
+
+unsigned int UacPlanResyncStart(UAC_RECOVERY *r)
+{
+    if (r->ResyncRun >= UAC_RESYNC_LIMIT) return 0;
+    r->ResyncRun++;
+    r->Resync = 0;
+    return 1;
+}
+
+unsigned int UacPlanFrameCancel(unsigned int stop, unsigned int cancelled, unsigned int forResync,
+                                unsigned long ageMs)
+{
+    if (cancelled) return 0;
+    return stop || (!forResync && ageMs > UAC_FRAME_WAIT_MS);
+}
+
+unsigned int UacPlanDataGate(unsigned int lagSuspect, unsigned int taken, unsigned int out,
+                             unsigned int cancelled)
+{
+    if (!lagSuspect) return UAC_GATE_SUBMIT;
+    if (taken) return UAC_GATE_FRAME;
+    if (out) return cancelled ? UAC_GATE_SUBMIT : UAC_GATE_HOLD;
+    return UAC_GATE_ASK;
+}
+
+unsigned int UacPlanResyncGate(unsigned int taken, unsigned int out)
+{
+    if (taken) return UAC_RSY_RUN;
+    return out ? UAC_RSY_WAIT : UAC_RSY_ASK;
+}
+
+unsigned int UacPlanHoldExpired(unsigned int resync, unsigned long elapsedMs)
+{
+    return resync && elapsedMs > UAC_RESYNC_WAIT_MS;
+}
+
+unsigned int UacPlanResyncAhead(unsigned long frame, unsigned long ageMs, unsigned long *ahead)
+{
+    if (ageMs > UAC_FRAME_FRESH_MS) return 0;
+    *ahead = (frame + ageMs) & 0xFFFFFFFFUL;
+    return 1;
+}
+
+unsigned int UacPlanWorkerExit(unsigned int stop, unsigned int slotsOut, unsigned int frameOut)
+{
+    return stop && !slotsOut && !frameOut;
 }
 
 unsigned int UacPlanLostLimit(unsigned long spanUs)
@@ -168,6 +258,23 @@ unsigned int UacPlanFormatsFor(const UAC_DESC *desc, int capture, int highSpeed,
         if (((a->DataEndpoint & 0x80) != 0) != (capture != 0)) continue;
         if (terminal && a->Terminal != terminal) continue;
         if (!Runnable(a, highSpeed)) continue;
+#ifdef UAC_V1
+        /* uac1 (26.12): the wire format with its tag; the pin view is the
+         * same for PCM, 16-bit for a format the driver converts. */
+        if (!UacConvKnown(a->FormatTag, a->Subslot, a->Bits)) continue;
+        for (j = 0; j < n; j++)
+            if (out[j].Channels == a->Channels && out[j].WireSubslot == a->Subslot &&
+                out[j].WireBits == a->Bits && out[j].FormatTag == a->FormatTag &&
+                out[j].Terminal == a->Terminal && out[j].ChannelConfig == a->ChannelConfig) break;
+        if (j < n) continue;
+        out[n].FormatTag = a->FormatTag;
+        out[n].WireSubslot = a->Subslot; out[n].WireBits = a->Bits;
+        out[n].Channels = a->Channels;
+        out[n].Subslot = (UAC_BYTE)(a->FormatTag == UAC_TAG_PCM ? a->Subslot : 2);
+        out[n].Bits = (UAC_BYTE)(a->FormatTag == UAC_TAG_PCM ? a->Bits : 16);
+        out[n].ChannelConfig = a->ChannelConfig; out[n].Terminal = a->Terminal;
+        n++;
+#else
         for (j = 0; j < n; j++)
             if (out[j].Channels == a->Channels && out[j].Subslot == a->Subslot &&
                 out[j].Bits == a->Bits && out[j].Terminal == a->Terminal &&
@@ -177,6 +284,7 @@ unsigned int UacPlanFormatsFor(const UAC_DESC *desc, int capture, int highSpeed,
         out[n].ChannelConfig = a->ChannelConfig;
         out[n].Bits = a->Bits; out[n].Terminal = a->Terminal;
         n++;
+#endif
     }
     return n;
 }
@@ -280,6 +388,52 @@ int UacPlanHasRate(const UAC_ALT *a, unsigned int rate)
         if (a->Rate[i] == rate) return 1;
     return 0;
 }
+
+static int SameView(const UAC_FORMAT *a, const UAC_FORMAT *b)
+{
+    return a->Channels == b->Channels && a->Subslot == b->Subslot && a->Bits == b->Bits &&
+           a->ChannelConfig == b->ChannelConfig && a->Terminal == b->Terminal;
+}
+
+unsigned int UacPlanOffer(UAC_FORMAT *formats, unsigned long *counts, unsigned long *rates,
+                          unsigned int stride, unsigned int count)
+{
+    unsigned int i, j, k, m, n = 0;
+    if (!formats || !counts || !rates || !stride) return 0;
+    /* Stable insertion sort by rank, each format's rates with it. */
+    for (i = 1; i < count; i++) {
+        for (j = i; j && UacConvRank(formats[j - 1].FormatTag) > UacConvRank(formats[j].FormatTag); j--) {
+            UAC_FORMAT f = formats[j]; unsigned long c = counts[j];
+            formats[j] = formats[j - 1]; formats[j - 1] = f;
+            counts[j] = counts[j - 1]; counts[j - 1] = c;
+            for (k = 0; k < stride; k++) {
+                unsigned long r = rates[j * stride + k];
+                rates[j * stride + k] = rates[(j - 1) * stride + k];
+                rates[(j - 1) * stride + k] = r;
+            }
+        }
+    }
+    for (i = 0; i < count; i++) {
+        unsigned long kept = 0;
+        if (counts[i] > stride) counts[i] = stride;
+        for (k = 0; k < counts[i]; k++) {
+            unsigned long rate = rates[i * stride + k];
+            int covered = 0;
+            if (formats[i].FormatTag != UAC_TAG_PCM)
+                for (j = 0; j < n && !covered; j++)
+                    if (SameView(&formats[j], &formats[i]))
+                        for (m = 0; m < counts[j]; m++)
+                            if (rates[j * stride + m] == rate) { covered = 1; break; }
+            if (!covered) rates[i * stride + kept++] = rate;
+        }
+        if (!kept) continue;
+        /* Kept: moved down to slot n (n <= i). */
+        formats[n] = formats[i]; counts[n] = kept;
+        if (n != i) for (k = 0; k < kept; k++) rates[n * stride + k] = rates[i * stride + k];
+        n++;
+    }
+    return n;
+}
 #endif
 
 int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
@@ -288,11 +442,18 @@ int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
 {
     unsigned int i, need, best = 0, bestCap = 0;
     int found = 0;
+#ifdef UAC_V1
+    unsigned int tag = bits >> 8 ? bits >> 8 : UAC_TAG_PCM;
+    bits &= 0xff;
+#endif
     if (!desc || !index) return UAC_NO_AUDIO;
     for (i = 0; i < desc->AltCount; i++) {
         const UAC_ALT *a = &desc->Alt[i];
         unsigned int cap;
         if (((a->DataEndpoint & 0x80) != 0) != (capture != 0)) continue;
+#ifdef UAC_V1
+        if (a->FormatTag != tag) continue;
+#endif
         if (a->Channels != channels || a->Subslot != subslot || a->Bits != bits) continue;
         if (config != UAC_PLAN_ANY_CONFIG && a->ChannelConfig != config) continue;
         if (terminal && a->Terminal != terminal) continue;

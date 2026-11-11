@@ -4,6 +4,17 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.10 (2026-11-11)
+
+- **uac2 0.1.11.0 and uac1 0.1.1.0, sound after a stall**: when the system stalls and Windows' USB driver then refuses a stream's next transfers (seen under 98 SE's, ME's and 2000's own USB 1.1 drivers and NUSB's), the stream starts again at a later bus frame instead of stopping. [uac2 design, section 26.13](design/uac2.md).
+- **uac2 and uac1, names**: a device with no USB product name is shown as "USB Audio 2.0 (uac2)" or "USB Audio 1.0 (uac1)", and Setup names the install disk "usb-wdm-free uac2 driver" or "usb-wdm-free uac1 driver"; "experiment" is gone from both. [uac2 design, section 21.3](design/uac2.md).
+- **uac1 0.1.1.0 (Windows 98 SE)**: also runs devices that send or take 8-bit, floating-point, A-law or mu-law sound (converted to and from 16-bit), devices that take only full packets, and microphones with an adaptive clock. It is for testing 98 SE in a virtual machine; on a real PC keep Windows' own driver. `STAGE.TXT` no longer stages it: point Update Driver at `w98se\`. [uac2 design, section 26.12](design/uac2.md).
+- **rtl815x 0.2.2.0, ax88179 0.1.4.0, ax88772 0.1.1.0 and cdcnet 0.1.4.0, the Advanced tab**: Energy-Efficient Ethernet, speed and duplex, flow control and checksum offloads where the chip has them, as the makers' own drivers offer them; cdcnet offers a network address for NCM adapters. [ethernet design, section 4.10](design/ethernet.md).
+- **cdcnet 0.1.4.0, resume**: when the adapter does not come back after standby, cdcnet tries again for about 31 s and restores the receive filter.
+- **sr9700 0.1.1.0**: the shared network core of this release; no Advanced tab.
+- **uvc98 0.1.3.0**: a webcam stream the USB driver refuses after a stall starts again at a later bus frame. [uvc design, section 5.4a](design/uvc.md).
+- **uac2 0.1.11.0 and uac1 0.1.1.0**: a recording or playback opened just after another one closed waits up to 2 s for the one before to finish closing instead of failing. [uac2 design, section 27](design/uac2.md).
+
 ## Release 0.1.9 (2026-11-08)
 
 - **uac2 0.1.10.0**: plays on through lost intervals and refused start frames; Full Speed explicit feedback in 4 bytes as well as 3; a new device takes Windows' default playback and recording on 98 SE to XP x64. [uac2 design, sections 22, 23, 25](design/uac2.md).

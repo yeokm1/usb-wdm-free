@@ -411,7 +411,7 @@ void NdisReleaseSpinLock(PNDIS_SPIN_LOCK l) { KeReleaseSpinLock(&l->SpinLock, l-
 
 static int configOpen;
 static NDIS_CONFIGURATION_PARAMETER param;
-static WCHAR paramText[16];
+static WCHAR paramText[32];
 
 void NdisOpenConfiguration(PNDIS_STATUS s, PNDIS_HANDLE h, NDIS_HANDLE config)
 {
@@ -440,13 +440,34 @@ void NdisReadConfiguration(PNDIS_STATUS s, PNDIS_CONFIGURATION_PARAMETER *p, NDI
     (void)h;
     *s = NDIS_STATUS_FAILURE;
     if (type == NdisParameterString && SameName(name, "FallbackAddress") && Fake.HaveFallback) {
-        memcpy(paramText, Fake.Fallback, sizeof(paramText));
+        memcpy(paramText, Fake.Fallback, sizeof(Fake.Fallback));
         param.ParameterType = NdisParameterString;
         param.ParameterData.StringData.Buffer = paramText;
         param.ParameterData.StringData.Length = 24;
         param.ParameterData.StringData.MaximumLength = 24;
         *p = &param;
         *s = NDIS_STATUS_SUCCESS;
+        return;
+    }
+    {
+        int k, n;
+        for (k = 0; k < Fake.KeywordCount; k++) {
+            if (!SameName(name, Fake.Keywords[k].Name)) continue;
+            Fake.KeywordReads++;
+            if (Fake.Keywords[k].IsInteger) {
+                param.ParameterType = NdisParameterInteger;
+                param.ParameterData.IntegerData = Fake.Keywords[k].Integer;
+            } else {
+                for (n = 0; Fake.Keywords[k].Text[n] && n < 31; n++) paramText[n] = (WCHAR)Fake.Keywords[k].Text[n];
+                param.ParameterType = NdisParameterString;
+                param.ParameterData.StringData.Buffer = paramText;
+                param.ParameterData.StringData.Length = (USHORT)(n * 2);
+                param.ParameterData.StringData.MaximumLength = sizeof(paramText);
+            }
+            *p = &param;
+            *s = NDIS_STATUS_SUCCESS;
+            return;
+        }
     }
 }
 

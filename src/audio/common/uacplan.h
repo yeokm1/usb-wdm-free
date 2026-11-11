@@ -21,6 +21,12 @@ extern "C" {
 typedef struct UAC_FORMAT {
     UAC_BYTE Channels, Subslot, Bits, Terminal;
     unsigned int ChannelConfig;   /* the first such alternate's bmChannelConfig */
+#ifdef UAC_V1
+    /* uac1 (docs/design/uac2.md 26.12): Subslot and Bits are what the pin
+     * offers (2 and 16 for a converted format); the wire's are kept here
+     * with the alternates' wFormatTag. */
+    UAC_BYTE FormatTag, WireSubslot, WireBits;
+#endif
 } UAC_FORMAT;
 
 /* The WAVEFORMATEXTENSIBLE dwChannelMask for a UAC 2.0 bmChannelConfig:
@@ -66,6 +72,18 @@ int UacPlanPick(const UAC_DESC *desc, int capture, unsigned int terminal,
  * (discrete) or its continuous range contains it. UacPlanPick takes only
  * such an alternate. */
 int UacPlanHasRate(const UAC_ALT *alt, unsigned int rate);
+/* uac1: UacPlanPick's bits may carry the alternate's wFormatTag in bits
+ * 8 to 15 (UAC_PLAN_BITS); 0 there means PCM. Only an alternate of that
+ * tag is taken (PCM8, A-law and mu-law share 1-byte 8-bit subframes). */
+#define UAC_PLAN_BITS(tag, bits) ((unsigned int)(bits) | ((unsigned int)(tag) << 8))
+/* uac1 (26.12): one direction's formats with the rates each runs at
+ * (rates[i * stride + k], counts[i]), put in the order a pin offers them:
+ * by uacconv.h's rank, stable (native PCM first, as found), a converted
+ * format keeping only the rates no earlier format of the same pin view
+ * (channels, Subslot, Bits, ChannelConfig, terminal) carries, and a
+ * format left with no rate removed. Returns the formats kept. */
+unsigned int UacPlanOffer(UAC_FORMAT *formats, unsigned long *counts, unsigned long *rates,
+                          unsigned int stride, unsigned int count);
 #endif
 
 /* The first terminal (descriptor order) a direction's runnable alternates
@@ -197,6 +215,100 @@ unsigned int UacPlanDataRefused(unsigned long urbStatus, unsigned int packets);
 #define UAC_FB_RESUBMIT 1U
 #define UAC_FB_OFF 2U
 unsigned int UacPlanFbRefused(unsigned long urbStatus, unsigned int run);
+/* Design 26.13: after a URB refused for its start frame, once no slot is
+ * with the stack, every slot of a pipe is submitted at an explicit frame:
+ * slot k (in submission order) at UacPlanResyncFrame(current, k, frames) =
+ * current + UAC_RESYNC_LEAD + k * frames, wrapping as a 32-bit frame
+ * number; ASAP after that. UacPlanSpanFrames: the 1 ms frames a URB of
+ * spanUs covers, rounded up, at least 1. UAC_RESYNC_LIMIT resyncs with no
+ * good data URB between them end the stream. */
+#define UAC_RESYNC_LEAD 8UL
+#define UAC_RESYNC_LIMIT 4U
+/* The longest the worker holds the stream's slots waiting for the stack
+ * to give back the last one; past it the stream ends. */
+#define UAC_RESYNC_WAIT_MS 1000U
+unsigned long UacPlanResyncFrame(unsigned long current, unsigned long index, unsigned long frames);
+unsigned long UacPlanSpanFrames(unsigned long spanUs);
+/* Design 26.13: 1 when a URB's frames (start, frames long) ended more
+ * than slack frames before the frame current (for a data URB lost whole:
+ * the bus frame read as it was submitted, so the stack placed it behind
+ * the bus: its ASAP chain lags, as 98 SE's own UHCI's does after a stall
+ * until it refuses a start frame); the frame numbers compared as 32-bit
+ * and wrapping. 0 when they end later, or the lag is over 2^31. */
+unsigned int UacPlanBehind(unsigned long current, unsigned long start, unsigned long frames,
+                           unsigned long slack);
+/* Design 26.13: a stream's recovery state, which each retired data URB
+ * updates (UacPlanDataDone) and each resync reads (UacPlanResyncStart).
+ * ResyncRun: resyncs since the last data URB that carried audio; LagSuspect:
+ * the bus frame is read before each ASAP data submission; Resync: a resync
+ * is wanted (no idle slot is submitted until it runs). */
+typedef struct UAC_RECOVERY {
+    unsigned int ResyncRun, LagSuspect, Resync;
+} UAC_RECOVERY;
+/* What a data URB came back as. AUDIO: successful, and for capture at least
+ * one PCM frame delivered (render: any successful URB); EMPTY: a successful
+ * capture URB that delivered none (98 SE's own UHCI returns a recording's
+ * URBs placed behind the bus so); REFUSED: refused whole for its start
+ * frame (UacPlanDataRefused); LOST: lost whole (UacPlanIsoLost); OTHER:
+ * anything else (a stop, a cancellation, any other failure). */
+#define UAC_DATA_AUDIO 0U
+#define UAC_DATA_EMPTY 1U
+#define UAC_DATA_REFUSED 2U
+#define UAC_DATA_LOST 3U
+#define UAC_DATA_OTHER 4U
+/* behind: for LOST or EMPTY, UacPlanBehind of the frame read before its
+ * submission (0 when none was read). Only AUDIO clears ResyncRun and
+ * LagSuspect; REFUSED wants a resync; LOST and EMPTY arm LagSuspect and,
+ * behind the bus with no resync wanted yet, want one. Returns 1 when this
+ * URB's lag began the resync, else 0. */
+unsigned int UacPlanDataDone(UAC_RECOVERY *r, unsigned int kind, unsigned int behind);
+/* At a resync, with the bus frame in hand: 0 when UAC_RESYNC_LIMIT resyncs
+ * already ran with no AUDIO URB since (the stream ends); else 1, the resync
+ * counted and no longer wanted. */
+unsigned int UacPlanResyncStart(UAC_RECOVERY *r);
+/* Design 26.13: the worker sends its frame requests and does not wait for
+ * them; one is out at a time and its storage is the stream's until it is
+ * back. UacPlanFrameCancel: 1 when the worker cancels the one out (once): at
+ * a stop, or a submission-frame request out past UAC_FRAME_WAIT_MS. A
+ * resync's request is bounded by the hold's UAC_RESYNC_WAIT_MS instead. */
+#define UAC_FRAME_WAIT_MS 100U
+unsigned int UacPlanFrameCancel(unsigned int stop, unsigned int cancelled, unsigned int forResync,
+                                unsigned long ageMs);
+/* An idle data slot the worker submits ASAP. lagSuspect: LagSuspect; taken:
+ * a submission-frame request came back this pass (the frame is its, or none
+ * if it failed); out: a request is with the stack; cancelled: that one was
+ * cancelled. SUBMIT: submit with no frame; FRAME: submit with the frame
+ * taken; ASK: send a request and hold the slot; HOLD: hold the slot. */
+#define UAC_GATE_SUBMIT 0U
+#define UAC_GATE_FRAME 1U
+#define UAC_GATE_ASK 2U
+#define UAC_GATE_HOLD 3U
+unsigned int UacPlanDataGate(unsigned int lagSuspect, unsigned int taken, unsigned int out,
+                             unsigned int cancelled);
+/* A wanted resync with no slot out. taken: the resync's own request came
+ * back this pass; out: a request is with the stack. RUN: resync on the
+ * frame taken (a failed request ends the stream); ASK: send the resync's
+ * request; WAIT: wait for the one out. */
+#define UAC_RSY_RUN 0U
+#define UAC_RSY_ASK 1U
+#define UAC_RSY_WAIT 2U
+unsigned int UacPlanResyncGate(unsigned int taken, unsigned int out);
+/* 1 when a resync is still wanted (resync) elapsedMs after the hold
+ * began, past UAC_RESYNC_WAIT_MS: the stream ends, whatever is out or has
+ * just come back. */
+unsigned int UacPlanHoldExpired(unsigned int resync, unsigned long elapsedMs);
+/* The resync's frame, read by a request that was out ageMs before the
+ * worker took it (the stack read it somewhere in that time). 1 with *ahead
+ * = frame + ageMs (1 ms frames, 32-bit wrap), at or past the bus's frame
+ * when it is taken, when ageMs is at most UAC_FRAME_FRESH_MS; else 0: read
+ * afresh. Bounded so, the last slot of the largest queue lies at most
+ * UAC_FRAME_FRESH_MS + UAC_RESYNC_LEAD + 31 x 8 frames past the bus when
+ * taken, inside the stack's USBD_ISO_START_FRAME_RANGE (1024). */
+#define UAC_FRAME_FRESH_MS 64U
+unsigned int UacPlanResyncAhead(unsigned long frame, unsigned long ageMs, unsigned long *ahead);
+/* 1 when the worker may exit: stopped, no slot and no frame request with
+ * the stack (their storage is freed only after it). */
+unsigned int UacPlanWorkerExit(unsigned int stop, unsigned int slotsOut, unsigned int frameOut);
 
 /* Section 25: 1 when a device's PDO belongs to Windows 2000's USB 1.1
  * hub driver, whose devices run at Full or Low Speed: the driver object's

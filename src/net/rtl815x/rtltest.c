@@ -208,10 +208,19 @@ static void Reset(nc_u32 tcr0)
     memset(state, 0, sizeof(state));
 }
 
+/* The Advanced-tab values (ethernet.md 4.10) in the table's order:
+ * *SpeedDuplex, *FlowControl, *EEE, EEEMaxSupportSpeed,
+ * EnableGreenEthernet, AdvancedEEE, EnableExtraPowerSaving. AllOn gives
+ * the bring-up the driver had before the keywords (Linux's), which the
+ * tests below Settings() check; Settings() checks the others. */
+static const long AllOn[7] = { 0, 3, 1, 2500, 1, 1, 1 };
+static long Values[7];
+
 static NET_PROBE Probe(nc_u8 speed)
 {
     NET_PROBE p;
     memset(&p, 0, sizeof(p));
+    p.Settings = AllOn;
     p.Speed = speed;
     p.In = 0x81; p.Out = 0x02; p.Interrupt = 0x83;
     p.InMax = p.OutMax = (nc_u16)(speed == NC_SPEED_SUPER ? 1024 : speed == NC_SPEED_HIGH ? 512 : 64);
@@ -1130,11 +1139,150 @@ static void Probes(void)
     }
 }
 
+/* ---------------- the Advanced tab's keywords ---------------- */
+
+static long Start(nc_u16 id, nc_u8 speed, const long *values, NET_PARAMS *par)
+{
+    NET_PROBE p = Probe(speed);
+    p.Settings = values;
+    Reset((nc_u32)id << 16);
+    return NetPackageChip.Start(state, &io, &p, par);
+}
+
+static void Set(long speed, long flow, long eee, long eeeMax, long green, long plus, long idle)
+{
+    Values[0] = speed; Values[1] = flow; Values[2] = eee; Values[3] = eeeMax;
+    Values[4] = green; Values[5] = plus; Values[6] = idle;
+}
+
+#define ADV(m) (m->Phy[(MII(MII_AN_ADV)) / 2])
+#define BMCR(m) (m->Phy[(MII(MII_CONTROL)) / 2])
+
+static void Settings(void)
+{
+    static const nc_u16 ids[] = { ID_4C10, ID_5C30, ID_6010, ID_6400, ID_7030, ID_7410, ID_7420, ID_1030, ID_2020 };
+    NET_PARAMS par;
+    NET_LINK l;
+    RTL_STATE *s = (RTL_STATE *)state;
+    unsigned i;
+
+    /* The table: Realtek's 7 INF's names and defaults. */
+    CHECK(NetPackageChip.SettingCount == 7 && NetPackageChip.Settings);
+    CHECK(!strcmp(NetPackageChip.Settings[2].Name, "*EEE") && NetPackageChip.Settings[2].Default == 0);
+    CHECK(NetPackageChip.Settings[1].Default == 3 && NetPackageChip.Settings[3].Default == 1000);
+
+    /* The defaults (no values: NcSetting's): EEE, green, EEE+ and U2P3
+     * off; pause advertised; autonegotiation of everything. */
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        nc_u16 id = ids[i];
+        CHECK(Start(id, (nc_u8)(id == ID_4C10 ? NC_SPEED_HIGH : NC_SPEED_SUPER), NULL, &par) == NC_OK && s->Timeouts == 0);
+        CHECK(par.Ignored == 0);
+        CHECK((Word(m->Pla, MR_EEE) & 3) == 0 && m->Phy[PR_EEE_ADV / 2] == 0);
+        if (Is8156(id) || id == ID_1030 || id == ID_2020) CHECK(m->Phy[PR_EEE_ADV2 / 2] == 0);
+        if (id == ID_4C10) CHECK((m->Phy[PR_EEE_A1 / 2] & 0x3370) == 0x0070 && (m->Phy[PR_EEE_A2 / 2] & 0x0600) == 0);
+        CHECK((ADV(m) & 0x0de0) == 0x0de0);
+        CHECK((BMCR(m) & (MIICTL_AN_ENABLE | MIICTL_AN_RESTART)) == (MIICTL_AN_ENABLE | MIICTL_AN_RESTART));
+        CHECK((Word(m->Usb, UR_U2P3) & 0x0001) == 0);
+        if (Is8156(id) || id == ID_1030 || id == ID_2020) CHECK((m->Sram[0][SR_GREEN] & 0x8000) == 0);
+        if (id == ID_6010 || id == ID_6400) {
+            /* a second setup keeps the full bias: green Ethernet off */
+            NET_PROBE p = Probe(NC_SPEED_SUPER);
+            p.Settings = NULL;
+            CHECK(NetPackageChip.Resume(state, &io, &p, &par) == NC_OK);
+            CHECK(m->Sram[0][SR_BIAS_10] == 0x2444 && m->Sram[0][SR_BIAS_1000] == 0x2444);
+        }
+        /* EEE+ at 10 Mb/s: from the 8153B on only with AdvancedEEE; the
+         * RTL8152 and 8153 as Linux (it has no keyword there). */
+        m->Pla[MR_LINK] = LNK_UP | LNK_10;
+        m->Pla[MR_EEE_PLUS] = (nc_u8)((id == ID_4C10 || id == ID_5C30) ? 0x00 : 0x02);
+        CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && l.Up);
+        CHECK((Word(m->Pla, MR_EEE_PLUS) & 2) == ((id == ID_4C10 || id == ID_5C30) ? 2 : 0));
+    }
+
+    /* AllOn: green's lower bias on the second setup, EEE+ at 10 Mb/s. */
+    CHECK(Start(ID_6010, NC_SPEED_SUPER, AllOn, &par) == NC_OK);
+    {
+        NET_PROBE p = Probe(NC_SPEED_SUPER);
+        CHECK(NetPackageChip.Resume(state, &io, &p, &par) == NC_OK);
+        CHECK(m->Sram[0][SR_BIAS_10] == 0 && m->Sram[0][SR_BIAS_100] == 0x1222);
+    }
+    m->Pla[MR_LINK] = LNK_UP | LNK_10;
+    CHECK(NetPackageChip.Link(state, &io, &l) == NC_OK && (Word(m->Pla, MR_EEE_PLUS) & 2));
+    CHECK(Start(ID_7410, NC_SPEED_SUPER, AllOn, &par) == NC_OK && (m->Sram[0][SR_GREEN] & 0x8000));
+
+    /* Flow control off: no pause bits advertised. */
+    Set(0, 0, 0, 1000, 0, 0, 0);
+    CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK);
+    CHECK((ADV(m) & 0x0c00) == 0 && (ADV(m) & ANADV_10_100) == ANADV_10_100);
+
+    /* Forced 10/100: autonegotiation off, speed and duplex in the
+     * control register, after a PHY reset. */
+    for (i = 1; i <= 4; i++) {
+        Set((long)i, 3, 0, 1000, 0, 0, 0);
+        CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK && s->Timeouts == 0 && par.Ignored == 0);
+        CHECK((BMCR(m) & (MIICTL_AN_ENABLE | MIICTL_SPEED100 | MIICTL_FULL)) ==
+              ((i >= 3 ? MIICTL_SPEED100 : 0) | (i % 2 ? 0 : MIICTL_FULL)));
+        CHECK(m->BmcrResets >= 1);
+    }
+    /* 1000 full alone on a gigabit chip; on the RTL8152 it is not offered. */
+    Set(6, 3, 0, 1000, 0, 0, 0);
+    CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((ADV(m) & ANADV_10_100) == 0 && m->Phy[(MII(MII_GIG_CONTROL)) / 2] == GIGCTL_1000_FULL);
+    CHECK((BMCR(m) & MIICTL_AN_ENABLE));
+    CHECK(Start(ID_4C10, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == 1);
+    CHECK((ADV(m) & ANADV_10_100) == ANADV_10_100);
+    /* 2.5G alone at SuperSpeed; at High Speed it cannot be carried: auto. */
+    Set(2500, 3, 0, 1000, 0, 0, 0);
+    CHECK(Start(ID_7410, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((ADV(m) & ANADV_10_100) == 0 && m->Phy[(MII(MII_GIG_CONTROL)) / 2] == 0);
+    CHECK(m->Phy[PR_MGIG_CTRL / 2] == MGIG_2G5);
+    CHECK(Start(ID_7410, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == 1);
+    CHECK((ADV(m) & ANADV_10_100) == ANADV_10_100 && m->Phy[PR_MGIG_CTRL / 2] == 0);
+    Set(5000, 3, 0, 1000, 0, 0, 0);
+    CHECK(Start(ID_1030, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((m->Phy[PR_MGIG_CTRL / 2] & (MGIG_2G5 | MGIG_5G | MGIG_10G)) == MGIG_5G);
+    Set(10000, 3, 0, 1000, 0, 0, 0);
+    CHECK(Start(ID_1030, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == 1);
+
+    /* EEE on with its advertisement limited by EEEMaxSupportSpeed. */
+    Set(0, 3, 1, 1000, 0, 0, 0);
+    CHECK(Start(ID_7410, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((Word(m->Pla, MR_EEE) & 3) == 3 && m->Phy[PR_EEE_ADV / 2] == (EEEADV_1000T | EEEADV_100TX));
+    CHECK(m->Phy[PR_EEE_ADV2 / 2] == 0);
+    Set(0, 3, 1, 100, 0, 0, 0);
+    CHECK(Start(ID_7410, NC_SPEED_SUPER, Values, &par) == NC_OK);
+    CHECK(m->Phy[PR_EEE_ADV / 2] == EEEADV_100TX);
+    Set(0, 3, 1, 10, 0, 0, 0);
+    CHECK(Start(ID_7410, NC_SPEED_SUPER, Values, &par) == NC_OK);
+    CHECK(m->Phy[PR_EEE_ADV / 2] == 0 && (m->Phy[PR_EEE_CFG / 2] & 0x0010));
+    /* ... not on the RTL8153 (no limit there) nor the 7020 (no EEE). */
+    CHECK(Start(ID_5C30, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == (1UL << 3));
+    CHECK(m->Phy[PR_EEE_ADV / 2] == (EEEADV_1000T | EEEADV_100TX));
+    CHECK(Start(ID_7020, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == ((1UL << 2) | (1UL << 3)));
+    CHECK((Word(m->Pla, MR_EEE) & 3) == 0 && m->Phy[PR_EEE_ADV / 2] == 0);
+    /* EEE on on the RTL8152: its own registers. */
+    Set(0, 3, 1, 1000, 0, 0, 0);
+    CHECK(Start(ID_4C10, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((Word(m->Pla, MR_EEE) & 3) == 3 && (m->Phy[PR_EEE_A1 / 2] & 0x3370) == 0x3310);
+
+    /* Green, EEE+ and idle power saving where the chip has no function
+     * for them: ignored; idle power saving where it has. */
+    Set(0, 3, 0, 1000, 1, 1, 1);
+    CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == ((1UL << 4) | (1UL << 5)));
+    CHECK(Word(m->Usb, UR_U2P3) & 0x0001);
+    CHECK(Start(ID_5C10, NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == ((1UL << 4) | (1UL << 5) | (1UL << 6)));
+    CHECK((Word(m->Usb, UR_U2P3) & 0x0001) == 0);
+    CHECK(Start(ID_6010, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == (1UL << 6));
+    CHECK(Start(ID_7030, NC_SPEED_SUPER, Values, &par) == NC_OK && par.Ignored == 0);
+    CHECK((Word(m->Usb, UR_U2P3) & 0x0001) && (m->Sram[0][SR_GREEN] & 0x8000));
+}
+
 int main(void)
 {
     m = malloc(sizeof(*m));
     CHECK(m != NULL);
     Encoding();
+    Settings();
     BringUp(0x4c00, NC_SPEED_HIGH);
     BringUp(0x4c10, NC_SPEED_HIGH);
     BringUp(0x4c10, NC_SPEED_FULL);

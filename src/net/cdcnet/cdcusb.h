@@ -44,6 +44,11 @@ typedef struct CDC_CALLBACKS {
 
 typedef struct CDC_START {
     unsigned AllowMask;           /* CDC_ALLOW(CDC_PROTO_*) */
+    /* in: the Advanced tab's NetworkAddress (ethernet.md 4.8, 4.10), set
+     * on an NCM function that offers SetNetAddress; out: AddressSet when
+     * the function took it (Mac is then that address). */
+    cdc_u8 WantMac[6];
+    int HaveWantMac, AddressSet;
     cdc_u8 Mac[6];                /* out: the address used for traffic */
     cdc_u8 PermanentMac[6];       /* out */
     cdc_u8 Protocol;              /* out: CDC_PROTO_* */
@@ -72,5 +77,10 @@ int CdcUsbRequest(void *device, int request, cdc_u32 value, const cdc_u8 *data, 
 void CdcUsbSurpriseRemoved(void *device);
 
 void CdcTrace(const char *format, ...);
+
+/* TaskDone's status for a reset whose bring-up failed again after a
+ * failed resume (STATUS_ADAPTER_HARDWARE_ERROR): the data path stays
+ * closed. */
+#define CDC_E_BROKEN ((long)0xC00000C2L)
 
 #endif

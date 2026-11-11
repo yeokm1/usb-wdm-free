@@ -504,9 +504,12 @@ static void Link(void *context, int connected, cdc_u32 speed)
 static void TaskDone(void *context, int request, long status)
 {
     ADAPTER *a = context;
-    UNREFERENCED_PARAMETER(status);
     if (request == CDC_REQ_RESET) {
-        NdisMResetComplete(a->Handle, NDIS_STATUS_SUCCESS, FALSE);
+        /* A reset that could not bring the device back after a failed
+         * resume (cdcusb.c Rebuild) is reported as failed; any other
+         * completes as before. */
+        NdisMResetComplete(a->Handle, status == CDC_E_BROKEN ? NDIS_STATUS_HARD_ERRORS : NDIS_STATUS_SUCCESS,
+                           FALSE);
         return;
     }
 #if CDC_DEFER
@@ -780,6 +783,28 @@ static VOID Shutdown(NDIS_HANDLE context)
 }
 #endif
 
+/* The Advanced tab's NetworkAddress (ethernet.md 4.8, 4.10): a unicast
+ * address for an NCM function that can take it (cdcusb.c Bringup). */
+static void ReadAddress(NDIS_HANDLE config, CDC_START *start)
+{
+    NDIS_HANDLE handle;
+    NDIS_STATUS status;
+    PVOID address = NULL;
+    UINT length = 0;
+    start->HaveWantMac = 0;
+    NdisOpenConfiguration(&status, &handle, config);
+    if (status != NDIS_STATUS_SUCCESS) return;
+    NdisReadNetworkAddress(&status, &address, &length, handle);
+    if (status == NDIS_STATUS_SUCCESS && length == 6 && !(((PUCHAR)address)[0] & 1)) {
+        PUCHAR m = address;
+        if (m[0] | m[1] | m[2] | m[3] | m[4] | m[5]) {
+            NdisMoveMemory(start->WantMac, address, 6);
+            start->HaveWantMac = 1;
+        }
+    }
+    NdisCloseConfiguration(handle);
+}
+
 static unsigned ReadProtocol(NDIS_HANDLE config)
 {
     NDIS_HANDLE handle;
@@ -862,6 +887,7 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
     if (!pdo || !fdo || !lower) { FreeAdapter(a); return NDIS_STATUS_ADAPTER_NOT_FOUND; }
 
     a->Start.AllowMask = ReadProtocol(config);
+    ReadAddress(config, &a->Start);
     cb.Context = a; cb.Receive = Receive; cb.TxTake = TxTake; cb.TxCopy = TxCopy;
     cb.TxDone = TxDone; cb.Link = Link; cb.TaskDone = TaskDone;
     if (CdcUsbStart(lower, &cb, &a->Start, &a->Usb) < 0) {
@@ -870,6 +896,12 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
                                a->Start.Failure, (ULONG)a->Start.Status);
         FreeAdapter(a);
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
+    }
+    if (a->Start.HaveWantMac && !a->Start.AddressSet) {
+        /* ECM and RNDIS define no way to set it; an NCM function may not
+         * offer it or may refuse it (section 4.10). */
+        CdcTrace("NetworkAddress not taken by this function (protocol %u)", a->Start.Protocol);
+        NdisWriteErrorLogEntry(handle, NDIS_ERROR_CODE_UNSUPPORTED_CONFIGURATION, 1, 0x4e41UL);
     }
     CdcLock(a);
     /* Link may have been called already (the worker runs from

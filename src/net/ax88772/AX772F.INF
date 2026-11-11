@@ -20,31 +20,31 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/06/2026,0.1.0.0
+DriverVer=11/10/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models,NTx86.5.1,NTamd64.5.2,NTx86.6.0,NTamd64.6.0,NTx86.6.1,NTamd64.6.1,NTx86.6.2,NTamd64.6.2
 
 [Models]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTx86.5.1]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTamd64.5.2]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTx86.6.0]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTamd64.6.0]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTx86.6.1]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTamd64.6.1]
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [Models.NTx86.6.2]
 
@@ -62,20 +62,20 @@ ax772f.sys=1
 [DestinationDirs]
 CopyNT=12
 
-[AX.NT]
+[AX_SR.NT]
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params
+AddReg=RegNT,Params,Speed
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
 
-[AX.NTamd64]
+[AX_SR.NTamd64]
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params
+AddReg=RegNT,Params,Speed
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
@@ -88,10 +88,10 @@ HKR,Ndi,Service,,ax772f
 HKR,Ndi\Interfaces,UpperRange,,ndis5
 HKR,Ndi\Interfaces,LowerRange,,ethernet
 
-[AX.NT.Services]
+[AX_SR.NT.Services]
 AddService=ax772f,2,Service,EventLog
 
-[AX.NTamd64.Services]
+[AX_SR.NTamd64.Services]
 AddService=ax772f,2,Service,EventLog
 
 [Service]
@@ -109,7 +109,12 @@ AddReg=EventLogReg
 HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
 HKR,,TypesSupported,0x00010001,7
 
-; The Advanced tab: a locally administered address (ethernet.md 4.8).
+; The Advanced tab (ethernet.md section 4.10): ASIX's AX88772B 7 INF's
+; keywords, values and defaults for the AX88772B and AX88772C, each written
+; to the driver key at its default (no-clobber, so a reinstall keeps a
+; changed value); the SR9800, which no maker's INF covers, speed and duplex
+; only (a clause 22 MII PHY).
+; The locally administered address (ethernet.md 4.8).
 [Params]
 HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
 HKR,Ndi\params\NetworkAddress,type,,edit
@@ -118,9 +123,34 @@ HKR,Ndi\params\NetworkAddress,UpperCase,,1
 HKR,Ndi\params\NetworkAddress,optional,,1
 HKR,Ndi\params\NetworkAddress,default,,""
 
+[Speed]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,,*SpeedDuplex,0x00000002,"0"
+
 [Strings]
 Provider="usb-wdm-free"
 Disk="AX772F installation disk"
 Service="usb-wdm-free AX772F USB Fast Ethernet"
 AddressDesc="Network Address"
+SpeedDesc="Speed and duplex"
+Auto="Automatic"
+S10H="10 Mb/s half duplex"
+S10F="10 Mb/s full duplex"
+S100H="100 Mb/s half duplex"
+S100F="100 Mb/s full duplex"
+S1000F="1 Gb/s full duplex"
+FlowDesc="Flow control"
+Off="Off"
+On="On"
+TxOnly="Transmit only"
+RxOnly="Receive only"
+RxTx="Transmit and receive"
+EeeDesc="Energy-Efficient Ethernet (EEE)"
 Sr9800="CoreChips SR9800 USB 2.0 Fast Ethernet (AX772F)"

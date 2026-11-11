@@ -17,7 +17,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/08/2026,0.1.3.0
+DriverVer=11/10/2026,0.1.4.0
 
 [Manufacturer]
 %Provider%=Models
@@ -72,7 +72,16 @@ HKR,Ndi\Install,ndis5,,CDC.ndis
 CopyFiles=Copy9x
 
 ; The Advanced tab: which protocol to prefer when a device offers several.
+; The Advanced tab (ethernet.md sections 4.8, 4.10): a locally administered
+; address, which an NCM function offering SetNetAddress takes; ECM and
+; RNDIS define no way to set one, so there it is left unused (logged).
 [Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
 HKR,Ndi\params\Protocol,ParamDesc,,%ProtocolDesc%
 HKR,Ndi\params\Protocol,type,,enum
 HKR,Ndi\params\Protocol,default,,0
@@ -91,6 +100,7 @@ Rndis="USB Ethernet (RNDIS)"
 Gadget="USB Ethernet (Linux USB gadget)"
 Service="usb-wdm-free CDCNET USB Ethernet"
 ProtocolDesc="USB protocol"
+AddressDesc="Network Address"
 Auto="Automatic (NCM, ECM, RNDIS)"
 ForceRndis="RNDIS only"
 ForceEcm="CDC-ECM only"

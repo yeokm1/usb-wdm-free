@@ -47,6 +47,7 @@ typedef struct CHIP_MODEL {
     nc_u32 RxSum;               /* RxChecksum's answer */
     int Offloads;               /* TxOffload calls */
     NET_TX_INFO LastInfo;       /* the last TxOffload request */
+    long Seen[2];               /* the settings the last Start read (NcSetting) */
 } CHIP_MODEL;
 static CHIP_MODEL chip;
 
@@ -65,8 +66,10 @@ static long CProbe(const nc_u8 *device, nc_u32 deviceSize, const nc_u8 *const *c
 
 static long CStart(void *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *p)
 {
-    (void)s; (void)probe;
+    (void)s;
     chip.Starts++;
+    chip.Seen[0] = NcSetting(probe, 0);
+    chip.Seen[1] = NcSetting(probe, 1);
     if (chip.FailStart) return NC_E_DEVICE;
     NcIoRead(io, 0x11, 0, 0, p->Mac, 6);
     p->RxSize = 2048; p->RxCount = 4;
@@ -171,10 +174,17 @@ static void CTxOffload(void *s, nc_u8 *h, const NET_TX_INFO *info)
 
 static nc_u32 CRxChecksum(void *s, const nc_u8 *frame) { (void)s; (void)frame; return chip.RxSum; }
 
+/* Two Advanced-tab keywords, as a package's table lists them. */
+static const NET_SETTING CSettings[] = {
+    { "*TestSpeed", 0, 3, { 0, 6, 2500 } },
+    { "TestFlag", 1, 2, { 0, 1 } },
+};
+
 const NET_CHIP NetPackageChip = {
     "coretest", "coretest double", 1,
     CProbe, CStart, CSetMac, CLink, CPoll, CSetFilter, CStop, CSuspend, CResume,
-    CStatus, CRxParse, CTxHeader, CTxEnd, 0, CTxOffload, CRxChecksum
+    CStatus, CRxParse, CTxHeader, CTxEnd, 0, CTxOffload, CRxChecksum,
+    CSettings, 2
 };
 
 /* ---------------- the fake USB device ---------------- */
@@ -1576,6 +1586,110 @@ static void Addresses(void)
     }
 }
 
+static void Keyword(const char *name, const char *text)
+{
+    Fake.Keywords[Fake.KeywordCount].Name = name;
+    Fake.Keywords[Fake.KeywordCount].Text = text;
+    Fake.KeywordCount++;
+}
+
+/* The Advanced tab's keywords (ethernet.md section 4.10): read before the
+ * chip starts, decimal text or an integer, anything else the default;
+ * on NT the checksum keywords narrow what TCP/IP is offered. */
+static void Settings(void)
+{
+    union { UCHAR b[256]; ULONG align; } u;
+    NDIS_TASK_OFFLOAD_HEADER *h = (NDIS_TASK_OFFLOAD_HEADER *)u.b;
+    NDIS_TASK_OFFLOAD *t;
+    NDIS_TASK_TCP_IP_CHECKSUM *c;
+    ULONG w = 0, n = 0;
+    int round, done;
+
+    for (round = 0; round < 2; round++) {    /* NT, then 98 SE */
+        Fresh();
+        Fake.Wdm110 = !round;
+        CHECK(Init() == NDIS_STATUS_SUCCESS);
+        CHECK(chip.Seen[0] == 0 && chip.Seen[1] == 1);          /* none written: the defaults */
+        Halt();
+        Balanced();
+
+        Fresh();
+        Fake.Wdm110 = !round;
+        Keyword("*TestSpeed", "2500");
+        Keyword("TestFlag", "0");
+        CHECK(Init() == NDIS_STATUS_SUCCESS);
+        CHECK(chip.Seen[0] == 2500 && chip.Seen[1] == 0 && Fake.KeywordReads >= 2);
+        Halt();
+        Balanced();
+    }
+
+    /* Malformed or not offered: the default. */
+    Fresh();
+    Keyword("*TestSpeed", "25x0");
+    Keyword("TestFlag", "7");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[0] == 0 && chip.Seen[1] == 1);
+    Halt();
+    Balanced();
+    Fresh();
+    Keyword("*TestSpeed", "");
+    Keyword("TestFlag", "-1");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[0] == 0 && chip.Seen[1] == 1);
+    Halt();
+    Balanced();
+    Fresh();
+    Keyword("*TestSpeed", "1000");                       /* a number, but not one this chip offers */
+    Fake.Keywords[1].Name = "TestFlag";                  /* an integer-typed value (a DWORD) */
+    Fake.Keywords[1].IsInteger = 1;
+    Fake.Keywords[1].Integer = 0;
+    Fake.KeywordCount = 2;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[0] == 0 && chip.Seen[1] == 0);
+    /* A power cycle's restart reads them from the probe again. */
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD3) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    Fake.Keywords[1].Integer = 1;                        /* a later registry change waits for a restart */
+    done = nd.SetCompletes;
+    CHECK(SetUlong(OID_PNP_SET_POWER, NdisDeviceStateD0) == NDIS_STATUS_PENDING);
+    UNTIL(nd.SetCompletes == done + 1, 5000);
+    CHECK(chip.Resumes == 1);
+    CHECK(chip.Seen[0] == 0 && chip.Seen[1] == 0);
+    Halt();
+    Balanced();
+
+    /* The checksum keywords (NT): TCP's off, the IP header's and UDP's left on. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4;
+    Keyword("*TCPChecksumOffloadIPv4", "2");             /* receive only: not offered, so off */
+    Keyword("*UDPChecksumOffloadIPv4", "3");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    memset(&u, 0, sizeof(u));
+    h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
+    h->EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+    h->EncapsulationFormat.EncapsulationHeaderSize = 14;
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_SUCCESS);
+    t = (NDIS_TASK_OFFLOAD *)(u.b + h->OffsetFirstTask);
+    c = (NDIS_TASK_TCP_IP_CHECKSUM *)t->TaskBuffer;
+    CHECK(t->Task == TcpIpChecksumNdisTask);
+    CHECK(!c->V4Transmit.TcpChecksum && c->V4Transmit.IpChecksum && c->V4Transmit.UdpChecksum);
+    Halt();
+    Balanced();
+    /* All three off: nothing to offer. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4;
+    Keyword("*IPChecksumOffloadIPv4", "0");
+    Keyword("*TCPChecksumOffloadIPv4", "0");
+    Keyword("*UDPChecksumOffloadIPv4", "0");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_NOT_SUPPORTED);
+    Halt();
+    Balanced();
+}
+
 static void Failures(void)
 {
     Fresh();
@@ -1640,6 +1754,7 @@ int main(void)
     Power98();
     SurpriseRemoval();
     Addresses();
+    Settings();
     Failures();
     Oids();
     for (round = 0; round < 20; round++) Lifecycle(round & 1);

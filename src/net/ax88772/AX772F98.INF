@@ -17,7 +17,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/06/2026,0.1.0.0
+DriverVer=11/10/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models
@@ -27,7 +27,7 @@ DriverVer=11/06/2026,0.1.0.0
 %Asus%=AX,USB\VID_0B95&PID_7E2B
 %Lenovo%=AX,USB\VID_17EF&PID_7203
 %Dube100%=AX,USB\VID_2001&PID_1A02
-%Sr9800%=AX,USB\VID_0FE6&PID_9800
+%Sr9800%=AX_SR,USB\VID_0FE6&PID_9800
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -43,7 +43,11 @@ Copy9x=11
 
 [AX]
 CopyFiles=Copy9x
-AddReg=Reg9x,Params
+AddReg=Reg9x,Params,Speed,Flow
+
+[AX_SR]
+CopyFiles=Copy9x
+AddReg=Reg9x,Params,Speed
 
 [Copy9x]
 ax772f.sys
@@ -67,7 +71,12 @@ HKR,Ndi\Install,ndis5,,AX.ndis
 [AX.ndis]
 CopyFiles=Copy9x
 
-; The Advanced tab: a locally administered address (ethernet.md 4.8).
+; The Advanced tab (ethernet.md section 4.10): ASIX's AX88772B 7 INF's
+; keywords, values and defaults for the AX88772B and AX88772C, each written
+; to the driver key at its default (no-clobber, so a reinstall keeps a
+; changed value); the SR9800, which no maker's INF covers, speed and duplex
+; only (a clause 22 MII PHY).
+; The locally administered address (ethernet.md 4.8).
 [Params]
 HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
 HKR,Ndi\params\NetworkAddress,type,,edit
@@ -76,10 +85,45 @@ HKR,Ndi\params\NetworkAddress,UpperCase,,1
 HKR,Ndi\params\NetworkAddress,optional,,1
 HKR,Ndi\params\NetworkAddress,default,,""
 
+[Speed]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,,*SpeedDuplex,2,"0"
+
+[Flow]
+HKR,Ndi\params\*FlowControl,ParamDesc,,%FlowDesc%
+HKR,Ndi\params\*FlowControl,type,,enum
+HKR,Ndi\params\*FlowControl,default,,3
+HKR,Ndi\params\*FlowControl\enum,0,,%Off%
+HKR,Ndi\params\*FlowControl\enum,1,,%TxOnly%
+HKR,Ndi\params\*FlowControl\enum,2,,%RxOnly%
+HKR,Ndi\params\*FlowControl\enum,3,,%RxTx%
+HKR,,*FlowControl,2,"3"
+
 [Strings]
 Provider="usb-wdm-free"
 Disk="AX772F installation disk"
 AddressDesc="Network Address"
+SpeedDesc="Speed and duplex"
+Auto="Automatic"
+S10H="10 Mb/s half duplex"
+S10F="10 Mb/s full duplex"
+S100H="100 Mb/s half duplex"
+S100F="100 Mb/s full duplex"
+S1000F="1 Gb/s full duplex"
+FlowDesc="Flow control"
+Off="Off"
+On="On"
+TxOnly="Transmit only"
+RxOnly="Receive only"
+RxTx="Transmit and receive"
+EeeDesc="Energy-Efficient Ethernet (EEE)"
 Ax88772b="ASIX AX88772B/AX88772C USB 2.0 Fast Ethernet (AX772F)"
 Asus="ASUS USB Ethernet Adapter (AX772F)"
 Lenovo="Lenovo U2L100P USB 2.0 Fast Ethernet (AX772F)"

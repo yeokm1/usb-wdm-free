@@ -212,6 +212,8 @@
 #define MIICTL_AN_ENABLE 0x1000
 #define MIICTL_POWERDOWN 0x0800
 #define MIICTL_AN_RESTART 0x0200
+#define MIICTL_SPEED100  0x2000 /* a forced speed: 100 Mb/s (else 10) */
+#define MIICTL_FULL      0x0100 /* a forced speed: full duplex */
 #define ANADV_10_100     0x01e0 /* 10 and 100, half and full duplex */
 #define ANADV_PAUSE      0x0c00 /* symmetric and asymmetric pause */
 #define GIGCTL_1000_MASK 0x0300
@@ -371,7 +373,9 @@ typedef struct RTL_STATE {
     nc_u8 Abort;              /* a step gave up: the sequences running end */
     nc_u8 Failed;             /* the chip did not come out of its setup */
     nc_u8 NoReset;            /* the PHY setup gave up: autonegotiation without a PHY reset */
-    nc_u8 Spare;
+    nc_u8 Flags;              /* F_*: the Advanced tab's on/off keywords (rtlchip.c) */
+    nc_u16 Speed;             /* *SpeedDuplex as applied: 0 auto, 1-4 forced, 6, 2500, 5000, 10000 */
+    nc_u16 EeeMax;            /* EEEMaxSupportSpeed, Mb/s (the 8156 core) */
     nc_u32 Accept;            /* ACC_* bits beyond ACC_BCAST | ACC_MY_PHYS */
     nc_u8 Hash[8];            /* MR_HASH bytes as written */
     nc_u8 Mac[6];

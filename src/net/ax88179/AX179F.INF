@@ -18,7 +18,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/06/2026,0.1.3.0
+DriverVer=11/10/2026,0.1.4.0
 
 [Manufacturer]
 %Provider%=Models
@@ -34,9 +34,9 @@ DriverVer=11/06/2026,0.1.3.0
 %Belkin%=AX,USB\VID_050D&PID_0128
 %Toshiba%=AX,USB\VID_0930&PID_0A13
 %Mct%=AX,USB\VID_0711&PID_0179
-%Umc2000%=AX,USB\VID_07C9&PID_000E
-%Umc200%=AX,USB\VID_07C9&PID_000F
-%Umc2000sp%=AX,USB\VID_07C9&PID_0010
+%Umc2000%=AX_AT1G,USB\VID_07C9&PID_000E
+%Umc200%=AX_AT100,USB\VID_07C9&PID_000F
+%Umc2000sp%=AX_ATSP,USB\VID_07C9&PID_0010
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -54,7 +54,25 @@ CopyNT=12
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params
+AddReg=RegNT,Params,Speed,Flow,Eee
+
+[AX_AT1G.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params,SpeedAt1G,FlowAt,EeeAt
+
+[AX_AT100.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params,SpeedAt100,FlowAt,EeeAt
+
+[AX_ATSP.NT]
+Characteristics=0x84
+BusType=15
+CopyFiles=CopyNT
+AddReg=RegNT,Params,SpeedAtSp,FlowAt,EeeAt
 
 [CopyNT]
 ax179f.sys
@@ -65,6 +83,15 @@ HKR,Ndi\Interfaces,UpperRange,,ndis5
 HKR,Ndi\Interfaces,LowerRange,,ethernet
 
 [AX.NT.Services]
+AddService=ax179f,2,Service,EventLog
+
+[AX_AT1G.NT.Services]
+AddService=ax179f,2,Service,EventLog
+
+[AX_AT100.NT.Services]
+AddService=ax179f,2,Service,EventLog
+
+[AX_ATSP.NT.Services]
 AddService=ax179f,2,Service,EventLog
 
 [Service]
@@ -82,7 +109,12 @@ AddReg=EventLogReg
 HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\netevent.dll"
 HKR,,TypesSupported,0x00010001,7
 
-; The Advanced tab: a locally administered address (ethernet.md 4.8).
+; The Advanced tab (ethernet.md section 4.10): ASIX's AX88179 7 INF's
+; keywords, values and defaults, each written to the driver key at its
+; default (no-clobber, so a reinstall keeps a changed value); the Allied
+; Telesis media converters with the fixed speed, flow control off and no
+; EEE of their own sections there.
+; The locally administered address (ethernet.md 4.8).
 [Params]
 HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
 HKR,Ndi\params\NetworkAddress,type,,edit
@@ -91,11 +123,93 @@ HKR,Ndi\params\NetworkAddress,UpperCase,,1
 HKR,Ndi\params\NetworkAddress,optional,,1
 HKR,Ndi\params\NetworkAddress,default,,""
 
+[Speed]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,Ndi\params\*SpeedDuplex\enum,1,,%S10H%
+HKR,Ndi\params\*SpeedDuplex\enum,2,,%S10F%
+HKR,Ndi\params\*SpeedDuplex\enum,3,,%S100H%
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,,*SpeedDuplex,0x00000002,"0"
+
+[Flow]
+HKR,Ndi\params\*FlowControl,ParamDesc,,%FlowDesc%
+HKR,Ndi\params\*FlowControl,type,,enum
+HKR,Ndi\params\*FlowControl,default,,3
+HKR,Ndi\params\*FlowControl\enum,0,,%Off%
+HKR,Ndi\params\*FlowControl\enum,1,,%TxOnly%
+HKR,Ndi\params\*FlowControl\enum,2,,%RxOnly%
+HKR,Ndi\params\*FlowControl\enum,3,,%RxTx%
+HKR,,*FlowControl,0x00000002,"3"
+
+[Eee]
+HKR,Ndi\params\*EEE,ParamDesc,,%EeeDesc%
+HKR,Ndi\params\*EEE,type,,enum
+HKR,Ndi\params\*EEE,default,,1
+HKR,Ndi\params\*EEE\enum,0,,%Off%
+HKR,Ndi\params\*EEE\enum,1,,%On%
+HKR,,*EEE,0x00000002,"1"
+
+[SpeedAt1G]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,6
+HKR,Ndi\params\*SpeedDuplex\enum,6,,%S1000F%
+HKR,,*SpeedDuplex,0x00000002,"6"
+
+[FlowAt]
+HKR,Ndi\params\*FlowControl,ParamDesc,,%FlowDesc%
+HKR,Ndi\params\*FlowControl,type,,enum
+HKR,Ndi\params\*FlowControl,default,,0
+HKR,Ndi\params\*FlowControl\enum,0,,%Off%
+HKR,Ndi\params\*FlowControl\enum,1,,%TxOnly%
+HKR,Ndi\params\*FlowControl\enum,2,,%RxOnly%
+HKR,Ndi\params\*FlowControl\enum,3,,%RxTx%
+HKR,,*FlowControl,0x00000002,"0"
+
+[EeeAt]
+HKR,Ndi\params\*EEE,ParamDesc,,%EeeDesc%
+HKR,Ndi\params\*EEE,type,,enum
+HKR,Ndi\params\*EEE,default,,0
+HKR,Ndi\params\*EEE\enum,0,,%Off%
+HKR,,*EEE,0x00000002,"0"
+
+[SpeedAt100]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,4
+HKR,Ndi\params\*SpeedDuplex\enum,4,,%S100F%
+HKR,,*SpeedDuplex,0x00000002,"4"
+
+[SpeedAtSp]
+HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
+HKR,Ndi\params\*SpeedDuplex,type,,enum
+HKR,Ndi\params\*SpeedDuplex,default,,0
+HKR,Ndi\params\*SpeedDuplex\enum,0,,%Auto%
+HKR,,*SpeedDuplex,0x00000002,"0"
+
 [Strings]
 Provider="usb-wdm-free"
 Disk="AX179F installation disk"
 Service="usb-wdm-free AX179F USB Gigabit Ethernet"
 AddressDesc="Network Address"
+SpeedDesc="Speed and duplex"
+Auto="Automatic"
+S10H="10 Mb/s half duplex"
+S10F="10 Mb/s full duplex"
+S100H="100 Mb/s half duplex"
+S100F="100 Mb/s full duplex"
+S1000F="1 Gb/s full duplex"
+FlowDesc="Flow control"
+Off="Off"
+On="On"
+TxOnly="Transmit only"
+RxOnly="Receive only"
+RxTx="Transmit and receive"
+EeeDesc="Energy-Efficient Ethernet (EEE)"
 Ax88179="ASIX AX88179 USB 3.0 Gigabit Ethernet (AX179F)"
 Ax88178a="ASIX AX88178A USB 2.0 Gigabit Ethernet (AX179F)"
 Gx3="Cypress GX3 SuperSpeed Gigabit Ethernet (AX179F)"

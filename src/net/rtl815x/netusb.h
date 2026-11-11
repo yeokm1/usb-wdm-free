@@ -71,6 +71,9 @@ typedef struct NET_CALLBACKS {
 #define NET_ANOMALY_RX_FCS 1     /* received frames carried their FCS (value: in this transfer) */
 
 typedef struct NET_START {
+    /* in: the Advanced-tab values, one per NET_CHIP.Settings entry (NULL:
+     * the defaults); kept by the caller for the adapter's life. */
+    const long *Settings;
     nc_u8 DeviceMac[6];          /* out: the address the chip reported */
     nc_u16 Vendor, Product, Revision;  /* out */
     nc_u32 Version;              /* out: chip revision */

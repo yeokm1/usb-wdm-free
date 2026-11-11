@@ -25,7 +25,7 @@ set COMMON=%SRC%..\common
 pushd "%OUT%"
 type nul > test.log
 for %%O in (Od O2) do (
-    cl /nologo /W4 /WX /MD /%%O /DUAC_V1=1 /I"%SRC%." /I"%COMMON%" /Fe"%OUT%\uac1t%%O.exe" "%SRC%uac1test.c" "%SRC%uac1desc.c" "%SRC%uacfmt.c" "%SRC%uac1model.c" "%COMMON%\uacplan.c" "%COMMON%\uacvol.c" "%COMMON%\uacctl.c" "%COMMON%\uacrate.c" "%COMMON%\uacdesc.c" > build.log 2>&1
+    cl /nologo /W4 /WX /MD /%%O /DUAC_V1=1 /I"%SRC%." /I"%COMMON%" /Fe"%OUT%\uac1t%%O.exe" "%SRC%uac1test.c" "%SRC%uac1desc.c" "%SRC%uacfmt.c" "%SRC%uac1model.c" "%COMMON%\uacplan.c" "%COMMON%\uacvol.c" "%COMMON%\uacctl.c" "%COMMON%\uacrate.c" "%COMMON%\uacdesc.c" "%COMMON%\uacconv.c" > build.log 2>&1
     if errorlevel 1 goto fail
     "%OUT%\uac1t%%O.exe" "%SRC%testdata\brio100.bin" "%SRC%testdata\logi0a64.bin" "%SRC%testdata\play2.bin" > test.log 2>&1
     if errorlevel 1 goto fail

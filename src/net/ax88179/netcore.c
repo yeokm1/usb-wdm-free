@@ -30,7 +30,11 @@
  *   and complete from the lower edge's passive worker;
  * - the address: the Advanced tab's NetworkAddress if valid, else the
  *   chip's own, else a locally administered address generated once and
- *   kept in the driver key as FallbackAddress (section 4.8).
+ *   kept in the driver key as FallbackAddress (section 4.8);
+ * - the Advanced tab's other keywords (section 4.10): the chip's own
+ *   (NET_CHIP.Settings), read once before the chip starts and handed to
+ *   it in NET_START.Settings, and on NT the transmit checksum keywords,
+ *   which narrow NET_START.Offload.
  */
 #include <ndis.h>
 #include "netusb.h"
@@ -80,6 +84,8 @@ typedef struct ADAPTER {
      * what TCP/IP enabled, under Lock. */
     BOOLEAN PerPacket;
     ULONG TaskTx, TaskRx;
+    long Settings[NC_SETTINGS_MAX];  /* the chip's keywords (section 4.10), in its table's order */
+    ULONG OffloadAllowed;          /* NC_OFFLOAD_* the checksum keywords leave on */
     ULONG TxLarge, RxChecked;      /* trace: large sends; frames given a checksum result */
 #if NET_DEFER
     /* 98 SE and ME (Defer): what the USB completions would have indicated
@@ -1097,6 +1103,88 @@ static void ChooseAddress(ADAPTER *a, NDIS_HANDLE config)
     if (handle) NdisCloseConfiguration(handle);
 }
 
+/* ---------------- the Advanced tab's keywords (section 4.10) ---------------- */
+
+/* One keyword as a number: the tab writes decimal text on every system;
+ * a DWORD (integer type) is taken as it is. FALSE when it is missing or
+ * not a plain decimal number. */
+static BOOLEAN ReadKeyword(NDIS_HANDLE handle, const char *keyword, long *value)
+{
+    WCHAR text[40];
+    NDIS_STRING name;
+    NDIS_STATUS status;
+    PNDIS_CONFIGURATION_PARAMETER p;
+    UINT i, n;
+    for (n = 0; keyword[n] && n < 39; n++) text[n] = (WCHAR)(UCHAR)keyword[n];
+    text[n] = 0;
+    name.Buffer = text;
+    name.Length = (USHORT)(n * sizeof(WCHAR));
+    name.MaximumLength = (USHORT)(sizeof(text));
+    NdisReadConfiguration(&status, &p, handle, &name, NdisParameterString);
+    if (status != NDIS_STATUS_SUCCESS) return FALSE;
+    if (p->ParameterType == NdisParameterInteger || p->ParameterType == NdisParameterHexInteger) {
+        if (p->ParameterData.IntegerData > 0x7fffffffUL) return FALSE;
+        *value = (long)p->ParameterData.IntegerData;
+        return TRUE;
+    }
+    if (p->ParameterType != NdisParameterString) return FALSE;
+    n = p->ParameterData.StringData.Length / sizeof(WCHAR);
+    while (n && p->ParameterData.StringData.Buffer[n - 1] == 0) n--;   /* a counted terminator */
+    if (!n || n > 9) return FALSE;
+    *value = 0;
+    for (i = 0; i < n; i++) {
+        WCHAR c = p->ParameterData.StringData.Buffer[i];
+        if (c < L'0' || c > L'9') return FALSE;
+        *value = *value * 10 + (c - L'0');
+    }
+    return TRUE;
+}
+
+/* The transmit checksum keywords (NT): 1 (Tx) or 3 (Rx and Tx) leave the
+ * task on, 0 or 2 take it off; missing or anything else: on. */
+static ULONG ChecksumKeyword(NDIS_HANDLE handle, const char *keyword, ULONG bits)
+{
+    long v;
+    if (!ReadKeyword(handle, keyword, &v) || v < 0 || v > 3) return bits;
+    NetTrace("setting %s = %d", keyword, v);
+    return (v & 1) ? bits : 0;
+}
+
+static void ReadSettings(ADAPTER *a, NDIS_HANDLE config)
+{
+    NDIS_HANDLE handle = NULL;
+    NDIS_STATUS status;
+    UINT i, k;
+    const NET_SETTING *s = NetPackageChip.Settings;
+    UINT count = s ? NetPackageChip.SettingCount : 0;
+    if (count > NC_SETTINGS_MAX) count = NC_SETTINGS_MAX;
+    a->OffloadAllowed = (ULONG)-1;
+    for (i = 0; i < count; i++) a->Settings[i] = s[i].Default;
+    NdisOpenConfiguration(&status, &handle, config);
+    if (status != NDIS_STATUS_SUCCESS) return;
+    for (i = 0; i < count; i++) {
+        long v;
+        if (!ReadKeyword(handle, s[i].Name, &v)) {
+            NetTrace("setting %s: none or malformed, default %d", s[i].Name, s[i].Default);
+            continue;
+        }
+        for (k = 0; k < s[i].Count && k < NC_SETTING_VALUES; k++) if (s[i].Values[k] == v) break;
+        if (k == s[i].Count || k == NC_SETTING_VALUES) {
+            NetTrace("setting %s = %d: not offered, default %d", s[i].Name, v, s[i].Default);
+            continue;
+        }
+        a->Settings[i] = v;
+        NetTrace("setting %s = %d", s[i].Name, v);
+    }
+    if (a->PerPacket) {         /* NT: 98 SE and ME have no offload */
+        a->OffloadAllowed &= ~(ULONG)(NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*IPChecksumOffloadIPv4", NC_OFFLOAD_TX_IP4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*TCPChecksumOffloadIPv4", NC_OFFLOAD_TX_TCP4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*UDPChecksumOffloadIPv4", NC_OFFLOAD_TX_UDP4);
+    }
+    NdisCloseConfiguration(handle);
+}
+
 static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM media, UINT count,
                               NDIS_HANDLE handle, NDIS_HANDLE config)
 {
@@ -1162,6 +1250,8 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
 
     cb.Context = a; cb.Receive = Receive; cb.ReceiveEnd = ReceiveEnd; cb.TxTake = TxTake; cb.TxCopy = TxCopy;
     cb.TxDone = TxDone; cb.Link = Link; cb.TaskDone = TaskDone; cb.Anomaly = Anomaly;
+    ReadSettings(a, config);
+    a->Start.Settings = NetPackageChip.SettingCount ? a->Settings : NULL;
     if (NetUsbStart(lower, &cb, &a->Start, &a->Usb) < 0) {
         NetTrace("initialize failed: stage %u status %x", a->Start.Failure, a->Start.Status);
         NdisWriteErrorLogEntry(handle, NDIS_ERROR_CODE_ADAPTER_NOT_FOUND, 2,
@@ -1169,6 +1259,9 @@ static NDIS_STATUS Initialize(PNDIS_STATUS error, PUINT chosen, PNDIS_MEDIUM med
         FreeAdapter(a);
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
+    if (a->Start.Offload & ~a->OffloadAllowed)
+        NetTrace("offload %x, keywords leave %x", a->Start.Offload, a->Start.Offload & a->OffloadAllowed);
+    a->Start.Offload &= a->OffloadAllowed;
     ChooseAddress(a, config);
     if (NetUsbOpen(a->Usb, a->Mac, &a->Start, &connected, &speed) < 0) {
         NetTrace("open failed: stage %u status %x", a->Start.Failure, a->Start.Status);

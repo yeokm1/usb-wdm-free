@@ -65,3 +65,13 @@ int UvcIsoFeed(UVC_PAY *pay, UVC_ISO_STATS *stats,
     }
     return 1;
 }
+
+int UvcIsoRefused(unsigned long urbStatus)
+{
+    return urbStatus == UVC_ISO_BAD_START_STATUS;
+}
+
+unsigned long UvcIsoResyncFrame(unsigned long current, unsigned int index, unsigned int framesPerUrb)
+{
+    return (current + UVC_ISO_RESYNC_LEAD + (unsigned long)index * framesPerUrb) & 0xFFFFFFFFUL;
+}

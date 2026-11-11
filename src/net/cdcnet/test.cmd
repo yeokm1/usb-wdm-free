@@ -29,6 +29,11 @@ cl /nologo /W3 /WX /MD /Od /Zi /DDBG=0 /I"%SRC%shim" /I"%SRC%." /Fe"%OUT%\cdccor
 if errorlevel 1 goto fail
 "%OUT%\cdccore.exe" >> test.log 2>&1
 if errorlevel 1 goto fail
+rem cdcusbtest: cdcusb.c, as the driver builds it, on the same fake operating system with a fake NCM function
+cl /nologo /W3 /WX /MD /Od /Zi /DDBG=0 /I"%SRC%usbtest" /I"%SRC%shim" /I"%SRC%." /Fe"%OUT%\cdcusbtest.exe" "%SRC%cdcusbtest.c" "%SRC%cdcusb.c" "%SRC%cdcdesc.c" "%SRC%cdcncm.c" "%SRC%cdcrndis.c" "%SRC%shim\fakeos.c" "%SRC%shim\fakewin.c" >> build.log 2>&1
+if errorlevel 1 goto fail
+"%OUT%\cdcusbtest.exe" >> test.log 2>&1
+if errorlevel 1 goto fail
 type test.log
 echo PASS cdcnet host > PASS.TXT
 popd

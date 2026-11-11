@@ -197,23 +197,50 @@ class Chip:
         return dest == bytes(self.mac_regs[R_NODE_ID:R_NODE_ID + 6])
 
     # -- PHY -----------------------------------------------------------------
+    def negotiated(self):
+        """(Mb/s, full duplex) the PHY's control and advertisement leave with
+        a partner of --mbps (the Advanced tab's *SpeedDuplex, ethernet.md
+        4.10): a forced 10/100 with autonegotiation off, else the fastest
+        mode both advertise; None if none."""
+        bmcr, adv, gig = self.pages[0][BMCR], self.pages[0][ADVERTISE], self.pages[0][CTRL1000]
+        if not bmcr & BMCR_ANENABLE:
+            mbps = 100 if bmcr & 0x2000 else 10
+            return (mbps, bool(bmcr & 0x0100)) if mbps <= self.mbps else None
+        for mbps, bit, full in ((1000, gig & 0x0200, True), (100, adv & 0x0100, True), (100, adv & 0x0080, False),
+                                (10, adv & 0x0040, True), (10, adv & 0x0020, False)):
+            if bit and mbps <= self.mbps:
+                return mbps, full
+        return None
+
+    def settings(self):
+        """The registers the Advanced tab's keywords set, for the legs' logs."""
+        return dict(bmcr=self.pages[0][BMCR], an_adv=self.pages[0][ADVERTISE], ctrl1000=self.pages[0][CTRL1000],
+                    medium=self.word(R_MEDIUM), eee_adv=self.mmd.get(0x4007, 0),
+                    eee_page3=self.pages.get(3, [0] * 32)[0x19], eee_page5=self.pages.get(5, [0] * 32)[BMSR])
+
     def phy_read(self, reg):
         if reg == PHYSR and self.page() == 0:
-            return (PHYSR_LINK | PHYSR_FULL | PHYSR_SPEED[self.mbps]) if self.link else 0
+            got = self.negotiated() if self.link else None
+            return (PHYSR_LINK | (PHYSR_FULL if got[1] else 0) | PHYSR_SPEED[got[0]]) if got else 0
         if reg == BMSR and self.page() == 0:
             v = self.pages[0][BMSR] & ~(BMSR_LINK | BMSR_ANDONE)
             return v | (BMSR_LINK | BMSR_ANDONE if self.link else 0)
         if reg == 0x0e and self.page() == 0:
             return self.mmd.get(self.mmd_ctrl, 0)
         if reg in (LPA, STAT1000) and self.page() == 0:
-            return ((PARTNER_LPA if reg == LPA else PARTNER_STAT1000)[self.mbps]) if self.link else 0
+            if not self.link or not self.pages[0][BMCR] & BMCR_ANENABLE:
+                return 0
+            return (PARTNER_LPA if reg == LPA else PARTNER_STAT1000)[self.mbps]
         return self.pages.setdefault(self.page() if reg != PAGE_SELECT else 0, [0] * 32)[reg]
 
     def phy_write(self, reg, value):
         page = 0 if reg == PAGE_SELECT else self.page()
         regs = self.pages.setdefault(page, [0] * 32)
         if page == 0 and reg == BMCR:
-            if value & (BMCR_ANRESTART | BMCR_RESET):
+            # A restart, a reset, or a forced speed or duplex that changes
+            # (autonegotiation off) takes the link down and up again.
+            if value & (BMCR_ANRESTART | BMCR_RESET) or \
+                    (not value & BMCR_ANENABLE and (value ^ regs[BMCR]) & (BMCR_ANENABLE | 0x2100)):
                 self.restarts += 1
             value &= ~(BMCR_ANRESTART | BMCR_RESET)
         if page == 0 and reg == 0x0d:
@@ -599,8 +626,14 @@ class Model:
     def set_link(self, up, why):
         if up == self.chip.link:
             return
+        got = self.chip.negotiated() if up else None
+        if up and got is None:
+            self.log('no_common_speed', partner=self.chip.mbps)
+            self.totals['no_common_speed'] += 1
+            return
         self.chip.link = up
-        self.log('link', up=up, why=why, mbps=self.chip.mbps if up else 0)
+        self.log('link', up=up, why=why, mbps=got[0] if up else 0, full=got[1] if up else False,
+                 **(self.chip.settings() if up else {}))
         self.irq.append(struct.pack('<II', INT_LINK if up else 0, 0))
         self.flush_irq()
 

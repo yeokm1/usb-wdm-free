@@ -70,8 +70,9 @@ Profiles (--profile):
             kHz (768-byte packets) behind a 1-channel input terminal, mono
             capture 8 to 48 kHz, master-only units, a sidetone path through
             Mixer Unit 12 (which stalls), its HID report.
-Formats and synchronisation a UAC 1.0 driver may refuse (Full Speed; each
-otherwise like dacd or mic, Windows' own driver may still take them):
+Formats and synchronisation beyond 16-bit PCM (Full Speed; uac1 0.1.0.1
+refused the first three, uac1 runs them all since docs/design/uac2.md
+26.12):
   pcm8      playback only, one alternate: wFormatTag 2 (PCM8), bSubframeSize
             1, bBitResolution 8 (unsigned), stereo 44.1/48 kHz, ADAPTIVE.
   float     the same with wFormatTag 3 (IEEE_FLOAT), bSubframeSize 4,
@@ -79,7 +80,29 @@ otherwise like dacd or mic, Windows' own driver may still take them):
   adsrc     capture only: an ADAPTIVE IN data endpoint 0x81 whose
             bSynchAddress names the sync OUT endpoint 0x01 (UAC 1.0 Table
             4-22; 3 bytes, bRefresh 2), mono 16-bit 16/44.1/48 kHz. What the
-            host sends there is counted and logged (synch_out).
+            host sends there is counted, checked against the rate and
+            logged (synch_out); the source produces its samples at the Ff
+            last received (the nominal before one, UAC 1.0 3.7.2.2).
+  alaw      playback 2 channels A-law (wFormatTag 4, 1 byte) 44.1/48 kHz
+            ADAPTIVE, capture 1 channel A-law 16/48 kHz ASYNCHRONOUS.
+  mulaw     the same in mu-law (wFormatTag 5).
+  pcm8in    capture only: mono PCM8 in a 2-byte subframe (bBitResolution
+            8, left-justified), 16/44.1/48 kHz, ASYNCHRONOUS.
+  floatin   capture only: stereo IEEE_FLOAT 44.1/48 kHz, SYNCHRONOUS.
+  mpoin     capture only: stereo 16-bit PCM 44.1/48 kHz, SYNCHRONOUS, with
+            MaxPacketsOnly (class endpoint bmAttributes D7): every packet
+            is wMaxPacketSize (52 frames) with zero padding after the
+            audio; at 48 kHz the audio follows Formats 1.0 2.2.1's 48, 47,
+            49, 48 sizes. mpoin48: the same at 48 kHz only (98 SE's KMixer
+            opens a capture pin at its lowest rate).
+  mpoout    playback only: stereo PCM8 44.1/48 kHz ADAPTIVE with
+            MaxPacketsOnly: each non-null packet must be wMaxPacketSize
+            (50 frames), the audio first (counted as mpo_bad_length when
+            not); the model reads the audio up to its last nonzero frame,
+            and at least the cadence's whole frames (PCM8 0x00 is -1.0 as
+            well as padding; counted as mpo_zero_audio).
+Every playback stream's tone frequency (zero crossings of channel 1,
+decoded from any of these formats) is logged as tone_hz.
 Aliases (the names agent uac1 planned): headset1 = headset, speaker1 =
 dacd, mic1 = cammic.
 
@@ -143,7 +166,7 @@ DELAY_RANGE = (0, 64 * 1000, 1)
 CHANNEL_CONFIG = {1: 0x0004, 2: 0x0003}
 SYNC = {'async': 0x04, 'adaptive': 0x08, 'sync': 0x0c}
 PROFILE_NAMES = ('headset', 'dacd', 'dacc', 'async', 'hs', 'mic', 'cammic', 'dual', 'play2', 'logi',
-                 'pcm8', 'float', 'adsrc')
+                 'pcm8', 'float', 'adsrc', 'alaw', 'mulaw', 'pcm8in', 'floatin', 'mpoin', 'mpoout', 'mpoin48')
 # The names agent uac1's plan used, for the same models.
 ALIASES = {'headset1': 'headset', 'speaker1': 'dacd', 'mic1': 'cammic'}
 BASE_PID = 0x0300
@@ -189,11 +212,13 @@ class Builder1:
 
     # -- AudioStreaming (4.5, 4.6) -------------------------------------------
     def stream(self, terminal, direction, channels, formats, rates, sync, sync_attr=0x01, refresh=2,
-               freq_control=True, format_tag=0x0001):
+               freq_control=True, format_tag=0x0001, mpo=False, frames=None):
         """formats: [(subframe, bits)], one alternate each; rates: a list
         (discrete) or a (low, high) tuple (continuous); format_tag: the AS
         general descriptor's wFormatTag (Formats A.1.1: 1 PCM, 2 PCM8, 3
-        IEEE_FLOAT). An ASYNCHRONOUS OUT endpoint gets a sync IN endpoint
+        IEEE_FLOAT, 4 ALAW, 5 MULAW); mpo: MaxPacketsOnly (class endpoint
+        bmAttributes D7); frames: wMaxPacketSize in frames instead of the
+        top rate's plus one. An ASYNCHRONOUS OUT endpoint gets a sync IN endpoint
         (feedback); an ADAPTIVE IN endpoint a sync OUT endpoint (UAC 1.0
         Table 4-22: the host's synchronization data for an adaptive
         source), on the OUT direction of the same endpoint number."""
@@ -213,13 +238,13 @@ class Builder1:
             else:
                 table = bytes((len(rates),)) + b''.join(u24(r) for r in rates)
             body += bytes((7 + len(table), 0x24, 0x02, 1, channels, subframe, bits)) + table
-            size = (top // 1000 + 1) * channels * subframe
+            size = (frames or top // 1000 + 1) * channels * subframe
             if size > (1024 if self.speed == 'high' else 1023):
                 raise ValueError('alternate exceeds one transaction')
             interval = 4 if self.speed == 'high' else 1
             synch = (0x80 | ep) if fb else (ep & 0x7f) if synch_out else 0
             body += bytes((9, 5, ep, 0x01 | SYNC[sync])) + struct.pack('<HBBB', size, interval, 0, synch)
-            body += bytes((7, 0x25, 0x01, 0x01 if freq_control else 0, 0, 0, 0))
+            body += bytes((7, 0x25, 0x01, (0x01 if freq_control else 0) | (0x80 if mpo else 0), 0, 0, 0))
             if fb or synch_out:
                 # 3 bytes 10.14 at Full Speed; at High Speed USB 2.0
                 # 5.12.4.2's 4 bytes 16.16 (what uacemu's feedback sends there).
@@ -336,6 +361,37 @@ def build1(name, speed=None, sync_attr=0x01, refresh=2):
         b.it(1, 0x0201, 1); b.fu(2, 1, [0x03, 0]); b.ot(3, 0x0101, 2)
         b.stream(3, 'in', 1, [(2, 16)], [16000, 44100, 48000], 'adaptive')
         fu = {2: (-3072, 7680, 256, 0)}
+    elif name in ('alaw', 'mulaw'):
+        # Formats document 2.2.6.4: G.711 octets, one byte a sample.
+        tag = 0x0004 if name == 'alaw' else 0x0005
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0101, 2); b.fu(2, 1, [0x03, 0, 0]); b.ot(3, 0x0301, 2)
+        b.it(4, 0x0201, 1); b.fu(5, 4, [0x03, 0]); b.ot(6, 0x0101, 5)
+        b.stream(1, 'out', 2, [(1, 8)], FS_RATES_44_48, 'adaptive', format_tag=tag)
+        b.stream(6, 'in', 1, [(1, 8)], [16000, 48000], 'async', format_tag=tag)
+        fu = {2: (-24576, 0, 256, 0), 5: (-3072, 7680, 256, 0)}
+    elif name == 'pcm8in':
+        # PCM8 left-justified in a 2-byte subframe (Formats 2.2.5, 2.2.6.2).
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0201, 1); b.fu(2, 1, [0x03, 0]); b.ot(3, 0x0101, 2)
+        b.stream(3, 'in', 1, [(2, 8)], [16000, 44100, 48000], 'async', format_tag=0x0002)
+        fu = {2: (-3072, 7680, 256, 0)}
+    elif name == 'floatin':
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0603, 2); b.fu(2, 1, [0x03, 0, 0]); b.ot(3, 0x0101, 2)
+        b.stream(3, 'in', 2, [(4, 32)], FS_RATES_44_48, 'sync', format_tag=0x0003)
+        fu = {2: (-3072, 7680, 256, 0)}
+    elif name in ('mpoin', 'mpoin48'):
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0603, 2); b.fu(2, 1, [0x03, 0, 0]); b.ot(3, 0x0101, 2)
+        b.stream(3, 'in', 2, [(2, 16)], FS_RATES_44_48 if name == 'mpoin' else [48000], 'sync', mpo=True,
+                 frames=52)
+        fu = {2: (-3072, 7680, 256, 0)}
+    elif name == 'mpoout':
+        b = Builder1(speed or 'full')
+        b.it(1, 0x0101, 2); b.fu(2, 1, [0x03, 0, 0]); b.ot(3, 0x0301, 2)
+        b.stream(1, 'out', 2, [(1, 8)], FS_RATES_44_48, 'adaptive', format_tag=0x0002, mpo=True, frames=50)
+        fu = {2: (-24576, 0, 256, 0)}
     else:
         raise ValueError('profile')
     return b.speed, b.configuration(), fu, mx, hid, iad
@@ -519,7 +575,8 @@ class Profile1:
         fbs = [e for e in a['endpoints'][1:] if e['address'] == data['synch']]
         return dict(frame=a['channels'] * a['subslot'], channels=a['channels'], subslot=a['subslot'],
                     bits=a['bits'], clock=data['address'], data=data, feedback=fbs[0] if fbs else None,
-                    rates=a['rates'], sync=data['attributes'] & 0x0c, format_tag=a.get('format_tag', 1))
+                    rates=a['rates'], sync=data['attributes'] & 0x0c, format_tag=a.get('format_tag', 1),
+                    mpo=bool(data['cs_attributes'] & 0x80))
 
     def endpoint_rates(self, ep, alternate_info=None):
         """The rates an endpoint takes: its active alternate's, else every
@@ -541,6 +598,82 @@ def rate_ok(rate, rates):
     return rate in merged or any(lo <= rate <= hi for lo, hi in ranges)
 
 
+def alaw_decode(a):
+    """ITU-T G.711 A-law octet (even bits inverted) to 16-bit linear."""
+    a ^= 0x55
+    seg, t = (a >> 4) & 7, (a & 15) << 4
+    t = t + 8 if seg == 0 else (t + 0x108) << (seg - 1)
+    return t if a & 0x80 else -t
+
+
+def mulaw_decode(u):
+    """ITU-T G.711 mu-law octet (all bits inverted) to 16-bit linear."""
+    u = ~u & 0xff
+    t = (((u & 15) << 3) + 0x84) << ((u >> 4) & 7)
+    return 0x84 - t if u & 0x80 else t - 0x84
+
+
+ALAW = [alaw_decode(a) for a in range(256)]
+MULAW = [mulaw_decode(u) for u in range(256)]
+
+
+def g711_encode(table, value):
+    """The octet whose decoded value is nearest (a test signal's encoder,
+    by the decode table, independent of the driver's segment code)."""
+    return min(range(256), key=lambda c: (abs(table[c] - value), c))
+
+
+G711_CACHE = {}
+
+
+def g711(table_name, value):
+    key = (table_name, value)
+    if key not in G711_CACHE:
+        G711_CACHE[key] = g711_encode(ALAW if table_name == 4 else MULAW, value)
+    return G711_CACHE[key]
+
+
+def decode16(payload, tag, subslot, bits):
+    """Samples of a Type I payload as 16-bit linear values (PCM's top 16
+    bits; PCM8, ALAW and MULAW from the subframe's last byte; IEEE_FLOAT
+    times 32768, clamped, NaN as 0)."""
+    out = []
+    if tag == 3:
+        count = len(payload) // 4
+        for v in struct.unpack('<%df' % count, payload[:4 * count]):
+            out.append(0 if v != v else int(max(-1.0, min(1.0, v)) * 32767))
+        return out
+    for i in range(0, len(payload) - subslot + 1, subslot):
+        if tag == 2:
+            out.append((payload[i + subslot - 1] - 128) << 8)
+        elif tag == 4:
+            out.append(ALAW[payload[i + subslot - 1]])
+        elif tag == 5:
+            out.append(MULAW[payload[i + subslot - 1]])
+        else:
+            v = int.from_bytes(payload[i:i + subslot], 'little', signed=True)
+            out.append(v >> (8 * subslot - 16))
+    return out
+
+
+def encode_sine(samples, info, rate, phase):
+    """uacemu's 1 kHz half-scale sine in the alternate's format: PCM as
+    uacemu.sine; the others from a 16-bit value of 16383 peak (-6 dBFS)."""
+    tag, sub = info.get('format_tag', 1), info['subslot']
+    if tag == 1:
+        return uacemu.sine(samples, info, rate, phase)
+    out = bytearray()
+    for n in range(phase, phase + samples):
+        v = int(round(16383 * math.sin(2 * math.pi * 1000 * n / rate)))
+        if tag == 3:
+            one = struct.pack('<f', v / 32768.0)
+        else:
+            byte = (v + 32896) >> 8 if tag == 2 else g711(tag, v)
+            one = bytes(sub - 1) + bytes((min(255, byte),))
+        out += one * info['channels']
+    return bytes(out)
+
+
 class Model1(uacemu.Model):
     """uacemu's usbredir device with UAC 1.0 class requests, endpoint
     sampling rates and OUT stream validation."""
@@ -557,6 +690,7 @@ class Model1(uacemu.Model):
         self.synch_out = {}         # sync OUT endpoint (adaptive source): what the host sent
         self.float_bad, self.float_samples = {}, {}     # endpoint: float samples out of range, all
         self.closed = []            # verdicts of finished streams
+        self.tone = {}              # OUT endpoint: zero crossings of channel 1 (26.12)
 
     def bind(self, profile):
         """Make one configuration's function the active one (its state reset)."""
@@ -630,7 +764,11 @@ class Model1(uacemu.Model):
         if not ep & 0x80 and info['data']['address'] == ep:
             self.ostate[ep] = dict(info=info, started=False, packets=0, frames=0, hist=collections.Counter(),
                                    outside=0, zero=0, lead_zero=0, under=0, over=0, misframed=0,
-                                   level=0.0, expected=0.0, low=None, high=None)
+                                   level=0.0, expected=0.0, low=None, high=None, mpo_bad=0,
+                                   mpo_zero=0, mpo_acc=0.0)
+            self.tone[ep] = dict(sign=0, crossings=0, samples=0, rate=self.rate(info['clock']) or 48000)
+        if ep & 0x80 and info['data']['address'] == ep and ep in self.in_streams:
+            self.in_streams[ep]['k'] = 0
 
     def feedback_value(self, info):
         if self.fb_lead_left > 0:
@@ -645,7 +783,7 @@ class Model1(uacemu.Model):
         if s is not None:
             verdict = self.summary(ep, s)
             verdict['ok'] = bool(s['packets']) and not (s['outside'] or s['under'] or s['over'] or
-                                                          s['misframed'] or s['zero'])
+                                                          s['misframed'] or s['zero'] or s.get('mpo_bad', 0))
             self.closed.append(verdict)
             self.log('ostream_verdict', **verdict)
         super().stop(ep)
@@ -671,6 +809,7 @@ class Model1(uacemu.Model):
                     frames_per_packet={str(k): v for k, v in sorted(s['hist'].items())[:24]},
                     outside_pm1=s['outside'], zero_length=s['zero'], lead_zero=s['lead_zero'],
                     underruns=s['under'], overruns=s['over'], misframed=s['misframed'],
+                    mpo_bad_length=s.get('mpo_bad', 0), mpo_zero_audio=s.get('mpo_zero', 0),
                     drift_frames=round(s['frames'] - s['expected'], 3),
                     fifo_low=None if s['low'] is None else round(s['low'], 2),
                     fifo_high=None if s['high'] is None else round(s['high'], 2))
@@ -680,22 +819,45 @@ class Model1(uacemu.Model):
             fields['ostreams'] = [self.summary(ep, s) for ep, s in sorted(self.ostate.items())]
         if event in ('iso_stop', 'disconnected') and getattr(self, 'synch_out', None):
             fields['synch_out'] = {'%02x' % ep: dict(packets=s['packets'], empty=s['empty'],
-                                                     values={str(k): v for k, v in sorted(s['values'].items())})
+                                                     values={str(k): v for k, v in sorted(s['values'].items())},
+                                                     off_rate=s.get('off', 0), expected=s.get('expected'))
                                    for ep, s in sorted(self.synch_out.items())}
+        if event in ('iso_out_totals', 'iso_stop', 'disconnected') and getattr(self, 'tone', None):
+            fields['tone_hz'] = {'%02x' % ep: round(s['crossings'] * s['rate'] / s['samples'], 1)
+                                 for ep, s in sorted(self.tone.items()) if s['samples']}
         if event in ('iso_out_totals', 'iso_stop', 'disconnected') and getattr(self, 'float_samples', None):
             fields['float_out_of_range'] = {'%02x' % (ep or 0): [self.float_bad.get(ep, 0), n]
                                             for ep, n in sorted(self.float_samples.items(), key=lambda x: x[0] or 0)}
         super().log(event, **fields)
 
+    def track_tone(self, payload, info, ep):
+        """Zero crossings (negative to positive, zeros skipped) of channel 1."""
+        s = self.tone.get(ep)
+        if s is None:
+            return
+        values = decode16(payload, info.get('format_tag', 1), info['subslot'], info['bits'])
+        for v in values[::info['channels']]:
+            s['samples'] += 1
+            if v > 0:
+                if s['sign'] < 0:
+                    s['crossings'] += 1
+                s['sign'] = 1
+            elif v < 0:
+                s['sign'] = -1
+
     def measure(self, payload, info, units, ep=None):
-        """PCM8 (unsigned, offset 128) and IEEE_FLOAT samples measured as
-        16-bit PCM of the same level; PCM as uacemu does."""
+        """PCM8 (unsigned, offset 128), ALAW, MULAW and IEEE_FLOAT samples
+        measured as 16-bit PCM of the same level; PCM as uacemu does."""
         tag = info.get('format_tag', 1)
+        if ep is not None:
+            self.track_tone(payload, info, ep)
+        if tag in (2, 4, 5):
+            pcm = decode16(payload, tag, info['subslot'], info['bits'])
+            return super().measure(struct.pack('<%dh' % len(pcm), *[max(-32768, min(32767, v)) for v in pcm]),
+                                   dict(info, subslot=2), units, ep)
         if tag not in (2, 3):
             return super().measure(payload, info, units, ep)
-        if tag == 2:
-            pcm = [(b - 128) << 8 for b in payload]
-        else:
+        if True:
             count = len(payload) // 4
             values = struct.unpack('<%df' % count, payload[:4 * count])
             # A float stream carries -1.0 to 1.0: NaN, infinities and values
@@ -729,13 +891,48 @@ class Model1(uacemu.Model):
                 sync['empty'] += 1
             else:
                 scale = 65536 if len(payload) >= 4 else 16384
-                value = int.from_bytes(payload[:4], 'little') / scale
+                raw = int.from_bytes(payload[:4], 'little')
+                value = raw / scale
+                # The value the rate asks: rate x 16384 / 1000 (Full Speed),
+                # rate x 65536 / 8000 (High Speed), rounded.
+                rate = self.rate(info['clock']) or 48000
+                want = round(rate * 16384 / 1000) if scale == 16384 else round(rate * 65536 / 8000)
+                sync['expected'] = round(want / scale, 4)
+                if abs(raw - want) > 1:
+                    sync['off'] = sync.get('off', 0) + 1
+                sync['last'] = value
                 if len(sync['values']) < 32 or value in sync['values']:
                     sync['values'][round(value, 4)] += 1
                 if sync['packets'] <= 4:
                     self.log('synch_out', endpoint=ep, length=length, value=round(value, 4))
             return
         s = self.ostate.get(ep)
+        if info.get('mpo') and info['data']['address'] == ep and length:
+            # MaxPacketsOnly (UAC 1.0 4.6.1.2): a non-null packet is
+            # wMaxPacketSize, the audio first and zero bytes after it.
+            if length != info['data']['max'] * info['data']['mult'] and s is not None:
+                s['mpo_bad'] += 1
+            payload = packet[4:]
+            frames = length // info['frame']
+            last = 0
+            for f in range(frames, 0, -1):
+                if any(payload[(f - 1) * info['frame']:f * info['frame']]):
+                    last = f
+                    break
+            if info.get('format_tag', 1) == 2 and s is not None:
+                # PCM8: a zero byte is a full-scale sample (-1.0) as well
+                # as padding, so trailing zero frames are ambiguous. Up to
+                # the cadence's whole frames (a running fraction, so 44.1
+                # kHz gives nine 44 and one 45) are taken as audio (counted
+                # as mpo_zero_audio, not a failure); padding is past them.
+                s['mpo_acc'] += self.nominal(info)
+                whole = int(s['mpo_acc'] + 1e-9)
+                s['mpo_acc'] -= whole
+                if last < min(frames, whole):
+                    s['mpo_zero'] += min(frames, whole) - last
+                    last = min(frames, whole)
+            length = last * info['frame']
+            packet = struct.pack('<BBH', ep, 0, length) + payload[:length]
         if length > info['data']['max'] * info['data']['mult'] or length % info['frame']:
             # Counted against the driver, not fatal.
             if s is not None:
@@ -774,6 +971,44 @@ class Model1(uacemu.Model):
             s['level'] = capacity / 2
         s['low'] = s['level'] if s['low'] is None else min(s['low'], s['level'])
         s['high'] = s['level'] if s['high'] is None else max(s['high'], s['level'])
+
+    # -- device-to-host streams (26.12) ----------------------------------------
+    def capture(self):
+        """uacemu's capture with the alternate's format, an adaptive
+        source's samples at the Ff last sent to its synch endpoint, and
+        MaxPacketsOnly padding (with Formats 2.2.1's sizes at 48 kHz)."""
+        stamp = self.now()
+        for ep, s in self.in_streams.items():
+            if stamp < s['next']:
+                continue
+            info = s['info']
+            rate = self.rate(info['clock']) or 48000
+            limit = info['data']['max'] * info['data']['mult'] // info['frame']
+            fb = info['feedback']
+            ff = self.synch_out.get(fb['address'], {}).get('last') if fb and not fb['address'] & 0x80 else None
+            unit = 0.000125 if self.p.speed == 'high' else 0.001
+            per = ff * s['period'] / unit if ff else rate * s['period']
+            jitter = info.get('mpo') and abs(per - round(per)) < 1e-9
+            for _ in range(min(64, int((stamp - s['next']) / s['period'] + 1e-9) + 1)):
+                s['acc'] += per
+                k = s.get('k', 0)
+                s['k'] = k + 1
+                # The jitter (2.2.1's nav - 1, nav + 1) is added after the
+                # accumulator takes its whole samples, so it never carries
+                # into the next packet: 48, 47, 49, 48.
+                base = int(s['acc'] + 1e-9)
+                s['acc'] -= base
+                samples = base + ((0, -1, 1, 0)[k % 4] if jitter else 0)
+                samples = max(0, min(samples, limit))
+                data = encode_sine(samples, info, rate, s['phase'])
+                if info.get('mpo') and data:
+                    data += bytes(info['data']['max'] * info['data']['mult'] - len(data))
+                s['phase'] += samples
+                self.send(102, s['ident'], struct.pack('<BBH', ep, 0, len(data)) + data)
+                s['ident'] = (s['ident'] + 1) & 0xffffffff
+                self.in_packets += 1
+                self.in_bytes += len(data)
+                s['next'] += s['period']
 
     # -- usbredir: configurations -------------------------------------------
     def handle(self, kind, ident, packet):

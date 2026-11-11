@@ -72,6 +72,7 @@ MODEL_MAC = bytes.fromhex('000ec6970001')
 # five-packet transfer and took a 2610-byte one.
 RX_TRANSFER_MAX = 3072
 VENDOR, PRODUCT, RELEASE = 0x0fe6, 0x9700, 0x0001
+PRODUCT_9702 = 0x9702                               # the SR9700 with a driver disc (Linux sr9700.c products[])
 
 
 class Chip:
@@ -134,12 +135,19 @@ class Chip:
         return False
 
 
-def config_descriptor(kind=2):
-    body = bytes((9, 4, 0, 0, 3, 0xff, 0xff, 0, 0))
+def config_descriptor(kind=2, composite=False):
+    """The SR9700's configuration; composite: the 0FE6:9702's, whose
+    interface 0 is the driver disc's, a mass-storage CD-ROM interface
+    (class 08/06/50; INFERRED: modelled with no endpoints, so no storage
+    driver can run it; Linux sr9700.c's products[] says only that the
+    Ethernet is interface 1) and interface 1 the Ethernet."""
+    eth = 1 if composite else 0
+    body = bytes((9, 4, 0, 0, 0, 0x08, 0x06, 0x50, 0)) if composite else b''
+    body += bytes((9, 4, eth, 0, 3, 0xff, 0xff, 0, 0))
     body += bytes((7, 5, EP_IN, 2)) + struct.pack('<HB', 64, 0)
     body += bytes((7, 5, EP_OUT, 2)) + struct.pack('<HB', 64, 0)
     body += bytes((7, 5, EP_INT, 3)) + struct.pack('<HB', 8, 1)
-    return bytes((9, kind)) + struct.pack('<HBBBBB', 9 + len(body), 1, 1, 0, 0x80, 0x32) + body
+    return bytes((9, kind)) + struct.pack('<HBBBBB', 9 + len(body), 1 + eth, 1, 0, 0x80, 0x32) + body
 
 
 class Model(ax7emu.Model):
@@ -147,16 +155,20 @@ class Model(ax7emu.Model):
     registers, descriptors and framing."""
 
     def __init__(self, connection, trace, now=None, link_after=1.0, flap_after=None, flap_for=2.0,
-                 serial='SIM9700'):
+                 serial='SIM9700', composite=False):
         kw = {} if now is None else {'now': now}
         super().__init__(connection, trace, 'full', link_after=link_after, flap_after=flap_after,
                          flap_for=flap_for, serial=serial, **kw)
         self.chip = Chip()
-        self.vid, self.pid, self.release = VENDOR, PRODUCT, RELEASE
+        self.composite = composite
+        self.eth_interface = 1 if composite else 0
+        self.vid, self.pid, self.release = VENDOR, PRODUCT_9702 if composite else PRODUCT, RELEASE
         self.model_name = 'SR9700'
-        self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x0110, 0xff, 0xff, 0, 64,
-                                  VENDOR, PRODUCT, RELEASE, 1, 2, 3 if serial else 0, 1)
-        self.config_desc = config_descriptor()
+        # The composite device: class 0 at the device, so the host's composite parent splits it.
+        self.device = struct.pack('<BBHBBBBHHHBBBB', 18, 1, 0x0110, 0 if composite else 0xff,
+                                  0 if composite else 0xff, 0, 64,
+                                  VENDOR, self.pid, RELEASE, 1, 2, 3 if serial else 0, 1)
+        self.config_desc = config_descriptor(composite=composite)
         self.other = None
         self.strings[2] = usb_string('SR9700 Ethernet - SIMULATED')
         self.bulk_max = 64
@@ -177,13 +189,19 @@ class Model(ax7emu.Model):
             for slot, kind, interval, size in ((16 + (EP_IN & 15), 2, 0, 64), (EP_OUT, 2, 0, 64),
                                                (16 + (EP_INT & 15), 3, 1, 8)):
                 types[slot], intervals[slot], packets[slot] = kind, interval, size
+                interfaces[slot] = self.eth_interface    # the endpoints' interface (the 9702: 1)
         data = bytes(types + intervals + interfaces)
         if self.peer_caps & (1 << ax7emu.CAP_EP_MAX):
             data += struct.pack('<32H', *packets)
         self.send(5, data=data)
         numbers, classes, subclasses, protocols = (bytearray(32) for _ in range(4))
         classes[0], subclasses[0] = 0xff, 0xff
-        self.send(4, data=struct.pack('<I', 1 if self.config else 0) + numbers + classes + subclasses + protocols)
+        count = 1
+        if self.composite:
+            classes[0], subclasses[0], protocols[0] = 0x08, 0x06, 0x50
+            numbers[1], classes[1], subclasses[1] = 1, 0xff, 0xff
+            count = 2
+        self.send(4, data=struct.pack('<I', count if self.config else 0) + numbers + classes + subclasses + protocols)
 
     def set_link(self, up, why):
         if up == self.chip.link:
@@ -292,6 +310,16 @@ class Model(ax7emu.Model):
         return frame
 
     def handle(self, kind, ident, packet):
+        if kind in (9, 10) and self.composite:
+            # The 9702's two interfaces, each with alternate 0 only; selecting
+            # the Ethernet's drops a transfer cut off, the CD-ROM's touches it not.
+            if len(packet) != (2 if kind == 9 else 1):
+                raise ValueError('alternate length')
+            ok = self.config and packet[0] in (0, 1) and (kind == 10 or packet[1] == 0)
+            if ok and kind == 9 and packet[0] == self.eth_interface:
+                self.tx_buf = bytearray()
+            self.send(11, ident, bytes((0 if ok else 4, packet[0], 0)))
+            return
         if kind == 9 and self.config and packet == b'\0\0':
             self.tx_buf = bytearray()                 # SET_INTERFACE(0, 0): a transfer cut off is dropped
         if kind in (15, 16):
@@ -328,7 +356,8 @@ class Model(ax7emu.Model):
 
     def connect(self):
         self.info()
-        data = struct.pack('<BBBBHH', 1, 0xff, 0xff, 0, VENDOR, PRODUCT)
+        data = struct.pack('<BBBBHH', 1, 0 if self.composite else 0xff, 0 if self.composite else 0xff, 0,
+                           VENDOR, self.pid)
         if self.peer_caps & (1 << CAP_VERSION):
             data += struct.pack('<H', RELEASE)
         self.send(1, data=data)
@@ -344,6 +373,8 @@ def main():
     ap.add_argument('--flap-after', type=float)
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--serial', default='SIM9700')
+    ap.add_argument('--composite', action='store_true',
+                    help='the 0FE6:9702: a CD-ROM interface 0 (modelled endpoint-less), the Ethernet on 1')
     ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
     args = ap.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -355,7 +386,7 @@ def main():
         with connection:
             connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             model = Model(connection, trace, link_after=args.link_after, flap_after=args.flap_after,
-                          flap_for=args.flap_for, serial=args.serial)
+                          flap_for=args.flap_for, serial=args.serial, composite=args.composite)
             if args.udp:
                 model.bridge = ax7emu.open_bridge(args.udp)
             try:

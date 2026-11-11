@@ -195,7 +195,7 @@ static int RunJob(UVWORK *e)
             UVHEX("USB_EOFS ",st.Eofs); UVHEX("USB_FIDFLIPS ",st.FidFlips);
             UVHEX("USB_DROP_BAD ",st.DropBad); UVHEX("USB_DROP_SIZE ",st.DropSize);
             UVHEX("USB_LASTDROP_USED ",st.LastDropUsed); UVHEX("USB_ERRPKTS ",st.ErrorPackets);
-            UVHEX("USB_OVERFLOWS ",st.Overflows);
+            UVHEX("USB_OVERFLOWS ",st.Overflows); UVHEX("USB_RESYNCS ",st.Resyncs);
         }
 #endif
     }

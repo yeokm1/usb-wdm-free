@@ -141,4 +141,10 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
     if ($t -notmatch '(?m)^Device="([^"]*)"\s*$') { throw "${inf}: no Device string" }
     if ($Matches[1] -cne $fallback) { throw "${inf}: Device string '$($Matches[1])' is not the driver's fallback '$fallback'" }
 }
-Write-Output "PASS infchk: Uac2QueueMs at $default, Uac2VolAboveZero at 0 and SetupPreferredAudioDevices 2 (no-clobber) in every install section of both INFs, Device the driver fallback name; $n mutations refused"
+# uac1 (the UAC_V1 branch) names its devices from uac1's INF the same way.
+if ($cpp -notmatch '#ifdef UAC_V1\r?\nstatic const char NameFallback\[\] = "([^"]*)";') { throw 'uac1 NameFallback not found in uacwdm.cpp' }
+$fallback1 = $Matches[1]
+$t = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\uac1\uac1wdm.inf'))
+if ($t -notmatch '(?m)^Device="([^"]*)"\s*$') { throw 'uac1wdm.inf: no Device string' }
+if ($Matches[1] -cne $fallback1) { throw "uac1wdm.inf: Device string '$($Matches[1])' is not the driver's fallback '$fallback1'" }
+Write-Output "PASS infchk: Uac2QueueMs at $default, Uac2VolAboveZero at 0 and SetupPreferredAudioDevices 2 (no-clobber) in every install section of both INFs, Device the driver fallback name (uac2 and uac1); $n mutations refused"

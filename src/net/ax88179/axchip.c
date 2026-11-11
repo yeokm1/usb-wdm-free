@@ -20,6 +20,16 @@
  *   through SetMac when it uses another address (section 4.8).
  * - link_reset's TX FIFO poll is bounded to AX_FIFO_POLLS reads with a
  *   10 ms sleep, instead of a 100 ms busy loop.
+ * - The Advanced tab's keywords (ethernet.md section 4.10; Settings,
+ *   below): *SpeedDuplex forces 10 or 100 Mb/s (autonegotiation off) or
+ *   advertises 1000 full alone; *FlowControl 3 (the default) leaves
+ *   Linux's pause (the PHY's own advertisement, both medium enables) on
+ *   a full-duplex autonegotiated link (Linux sets them on every link);
+ *   0 to 2 set the pause bits of the advertisement as Linux's phylib does
+ *   for the pair allowed, and the medium's pause enables follow the
+ *   resolution with the partner's (IEEE 802.3 Table 28B-3) within it;
+ *   *EEE runs ax88179_enable_eee and advertises EEE at 100 and 1000 Mb/s,
+ *   or (0) disables it as Linux's reset does.
  * - Start begins with a settle cycle (Settle, below): the chip is run
  *   briefly with this driver's configuration and stopped as Stop stops
  *   it, then brought up. Linux has no such step.
@@ -178,6 +188,9 @@ long AxStart(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
         for (i = 0; i < sizeof(*s); i++) p[i] = 0;
     }
     s->UsbSpeed = probe->Speed;
+    s->Speed = (nc_u16)NcSetting(probe, S_SPEED);
+    s->Flow = (nc_u8)NcSetting(probe, S_FLOW);
+    s->Eee = (nc_u8)NcSetting(probe, S_EEE);
 
     Settle(io);
 
@@ -222,20 +235,56 @@ long AxStart(void *chip, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *params)
                 AX_MEDIUM_FULL_DUPLEX | AX_MEDIUM_GIGAMODE;
     Write16(io, AX_MEDIUM_STATUS_MODE, s->Medium);
 
-    /* ax88179_disable_eee, then advertise no EEE mode
-     * (ax88179_ethtool_set_eee with an empty set). */
-    PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE3);
-    PhyWrite(io, MII_PHYADDR, 0x3246);
-    PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE0);
+    if (s->Eee) {
+        /* ax88179_enable_eee, then advertise EEE at 100 and 1000 Mb/s
+         * (ax88179_ethtool_set_eee). */
+        PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE3);
+        PhyWrite(io, MII_PHYADDR, 0x3247);
+        PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE5);
+        PhyWrite(io, MII_BMSR, 0x0680);
+        PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE0);
+    } else {
+        /* ax88179_disable_eee, then advertise no EEE mode
+         * (ax88179_ethtool_set_eee with an empty set). */
+        PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE3);
+        PhyWrite(io, MII_PHYADDR, 0x3246);
+        PhyWrite(io, GMII_PHY_PAGE_SELECT, GMII_PHY_PGSEL_PAGE0);
+    }
     PhyWrite(io, MII_MMD_CTRL, MDIO_MMD_AN);
     PhyWrite(io, MII_MMD_DATA, MDIO_AN_EEE_ADV);
     PhyWrite(io, MII_MMD_CTRL, MDIO_MMD_AN | MII_MMD_CTRL_NOINCR);
-    W16(b, 0);
+    W16(b, (nc_u16)(s->Eee ? (MDIO_EEE_100TX | MDIO_EEE_1000T) : 0));
     NcIoWrite(io, AX_ACCESS_PHY, AX88179_PHY_ID, MII_MMD_DATA, b, 2);
 
-    /* mii_nway_restart */
-    bmcr = PhyRead(io, MII_BMCR);
-    if (bmcr & BMCR_ANENABLE) PhyWrite(io, MII_BMCR, (nc_u16)(bmcr | BMCR_ANRESTART));
+    if (s->Speed >= 1 && s->Speed <= 4) {
+        /* A forced speed (mii_ethtool_set_link_ksettings): autonegotiation
+         * off, 10 or 100 Mb/s, half or full duplex. */
+        PhyWrite(io, MII_BMCR, (nc_u16)((s->Speed >= 3 ? BMCR_SPEED100 : 0) |
+                                         (s->Speed % 2 ? 0 : BMCR_FULLDPLX)));
+    } else if (s->Speed == 6 || s->Flow != 3) {
+        /* The advertisement: 10/100 and 1000 full (6: 1000 full alone),
+         * and, unless *FlowControl is 3, the pause bits for the pair it
+         * allows, as phylib's linkmode_set_pause (receive: PAUSE;
+         * transmit differs from receive: ASM_DIR); then autonegotiation
+         * restarted. */
+        nc_u16 adv = PhyRead(io, MII_ADVERTISE), gig = PhyRead(io, MII_CTRL1000);
+        adv &= (nc_u16)~(ADVERTISE_10HALF | ADVERTISE_10FULL | ADVERTISE_100HALF | ADVERTISE_100FULL);
+        if (s->Speed != 6)
+            adv |= ADVERTISE_10HALF | ADVERTISE_10FULL | ADVERTISE_100HALF | ADVERTISE_100FULL;
+        if (s->Flow != 3) {
+            adv &= (nc_u16)~(ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM);
+            if (s->Flow & 2) adv |= ADVERTISE_PAUSE_CAP;
+            if (((s->Flow & 1) != 0) != ((s->Flow & 2) != 0)) adv |= ADVERTISE_PAUSE_ASYM;
+        }
+        PhyWrite(io, MII_ADVERTISE, adv);
+        PhyWrite(io, MII_CTRL1000, (nc_u16)((gig & ~(ADVERTISE_1000HALF | ADVERTISE_1000FULL)) | ADVERTISE_1000FULL));
+        PhyWrite(io, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+    } else {
+        /* The defaults: Linux's mii_nway_restart, the PHY's own
+         * advertisement. */
+        bmcr = PhyRead(io, MII_BMCR);
+        if (bmcr & BMCR_ANENABLE) PhyWrite(io, MII_BMCR, (nc_u16)(bmcr | BMCR_ANRESTART));
+    }
 
     if (io->Status < 0) return io->Status;
     {
@@ -263,6 +312,23 @@ long AxSetMac(void *chip, NET_IO *io, const nc_u8 mac[6])
     if (io->Status < 0) return io->Status;
     for (i = 0; i < 6; i++) s->Mac[i] = mac[i];
     return NC_OK;
+}
+
+/* The pause directions of a full-duplex link (bit 0 transmit, bit 1
+ * receive): IEEE 802.3 Table 28B-3 on this end's and the partner's
+ * advertisement, within the pair *FlowControl allows. None when
+ * autonegotiation is off. */
+static nc_u8 Pause(NET_IO *io, nc_u8 allowed)
+{
+    nc_u16 bmcr = PhyRead(io, MII_BMCR), adv = PhyRead(io, MII_ADVERTISE), lpa = PhyRead(io, MII_LPA);
+    nc_u8 got = 0;
+    if (!(bmcr & BMCR_ANENABLE)) return 0;
+    if ((adv & ADVERTISE_PAUSE_CAP) && (lpa & ADVERTISE_PAUSE_CAP)) got = 3;
+    else if ((adv & ADVERTISE_PAUSE_CAP) && (adv & ADVERTISE_PAUSE_ASYM) &&
+             !(lpa & ADVERTISE_PAUSE_CAP) && (lpa & ADVERTISE_PAUSE_ASYM)) got = 2;
+    else if (!(adv & ADVERTISE_PAUSE_CAP) && (adv & ADVERTISE_PAUSE_ASYM) &&
+             (lpa & ADVERTISE_PAUSE_CAP) && (lpa & ADVERTISE_PAUSE_ASYM)) got = 1;
+    return (nc_u8)(got & allowed);
 }
 
 long AxLink(void *chip, NET_IO *io, NET_LINK *link)
@@ -294,7 +360,7 @@ long AxLink(void *chip, NET_IO *io, NET_LINK *link)
         return NC_OK;
     }
 
-    mode = AX_MEDIUM_RECEIVE_EN | AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN;
+    mode = AX_MEDIUM_RECEIVE_EN;
     status = Read8(io, AX_PHYSICAL_LINK_STATUS);
     phy = PhyRead(io, GMII_PHY_PHYSR);
     if (io->Status < 0) return io->Status;
@@ -322,6 +388,13 @@ long AxLink(void *chip, NET_IO *io, NET_LINK *link)
     NcIoWrite(io, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, queue, 5);
     s->RxLength = 1024UL * (queue[3] + 2);
     if (phy & GMII_PHY_PHYSR_FULL) mode |= AX_MEDIUM_FULL_DUPLEX;
+    /* Pause only on a full-duplex link that autonegotiated; there
+     * *FlowControl 3 (the default) sets both enables, as Linux does. */
+    s->Pause = 0;
+    if ((phy & GMII_PHY_PHYSR_FULL) && (PhyRead(io, MII_BMCR) & BMCR_ANENABLE))
+        s->Pause = (nc_u8)(s->Flow == 3 ? 3 : Pause(io, s->Flow));
+    if (s->Pause & 1) mode |= AX_MEDIUM_TXFLOW_CTRLEN;
+    if (s->Pause & 2) mode |= AX_MEDIUM_RXFLOW_CTRLEN;
     Write16(io, AX_MEDIUM_STATUS_MODE, mode);
     if (io->Status < 0) return io->Status;
     for (i = 0; i < 5; i++) s->Queue[i] = queue[i];
@@ -464,10 +537,19 @@ int AxTxEnd(void *chip, nc_u8 *buffer, nc_u32 *total, nc_u32 capacity, nc_u32 ma
     return 0;                   /* the header's padding flag covers it */
 }
 
+/* The Advanced tab's keywords (ethernet.md section 4.10): ASIX's 7 INF's
+ * names, values and defaults, in the order of NET_PROBE.Settings. */
+static const NET_SETTING Settings[S_COUNT] = {
+    { "*SpeedDuplex", 0, 6, { 0, 1, 2, 3, 4, 6 } },
+    { "*FlowControl", 3, 4, { 0, 1, 2, 3 } },
+    { "*EEE", 1, 2, { 0, 1 } },
+};
+
 const NET_CHIP NetPackageChip = {
     "ax179f",
     "usb-wdm-free AX179F (ASIX AX88179/AX88178A USB Gigabit Ethernet)",
     0x0001,
     AxProbe, AxStart, AxSetMac, AxLink, AxPoll, AxSetFilter, AxStop, AxSuspend, AxResume,
-    AxStatus, AxRxParse, AxTxHeader, AxTxEnd
+    AxStatus, AxRxParse, AxTxHeader, AxTxEnd, 0, 0, 0,
+    Settings, S_COUNT
 };

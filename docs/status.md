@@ -298,7 +298,7 @@ it is tested there too.
 | Package | 98 SE | ME | 2000 | XP | XP x64 | Vista | Vista x64 | 7 | 7 x64 | 8 | 8 x64 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `uvc98` | Tested on a real PC (10) | Built, not tested | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
-| `uac1` | Built, not tested | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
+| `uac1` | Tested on a real PC (11) | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target | Not a target |
 | `uac2` | Tested on a real PC (10) | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested |
 | `usbmidi` | Built, not tested | Built, not tested (1) | Built, not tested | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) | Built, not tested (1) |
 | `cdcnet` | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Built, not tested | Not a target | Not a target |
@@ -338,25 +338,32 @@ it is tested there too.
    an EHCI stack) and what was exercised are not recorded yet, so the
    rule above that a driver is ready only when both host controller
    drivers pass is not yet shown.
+11. The owner's bench, 2026-11-09: the real Creative Sound Blaster Play! 2
+   (`041E:323D`) on a ThinkPad P14s Gen 1 under Windows 98 SE, xHCI98
+   3.4.2.0 and `uac1` 0.1.9: playback, volume and mute, recording from a
+   microphone, unplug and replug with nothing playing
+   ([uac1-play2-real](testing/2026-11-09-uac1-play2-real.md)). Under an
+   EHCI stack (NUSB's UHCI companion for this Full Speed device) not yet
+   run on a real PC.
 
 ### Legs run so far, by kind of device
 
-None of the runs below makes a cell above "Tested": none was on a real PC
-with the system installed on it. They are development legs, each recorded
-in `docs/testing/`. The "Device" column says which kind of device the leg
+Only a run on a real PC (the third label below) can make a cell above
+"Tested"; the others are development legs. Each is recorded in
+`docs/testing/`. The "Device" column says which kind of device the leg
 used, with one of three labels:
 
 - **emulated**: a QEMU device model, or this repository's simulator or
   synthetic source (named in the row);
 - **real device via VM**: a physical device passed through from the
   author's host to a QEMU guest with QEMU `usb-host` (named in the row);
-- **real PC**: a physical machine running the system. **None yet - owner's
-  bench session**, for every driver.
+- **real PC**: a physical machine running the system: so far the owner's
+  bench of 2026-11-09 (`uac1`, below).
 
 "Host controller driver" is the guest's USB host controller driver: Windows'
-own UHCI or EHCI driver, NUSB 3.3's EHCI driver on 98 SE, or xHCI98. The
-emulated controller under it is always QEMU's (PIIX UHCI, `usb-ehci` or
-`qemu-xhci`). Only legs in which this repository's driver (or INF) ran are
+own UHCI or EHCI driver, NUSB 3.3's EHCI driver on 98 SE, or xHCI98. In a
+leg in a VM the controller under it is QEMU's (PIIX UHCI, `usb-ehci` or
+`qemu-xhci`); on a real PC it is the machine's own. Only legs in which this repository's driver (or INF) ran are
 listed; runs of Windows' own class drivers (usbvideo, usbaudio) with the
 same devices are references, not legs. Per host controller driver, the
 same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
@@ -396,6 +403,15 @@ same legs are in [docs/testing/hcd-matrix.md](testing/hcd-matrix.md).
 | XP x64 | xHCI98 3.4.0.0, Windows' EHCI | emulated: `hs24` (first plug), `cx31993` (the seek legs); the released 0.1.6.0 x64 files, `uac2wdm.inf` staged by `SetupCopyOEMInf` with `UACCI.INF` | first plug: the wizard chose `uac2` from the staged INF with no restart prompt; play, rec and ramp PASS; the seek legs: none in 5 legs on each controller | [xp64-legs](testing/2026-11-04-xp64-legs.md) |
 
 2000: the seek legs only (2026-10-31); ME under xHCI98 only; the seek legs on 98 SE are owed. Real PC: none yet - owner's bench session.
+
+**`uac1`**
+
+| System | Host controller driver | Device | Verdict | Record |
+|---|---|---|---|---|
+| 98 SE | xHCI98 3.4.2.0 | real PC (the owner's bench, a ThinkPad P14s Gen 1): Creative Sound Blaster Play! 2 `041E:323D` | PASS: playback clean at 48 and 44.1 kHz (tones, left and right, sweeps), volume and mute, recording from a microphone clean at 44.1 kHz 16-bit stereo, unplug and replug with nothing playing (the same port and another): still the preferred device, playback clean | [uac1-play2-real](testing/2026-11-09-uac1-play2-real.md) |
+| 98 SE | xHCI98 `ca0001e1` | real device via VM: Sound Blaster Play! 2, `usb-host` `isobsize=1` | PASS: install, list, mixer, ramp, play 48 and 44.1 kHz, record 48 and 44.1 kHz, no transfer refused by the host (QEMU's defaults: every OUT transfer refused) | [uac1-play2-real](testing/2026-11-09-uac1-play2-real.md) |
+| 98 SE | NUSB 3.3, its UHCI companion | real device via VM: Sound Blaster Play! 2 | install, list, mixer PASS; no `usb-host` setting carried both playback and recording | [uac1-play2-real](testing/2026-11-09-uac1-play2-real.md) |
+| 98 SE | xHCI98, 98 SE's own UHCI driver | real device via VM: Logi USB Headset `046D:0A64`; emulated: `uac1emu.py` profiles | see the record (G1 to G3) | [uac1-98se](testing/2026-11-07-uac1-98se.md) |
 
 **`noaud`**
 

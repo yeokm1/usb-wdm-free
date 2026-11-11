@@ -19,6 +19,7 @@ NDIS.SYS!NdisMSetAttributesEx
 NDIS.SYS!NdisMSleep
 NDIS.SYS!NdisOpenConfiguration
 NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReadNetworkAddress
 NDIS.SYS!NdisTerminateWrapper
 NDIS.SYS!NdisUnchainBufferAtFront
 NDIS.SYS!NdisWriteErrorLogEntry

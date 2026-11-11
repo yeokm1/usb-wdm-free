@@ -337,3 +337,16 @@ proprietary programs.  If your program is a subroutine library, you may
 consider it more useful to permit linking proprietary applications with the
 library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
+
+---------------------------------------------------------------------------
+Scope note (not part of the GNU General Public License text above)
+
+The licence above covers the copyrightable contributions of this project's
+authors. It does not, and cannot, grant any right in third-party material:
+code adapted from other projects keeps its own licence (NOTICE.md), and
+src/video/uvcdec/turbo/ is libjpeg-turbo's under its own licences.
+
+This project's documentation - every Markdown (.md) file tracked outside
+src/video/uvcdec/turbo/, README.md among them - is licensed under the
+Creative Commons Attribution 4.0 International License (CC BY 4.0) instead
+of the licence above. LICENSE-docs.md gives the scope and its exclusions.

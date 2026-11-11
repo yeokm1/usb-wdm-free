@@ -638,6 +638,287 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
   checksums asked for on the RTL8157/8159, and writes the receive checksum
   bits as the real RTL8157 did; what was not seen is marked inferred there.
 
+### 4.10 The Advanced tab: the makers' keywords (2026-11-09)
+
+Owner, 2026-11-09: each Ethernet driver's settings on its adapter's
+Advanced tab are matched, chip by chip, to what the chip maker's own INF
+offers, with the maker's defaults; for `sr9700` and `cdcnet`, which no
+maker's INF covers, only what the chip or the class supports. Before
+this, every package's INF offered `NetworkAddress` alone (`cdcnet` also
+its own `Protocol`), and `rtl815x` kept EEE on as Linux sets it, where
+Realtek's driver leaves it off (section 6.4.2, "Kept as Linux sets
+them").
+
+#### 4.10.1 The makers' INFs, as read
+
+Read 2026-11-09 from `usb-wdm-nonfree` `d2f7a26` (the files as released;
+an INF is text, read for its `Ndi\params` keys, values, defaults and the
+install section each id takes). "Default" is the `default` value of the
+key; where an INF also writes the value itself (`HKR,,<name>`) it is the
+same. Keywords the drivers here cannot honour are in 4.10.3.
+
+**Realtek** (`rtl815x`). XP 5.23 (`rtuxp.INF`), Vista 6.27
+(`rtux86lh.INF`, `rtux64lh.INF`) and 7 7.61.20 (`rtump62x86sta.INF`,
+`rtump62x64sta.INF`) list the RTL8152/8152B, RTL8153/8153B and, in the
+7 INF only, the RTL8153C, RTL8153D, 8155, 8156 and 8156B; each chip revision
+(`REV_xxxx`) takes a section that pulls in one `.reg` section per
+keyword; a bare id (no revision) takes a fallback section
+(`RTL8152BXx86`, `RTL8153Xx86`, `RTL8156Xx86`, `RTL8155Xx86` in the 7 INF)
+that offers only the address, speed, flow control, VLAN and checksum
+keywords. The table is the revision sections'. The RTL8157 and RTL8159 are only in Realtek's Windows 10 INF
+10.68.20, which was read on 2026-11-07 for its ids, chip sections and
+these four defaults (`docs/testing/2026-11-07-realtek-diagnostic.md`,
+section 6.4.2): `*EEE`, `EnableGreenEthernet`, `AdvancedEEE`,
+`EnableExtraPowerSaving` all 0. That INF is not on this host now; its
+other keywords for these chips were not recorded.
+
+| Keyword (7 INF; XP and Vista name) | Values | XP 5.23 default | Vista 6.27 default | 7 7.61.20 default | Chips offered on (7 INF) |
+|---|---|---|---|---|---|
+| `NetworkAddress` | edit, 12 hex digits, optional | empty | empty | empty | all |
+| `*SpeedDuplex` (XP `SpeedDuplex`) | 0 auto, 1 10 half, 2 10 full, 3 100 half, 4 100 full, 6 1000 full, 2500, 5000 | 0 | 0 | 0 | all; the list stops at the chip's speed (8152: to 4; 8153 family: to 6; 8155/8156/8156B: to 2500). Fibre and "rm10mbe" sections drop some |
+| `*FlowControl` (XP `FlowControl`) | 7: 0 off, 3 Rx and Tx; XP: 0 off, 1 on | 1 (on) | 3 | 3 | all |
+| `*EEE` (XP and Vista `EEE`) | 0, 1 | 1 on most 8152B, 8153, 8153B sections, 0 on the "basicfunc" ones | the same | **0 on every revision section** | every chip |
+| `EEEMaxSupportSpeed` | 10, 100, 1000, 2500 (Mb/s) | - | - | 1000 | 8155, 8156, 8156B |
+| `EnableGreenEthernet` | 0, 1 | 1 (8153B; 0 on its "basicfunc" section) | the same | **0** | 8153B/C, 8153D, 8155, 8156, 8156B (not the 8152B or 8153) |
+| `AdvancedEEE` | 0, 1 | 0 (8153B) | 0 (8153B) | **0** | 8153B/C, 8153D, 8155, 8156, 8156B (not the 8152B or 8153) |
+| `EnableExtraPowerSaving` (XP and Vista `EnableU2P3`), "Idle Power Saving" | 0, 1 | 1 (8153B; 0 on its "basicfunc" section) | the same | **0** | every chip |
+| `*IPChecksumOffloadIPv4`, `*TCPChecksumOffloadIPv4`, `*UDPChecksumOffloadIPv4` (XP `CksOffload`) | 0 off, 1 Tx, 2 Rx, 3 Rx and Tx | 3 | 3 | 3 | all |
+
+The XP and Vista INFs offer the four power keywords only on some
+sections (EEE on the RTL8152B and later, the other three on the
+RTL8153B), with EEE, green Ethernet and idle power saving on by default;
+the 7 INF offers EEE and idle power saving on every chip's revision
+sections and green Ethernet and Advanced EEE from the RTL8153B on, all
+off by default, as the Windows 10 INF has them on the RTL8157 and
+RTL8159.
+
+**ASIX, AX88179 and AX88178A** (`ax88179`). XP and Vista 1.4.2.0 / x64
+1.6.2.0 (`Ax88179_178a.inf`), 7 1.12.11.0 / x64 1.14.11.0
+(`AX88179_178a.inf`); no ASIX driver for 98 SE, ME or 2000.
+
+| Keyword | Values | XP/Vista default | 7 default |
+|---|---|---|---|
+| `NetworkAddress` | edit, optional | `000000000000` | the same |
+| `*SpeedDuplex` | 0 auto, 1, 2, 3, 4 (10/100 half/full), 6 1000 full | 0 | 0 (three Allied Telesis media-converter sections offer one value each: 6, 4 or 0) |
+| `*FlowControl` | 0 off, 1 Tx, 2 Rx, 3 Rx and Tx | 3 | 3 (0 in the Allied Telesis sections) |
+| `*EEE` | 0, 1 | not offered | **1** (0 in three Allied Telesis sections, 1 in `ATUMC2000T`) |
+
+**ASIX, AX88772B and AX88772C** (`ax88772`, 98 SE and ME). 2000/XP
+5.4.3.0, XP x64 5.6.3.0, Vista 5.8.2.0 (`Ax88772b.inf`): `ConnectionType`
+0 auto, 1 10 half, 2 10 full, 3 100 half, 4 100 full, default 0;
+`FlowControl` 0 off, 1 Tx, 2 Rx, 3 on, default 3; `NetworkAddress`.
+Vista's INF (5.8.2.0) has the starred `*SpeedDuplex` and `*FlowControl`
+with these values instead. 7 5.12.12.0
+(`Ax88772b.inf`): `*SpeedDuplex` 0 to 4, default 0; `*FlowControl` 0 to
+3, default 3; `NetworkAddress`; no EEE (the chip has a 10/100 PHY). ASIX's
+98 SE/ME driver 3.0.3.12 (`Ax88772.inf`, AX88772 and AX88772A only) has
+`ConnectionType` with other values (0 auto, 2, 3, 8, 9) and the same
+`FlowControl`.
+
+#### 4.10.2 What each driver offers
+
+One keyword set per package, on every system it serves: the newest
+maker INF's names and values for its chips (Realtek's 7 INF, ASIX's 7
+INFs), so a value means the same under 98 SE as under 7, and one parser
+in the core reads it. The XP and Vista names (`SpeedDuplex`, `EEE`,
+`EnableU2P3`, `ConnectionType`) are not read. The defaults are the newest
+maker INF's: so `rtl815x`'s EEE, green Ethernet, Advanced EEE and idle
+power saving are off by default, as Realtek's 7 and 10 drivers leave
+them. A keyword is offered only where the driver performs the function
+(4.10.3 lists the rest).
+
+| Package, chips | Keywords (default) |
+|---|---|
+| `rtl815x`, RTL8152 family | `NetworkAddress`; `*SpeedDuplex` 0-4 (0); `*FlowControl` 0, 3 (3); `*EEE` (0) |
+| `rtl815x`, 1 Gb/s (RTL8153, 8153B, 8153C, 8153D, and every id whose chip is not known from it) | as the RTL8152's, `*SpeedDuplex` adds 6; and `EnableGreenEthernet` (0), `AdvancedEEE` (0), `EnableExtraPowerSaving` (0) |
+| `rtl815x`, 2.5 Gb/s (RTL8155 id, 8156, 8156B) | as 1 Gb/s, `*SpeedDuplex` adds 2500; and `EEEMaxSupportSpeed` 10, 100, 1000, 2500 (1000) |
+| `rtl815x`, RTL8157 / RTL8159 | as the RTL8152's, `*SpeedDuplex` 0-4, 6, 2500, 5000 (and 10000 on the RTL8159, by the pattern of Realtek's values: no INF read here lists it); `EnableGreenEthernet` (0), `AdvancedEEE` (0); on 2000 to 7 also the three transmit checksum keywords, 0 off, 1 Tx (1) |
+| `ax88179`, AX88179, AX88178A | `NetworkAddress`; `*SpeedDuplex` 0-4, 6 (0); `*FlowControl` 0-3 (3); `*EEE` (1, ASIX's 7 default; owner question 12.3) |
+| `ax88179`, the Allied Telesis media converters `07C9:000E`, `000F`, `0010` | as ASIX's sections for them: `*SpeedDuplex` one value each (6, 4, 0); `*FlowControl` 0-3 (0); `*EEE` 0 only |
+| `ax88772`, AX88772B, AX88772C | `NetworkAddress`; `*SpeedDuplex` 0-4 (0); `*FlowControl` 0-3 (3) |
+| `ax88772`, SR9800 (no maker INF) | `NetworkAddress`; `*SpeedDuplex` 0-4 (0): its PHY is a clause 22 MII PHY (Linux `sr9800.c` drives it through the generic MII calls) |
+| `sr9700` (no maker INF) | `NetworkAddress` only: the chip runs 10 Mb/s half duplex only and has no MII (section 6.9.2) |
+| `cdcnet` (no maker INF) | `NetworkAddress`, applied on an NCM function whose `bmNetworkCapabilities` has D1 (CDC NCM 1.0, `SetNetAddress`), refused on any other (ECM and RNDIS define no way to set it); and its own `Protocol` |
+
+Which keyword set an adapter gets is chosen in the INF by its id. For
+`rtl815x` an id names a speed class, not a chip: the RTL8152 ids
+(`0BDA:8152`, `8050`, `8052`, and the rebrands Realtek's 7 INF puts in
+its RTL8152B sections), the 2.5 Gb/s ids (`0BDA:8155`, `8156`, `8056`
+and the rebrands in Realtek's RTL8156 and 8156B sections), the RTL8157
+and RTL8159 ids, and 1 Gb/s for every other id. Within a class the chip
+is read at start (`RtlChipId`); a keyword the chip lacks is ignored and
+traced (green Ethernet and Advanced EEE on an RTL8153 of a 1 Gb/s id,
+idle power saving on an RTL8153 5C00 or 5C10, an 8153B or an 8153C).
+Idle power saving is not offered on the RTL8152, RTL8157 and RTL8159,
+which Realtek's INFs offer it on with 0 as the default: the driver never
+turns the USB 2 PHY's P3 state on there (Linux has no such step for the
+RTL8152; on the RTL8157 and RTL8159 the setup keeps it off), so 0 is
+what they get.
+
+#### 4.10.3 Not offered
+
+Wake-on-LAN of every kind (`*WakeOnMagicPacket`, `*WakeOnPattern`,
+`WakeOnLinkChange`, `S5WakeOnLan`, `WolShutdownLinkSpeed`, `MaskTimer`,
+`WakeUp`): no wake-up source (section 4.7). VLAN and priority
+(`*PriorityVLANTag`, `VlanID`, `VLAN_ID`): no tags (4.6). Jumbo frames
+(`*JumboPacket`): MTU 1500 (4.6). Large send (`*LsoV2IPv4`,
+`*LsoV1IPv4`), IPv6 and receive checksums, ARP and NS offload: not
+offered by the driver (4.9). Realtek's `GigaLite` (the 8156 core's setup
+turns its "lite" modes off, as Linux does; turning them on is not
+described), `EnableExtraTransmissionParm`, `BatteryModeLinkSpeed`,
+`EnableAdaptiveLinkCap`, `EnableCloneMAC` and `DashEnable`: no public
+description of what they do. ASIX's `AutoDetach`, `AutoDetachTimer` and
+`UsbPowerSave`: `ax88179` keeps Linux's auto-detach (the EEPROM's
+setting, which is ASIX's 7 default, 2; its XP and Vista default is 0)
+and no U1/U2 setting.
+
+#### 4.10.4 What each keyword does
+
+What a Realtek or ASIX keyword does in their drivers is not published;
+each is mapped to the chip function of the same name that Linux drives
+(facts only from `r8152.c`, GPL-2.0-only; `ax88179_178a.c` and
+`asix_devices.c` are GPL-2.0-or-later):
+
+- **`*SpeedDuplex`** (every chip with an MII PHY): 0 autonegotiates
+  everything the chip and the USB link carry (as before). 1 to 4 turn
+  autonegotiation off and force 10 or 100 Mb/s, half or full duplex in
+  the PHY's control register (Linux `rtl8152_set_speed`,
+  `mii_ethtool_set_link_ksettings`). 6, 2500, 5000 and 10000 keep
+  autonegotiation and advertise that one speed only (full duplex): a
+  gigabit or faster link needs autonegotiation, and Linux forces one
+  through the advertisement in the same way. A speed the chip or the USB
+  link cannot carry (2500 at USB High Speed, where the multi-gigabit
+  speeds are never advertised, section 6.4.1; 1000 on an RTL8152) is
+  taken as 0, and traced. The link the chip then reports is the link
+  (section 4.6).
+- **`*FlowControl`**: `rtl815x` (Realtek offers on or off): 0 clears the
+  two pause bits of the advertisement, any other value sets them (as now;
+  Linux `r8152b_enable_fc`). `ax88179` and `ax88772` (ASIX offers Tx and
+  Rx apart): 3, the default, keeps what each driver does today (Linux's:
+  on the AX88179 the PHY's own advertisement and both medium pause
+  enables, here on a full-duplex autonegotiated link, where Linux sets
+  them on every link; on the AX88772B/C both pause bits advertised and
+  the enables resolved with the partner's advertisement, IEEE 802.3
+  Table 28B-3). 0 to 2: the advertisement as Linux's phylib sets it for
+  the pair (Rx only: PAUSE and ASM_DIR; Tx only: ASM_DIR; none: neither),
+  and the medium register's transmit and receive pause enables only for
+  the directions allowed, after that resolution, at link-up. The SR9800
+  keeps Linux's (no pause advertised, both enables); a value there is
+  reported, not applied. A speed
+  forced with autonegotiation off (`*SpeedDuplex` 1 to 4) has no
+  autonegotiation, so no pause; 6 and above keep autonegotiation, and
+  pause resolves as for 0.
+- **`*EEE`** and **`EEEMaxSupportSpeed`** on the RTL8156 revision 7020:
+  ignored, traced. Its setup never turns EEE on (Linux enables EEE on the
+  RTL8156 only from revision 7030), and no on-sequence for it is known,
+  so it stays off whatever the keyword says.
+- **`*EEE`**: `rtl815x`: the chip's EEE on (the steps it runs now, Linux
+
+  `rtl_eee_enable(true)`) or off (Linux `rtl_eee_enable(false)`: the
+  MAC's EEE enables cleared, the PHY's EEE configuration off, the EEE
+  advertisement 0; on the RTL8152 its own three PHY registers as Linux's
+  `r8152_eee_en(false)` writes them). `ax88179`: on, Linux's
+  `ax88179_enable_eee` and the EEE advertisement of 100 and 1000 Mb/s; off,
+  as now (`ax88179_disable_eee`, advertisement 0).
+- **`EEEMaxSupportSpeed`** (RTL8156 core, with EEE on): the EEE
+  advertisement stops at that speed: 2500 advertises 100, 1000 and 2.5G;
+  1000 (the default) 100 and 1000; 100 only 100; 10 none (EEE at 10 Mb/s
+  is the PHY's own 10BASE-Te enable, which `*EEE` sets).
+- **`EnableGreenEthernet`** (RTL8153B, 8153C and the 8156 core): Linux's
+  `GREEN_ETHERNET`. Off: the 8153B/C keep the full PHY bias
+  (`r8153b_green_en(false)`'s values) and the 8156 core clears
+  `GREEN_ETH_EN`; on: as Linux after the first setup (the lower bias,
+  `GREEN_ETH_EN` set), which is what the driver does now.
+- **`AdvancedEEE`** (RTL8153B and later): Linux's EEE+ (`PLA_EEEP_CR`,
+  `rtl_set_eee_plus`). Off: never on. On: as now, at 10 Mb/s only, never
+  on the RTL8159.
+- **`EnableExtraPowerSaving`**, "Idle Power Saving": the USB 2 PHY's P3
+  state (`UR_U2P3` bit 0; Linux `r8153_u2p3en`), which Realtek's XP and
+  Vista INFs name `EnableU2P3` under the same description. The driver
+  turns it on today on the RTL8153 5C20 and 5C30 (PHY setup and wake)
+  and the 8156 core (PHY setup and wake), as Linux does. Off: those
+  steps are skipped, the ones that clear it stay, so it stays off. On: as
+  now. On the other chips it is never on (above).
+- **Transmit checksums** (RTL8157 and RTL8159, 2000 to 7): 0 takes the
+  task out of what the core offers TCP/IP (section 4.9); 1, 3 keep it; 2
+  (receive only) is taken as 0, the receive checks not being offered.
+- **`NetworkAddress`**: as section 4.8; on `cdcnet` (NCM with D1 only)
+  `SetNetAddress` is sent with the data interface at alternate 0, before
+  it is selected. A refusal at start leaves the function's own address
+  for the adapter's life; an address taken at start is set again at each
+  resume and reset, and a refusal then fails that bring-up, so the
+  function and NDIS never carry traffic on different addresses. A resume
+  whose bring-up fails (an address refused, or any of its requests
+  failing while the function wakes) leaves the data path closed and the
+  link down; the worker then retries the bring-up on its own, after 1,
+  2, 4 and 8 quiet seconds and then every 8, six times in all, and on
+  success restores the cached packet filter, reports the link and
+  reopens the data path. After the last retry a reset, another sleep or
+  a replug still tries it.
+
+
+Every keyword is read once, at `MiniportInitialize`, before the chip's
+`Start`; a change takes effect when the adapter restarts (disabled and
+enabled, or the system restarted), as the Advanced tab's change does on
+these systems. A resume re-applies the values read.
+
+#### 4.10.5 The core and the chip interface
+
+`netchip.h` gains a settings table in `NET_CHIP`: `Settings` (an array of
+`NET_SETTING`: the keyword's ASCII name, its default, and its allowed
+values) with `SettingCount`. The values reach the chip through
+`NET_PROBE`, which the lower edge keeps for the adapter's life and hands
+to `Start` and `Resume`: `NET_PROBE.Settings` points at one value per
+table entry, in the table's order, set before `Start` and never changed
+after. The chips' `Start` clears its own state and reads the values
+from the probe there, so nothing a start clears holds them. A value a
+chip cannot apply (above) is named in `NET_PARAMS.Ignored`, a bit per
+table entry, which the lower edge traces after `Start`. The core
+(`netcore.c`, all four copies) reads each keyword in `Initialize` with
+`NdisReadConfiguration` as a string and parses it as decimal digits
+itself: the Advanced tab writes strings on every system, and
+`NdisParameterInteger`'s base on 98 SE was not read; a `REG_DWORD`
+(type integer) is taken as is. A value that is missing, malformed or not
+in the allowed list becomes the default, traced. The transmit checksum
+keywords are the core's own: on 2000 and later it masks
+`NET_PARAMS.Offload` with them; 98 SE and ME have no offload. `cdcnet`
+(its own code, no shared core) reads `NetworkAddress` with
+`NdisReadNetworkAddress` as the shared core does.
+
+#### 4.10.6 The INFs
+
+The NT INFs (2000 to 7) and the 98 SE/ME INFs carry the same keys, one
+`AddReg` section per keyword set: `Ndi\params\<keyword>` with
+`ParamDesc`, `type` (`enum`, `edit` for `NetworkAddress`), `default` and
+the `enum` values, and the value itself in the driver key at its default
+(`HKR,,<keyword>,0x00000002,"<default>"`, `FLG_ADDREG_NOCLOBBER`, so a
+reinstall keeps a changed value). `NetworkAddress` stays optional with
+no stored value. The descriptions are this repository's own wording.
+`RTL81598.INF`, `RTL815X.INF` and `RTLXP7.INF` gain one install section
+per speed class; `AX772F98.INF` and `AX772F.INF` one for the SR9800;
+`AX179F98.INF` and `AX179F.INF` one for each Allied Telesis id.
+
+
+#### 4.10.7 Legs
+
+Host tests: the core's parse (missing, malformed, out of list, integer
+type), each chip's register writes for each value against its model.
+Guest legs, on the simulators (`rtlemu.py`, `axemu.py`, `ax7emu.py`,
+`ncmemu.py`), on 98 SE (the 9x INF form) under NUSB's EHCI and under
+xHCI98, on XP (the NT form), and on 7 x64 for `rtl815x`:
+
+- After install the driver key holds each keyword at its default
+  (read back with the test aid `NETSET.EXE`).
+- The Advanced tab itself, once per INF form (98 SE's `netdi.dll` with
+  the starred names, and an NT system): every keyword is listed with its
+  default; one value is changed through the dialog, the dialog reopened
+  to show it, and the value read back (its registry type and text).
+- Every other value is written with `NETSET.EXE` as the tab writes it,
+  the adapter restarted, and the simulator's log shows the registers the
+  value sets (EEE enables and advertisement, the PHY control register and
+  advertisement, the pause bits, green and bias, EEE+, U2P3, the node id),
+  and the link and a ping pass.
+
 ## 5. USB side: binding and configuration
 
 ### 5.1 What the driver binds to, per host stack
@@ -1132,7 +1413,9 @@ to QEMU guests and cabled to a 10GbE port; record
   leaves the PHY up, so an rtl815x adapter that was disabled kept a
   5 Gb/s link before.
 - **Kept as Linux sets them**: EEE (100M to 5G advertised), ALDPS, EEE and
-  10M clock division, MAC clock slow-down. Realtek's Windows 10 driver
+  10M clock division, MAC clock slow-down. Section 4.10 (owner,
+  2026-11-09) puts EEE, green Ethernet, EEE+ and the USB 2 PHY's P3 state
+  under the Advanced tab, off by default as in Realtek's 7 and 10 INFs. Realtek's Windows 10 driver
   leaves all of these off by default (`*EEE` 0, `EnableGreenEthernet` 0,
   `AdvancedEEE` 0, `EnableExtraPowerSaving` 0 in its INF; the captured
   register writes agree). Both leave the chip's U1/U2 off while the link
@@ -2143,6 +2426,29 @@ After the first `ax88179` and `rtl815x` builds
 - ME's NDIS version, and Android's current tethering protocols, unverified
   (sections 4.1, 2.4). ME is not tested, so the first stays unverified
   unless the ME DDK is read (section 11.1).
+
+### 12.3 Open questions to the owner
+
+- **`ax88179`'s EEE default** (section 4.10.2). ASIX's 7 INF offers
+  `*EEE` on by default for the AX88179 and AX88178A (off only in the
+  three Allied Telesis sections, on in `ATUMC2000T`); its XP and Vista INF does not offer it; Linux
+
+  turns it off at every reset and `ax88179` does the same today. Options:
+  (a) on, ASIX's 7 default, by the rule of 2026-11-09 (the maker's
+  default); (b) off, as Linux and as `ax88179` has run on the bench.
+  Owner, 2026-11-09: (a), as implemented; off if a real AX88179
+  misbehaves with it. Read the same day
+  ([testing/2026-11-09-ax88179-eee-real.md](../testing/2026-11-09-ax88179-eee-real.md)):
+  the owner's real AX88179, passed through to 98 SE under xHCI98, linked
+  at 1000 full against an EEE-capable 10GbE port with EEE on, carried 500
+  pings of 1472 bytes and sustained TCP (host to guest) without loss or
+  error; with EEE off the link and the TCP rate were the same. A guest
+  that stopped answering after one hot replug with EEE on is open, its
+  cause not known. Not read: whether EEE was negotiated (the
+  driver reads no EEE status; low-power idle is not visible from the
+  guest), the guest-to-host direction, and a switch in between.
+
+
 
 ## 13. Sources
 

@@ -403,7 +403,13 @@ class Chip:
 
     def phy_written(self, addr, value):
         if addr == PR_MII:                     # BMCR
+            # A restart, a reset, or a change of the forced speed and duplex
+            # (autonegotiation off: the Advanced tab's *SpeedDuplex 1 to 4)
+            # takes the link down and brings it up as the PHY now says.
+            forced = MIICTL_AN_ENABLE | MIICTL_SPEED100 | MIICTL_FULL | MIICTL_SPEED1000
             if value & MIICTL_AN_RESTART or \
+                    (not value & MIICTL_AN_ENABLE and (value & MIICTL_RESET or
+                                                      (value ^ self.phy[addr // 2]) & forced)) or \
                     (self.newer and (value & MIICTL_RESET or not value & MIICTL_AN_ENABLE or
                                      (value ^ self.phy[addr // 2]) & MIICTL_POWERDOWN)):
                 self.autoneg += 1
@@ -527,6 +533,17 @@ class Chip:
     @property
     def mac(self):
         return bytes(self.pla[MR_NODE_ID:MR_NODE_ID + 6])
+
+    def settings(self):
+        """What the Advanced tab's keywords set (ethernet.md 4.10), as the
+        registers hold it at link-up, for the legs' logs."""
+        return dict(bmcr=self.phy_word(PR_MII), an_adv=self.phy_word(PR_MII + 8),
+                    gig_ctl=self.phy_word(PR_MII + 18), xg_ctl=self.phy_word(PR_XG_CTRL),
+                    eee_mac=self.pla_word(0xe040) & 3, eee_adv=self.phy_word(0xa5d0),
+                    eee_adv2=self.phy_word(0xa6d4), eee_cfg=self.phy_word(0xa432),
+                    eee_a1=self.phy_word(0x2080), eee_plus=self.pla_word(0xe080) & 2,
+                    u2p3=self.usb_word(0xb460) & 1, green=self.sram.get(0x8011, 0),
+                    bias_10=self.sram.get(0x8045, 0))
 
     # -- link ----------------------------------------------------------------
     def negotiate(self, partner):
@@ -960,6 +977,7 @@ class Model:
         self.irq_next = 0.0
         self.irq_shown = False
         self.pending = collections.OrderedDict()   # bulk-IN request id -> length
+        self.out_buf, self.out_pieces = bytearray(), 0   # a bulk-OUT transfer arriving in pieces
         self.rx = collections.deque()              # frames waiting for the guest
         self.link = False
         self.link_mbps, self.link_full = 0, False
@@ -1013,6 +1031,7 @@ class Model:
             self.send(101, ident, self.bulk_header(EP_IN, 1, 0))
         self.pending.clear()
         self.rx.clear()
+        self.out_buf, self.out_pieces = bytearray(), 0
         self.config, self.interrupt = 0, False
         self.u1u2 = 0                              # a reset clears the U1/U2 enables
 
@@ -1032,10 +1051,19 @@ class Model:
             if got and got[0] > 1000 and self.speed != 'super':   # off Linux's default advertisement
                 self.totals['multigig_below_superspeed'] += 1
         else:
-            self.chip.pla[MR_LINK] = (LNK_UP | self.chip.rate_bit | LNK_FULL) if up else 0
-            self.link_mbps, self.link_full = (self.chip.kind.top, True) if up else (0, False)
+            # The RTL8152 and 8153: the speed and duplex the PHY's control
+            # and advertisement leave (the chip's fastest, as before, with
+            # the driver's default advertisement).
+            got = self.chip.negotiate(self.partner) if up else None
+            if up and got is None:
+                self.log('no_common_speed', partner=self.partner)
+                self.totals['no_common_speed'] += 1
+                return
+            self.chip.pla[MR_LINK] = (LNK_UP | LNK_SPEED[got[0]] | (LNK_FULL if got[1] else 0)) if up else 0
+            self.link_mbps, self.link_full = got if up else (0, False)
         self.link = up
-        self.log('link', up=up, why=why, mbps=self.link_mbps, full=self.link_full)
+        self.log('link', up=up, why=why, mbps=self.link_mbps, full=self.link_full,
+                 **(self.chip.settings() if up else {}))
         if not self.irq_period:
             self.irq.append(self.irq_word(up))                # the bit is the link state
             self.flush_irq()
@@ -1150,6 +1178,43 @@ class Model:
             if not self.totals['rx_request_below_early_size']:
                 self.log('rx_request_below_early_size', length=length, early=early, need=need)
             self.totals['rx_request_below_early_size'] += 1
+
+    def bulk_out(self, data):
+        """One usb-redir bulk-OUT packet. A host controller model may hand
+        over one transfer in pieces: QEMU's UHCI sends each 64-byte packet
+        alone, where its EHCI and xHCI send the whole transfer. The pieces
+        are joined until the transfer ends: a short packet, a zero-length
+        one, or (full-size pieces) records that end with the data."""
+        if data:
+            self.out_pieces += 1
+        self.out_buf += data
+        if not self.out_buf:
+            return
+        if len(data) == self.bulk_max and not self.tx_complete(self.out_buf):
+            if len(self.out_buf) > 1 << 17:
+                raise ValueError('bulk OUT transfer never ends')
+            return
+        whole, pieces = bytes(self.out_buf), self.out_pieces
+        self.out_buf, self.out_pieces = bytearray(), 0
+        if pieces > 1:
+            if not self.totals['tx_joined']:
+                self.log('tx_joined', pieces=pieces, length=len(whole))
+            self.totals['tx_joined'] += 1
+        self.transmit(whole)
+
+    def tx_complete(self, data):
+        """True when data holds whole transmit records up to its end (zero
+        padding after the last one allowed); the checks are transmit()'s."""
+        hlen, align = self.chip.tx_desc
+        off = 0
+        while off + hlen <= len(data):
+            length = struct.unpack_from('<I', data, off)[0] & 0x3ffff
+            if not length:
+                return not any(data[off:])
+            if off + hlen + length > len(data):
+                return False
+            off = (off + hlen + length + align - 1) & ~(align - 1)
+        return not any(data[off:])
 
     def transmit(self, data):
         """One bulk-OUT transfer: header + frame, each record aligned. The
@@ -1328,8 +1393,7 @@ class Model:
                 if len(data) != length:
                     raise ValueError('bulk OUT length mismatch')
                 self.send(101, ident, self.bulk_header(EP_OUT, 0, length))
-                if data:
-                    self.transmit(data)
+                self.bulk_out(data)
                 self.drain()
             else:
                 if len(packet) != size or ident in self.pending or len(self.pending) >= 256:

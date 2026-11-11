@@ -15,7 +15,7 @@ These drivers are experimental. They may not work with every device and can make
 
 | Driver | Device class | Windows |
 |---|---|---|
-| `uac1` | USB Audio Class 1.0, playback and recording, with volume and mute; optional: Windows' own driver stays the default unless you install `uac1` | 98 SE |
+| `uac1` | USB Audio Class 1.0, playback and recording, with volume and mute; for testing 98 SE in a virtual machine; on a real PC keep Windows' own driver ([why](#uac1-is-for-testing-in-a-virtual-machine)) | 98 SE |
 | `uac2` | USB Audio Class 2.0, playback and recording, with volume and mute | 98 SE to 8; x64 from XP |
 | `usbmidi` | USB MIDI 1.0 | 98 SE to 8; x64 from XP (1) |
 | `uvc98` | USB Video Class 1.0, 1.1 and 1.5 webcams, with the `uvcdec` MJPEG codec | 98 SE, ME, 2000 |
@@ -48,12 +48,34 @@ These drivers are experimental. They may not work with every device and can make
 
 Windows 8.1 and 10 are not targets and were not evaluated.
 
+### `uac1` is for testing in a virtual machine
+
+On a real PC, keep Windows 98 SE's own USB audio driver ("USB Audio
+Device", `usbaudio.sys`), which xHCI98's installer leaves in place. `uac1`
+is for running 98 SE in a virtual machine (QEMU), where Windows' driver
+stops Windows as soon as it plays to QEMU's emulated USB audio device and
+`uac1` plays it.
+
+On a real PC `uac1` has no advantage: playback, recording, volume and mute
+work with both; unplugging while it plays can stop Windows with both, and
+the first plug of a boot freezes as often with both (Known issues). From
+0.1.1.0 it also runs the layouts Windows' driver runs: 8-bit, floating point,
+A-law and mu-law devices, MaxPacketsOnly endpoints and microphones that need a
+synchronisation endpoint. Not supported: MaxPacketsOnly recording from an
+asynchronous device, or in 8-bit, A-law or mu-law; such a device loads under
+`uac1` with no sound device (no hang), and Update Driver back to "USB Audio
+Device" gives it Windows' driver again.
+
+In Device Manager `uac1` names the device "USB Audio 1.0 (uac1)"; Windows'
+own driver names it "USB Audio Device".
+
 ## How each driver was evaluated
 
 <a name="tested-by-the-author"></a>
 `uac2`, `uvc98` and `ax88179` have run on a real PC with a real device
-under Windows 98 SE (the owner, reported 2026-10-29) (l). Every other
-cell is a virtual machine.
+under Windows 98 SE (the owner, reported 2026-10-29) (l), and `uac1` with
+the real Sound Blaster Play! 2 (the owner's bench, 2026-11-09) (r). Every
+other cell is a virtual machine.
 "Real device (VM)" means a real device passed through to Windows running
 in a virtual machine; "Simulator only" means a simulated device. Cells are
 32-bit Windows unless they say x64; "-" means the driver is not meant for
@@ -61,7 +83,7 @@ that Windows.
 
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
-| `uac1` | Real device (VM); simulator (o) | - | - | - | - | - | - |
+| `uac1` | Real PC (r); real device (VM); simulator (o) | - | - | - | - | - | - |
 | `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b); real device (VM), x64 (q) | Simulator only; real device (VM), x64 (q) | Real device (VM); real device (VM), x64 (q) | Real device (VM), x64 (q) |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
@@ -91,9 +113,10 @@ that Windows.
 - (l) The owner's report: each ran on a real PC under Windows 98 SE with a real device. The device, the host controller driver and what was exercised are not recorded here yet.
 - (m) Under xHCI98.
 - (n) Under xHCI98 only. The SR9700 is a USB 1.1 device, and NUSB's EHCI does not take one; 98 SE's own USB 1.1 stack was not run.
-- (o) Under xHCI98: the real Logi USB Headset (`046D:0A64`), passed through: install, playback at 48 and 44.1 kHz, volume and mute, recording at 48 kHz (`docs/testing/2026-11-07-uac1-98se.md`); a simulator replaying the real Creative Sound Blaster Play! 2 (`041E:323D`) from its captured descriptors (the real Play! 2 itself not yet run with `uac1`); and simulated headsets and DACs. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
+- (o) Under xHCI98: the real Logi USB Headset (`046D:0A64`), passed through: install, playback at 48 and 44.1 kHz, volume and mute, recording at 48 kHz (`docs/testing/2026-11-07-uac1-98se.md`); a simulator replaying the real Creative Sound Blaster Play! 2 (`041E:323D`) from its captured descriptors (the real Play! 2 itself on a real PC: (r)); and simulated headsets and DACs. Under 98 SE's own USB 1.1 driver: a simulated headset. Unplugging a device while it plays can stop Windows (Known issues).
 - (p) A real RTL8157 (`0BDA:8157`) under xHCI98 at 5 Gb/s: link, pings, two-way TCP with every byte checked, unplug under traffic and replug, and Device Manager's disable and enable (`docs/testing/2026-11-07-rtl8157-hardware.md`, `2026-11-07-rtl8157-performance.md`).
 - (q) A real Creative Sound Blaster X4 (`041E:3278`) and X1 (`041E:3286`) on XP x64, Vista x64, 7 x64, 8 x64 and 8.1 x64: playback on both, and recording on the X1 (`docs/testing/2026-11-05-uac2-build26-nt6x64.md`).
+- (r) The owner's bench, 2026-11-09: the real Creative Sound Blaster Play! 2 (`041E:323D`) on a ThinkPad P14s Gen 1 under Windows 98 SE, xHCI98 3.4.2.0 and `uac1` 0.1.9: playback clean at 48 and 44.1 kHz (a 1 kHz tone, left and right, a 50 Hz to 15 kHz sweep), volume and mute, and recording from a microphone clean at 44.1 kHz, 16-bit stereo (Sound Recorder's default of 22.05 kHz, 8-bit mono is noisy by its format). Unplugged and plugged in again with nothing playing (the same port and another): still the preferred device, and playback clean.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install
@@ -137,14 +160,14 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.9` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.10` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.9). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.10). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.9 is signed with the test certificate
+0.1.9 and 0.1.10 are signed with the test certificate
 `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
 `7A3C6E6289EC46E6E128D87BB54E87196B824959`; 7 x64 needs no update for
 it. Trust the `usb-wdm-free-test.cer` of this release; 0.1.4's
@@ -192,8 +215,8 @@ device and do the steps. The edited INF no longer matches `SHA256.TXT`.
 
 `uac1`, `uac2` and `usbmidi` on Windows 98 SE: if no WDM sound device was installed before, Windows sets up its own audio components once and may ask for the Windows 98 Second Edition CD-ROM; point it at the CD's `\WIN98` folder.
 
-`uac1` on 98 SE is optional. Without it, Windows' own USB audio driver
-keeps every USB Audio 1.0 device, as before. To use `uac1`, point the
+`uac1` on 98 SE is for a virtual machine (above). Without it, Windows' own
+USB audio driver keeps every USB Audio 1.0 device, as before. To use `uac1`, point the
 wizard (or Update Driver, for a device Windows' driver already has) at
 `free/audio/uac1/w98se/`. After that, USB Audio 1.0 devices plugged in
 for the first time get `uac1` too. To go back for one device, use Update
@@ -213,6 +236,16 @@ GPL-2.0-or-later: the GNU General Public License version 2
 ([LICENSE](LICENSE)) or, at your option, any later version. Code adapted
 from other projects keeps its own licence and is listed in
 [NOTICE.md](NOTICE.md).
+
+The documentation (every Markdown file outside `src/video/uvcdec/turbo/`,
+this README included) is licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), not the GPL.
+[LICENSE-docs.md](LICENSE-docs.md) gives the scope, what is excluded and how
+to credit. Third-party material quoted in the documentation keeps its own
+terms.
+
+If you use anything from this project in your work, please credit this
+repository. I would be interested to know how it has helped.
 
 ## AI usage
 

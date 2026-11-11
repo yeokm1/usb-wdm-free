@@ -45,6 +45,7 @@
 #define CONFIG_MAX 4096
 #define CTRL_MAX (RNDIS_CONTROL_MAX + 3)
 #define CTRL_TIMEOUT 2000
+#define BROKEN_TRIES 6            /* bring-ups the worker retries after a failed resume */
 
 #define WORK_RECOVER 0x01
 #define WORK_FETCH   0x02
@@ -82,6 +83,9 @@ struct CDC_DEV {
     USBD_PIPE_HANDLE In, Out, Int;
     USHORT InMax, OutMax;
     BOOLEAN HighSpeed;
+    UCHAR WantMac[6];             /* NetworkAddress for SetNetAddress (NCM, D1) */
+    BOOLEAN HaveWantMac, AddressSet;
+    BOOLEAN Broken;               /* a resume's bring-up failed: the data path stays closed until one succeeds */
 
     KSPIN_LOCK Lock;              /* everything below up to the worker */
     BOOLEAN Open;                 /* the submission gate */
@@ -113,6 +117,7 @@ struct CDC_DEV {
     KEVENT CtrlDone;
     PUCHAR Ctrl;                  /* nonpaged control scratch, CTRL_MAX */
     ULONG Recoveries;
+    ULONG BrokenTicks, BrokenTries; /* the retry of a failed resume's bring-up (RetryBroken) */
     ULONG RndisId, RndisMaxPackets, RndisMaxTransfer, RndisAlign;
     ULONG KeepaliveFailures;
     NCM_PARAMS Ncm;
@@ -714,7 +719,7 @@ static void Reopen(CDC_DEV *d)
 {
     KIRQL old;
     KeAcquireSpinLock(&d->Lock, &old);
-    if (!d->Gone && !d->Stop && !d->Suspended) d->Open = TRUE;
+    if (!d->Gone && !d->Stop && !d->Suspended && !d->Broken) d->Open = TRUE;
     KeReleaseSpinLock(&d->Lock, old);
     Pump(d);
 }
@@ -958,7 +963,8 @@ static NTSTATUS SelectDataAlt(CDC_DEV *d, UCHAR alt)
     urb->Interface.Length = (USHORT)ds;
     urb->Interface.InterfaceNumber = d->Fn.Data;
     urb->Interface.AlternateSetting = alt;
-    for (k = 0; k < 2; k++) urb->Interface.Pipes[k].MaximumTransferSize = RX_BLOCK;
+    /* Only the pipes the URB has room for: alternate 0 has none (InterfaceSize). */
+    for (k = 0; k < (alt ? 2u : 0u); k++) urb->Interface.Pipes[k].MaximumTransferSize = RX_BLOCK;
     status = Sync(d, (PURB)urb, CTRL_TIMEOUT);
     if (NT_SUCCESS(status)) {
         d->In = d->Out = NULL;
@@ -1029,6 +1035,26 @@ static NTSTATUS Bringup(CDC_DEV *d, CDC_START *start)
     if (d->Fn.Protocol == CDC_PROTO_NCM) {
         status = NcmSetup(d);
         if (!NT_SUCCESS(status)) return status;
+        /* The Advanced tab's NetworkAddress (ethernet.md 4.10): CDC NCM 1.0
+         * SetNetAddress, offered by bmNetworkCapabilities D1, sent with
+         * the data interface at alternate 0. At start a refusal leaves the
+         * function's own address for the adapter's life; an address taken
+         * at start is set again at each resume or reset, and one the
+         * function then refuses fails that bring-up, so no traffic runs
+         * with the function and NDIS on different addresses. */
+        if (d->HaveWantMac && (d->Fn.NcmCaps & 0x02)) {
+            NTSTATUS set;
+            RtlCopyMemory(d->Ctrl, d->WantMac, 6);
+            set = ClassRequest(d, FALSE, 0x82, 0, 6, NULL);       /* SET_NET_ADDRESS */
+            CdcTrace("ncm: SET_NET_ADDRESS %x", set);
+            if (DeviceGone(set, 0)) return set;
+            if (start) {
+                d->AddressSet = (BOOLEAN)NT_SUCCESS(set);
+                if (!d->AddressSet) d->HaveWantMac = FALSE;
+            } else if (!NT_SUCCESS(set)) {
+                return set;
+            }
+        }
     }
     return SelectDataAlt(d, d->Fn.DataAlt);
 }
@@ -1113,6 +1139,22 @@ static void ReportGone(CDC_DEV *d)
     }
 }
 
+/* After a resume whose bring-up failed (Broken): the bring-up again.
+ * TRUE when the adapter may reopen. */
+static BOOLEAN Rebuild(CDC_DEV *d)
+{
+    NTSTATUS status;
+    if (!d->Broken) return TRUE;
+    status = Bringup(d, NULL);
+    CdcTrace("rebuild: bring-up %x", status);
+    if (!NT_SUCCESS(status)) {
+        if (DeviceGone(status, 0)) { d->Gone = TRUE; ReportGone(d); }
+        return FALSE;
+    }
+    d->Broken = FALSE;
+    return TRUE;
+}
+
 static void Recover(CDC_DEV *d)
 {
     NTSTATUS status = STATUS_SUCCESS;
@@ -1130,6 +1172,7 @@ static void Recover(CDC_DEV *d)
         return;
     }
     Sleep(d->Recoveries > 3 ? 200 : 20);
+    if (!Rebuild(d)) return;                 /* the link stays down, the data path closed */
     status = PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->In);
     if (NT_SUCCESS(status)) status = PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->Out);
     if (NT_SUCCESS(status)) status = PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->Int);
@@ -1174,9 +1217,22 @@ static long Power(CDC_DEV *d, BOOLEAN on)
     if (!was) return STATUS_SUCCESS;        /* D0 while awake: nothing to resume */
     if (d->Gone) return STATUS_SUCCESS;
     /* The device may have lost power: run the protocol's bring-up again,
-     * then restore the cached filter and multicast list. */
+     * then restore the cached filter and multicast list. A bring-up that
+     * fails (its data interface may be back at alternate 0, its address
+     * not restored) leaves the data path closed and the link down; a
+     * reset or a recovery tries it again (Rebuild). */
     status = Bringup(d, NULL);
-    if (NT_SUCCESS(status)) status = ApplyFilter(d);
+    if (!NT_SUCCESS(status) && !DeviceGone(status, 0)) {
+        CdcTrace("resume: bring-up %x, the data path stays closed", status);
+        d->Broken = TRUE;
+        d->BrokenTicks = d->BrokenTries = 0;   /* the worker retries it (RetryBroken) */
+        d->Cb.Link(d->Cb.Context, 0, d->Speed);
+        return STATUS_SUCCESS;
+    }
+    if (NT_SUCCESS(status)) {
+        d->Broken = FALSE;                  /* an earlier resume's failure is over */
+        status = ApplyFilter(d);
+    }
     CdcTrace("resume: %x", status);
     if (!NT_SUCCESS(status)) {
         if (DeviceGone(status, 0)) { CdcTrace("resume: device gone"); d->Gone = TRUE; ReportGone(d); }
@@ -1189,12 +1245,54 @@ static long Power(CDC_DEV *d, BOOLEAN on)
     return STATUS_SUCCESS;
 }
 
+/* Worker context, on a quiet tick (about once a second) while a failed
+ * resume's bring-up leaves the data path closed (Broken) and the adapter
+ * is awake: the bring-up again, delayed and bounded - after 1, 2, 4 and
+ * 8 quiet seconds, then every 8, BROKEN_TRIES times in all - so a
+ * transient failure (a control request the device missed while it woke)
+ * recovers without a reset, a sleep or a replug, which still try it after
+ * the last retry. Nothing else would: the data path submits nothing and
+ * the departure probe runs only while it is open. On success the cached
+ * filter is restored and the data path reopened, as in Power; a filter
+ * the device refuses counts as a failed retry. */
+static void RetryBroken(CDC_DEV *d)
+{
+    NTSTATUS status;
+    ULONG due;
+    if (d->BrokenTries >= BROKEN_TRIES) return;
+    due = d->BrokenTries < 3 ? (1UL << d->BrokenTries) : 8;
+    if (++d->BrokenTicks < due) return;
+    d->BrokenTicks = 0;
+    d->BrokenTries++;
+    if (!Rebuild(d)) {
+        CdcTrace("retry %u: bring-up failed%s", d->BrokenTries,
+                 d->BrokenTries >= BROKEN_TRIES ? ", no more retries" : "");
+        return;
+    }
+    status = ApplyFilter(d);
+    CdcTrace("retry %u: bring-up done, filter %x", d->BrokenTries, status);
+    if (!NT_SUCCESS(status)) {
+        /* The filter not restored (RNDIS's SET refused): the data path
+         * stays closed and the next retry runs the bring-up and the
+         * filter again, within the same bound. */
+        if (DeviceGone(status, 0)) { d->Gone = TRUE; ReportGone(d); }
+        else d->Broken = TRUE;
+        return;
+    }
+    d->Recoveries = 0;
+    d->Cb.Link(d->Cb.Context, d->Connected ? 1 : 0, d->Speed);   /* before Reopen, as in Power */
+    Reopen(d);
+}
+
 static long Reset(CDC_DEV *d)
 {
     NTSTATUS status;
+    BOOLEAN rebuilt;
     Quiesce(d);
     if (d->Gone) { ReportGone(d); return STATUS_SUCCESS; }
     if (d->Suspended) return STATUS_SUCCESS;
+    rebuilt = d->Broken;
+    if (!Rebuild(d)) return d->Gone ? STATUS_SUCCESS : CDC_E_BROKEN;
     (void)PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->In);
     (void)PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->Out);
     (void)PipeRequest(d, URB_FUNCTION_RESET_PIPE, d->Int);
@@ -1208,6 +1306,9 @@ static long Reset(CDC_DEV *d)
 #endif
     status = ApplyFilter(d);
     CdcTrace("reset: %x", status);
+    /* After a failed resume the upper edge was told the link was down:
+     * the device's last reported state again, before the reopen. */
+    if (rebuilt) d->Cb.Link(d->Cb.Context, d->Connected ? 1 : 0, d->Speed);
     Reopen(d);
     return status;
 }
@@ -1275,6 +1376,8 @@ static void Worker(PVOID context)
 #else
         UNREFERENCED_PARAMETER(status);
 #endif
+        if (status == STATUS_TIMEOUT && d->Broken && !d->Gone && !d->Suspended && !d->Stop)
+            RetryBroken(d);
         /* A departed device whose transfers the host controller driver
          * holds (xHCI98 parks them on the device) completes nothing, and
          * ECM and NCM send no control request of their own: ask the device
@@ -1332,6 +1435,9 @@ long CdcUsbStart(void *lowerDevice, const CDC_CALLBACKS *callbacks, CDC_START *s
     RtlZeroMemory(d, sizeof(*d));
     d->Lower = lowerDevice;
     d->Cb = *callbacks;
+    d->HaveWantMac = (BOOLEAN)(start->HaveWantMac != 0);
+    RtlCopyMemory(d->WantMac, start->WantMac, 6);
+    start->AddressSet = 0;
     KeInitializeSpinLock(&d->Lock);
     KeInitializeEvent(&d->Drained, NotificationEvent, FALSE);
     KeInitializeEvent(&d->Wake, SynchronizationEvent, FALSE);
@@ -1390,6 +1496,10 @@ long CdcUsbStart(void *lowerDevice, const CDC_CALLBACKS *callbacks, CDC_START *s
     CdcTrace("bring-up %x: pipes in %u out %u bytes per packet (descriptor %u/%u)", status,
              d->InMax, d->OutMax, d->Fn.InMax, d->Fn.OutMax);
     if (!NT_SUCCESS(status)) { Fail(start, CDC_FAIL_PROTOCOL, status); goto fail; }
+    if (d->AddressSet) {
+        RtlCopyMemory(start->Mac, d->WantMac, 6);
+        start->AddressSet = 1;
+    }
     CdcTrace("mac %x:%x:%x:%x:%x:%x", start->Mac[0], start->Mac[1], start->Mac[2],
              start->Mac[3], start->Mac[4], start->Mac[5]);
 

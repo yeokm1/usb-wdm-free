@@ -18,7 +18,7 @@ typedef struct UVU_STATS {
      * the descriptor frame it resolved to; payload-core diagnostics. */
     ULONG ReqFormat, ReqFrame, DevFormat, DevFrame, DevInterval, DevFrameBytes, DevPayload;
     ULONG CommitPayload, ResolvedWidth, ResolvedHeight;
-    ULONG Eofs, FidFlips, DropBad, DropSize, LastDropUsed, ErrorPackets, Overflows;
+    ULONG Eofs, FidFlips, DropBad, DropSize, LastDropUsed, ErrorPackets, Overflows, Resyncs;
 } UVU_STATS;
 /* Open the camera below `lower` (ConfigInfo->PhysicalDeviceObject): read
  * descriptors, parse the video function, select the configuration with

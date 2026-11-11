@@ -226,6 +226,14 @@ int main(void)
         CHECK(st.Packets == n && st.Fed + st.Failed + st.Invalid + st.Empty == n);
     }
     Plans();
+    /* Design 5.4a: the refused-start-frame status and the resync frames. */
+    CHECK(UvcIsoRefused(0xC0000A00UL));
+    CHECK(!UvcIsoRefused(0UL) && !UvcIsoRefused(0xC0000B00UL) && !UvcIsoRefused(0xC0000011UL));
+    CHECK(UVC_ISO_RESYNC_LEAD == 8UL && UVC_ISO_RESYNC_LIMIT == 4UL);
+    CHECK(UvcIsoResyncFrame(100UL, 0, 16) == 108UL);
+    CHECK(UvcIsoResyncFrame(100UL, 2, 16) == 140UL);
+    CHECK(UvcIsoResyncFrame(100UL, 5, 1) == 113UL);
+    CHECK(UvcIsoResyncFrame(0xFFFFFFFCUL, 1, 16) == 20UL);
     printf("%s: %u checks, %u failures\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;
 }

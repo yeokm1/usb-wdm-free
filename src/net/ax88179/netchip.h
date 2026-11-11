@@ -85,6 +85,10 @@ typedef struct NET_PROBE {
     nc_u8 IntInterval;
     nc_u8 Speed;                /* NC_SPEED_* */
     nc_u16 Vendor, Product, Revision;
+    /* The Advanced-tab values, one per NET_CHIP.Settings entry in its
+     * order (NULL: the defaults). Set by the lower edge after Probe,
+     * before Start, and unchanged for the adapter's life (NcSetting). */
+    const long *Settings;
 } NET_PROBE;
 
 /* What Start reports, for the lower edge's buffers and for NDIS. */
@@ -102,6 +106,8 @@ typedef struct NET_PARAMS {
     nc_u32 Offload;             /* NC_OFFLOAD_* the chip performs (0: none; needs TxOffload/RxChecksum) */
     nc_u32 LsoMax;              /* NC_OFFLOAD_LSO4: the largest large-send packet, bytes from the
                                  * Ethernet header on (the lower edge caps it to one transmit buffer) */
+    nc_u32 Ignored;             /* NET_CHIP.Settings entries (bit n: entry n) set to a value this
+                                 * chip cannot apply, so left as it runs without them (log) */
 } NET_PARAMS;
 
 /* Offloads (NET_PARAMS.Offload), IPv4 only (ethernet.md section 4.9). */
@@ -137,6 +143,18 @@ typedef struct NET_LINK {
 } NET_LINK;
 
 typedef void (*NET_EMIT)(void *context, const nc_u8 *frame, nc_u32 length);
+
+/* One Advanced-tab keyword a chip reads (ethernet.md section 4.10). The
+ * core reads each at initialization as decimal text (or a DWORD); a
+ * value missing, malformed or not in Values becomes Default. */
+#define NC_SETTINGS_MAX 8
+#define NC_SETTING_VALUES 10
+typedef struct NET_SETTING {
+    const char *Name;           /* the registry value's name, ASCII */
+    long Default;
+    nc_u32 Count;               /* entries of Values */
+    long Values[NC_SETTING_VALUES];
+} NET_SETTING;
 
 typedef struct NET_RX_STATS {
     nc_u32 Frames, Dropped;     /* delivered; well-formed but refused (CRC, size) */
@@ -192,6 +210,11 @@ typedef struct NET_CHIP {
      * the pointer RxParse hands to emit, inside the transfer): the
      * NC_RX_*_OK checksums the chip verified. */
     nc_u32 (*RxChecksum)(void *chip, const nc_u8 *frame);
+    /* Optional (0: none). The Advanced-tab keywords the chip reads, at
+     * most NC_SETTINGS_MAX; their values reach Start and Resume in
+     * NET_PROBE.Settings. */
+    const NET_SETTING *Settings;
+    nc_u32 SettingCount;
 } NET_CHIP;
 
 /* The package's chip table, defined by the package. */
@@ -205,6 +228,9 @@ nc_u32 NcEtherCrc(const nc_u8 *data, nc_u32 length);
 /* IEEE 802.3 frame check sequence (zlib CRC-32), for FCS verification. */
 nc_u32 NcFcs(const nc_u8 *data, nc_u32 length);
 int NcValidMac(const nc_u8 mac[6]);  /* not zero, not multicast */
+/* The value of NetPackageChip.Settings[index] for this adapter: from
+ * probe->Settings, or the entry's default when there are none. */
+long NcSetting(const NET_PROBE *probe, nc_u32 index);
 
 /* Standard descriptor walk: find, in one configuration, the first
  * interface (alternate 0) of class FF with exactly one bulk IN, one bulk

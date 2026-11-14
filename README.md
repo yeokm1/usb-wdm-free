@@ -261,6 +261,17 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.10** (2026-11-11):
+  - `uac2` 0.1.11.0 and `uac1` 0.1.1.0: sound starts again after a stall; a recording or playback opened just after another closed waits for it instead of failing; a device with no product name is shown as "USB Audio 2.0 (uac2)" or "USB Audio 1.0 (uac1)".
+  - `uac1` 0.1.1.0 (98 SE) also runs devices with 8-bit, floating-point, A-law or mu-law sound, and is copied only: point Update Driver at its folder.
+  - `rtl815x` 0.2.2.0, `ax88179` 0.1.4.0, `ax88772` 0.1.1.0 and `cdcnet` 0.1.4.0 gain the Advanced tab (Energy-Efficient Ethernet, speed and duplex, flow control, offloads). `cdcnet` tries again when an adapter does not come back after standby.
+  - `uvc98` 0.1.3.0: a webcam stream starts again after a stall.
+- **v0.1.9** (2026-11-08):
+  - `uac1` 0.1.0.1, new (98 SE, opt-in): USB Audio Class 1.0 sound cards, headsets and microphones.
+  - `ax88772` 0.1.0.0 and `sr9700` 0.1.0.0, new: ASIX AX88772B/C, CoreChips SR9800 and SR9700 Ethernet adapters.
+  - `absptr` 0.1.0.0, new: pen tablets, HID touch screens and absolute mice.
+  - `uac2` 0.1.10.0 plays on through lost intervals; `rtl815x` 0.2.1.0, `ax88179` 0.1.3.0 and `cdcnet` 0.1.3.0 take the shared network core's fixes; `xpad98` 0.1.1.0 no longer raises "Unsafe Removal" on 2000.
+  - On 98 SE and ME, `uac1`, `uac2` and `usbmidi` no longer ask for the KS files.
 - **v0.1.8** (2026-11-05):
   - `uac2` 0.1.8.26 pops far less under heavy CPU load (a delay of more than 16 ms in the USB host controller's driver still interrupts the sound): more sound is queued (`Uac2QueueMs`, 32 ms by default) and its worker runs at real-time priority (`Uac2Realtime`). The volume tops out at 0 dB, a likely cause of distortion on some devices (`Uac2VolAboveZero` 1 offers the whole range again). Each device is named by its own USB product name.
   - `uac2`, `cdcnet` and `usbflop` are also staged on XP x64, and `ax88179` on 2000.

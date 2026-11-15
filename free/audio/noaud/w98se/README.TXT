@@ -21,12 +21,13 @@ Installing (Windows 98 SE):
      "USB Audio Device" (under "Sound, video and game controllers"),
      Properties, Driver, Update Driver.
   3. Choose "Display a list of all the drivers in a specific location",
-     Have Disk, and point it at this folder. Pick the "(no driver)" line.
+     Have Disk, and point it at this folder. Pick the "(no driver,
+     wdm-free)" line.
   A device that was never installed: point the Add New Hardware Wizard
   at this folder instead.
 
-Undoing it: remove the "(no driver)" device in Device Manager and unplug
-and replug the camera; Windows then offers its own driver again.
+Undoing it: remove the "(no driver, wdm-free)" device in Device Manager
+and unplug and replug the camera; Windows then offers its own driver again.
 
 The installer never stages this file by itself (STAGE.TXT: COPY): it is
 copied with the other drivers and used only when you install it.

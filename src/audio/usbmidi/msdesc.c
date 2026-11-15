@@ -179,19 +179,49 @@ unsigned int UmMapPorts(const UM_INTERFACE *iface, UM_PORTMAP *map)
 }
 
 static unsigned int Append(unsigned short out[32], unsigned int at,
-                           const unsigned short *s, unsigned int n)
+                           const unsigned short *s, unsigned int n, unsigned int limit)
 {
     unsigned int i;
-    for (i = 0; i < n && s[i] && at < 31; i++) out[at++] = s[i];
+    for (i = 0; i < n && s[i] && at < limit; i++) out[at++] = s[i];
     return at;
 }
 
+static int Separator(unsigned int c)
+{
+    return c == ' ' || c == '-' || c == ',' || c == ':' || c == ';' || c == '_' || c == '/';
+}
+
+static unsigned int Fold(unsigned int c)
+{
+    return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
+}
+
+unsigned int UmMakerPrefix(const unsigned short *p, unsigned int n,
+                           const unsigned short *m, unsigned int mn)
+{
+    unsigned int i, skip = 0;
+    if (!p || !m) return 0;
+    for (i = 0; i < mn; i++) if (!m[i]) { mn = i; break; }
+    while (mn && m[mn - 1] == ' ') mn--;
+    for (i = 0; i < n && i < mn && Fold(p[i]) == Fold(m[i]); i++)
+        if ((i + 1 == mn || m[i + 1] == ' ') && i + 1 < n && Separator(p[i + 1])) skip = i + 1;
+    if (!skip || i == n) return 0;     /* none, or the product is the maker's name */
+    while (skip < n && Separator(p[skip])) skip++;
+    for (i = skip; i < n; i++)
+        if ((p[i] >= '0' && p[i] <= '9') || (Fold(p[i]) >= 'A' && Fold(p[i]) <= 'Z') || p[i] >= 0xc0)
+            return skip;
+    return 0;
+}
+
 unsigned int UmPortName(const unsigned short *product, unsigned int pn,
+                        const unsigned short *maker, unsigned int mn,
                         const unsigned short *jack, unsigned int jn,
                         int several, unsigned int index, unsigned short out[32])
 {
     static const unsigned short fallback[] = {'U','S','B',' ','M','I','D','I'};
     static const unsigned short midi[] = {' ','M','I','D','I',' '};
+    static const char mark[] = UM_NAME_MARK;
+    const unsigned int marks = sizeof(mark) - 1, room = 31 - marks;
     unsigned short digits[4];
     unsigned int at = 0, i, d = 0, v = index + 1;
     if (!product) pn = 0;
@@ -200,24 +230,48 @@ unsigned int UmPortName(const unsigned short *product, unsigned int pn,
     for (i = 0; i < jn; i++) if (!jack[i]) { jn = i; break; }
     while (pn && product[pn - 1] == ' ') pn--;   /* trailing padding */
     while (jn && jack[jn - 1] == ' ') jn--;
-    if (!pn) { product = fallback; pn = 8; }
+    if (!pn) { product = fallback; pn = 8; maker = 0; }
+    if (!maker) mn = 0;
+    if (several && !jn) do { digits[d++] = (unsigned short)('0' + v % 10); v /= 10; } while (v && d < 4);
+    /* The name before the mark has room characters. When the whole does
+     * not fit, the maker's name comes off the product's front first
+     * (owner, 2026-11-15), then the product is cut from its end; the part
+     * that tells one port from another (the jack, " MIDI n") is kept. */
     if (jn) {
         int prefixed = jn >= pn;
         for (i = 0; prefixed && i < pn; i++) if (jack[i] != product[i]) prefixed = 0;
-        if (!prefixed) {
-            at = Append(out, at, product, pn);
-            if (at < 31) out[at++] = ' ';
+        if ((prefixed ? jn : pn + 1 + jn) > room) {
+            unsigned int skip = UmMakerPrefix(product, pn, maker, mn);
+            product += skip; pn -= skip;
+            if (prefixed) { jack += skip; jn -= skip; }
         }
-        at = Append(out, at, jack, jn);
+        if (!prefixed && jn + 1 < room) {
+            if (pn > room - 1 - jn) pn = room - 1 - jn;
+            while (pn && product[pn - 1] == ' ') pn--;
+            at = Append(out, at, product, pn, room);
+            if (at) out[at++] = ' ';
+        }
+        at = Append(out, at, jack, jn, room);
+    } else if (several) {
+        if (pn + 6 + d > room) {
+            unsigned int skip = UmMakerPrefix(product, pn, maker, mn);
+            product += skip; pn -= skip;
+        }
+        if (pn > room - 6 - d) pn = room - 6 - d;
+        while (pn && product[pn - 1] == ' ') pn--;
+        at = Append(out, at, product, pn, room);
+        at = Append(out, at, at ? midi : midi + 1, at ? 6 : 5, room);
+        while (d && at < room) out[at++] = digits[--d];
     } else {
-        at = Append(out, at, product, pn);
-        if (several) {
-            at = Append(out, at, midi, 6);
-            do { digits[d++] = (unsigned short)('0' + v % 10); v /= 10; } while (v && d < 4);
-            while (d && at < 31) out[at++] = digits[--d];
+        if (pn > room) {
+            unsigned int skip = UmMakerPrefix(product, pn, maker, mn);
+            product += skip; pn -= skip;
         }
+        at = Append(out, at, product, pn, room);
     }
     while (at && out[at - 1] == ' ') at--;
+    if (!at) at = Append(out, 0, fallback, 8, room);
+    for (i = 0; i < marks; i++) out[at++] = (unsigned short)(unsigned char)mark[i];
     out[at] = 0;
     return at;
 }

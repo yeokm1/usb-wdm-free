@@ -100,7 +100,7 @@ static UINT Devices(void)
         if(result) { wsprintf(text,"Device %u caps error=%u\r\n",i,result); Append(text); continue; }
         wsprintf(text,"Device %u: %s channels=%u\r\n",i,caps.szPname,caps.wChannels); Append(text);
         lstrcpyn(name,caps.szPname,sizeof(name)); CharUpperBuff(name,lstrlen(name));
-        if(strstr(name,"UAC2") && chosen==(UINT)-1) chosen=i;
+        if((strstr(name,"UAC2") || strstr(name,"(WDM-") || strstr(name,"USB AUDIO 2.0")) && chosen==(UINT)-1) chosen=i;
     }
     return chosen;
 }

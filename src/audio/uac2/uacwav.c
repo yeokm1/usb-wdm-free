@@ -63,9 +63,11 @@ static void Format(WFX *w, unsigned ch, unsigned bits, unsigned rate)
     w->SubFormat = PcmSub;
 }
 
-/* A device of ours: its name holds "UAC2" (the INF's name, every
- * simulator profile's product string), or UACWAV_NAME (environment, any
- * case) when set: build 26 names a device by its product string. */
+/* A device of ours: its name holds "UAC2" (every UAC2 simulator profile's
+ * product string), the mark "(wdm-free)" (every name uac2 and uac1 give;
+ * its "(wdm-" where WinMM cuts it) or "USB Audio 2.0" (the fallback),
+ * or UACWAV_NAME (environment, any case) when set: build 26 names a device
+ * by its product string. */
 static int Uac2(const char *name)
 {
     char upper[MAXPNAMELEN], want[MAXPNAMELEN];
@@ -73,7 +75,11 @@ static int Uac2(const char *name)
     if (!n || n >= sizeof(want)) lstrcpy(want, "UAC2");
     CharUpperBuff(want, lstrlen(want));
     lstrcpyn(upper, name, sizeof(upper)); CharUpperBuff(upper, lstrlen(upper));
-    return strstr(upper, want) != NULL;
+    /* Without UACWAV_NAME, also the mark every name of ours carries
+     * ("USB Audio 2.0 (wdm-free)" holds no "UAC2"), as far as WinMM's 31
+     * characters keep it ("Speakers (USB Audio 2.0 (wdm-fr", Vista+). */
+    return strstr(upper, want) != NULL ||
+        ((!n || n >= sizeof(want)) && (strstr(upper, "(WDM-") || strstr(upper, "USB AUDIO 2.0")));
 }
 
 /* UACWAV_PAIR=k (environment) takes the k-th UAC2 device of a direction

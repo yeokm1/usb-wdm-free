@@ -81,11 +81,27 @@ unsigned int UmMapPorts(const UM_INTERFACE *iface, UM_PORTMAP *map);
  * jack/product may be NULL or empty. With a jack name: the jack name alone
  * when it begins with the product name, else "product jack". Without one:
  * product, plus " MIDI n" (n = index+1) when several ports share it; with
- * no product string "USB MIDI" stands in for it. Returns the length.
+ * no product string "USB MIDI" stands in for it. Then UM_NAME_MARK: the
+ * name before it has 20 characters; one that does not fit first loses the
+ * maker's name (maker, iManufacturer) from the product's front, then the
+ * product is cut from its end, so the jack or " MIDI n" stays ("UM-ONE
+ * (wdm-free)", "USB MIDI MIDI 4 (wdm-free)").
+ * Returns the length.
  */
+#define UM_NAME_MARK " (wdm-free)"   /* the project's mark (owner, 2026-11-15) */
 unsigned int UmPortName(const unsigned short *product, unsigned int productLength,
+                        const unsigned short *maker, unsigned int makerLength,
                         const unsigned short *jack, unsigned int jackLength,
                         int several, unsigned int index, unsigned short out[32]);
+/* How many leading units of the product p (n) are the maker's name m (mn,
+ * iManufacturer; NULL or empty: none): the most leading whole words of m
+ * that p begins with (any case) and follows with a separator (space - ,
+ * : ; _ /), and the separators after them; 0 when p does not begin with
+ * m's first word, p is all a leading part of m (the product is the
+ * maker's name), or no letter or digit of p would be left. UmPortName
+ * takes it off the product's front only when the name does not fit. */
+unsigned int UmMakerPrefix(const unsigned short *p, unsigned int n,
+                           const unsigned short *m, unsigned int mn);
 #ifdef __cplusplus
 }
 #endif

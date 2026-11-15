@@ -15,7 +15,7 @@ Signature="$CHICAGO$"
 Class=USB
 ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
-DriverVer=10/26/2026,1.0.1.0
+DriverVer=11/15/2026,1.0.2.0
 [Manufacturer]
 %Provider%=Models
 [Models]
@@ -35,7 +35,7 @@ DriverVer=10/26/2026,1.0.1.0
 AddService=,2
 [Strings]
 Provider="usb-wdm-free"
-QemuAC="QEMU USB Audio control (no driver)"
-QemuAS="QEMU USB Audio streaming (no driver)"
-BrioAC="Logitech Brio 100 microphone control (no driver)"
-BrioAS="Logitech Brio 100 microphone streaming (no driver)"
+QemuAC="QEMU USB Audio control (no driver, wdm-free)"
+QemuAS="QEMU USB Audio streaming (no driver, wdm-free)"
+BrioAC="Logitech Brio 100 microphone control (no driver, wdm-free)"
+BrioAS="Logitech Brio 100 microphone streaming (no driver, wdm-free)"

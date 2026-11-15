@@ -17,7 +17,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.4.0
+DriverVer=11/15/2026,0.1.5.0
 
 [Manufacturer]
 %Provider%=Models
@@ -94,10 +94,10 @@ HKR,,Protocol,,0
 [Strings]
 Provider="usb-wdm-free"
 Disk="CDCNET installation disk"
-Ecm="USB Ethernet (CDC-ECM)"
-Ncm="USB Ethernet (CDC-NCM)"
-Rndis="USB Ethernet (RNDIS)"
-Gadget="USB Ethernet (Linux USB gadget)"
+Ecm="USB Ethernet (CDC-ECM, wdm-free)"
+Ncm="USB Ethernet (CDC-NCM, wdm-free)"
+Rndis="USB Ethernet (RNDIS, wdm-free)"
+Gadget="USB Ethernet (Linux USB gadget, wdm-free)"
 Service="usb-wdm-free CDCNET USB Ethernet"
 ProtocolDesc="USB protocol"
 AddressDesc="Network Address"

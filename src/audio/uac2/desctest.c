@@ -515,7 +515,7 @@ static int Same(const UAC_WORD *w, const char *text)
 /* The device's name (docs/design/uac2.md section 21). */
 static void Names(void)
 {
-    UAC_BYTE d[256];
+    UAC_BYTE d[256], m[256];
     UAC_WORD w[UAC_NAME_MAX + 1];
     static const UAC_BYTE en[4] = { 4, 3, 0x09, 0x04 }, two[6] = { 6, 3, 0x07, 0x04, 0x09, 0x04 };
     static const UAC_BYTE ja[4] = { 4, 3, 0x11, 0x04 }, list3[8] = { 8, 3, 0x07, 0x04, 0x11, 0x04, 0x0c, 0x04 };
@@ -532,29 +532,84 @@ static void Names(void)
     memcpy(bad, en, 4); bad[0] = 2; CHECK(UacNameLanguage(bad, 4) == 0);   /* empty list */
     CHECK(UacNameLanguage(NULL, 4) == 0);
     n = Str(d, "Sound Blaster X1", NULL, 0);
-    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 16 && Same(w, "Sound Blaster X1"));
-    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 18 && Same(w, "Sound Blaster X1 2"));
-    CHECK(UacName(d, n, 9, w, UAC_NAME_MAX) == 19 && Same(w, "Sound Blaster X1 10"));
-    CHECK(UacName(d, n + 10, 0, w, UAC_NAME_MAX) == 16);            /* a longer buffer */
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 27 && Same(w, "Sound Blaster X1 (wdm-free)"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 29 && Same(w, "Sound Blaster X1 (wdm-free) 2"));
+    CHECK(UacName(d, n, 9, w, UAC_NAME_MAX) == 30 && Same(w, "Sound Blaster X1 (wdm-free) 10"));
+    CHECK(UacName(d, n + 10, 0, w, UAC_NAME_MAX) == 27);            /* a longer buffer */
     CHECK(UacName(d, n - 1, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0); /* cut short */
     CHECK(UacName(d, n, 0, w, 0) == 0 && UacName(d, n, 0, NULL, 8) == 0 && UacName(NULL, n, 0, w, 8) == 0);
     n = Str(d, "  USB\tAudio \x01\x7f  ", NULL, 0);
-    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 9 && Same(w, "USB Audio"));
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 20 && Same(w, "USB Audio (wdm-free)"));
+    /* The drivers' fallback (uacwdm.cpp NameFallback): the INFs' names. */
+    n = Str(d, "USB Audio 2.0", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 24 && Same(w, "USB Audio 2.0 (wdm-free)"));
+    CHECK(UacName(d, n, 3, w, UAC_NAME_MAX) == 26 && Same(w, "USB Audio 2.0 (wdm-free) 4"));
     n = Str(d, "", NULL, 0);
     CHECK(n == 2 && UacName(d, n, 0, w, UAC_NAME_MAX) == 0 && w[0] == 0);
     CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 0);                  /* no name: no " 2" alone */
     n = Str(d, " \t\r\n\x01 ", NULL, 0);
     CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0);
     n = Str(d, "", odd, 6);
-    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 3 && w[0] == 'D' && w[1] == 0x00e9 && w[2] == 'X' && w[3] == 0);
-    /* 40 characters: cut to 31; with a suffix, to 29 plus " 2", a space
-     * at the cut trimmed. */
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 14 && w[0] == 'D' && w[1] == 0x00e9 && w[2] == 'X' && Same(w + 3, " (wdm-free)"));
+    /* 40 characters: cut to 20 plus " (wdm-free)" (31); with a suffix, to
+     * 18 and " 2"; a space at the cut trimmed. */
+    n = Str(d, "ABCDEFGHIJKLMNOPQRS TUVWXYZABCDEFGHIJKLMN", NULL, 0);
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 30 && Same(w, "ABCDEFGHIJKLMNOPQRS (wdm-free)"));
     n = Str(d, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC DEFGHIJKLMN", NULL, 0);
-    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC D"));
-    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC 2"));
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQRST (wdm-free)"));
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 31 && Same(w, "ABCDEFGHIJKLMNOPQR (wdm-free) 2"));
+    n = Str(d, "ABCDEFGHIJKLMNOPQ  STUVWXYZ", NULL, 0);
+    CHECK(UacName(d, n, 1, w, UAC_NAME_MAX) == 30 && Same(w, "ABCDEFGHIJKLMNOPQ (wdm-free) 2"));
+    n = Str(d, "ABCDEFGHIJKLMNOPQRSTUVWXYZABC DEFGHIJKLMN", NULL, 0);
     CHECK(UacName(d, n, 0, w, 64) == 31);                           /* max capped */
-    CHECK(UacName(d, n, 0, w, 5) == 5 && Same(w, "ABCDE"));
-    CHECK(UacName(d, n, 1, w, 2) == 0);                             /* no room for the name */
+    CHECK(UacName(d, n, 0, w, 16) == 16 && Same(w, "ABCDE (wdm-free)"));
+    CHECK(UacName(d, n, 0, w, 11) == 0 && w[0] == 0);               /* the mark alone: no name */
+    CHECK(UacName(d, n, 1, w, 13) == 0);                            /* no room for the name */
+    CHECK(UacName(d, n, 1, w, 14) == 14 && Same(w, "A (wdm-free) 2"));
+    /* The maker's name (iManufacturer) comes off the front of a product
+     * string that does not fit, before any cut from the end (owner,
+     * 2026-11-15); a name that fits keeps it. */
+    n = Str(d, "Creative Sound Blaster X4", NULL, 0);
+    k = Str(m, "Creative Technology Ltd", NULL, 0);
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 27 && Same(w, "Sound Blaster X4 (wdm-free)"));
+    CHECK(UacNameFrom(d, n, m, k, 1, w, UAC_NAME_MAX) == 29 && Same(w, "Sound Blaster X4 (wdm-free) 2"));
+    CHECK(UacNameFrom(d, n, m, k, 9, w, UAC_NAME_MAX) == 30 && Same(w, "Sound Blaster X4 (wdm-free) 10"));
+    CHECK(UacNameFrom(d, n, 0, 0, 0, w, UAC_NAME_MAX) == 31 && Same(w, "Creative Sound Blast (wdm-free)")); /* no maker */
+    CHECK(UacNameFrom(d, n, m, k - 1, 0, w, UAC_NAME_MAX) == 31 && Same(w, "Creative Sound Blast (wdm-free)")); /* maker unreadable */
+    CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 31 && Same(w, "Creative Sound Blast (wdm-free)"));
+    n = Str(d, "Sound Blaster X1", NULL, 0);                                   /* no maker prefix, fits */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 27 && Same(w, "Sound Blaster X1 (wdm-free)"));
+    n = Str(d, "Creative Pebble X", NULL, 0);                                  /* fits: the maker stays */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 28 && Same(w, "Creative Pebble X (wdm-free)"));
+    n = Str(d, "Creative Pebble X Plus", NULL, 0);                             /* 22: stripped */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 24 && Same(w, "Pebble X Plus (wdm-free)"));
+    n = Str(d, "Creative Technology Ltd", NULL, 0);                            /* the product is the maker */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 30 && Same(w, "Creative Technology (wdm-free)"));
+    n = Str(d, "Creative Technology", NULL, 0);                                /* a leading part of it */
+    CHECK(UacNameFrom(d, n, m, k, 1, w, UAC_NAME_MAX) == 31 && Same(w, "Creative Technolog (wdm-free) 2"));
+    n = Str(d, "USB PnP Sound Device Ultra", NULL, 0);                         /* no common prefix: today's cut */
+    k = Str(m, "C-Media Electronics Inc.", NULL, 0);
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 31 && Same(w, "USB PnP Sound Device (wdm-free)"));
+    n = Str(d, "C-Media USB Headphone Set", NULL, 0);                          /* whole words only: "C-Media" */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 28 && Same(w, "USB Headphone Set (wdm-free)"));
+    n = Str(d, "C-Mediatek USB Audio Device", NULL, 0);                        /* not a word of the maker */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 31 && Same(w, "C-Mediatek USB Audio (wdm-free)"));
+    n = Str(d, "LOGITECH - G Pro X Wireless Gaming Headset", NULL, 0);         /* any case, separators, then the cut */
+    k = Str(m, "Logitech", NULL, 0);
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 31 && Same(w, "G Pro X Wireless Gam (wdm-free)"));
+    CHECK(UacNameFrom(d, n, m, k, 2, w, UAC_NAME_MAX) == 31 && Same(w, "G Pro X Wireless G (wdm-free) 3"));
+    n = Str(d, "Logitech --- --- --- --- ---", NULL, 0);                       /* nothing left but separators */
+    CHECK(UacNameFrom(d, n, m, k, 0, w, UAC_NAME_MAX) == 31 && Same(w, "Logitech --- --- --- (wdm-free)"));
+    {
+        static const UAC_WORD pw[] = { 'C','r','e','a','t','i','v','e',' ','S','o','u','n','d' };
+        static const UAC_WORD mw[] = { 'c','r','e','a','t','i','v','e',' ','L','a','b','s' };
+        static const UAC_WORD xw[] = { 'C','r','e','a','t','i','v','e' };
+        CHECK(UacNameMaker(pw, 14, mw, 13) == 9);
+        CHECK(UacNameMaker(pw, 14, xw, 8) == 9);
+        CHECK(UacNameMaker(pw, 8, xw, 8) == 0);          /* the whole product */
+        CHECK(UacNameMaker(pw, 14, mw, 0) == 0 && UacNameMaker(pw, 14, 0, 8) == 0 && UacNameMaker(0, 14, xw, 8) == 0);
+        CHECK(UacNameMaker(pw, 14, xw, 7) == 0);         /* "Creativ": not a whole word of the product */
+    }
     /* Malformed: type, odd bLength, bLength past the buffer, bLength 0. */
     n = Str(d, "Name", NULL, 0);
     d[1] = 2; CHECK(UacName(d, n, 0, w, UAC_NAME_MAX) == 0); d[1] = 3;
@@ -572,6 +627,7 @@ static void Names(void)
         for (i = 0; i < got; i++) CHECK(w[i] >= 0x20 && !(w[i] >= 0x7f && w[i] <= 0x9f) &&
                                          !(w[i] >= 0xd800 && w[i] <= 0xdfff));
         CHECK(!got || (w[0] != ' ' && w[got - 1] != ' '));
+        CHECK(!got || k % 3 || (got > 11 && Same(w + got - 11, " (wdm-free)")));
     }
 }
 

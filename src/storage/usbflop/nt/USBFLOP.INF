@@ -7,7 +7,7 @@ Signature="$Windows NT$"
 Class=USB
 ClassGuid={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=11/15/2026,0.1.3.0
 
 [Manufacturer]
 %Provider%=Models,NTx86,NTamd64
@@ -42,5 +42,5 @@ Needs=USBSTOR_CB.NT.Services
 
 [Strings]
 Provider="usb-wdm-free"
-CBI="USB UFI floppy (CBI, usb-wdm-free)"
-CB="USB UFI floppy (CB, usb-wdm-free)"
+CBI="USB UFI floppy (CBI, wdm-free)"
+CB="USB UFI floppy (CB, wdm-free)"

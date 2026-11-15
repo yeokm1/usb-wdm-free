@@ -73,7 +73,11 @@ static int Uac2(const char *name)
     if (!n || n >= sizeof(want)) lstrcpy(want, "UAC2");
     CharUpperBuff(want, lstrlen(want));
     lstrcpyn(upper, name, sizeof(upper)); CharUpperBuff(upper, lstrlen(upper));
-    return strstr(upper, want) != NULL;
+    /* Without UACWAV_NAME, also the mark every name of ours carries
+     * ("USB Audio 2.0 (wdm-free)" holds no "UAC2"), as far as WinMM's 31
+     * characters keep it ("Speakers (USB Audio 2.0 (wdm-fr", Vista+). */
+    return strstr(upper, want) != NULL ||
+        ((!n || n >= sizeof(want)) && (strstr(upper, "(WDM-") || strstr(upper, "USB AUDIO 2.0")));
 }
 
 static UINT Wanted(void)

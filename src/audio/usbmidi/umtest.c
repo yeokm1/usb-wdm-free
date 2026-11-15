@@ -204,28 +204,52 @@ static unsigned int Wide(const char *s,unsigned short *w)
 {
     unsigned int n=0; while(s[n]) {w[n]=(unsigned char)s[n];n++;} return n;
 }
-static void Name(const char *product,const char *jack,int several,unsigned int index,const char *want)
+static void NameM(const char *product,const char *maker,const char *jack,int several,unsigned int index,const char *want)
 {
-    unsigned short p[64],j[64],out[32];unsigned int pn=0,jn=0,n,i;
+    unsigned short p[64],m[64],j[64],out[32];unsigned int pn=0,mn=0,jn=0,n,i;
     if(product) pn=Wide(product,p);
+    if(maker) mn=Wide(maker,m);
     if(jack) jn=Wide(jack,j);
     for(i=0;i<32;i++) out[i]=0xffff;
-    n=UmPortName(product?p:NULL,pn,jack?j:NULL,jn,several,index,out);
+    n=UmPortName(product?p:NULL,pn,maker?m:NULL,mn,jack?j:NULL,jn,several,index,out);
     CHECK(n==strlen(want) && n<=31 && out[n]==0);
     for(i=0;i<n;i++) CHECK(out[i]==(unsigned char)want[i]);
 }
+static void Name(const char *product,const char *jack,int several,unsigned int index,const char *want)
+{
+    NameM(product,NULL,jack,several,index,want);
+}
 static void Names(void)
 {
-    Name("UM-ONE","",0,0,"UM-ONE");
-    Name("UM-ONE",NULL,1,1,"UM-ONE MIDI 2");
-    Name("Keystation ","",1,9,"Keystation MIDI 10");
-    Name("MIDI 2x2 SIM","Port A",1,0,"MIDI 2x2 SIM Port A");
-    Name("MIDI 2x2","MIDI 2x2 Port B",1,1,"MIDI 2x2 Port B");
-    Name(NULL,NULL,0,0,"USB MIDI");
-    Name("",NULL,1,3,"USB MIDI MIDI 4");
-    Name(NULL,"DIN 1",1,0,"USB MIDI DIN 1");
-    Name("A very long product name string here","",1,15,"A very long product name string");
-    Name("Thirty-one characters exactly!!","x",0,0,"Thirty-one characters exactly!!");
+    Name("UM-ONE","",0,0,"UM-ONE (wdm-free)");
+    Name("UM-ONE",NULL,1,1,"UM-ONE MIDI 2 (wdm-free)");
+    Name("Keystation ","",1,9,"Keystation MIDI 10 (wdm-free)");
+    Name("MIDI 2x2 SIM","Port A",1,0,"MIDI 2x2 SIM Port A (wdm-free)");
+    Name("MIDI 2x2","MIDI 2x2 Port B",1,1,"MIDI 2x2 Port B (wdm-free)");
+    Name(NULL,NULL,0,0,"USB MIDI (wdm-free)");
+    Name("   ",NULL,0,0,"USB MIDI (wdm-free)");
+    Name("",NULL,1,3,"USB MIDI MIDI 4 (wdm-free)");
+    Name(NULL,"DIN 1",1,0,"USB MIDI DIN 1 (wdm-free)");
+    /* 20 characters before the mark: the product is cut first, so the
+     * part that tells the ports apart (" MIDI n", the jack) stays. */
+    Name("A very long product name string here","",1,15,"A very long MIDI 16 (wdm-free)");
+    Name("A very long product name string here","",0,0,"A very long product (wdm-free)");
+    Name("Thirty-one characters exactly!!","x",0,0,"Thirty-one charact x (wdm-free)");
+    Name("Roland UM-ONE mk2","Port A",1,0,"Roland UM-ONE Port A (wdm-free)");
+    Name("Product","A jack name longer than twenty",1,0,"A jack name longer t (wdm-free)");
+    Name("A jack","A jack name longer than twenty",1,0,"A jack name longer t (wdm-free)");
+    /* The maker's name off the product's front when the name does not fit
+     * (owner, 2026-11-15), before the cut; the jack and " MIDI n" stay. */
+    NameM("Roland UM-ONE mk2","Roland Corporation","Port A",1,0,"UM-ONE mk2 Port A (wdm-free)");
+    NameM("Roland UM-ONE","Roland Corporation",NULL,0,0,"Roland UM-ONE (wdm-free)");          /* fits */
+    NameM("Roland UM-ONE mk2","Roland Corporation",NULL,1,1,"UM-ONE mk2 MIDI 2 (wdm-free)");
+    NameM("M-Audio Keystation 88 MkIII","M-Audio",NULL,1,1,"Keystation 88 MIDI 2 (wdm-free)");
+    NameM("Creative MIDI Hub","Creative Labs","Creative MIDI Hub Out 1",1,0,"MIDI Hub Out 1 (wdm-free)");
+    NameM("Yamaha Corporation","Yamaha Corporation","Port 1",1,0,"Yamaha Corpor Port 1 (wdm-free)"); /* the product is the maker */
+    NameM("Roland UM-ONE mk2","Korg Inc.","Port A",1,0,"Roland UM-ONE Port A (wdm-free)");   /* no common prefix */
+    NameM("Roland UM-ONE mk2",NULL,"Port A",1,0,"Roland UM-ONE Port A (wdm-free)");          /* no maker string */
+    NameM("Edirol UA-25EX USB MIDI Interface","EDIROL",NULL,0,0,"UA-25EX USB MIDI Int (wdm-free)");
+    CHECK(UmMakerPrefix(NULL,4,NULL,4)==0);
 }
 static void Guarded(void)
 {

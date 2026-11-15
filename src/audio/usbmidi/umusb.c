@@ -313,17 +313,19 @@ static NTSTATUS SelectConfiguration(UM_USB *s, PUCHAR config, ULONG length,
 
 static VOID Names(UM_USB *s, const USB_DEVICE_DESCRIPTOR *dev)
 {
-    WCHAR product[127], jack[127]; UCHAR langs[4]; ULONG got, pn, jn, f;
+    WCHAR product[127], maker[127], jack[127]; UCHAR langs[4]; ULONG got, pn, mn, jn, f;
     USHORT language = 0x0409;
     if (NT_SUCCESS(Descriptor(s->Lower, 3, 0, 0, langs, 4, &got)) && got >= 4 && langs[1] == 3)
         language = (USHORT)(langs[2] | (langs[3] << 8));
     pn = String(s, dev->iProduct, language, product, 126);
+    mn = String(s, dev->iManufacturer, language, maker, 126);
     for (f = 0; f < s->Info.Filters; f++) {
         UCHAR index = 0;
         if (f < s->Map.Outputs) index = s->Map.Out[f].Name;
         if (!index && f < s->Map.Inputs) index = s->Map.In[f].Name;
         jn = String(s, index, language, jack, 126);
-        UmPortName((const unsigned short *)product, pn, (const unsigned short *)jack, jn,
+        UmPortName((const unsigned short *)product, pn, (const unsigned short *)maker, mn,
+                   (const unsigned short *)jack, jn,
                    s->Info.Filters > 1, f, (unsigned short *)s->Names[f]);
     }
 }

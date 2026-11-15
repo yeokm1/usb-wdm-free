@@ -66,8 +66,8 @@ asynchronous device, or in 8-bit, A-law or mu-law; such a device loads under
 `uac1` with no sound device (no hang), and Update Driver back to "USB Audio
 Device" gives it Windows' driver again.
 
-In Device Manager `uac1` names the device "USB Audio 1.0 (uac1)"; Windows'
-own driver names it "USB Audio Device".
+In Device Manager `uac1` names the device "USB Audio 1.0 (wdm-free)";
+Windows' own driver names it "USB Audio Device".
 
 ## How each driver was evaluated
 
@@ -160,14 +160,14 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.10` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.11` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.10). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.11). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.9 and 0.1.10 are signed with the test certificate
+0.1.9 to 0.1.11 are signed with the test certificate
 `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
 `7A3C6E6289EC46E6E128D87BB54E87196B824959`; 7 x64 needs no update for
 it. Trust the `usb-wdm-free-test.cer` of this release; 0.1.4's
@@ -261,6 +261,9 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.11** (2026-11-15):
+  - Every device name the drivers show now carries "(wdm-free)", e.g. "USB Audio 2.0 (wdm-free)", "Sound Blaster X4 (wdm-free)", "USB Ethernet (CDC-ECM, wdm-free)"; a sound or MIDI name too long for the mark loses the maker's name first.
+  - A device keeps its old name until its driver is updated. On 98 SE the preferred playback device is kept by name: choose it again after the update.
 - **v0.1.10** (2026-11-11):
   - `uac2` 0.1.11.0 and `uac1` 0.1.1.0: sound starts again after a stall; a recording or playback opened just after another closed waits for it instead of failing; a device with no product name is shown as "USB Audio 2.0 (uac2)" or "USB Audio 1.0 (uac1)".
   - `uac1` 0.1.1.0 (98 SE) also runs devices with 8-bit, floating-point, A-law or mu-law sound, and is copied only: point Update Driver at its folder.

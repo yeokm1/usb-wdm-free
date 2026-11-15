@@ -2137,6 +2137,9 @@ Not used:
   " 2" to " 4", and the install disk "usb-wdm-free uac2 driver" (owner,
   2026-11-09); before that it was "UAC2 USB audio (experiment)"
   ("UAC1 USB audio (experiment)"), as the records up to 2026-11-09 show.
+  From 2026-11-15 the name is "USB Audio 2.0 (wdm-free)" ("USB Audio 1.0
+  (wdm-free)"), and every name the driver writes carries that mark
+  (21.6).
 - **Recorded** in the driver key:
   - `Uac2Name`: the name chosen for pair 0, recorded before it is
     written (not proof that the writes succeeded).
@@ -2182,6 +2185,88 @@ Not used:
 - Emulator legs (`docs/testing/2026-11-05-uac2-names.md`): XP x64, 7
   x86 and 98 SE, with distinct product strings, no product, an empty
   product, a long one, and a rename on the same instance.
+
+### 21.6 The project's mark, "(wdm-free)" (owner, 2026-11-15)
+
+Every name the project's drivers show carries "(wdm-free)", so that a
+device on one of them can be told from one on a maker's driver from
+usb-wdm-nonfree. Where a name had the driver's short name in brackets,
+the mark replaces it; elsewhere it is appended.
+
+- **The INFs.** `Device` is "USB Audio 2.0 (wdm-free)" (`uac1`: "USB
+  Audio 1.0 (wdm-free)"), `Device2` to `Device4` "USB Audio 2.0
+  (wdm-free) 2" to "... 4": 24 to 26 characters.
+- **The driver's names.** `UacName` appends `UAC_NAME_MARK` (`uacdesc.h`,
+  " (wdm-free)") to the cleaned product string, and a later pair's " N"
+  after it, as the INF does: "Sound Blaster X1 (wdm-free)", "Sound
+  Blaster X1 (wdm-free) 2". The 31 characters `szPname` holds leave 20
+  for the product string (18 with " 2" to " 9"). A longer one first
+  loses the maker's name from its front (21.7: "Creative Sound Blaster
+  X4" shows as "Sound Blaster X4 (wdm-free)"), and only what is still
+  too long is cut from the end. The mark is never cut. These are the names of 21.3: the interfaces'
+  `FriendlyName` (the wave and mixer devices on 98 SE to XP x64) and,
+  on Vista and later, the devnode's `FriendlyName` (Device Manager, and
+  the endpoint, "Speakers (Sound Blaster X1 (wdm-free))", which WinMM
+  cuts at 31 in `szPname`).
+- **The fallback.** `NameFallback` is the INF's name less the mark ("USB
+  Audio 2.0"); `UacName` adds the mark to it as to a product string.
+  `infchk.ps1` reads the mark from `uacdesc.h` and checks that each
+  INF's `Device` is `NameFallback` and the mark, `Device2` to `Device4`
+  it numbered, each at most 31 characters.
+- **Settings kept by name.** Windows keeps the preferred playback and
+  recording device by name (22.2, `Sound Mapper`'s `Playback` and
+  `Record` on XP x64; `UserPlayback` on 98 SE, read with the mark in
+  the record below). A device installed before the rename no longer has
+  the name stored there once the new driver names it, so Windows can
+  take another device as the default until the user picks the renamed
+  one again; the no-clobber `SetupPreferredAudioDevices` of an update
+  does not take it back (22.3). Vista and later were not read.
+- **Test tools.** UACWAV, UACSEEK and UACPLAY also take a device whose
+  name holds "(wdm-free)" when `UACWAV_NAME` is not set, so a device
+  shown under the fallback is found as before.
+- **Tests.** `desctest`: the mark on a product string, the fallback and
+  its pairs, the cut at 20 and 18 characters with a space at the cut,
+  no name when only the mark would fit, and the sweep checks that every
+  pair-0 name ends with the mark. Emulator legs:
+  [wdm-free-names](../testing/2026-11-15-wdm-free-names.md).
+
+### 21.7 A name too long: the maker's name off first (owner, 2026-11-15)
+
+The owner, on "Creative Sound Blaster X4" shown as "Creative Sound Blast
+(wdm-free)": "It should be called Sound Blaster X4. Chop the manufacturer
+name instead."
+
+- **The maker's name.** At start, after the product string, `ReadName`
+  reads the device's `iManufacturer` string in the same language
+  (`UacUsbDescriptor`, 5 s at most) into the extension (`Maker`). None
+  is read when the product string is not used, `iManufacturer` is 0 or
+  the read fails.
+- **The rule** (`UacNameFrom`, `UacNameMaker`, `uacdesc.c`, host-tested):
+  only when the cleaned product string does not fit the room before the
+  mark (20, or 18 with " 2" to " 9"), its front loses the most leading
+  whole words of the cleaned maker's name that it begins with (any case),
+  where the product goes on with a separator (space, `-`, `,`, `:`, `;`,
+  `_`, `/`), and the separators after them: "Creative Technology Ltd"
+  and "Creative Sound Blaster X4" share "Creative", so the name is
+  "Sound Blaster X4 (wdm-free)". If the rest still does not fit, it is
+  cut from the end as before. A name that fits keeps the maker's name
+  ("Creative Pebble X (wdm-free)").
+- **Not taken off:** a maker's word that is only part of a product's
+  word ("C-Mediatek ..." by "C-Media Electronics Inc."), a product that
+  is all the maker's name or a leading part of it ("Creative Technology
+  Ltd" stays and is cut from the end), and a strip that would leave no
+  letter or digit. With no maker's string, or none shared, the name is
+  cut from the end as in 21.6.
+- **What stays:** a later pair's " N" after the mark; the fallback name,
+  which has no maker. Each pair's name is built alone, so a product of
+  19 characters keeps the maker on pair 0 (room 20) and loses it on pair
+  1 (room 18).
+- **Tests:** `desctest`: the X4 (pairs 0, 1 and 9), the X1, a fitting
+  name that keeps its maker, no maker's string and an unreadable one, a
+  product equal to the maker's name and one that is a leading part of
+  it, no shared prefix, whole words only, any case with " - ", the strip
+  then the cut with a pair, and nothing left after the separators;
+  `UacNameMaker` alone. Emulator legs in the record of 21.6.
 
 ## 22. Windows' preferred device: `SetupPreferredAudioDevices` (xHCI98 task 47.11, 2026-11-06)
 

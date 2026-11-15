@@ -13,7 +13,7 @@ Signature="$CHICAGO$"
 Class=LibUsbDevices
 ClassGUID={EB781AAF-9C70-4523-A5DF-642A87ECA567}
 Provider=%Provider%
-DriverVer=10/22/2026,0.1.13.0
+DriverVer=11/15/2026,0.1.13.1
 
 [ClassInstall]
 AddReg=LibUsb.ClassReg
@@ -69,8 +69,8 @@ LIBUSB0.DLL=1
 Provider="usb-wdm-free"
 Disk="usb-wdm-free libusb0 disk"
 ClassName="LibUSB-Win32 Devices"
-USBasp="USBasp and V-USB devices on the shared libusb PID (libusb0)"
-USBtiny="USBtinyISP (libusb0)"
-AVRISP2="Atmel AVRISP mkII (libusb0)"
-JTAGICE2="Atmel JTAGICE mkII (libusb0)"
-Dragon="Atmel AVR Dragon (libusb0)"
+USBasp="USBasp and V-USB devices on the shared libusb PID (wdm-free)"
+USBtiny="USBtinyISP (wdm-free)"
+AVRISP2="Atmel AVRISP mkII (wdm-free)"
+JTAGICE2="Atmel JTAGICE mkII (wdm-free)"
+Dragon="Atmel AVR Dragon (wdm-free)"

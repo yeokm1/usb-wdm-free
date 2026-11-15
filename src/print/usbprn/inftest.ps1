@@ -23,7 +23,7 @@ $badP = [ordered]@{
     'setting missing'       = $p.Replace('HKLM,"Software\usb-wdm-free\usbprn","ResetOnCancel",0x00010003,0', '')
     'missing string'        = $p.Replace('%Uni%=', '%Nope%=')
     'NT signature'          = $p.Replace('$CHICAGO$', '$Windows NT$')
-    'bad date'              = $p.Replace('10/31/2026', '13/40/2026')
+    'bad date'              = $p -replace 'DriverVer=\d\d/\d\d/\d{4}', 'DriverVer=13/40/2026'
     'non-ASCII'             = $p + [char]0x100
     'duplicate section'     = $p + "`r`n[Strings]`r`nX=""y""`r`n"
 }

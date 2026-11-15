@@ -112,12 +112,32 @@ int UacClockPath(const UAC_DESC *desc, UAC_BYTE terminal,
  * (1..UAC_NAME_MAX) in out (room for max + 1, NUL-terminated): control
  * characters (below U+0020, U+007F to U+009F) read as spaces, surrogates,
  * U+FEFF, U+FFFE and U+FFFF are left out, runs of spaces become one and
- * the ends are trimmed; for pair > 0, " <pair + 1>" is appended, the name
- * cut before it to fit (trailing spaces trimmed again). Returns the
- * characters written, 0 (out empty) when the descriptor is malformed or
- * nothing printable is left: the INF's name stands. */
+ * the ends are trimmed; then UAC_NAME_MARK is appended, and for pair > 0
+ * " <pair + 1>" after it, the name cut before them to fit (trailing spaces
+ * trimmed again): "Sound Blaster X1 (wdm-free) 2", as the INF names a
+ * later pair. Returns the characters written, 0 (out empty) when the
+ * descriptor is malformed, nothing printable is left or there is no room
+ * for a character of it: the INF's name stands. */
 #define UAC_NAME_MAX 31
+/* The project's mark on every name (owner, 2026-11-15), as the INFs carry
+ * it ("USB Audio 2.0 (wdm-free)"; infchk.ps1 reads this line). */
+#define UAC_NAME_MARK " (wdm-free)"
 unsigned int UacNameLanguage(const UAC_BYTE *d, unsigned int length);
 unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
                      UAC_WORD *out, unsigned int max);
+/* UacNameFrom: UacName, with the maker's string descriptor (iManufacturer;
+ * NULL or malformed: none). When the product string does not fit, the
+ * maker's name is taken off its front first, as UacNameMaker finds it,
+ * and only then is the rest cut from the end (owner, 2026-11-15:
+ * "Creative Sound Blaster X4" is "Sound Blaster X4 (wdm-free)"). A name
+ * that fits keeps the maker's name. UacNameMaker: how many leading
+ * characters of the cleaned product p (n) are the maker's: the most
+ * leading whole words of the cleaned maker m (mn) that p begins with
+ * (any case) and follows with a separator (space - , : ; _ /), and the
+ * separators after them; 0 when p does not begin with m's first word, p
+ * is all a leading part of m (the product is the maker's name), or no
+ * letter or digit of p would be left. */
+unsigned int UacNameFrom(const UAC_BYTE *d, unsigned int length, const UAC_BYTE *maker,
+                         unsigned int makerLength, unsigned int pair, UAC_WORD *out, unsigned int max);
+unsigned int UacNameMaker(const UAC_WORD *p, unsigned int n, const UAC_WORD *m, unsigned int mn);
 #endif

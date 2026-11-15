@@ -35,7 +35,7 @@ $bu = Join-Path $tools 'binutils\mingw32\bin'
 # 1.x, so an upstream 1.x package installed later ranks higher. It reaches
 # the resources, LIBUSB_IOCTL_GET_VERSION (VERSION_*), the DLL's
 # usb_get_version() and, checked by the INF gate, DriverVer.
-$ver = @(0, 1, 13, 0)
+$ver = @(0, 1, 13, 1)
 $verDefs = @("/DVERSION_MAJOR=$($ver[0])", "/DVERSION_MINOR=$($ver[1])", "/DVERSION_MICRO=$($ver[2])",
              "/DVERSION_NANO=$($ver[3])")
 

@@ -4,6 +4,14 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.11 (2026-11-15)
+
+- **Every driver, the names**: every device name the drivers show now carries "(wdm-free)", e.g. "USB Audio 2.0 (wdm-free)", "Sound Blaster X4 (wdm-free)", so that a device on one of these drivers can be told from one on a maker's driver from usb-wdm-nonfree. Where a name had the driver's short name in brackets ("(uac2)", "(xpad98)", "(RTL815X)"), "(wdm-free)" replaces it; inside another bracket it is added there ("USB Ethernet (CDC-ECM, wdm-free)"); a later output of a sound device keeps its number after it ("USB Audio 2.0 (wdm-free) 2"), and a COM port its "(COM3)". [Record 2026-11-15](testing/2026-11-15-wdm-free-names.md).
+- **uac2, uac1 and usbmidi, long names**: a sound or MIDI device name too long for the mark (31 characters in all) loses the maker's name first ("Creative Sound Blaster X4" is "Sound Blaster X4 (wdm-free)"), and only then is cut from the end. [uac2 design, sections 21.6 and 21.7](design/uac2.md).
+- **Updating**: a device keeps its old name until its driver is updated. On 98 SE the preferred playback device is kept by name: choose it again after the update (Control Panel, Multimedia, Audio).
+- **Versions**: new images: `uac2` 0.1.12.0, `uac1` 0.1.2.0, `usbmidi` 0.1.3.0, `usbcom` 0.1.6.0 (`USBCOM.SYS`), `libusb0` 0.1.13.1. New INFs over the images of 0.1.10: `absptr` 0.1.1.0, `xpad98` 0.1.2.0, `ax88179` 0.1.5.0, `ax88772` 0.1.2.0, `rtl815x` 0.2.3.0, `sr9700` 0.1.2.0, `cdcnet` 0.1.5.0, `uvc98` 0.1.4.0, `usbflop` 0.1.3.0, `usbprn` 0.1.1.0, `noaud` 1.0.2.0.
+- **Signing**: the x64 `uac2wdm.sys` and `usbmidi.sys` are signed with the test certificate of 0.1.9 and 0.1.10 (`CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint `7A3C6E6289EC46E6E128D87BB54E87196B824959`); the other x64 images are 0.1.10's.
+
 ## Release 0.1.10 (2026-11-11)
 
 - **uac2 0.1.11.0 and uac1 0.1.1.0, sound after a stall**: when the system stalls and Windows' USB driver then refuses a stream's next transfers (seen under 98 SE's, ME's and 2000's own USB 1.1 drivers and NUSB's), the stream starts again at a later bus frame instead of stopping. [uac2 design, section 26.13](design/uac2.md).

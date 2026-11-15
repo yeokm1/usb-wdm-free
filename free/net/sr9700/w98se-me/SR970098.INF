@@ -16,7 +16,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.1.0
+DriverVer=11/15/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models
@@ -75,4 +75,4 @@ HKR,Ndi\params\NetworkAddress,default,,""
 Provider="usb-wdm-free"
 Disk="SR9700F installation disk"
 AddressDesc="Network Address"
-Sr9700="CoreChips SR9700 USB Ethernet (SR9700F)"
+Sr9700="CoreChips SR9700 USB Ethernet (wdm-free)"

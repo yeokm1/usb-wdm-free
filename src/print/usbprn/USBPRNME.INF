@@ -12,7 +12,7 @@ Signature="$CHICAGO$"
 Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
-DriverVer=10/31/2026,0.1.0.0
+DriverVer=11/15/2026,0.1.1.0
 
 [Manufacturer]
 %Provider%=Models
@@ -30,5 +30,5 @@ HKR,,NTMPDriver,,usbprint.sys
 
 [Strings]
 Provider="usb-wdm-free"
-Bidi="USB printing support (bidirectional)"
-Uni="USB printing support"
+Bidi="USB printing support (bidirectional, wdm-free)"
+Uni="USB printing support (wdm-free)"

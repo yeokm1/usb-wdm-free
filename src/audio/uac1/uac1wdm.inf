@@ -8,7 +8,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.1.0
+DriverVer=11/15/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models,NTx86,NTamd64
@@ -103,7 +103,7 @@ HKR,,FriendlyName,,%Device%
 
 [Strings]
 Provider="usb-wdm-free"
-Device="USB Audio 1.0 (uac1)"
+Device="USB Audio 1.0 (wdm-free)"
 Disk="usb-wdm-free uac1 driver"
 Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 Topology="{DDA54A40-1E4C-11D1-A050-405705C10000}"

@@ -359,25 +359,14 @@ unsigned int UacNameLanguage(const UAC_BYTE *d, unsigned int length)
     return first;
 }
 
-unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
-                     UAC_WORD *out, unsigned int max)
+/* A string descriptor's text, cleaned as UacName says, in out (at most
+ * cap characters, not terminated); 0 when it is malformed or empty. */
+static unsigned int NameText(const UAC_BYTE *d, unsigned int length, UAC_WORD *out, unsigned int cap)
 {
-    unsigned int n, i, used = 0, room, digits = 0, value;
-    UAC_WORD suffix[8];
-    if (!out || !max) return 0;
-    out[0] = 0;
-    if (max > UAC_NAME_MAX) max = UAC_NAME_MAX;
+    unsigned int n, i, used = 0;
     if (!d || length < 2 || d[1] != 3 || d[0] < 2 || d[0] > length || (d[0] & 1)) return 0;
-    if (pair) {
-        /* " <pair + 1>", as the INF names a later pair ("... 2"). */
-        value = pair + 1;
-        do { suffix[7 - digits++] = (UAC_WORD)('0' + value % 10); value /= 10; } while (value && digits < 6);
-        suffix[7 - digits++] = ' ';
-    }
-    if (digits >= max) return 0;
-    room = max - digits;
     n = (d[0] - 2) / 2;
-    for (i = 0; i < n && used < room; i++) {
+    for (i = 0; i < n && used < cap; i++) {
         unsigned int c = d[2 + 2 * i] | ((unsigned int)d[3 + 2 * i] << 8);
         if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) c = ' ';
         if ((c >= 0xd800 && c <= 0xdfff) || c == 0xfeff || c == 0xfffe || c == 0xffff) continue;
@@ -385,7 +374,74 @@ unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
         out[used++] = (UAC_WORD)c;
     }
     while (used && out[used - 1] == ' ') used--;
+    return used;
+}
+
+static int NameSeparator(unsigned int c)
+{
+    return c == ' ' || c == '-' || c == ',' || c == ':' || c == ';' || c == '_' || c == '/';
+}
+
+static unsigned int NameFold(unsigned int c)
+{
+    return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
+}
+
+unsigned int UacNameMaker(const UAC_WORD *p, unsigned int n, const UAC_WORD *m, unsigned int mn)
+{
+    unsigned int i, skip = 0;
+    if (!p || !m) return 0;
+    /* The most leading whole words of the maker's name the product begins
+     * with (any case): a word of the maker ends at its space or its end,
+     * and the product goes on with a separator there. */
+    for (i = 0; i < n && i < mn && NameFold(p[i]) == NameFold(m[i]); i++)
+        if ((i + 1 == mn || m[i + 1] == ' ') && i + 1 < n && NameSeparator(p[i + 1])) skip = i + 1;
+    if (!skip || i == n) return 0;     /* none, or the product is the maker's name */
+    while (skip < n && NameSeparator(p[skip])) skip++;
+    /* Never all of the product: a letter or digit must be left. */
+    for (i = skip; i < n; i++)
+        if ((p[i] >= '0' && p[i] <= '9') || (NameFold(p[i]) >= 'A' && NameFold(p[i]) <= 'Z') || p[i] >= 0xc0)
+            return skip;
+    return 0;
+}
+
+unsigned int UacName(const UAC_BYTE *d, unsigned int length, unsigned int pair,
+                     UAC_WORD *out, unsigned int max)
+{
+    return UacNameFrom(d, length, 0, 0, pair, out, max);
+}
+
+unsigned int UacNameFrom(const UAC_BYTE *d, unsigned int length, const UAC_BYTE *maker,
+                         unsigned int makerLength, unsigned int pair, UAC_WORD *out, unsigned int max)
+{
+    static const char mark[] = UAC_NAME_MARK;
+    const unsigned int marks = sizeof(mark) - 1;
+    unsigned int n, mn, i, used = 0, room, digits = 0, value, skip = 0;
+    UAC_WORD suffix[8], text[128], who[128];
+    if (!out || !max) return 0;
+    out[0] = 0;
+    if (max > UAC_NAME_MAX) max = UAC_NAME_MAX;
+    if (pair) {
+        /* " <pair + 1>", as the INF names a later pair ("... 2"). */
+        value = pair + 1;
+        do { suffix[7 - digits++] = (UAC_WORD)('0' + value % 10); value /= 10; } while (value && digits < 6);
+        suffix[7 - digits++] = ' ';
+    }
+    if (digits + marks >= max) return 0;
+    room = max - digits - marks;
+    n = NameText(d, length, text, 128);
+    if (!n) return 0;
+    if (n > room) {
+        /* Too long: the maker's name off its front first ("Creative Sound
+         * Blaster X4" by "Creative Technology Ltd": "Sound Blaster X4"),
+         * then, if still too long, cut from the end. */
+        mn = NameText(maker, makerLength, who, 128);
+        if (mn) skip = UacNameMaker(text, n, who, mn);
+    }
+    for (i = skip; i < n && used < room; i++) out[used++] = text[i];
+    while (used && out[used - 1] == ' ') used--;
     if (!used) { out[0] = 0; return 0; }
+    for (i = 0; i < marks; i++) out[used++] = (UAC_WORD)(unsigned char)mark[i];
     for (i = 0; i < digits; i++) out[used++] = suffix[8 - digits + i];
     out[used] = 0;
     return used;

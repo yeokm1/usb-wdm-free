@@ -14,7 +14,7 @@ Signature="$Windows NT$"
 Class=HIDClass
 ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider=%Provider%
-DriverVer=11/07/2026,0.1.1.0
+DriverVer=11/15/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models
@@ -271,5 +271,5 @@ ServiceBinary=%12%\xpad98.sys
 Provider="usb-wdm-free"
 Disk="xpad98 driver disk"
 Service="xpad98 Xbox pad HID minidriver"
-X360="Xbox 360 compatible pad (xpad98)"
-GIP="Xbox One/Series compatible pad (xpad98)"
+X360="Xbox 360 compatible pad (wdm-free)"
+GIP="Xbox One/Series compatible pad (wdm-free)"

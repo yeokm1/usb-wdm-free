@@ -7,7 +7,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.11.0
+DriverVer=11/15/2026,0.1.12.0
 
 [Manufacturer]
 %Provider%=Models,NTamd64,NTx86
@@ -143,7 +143,7 @@ AddService=uac2wdm,0x00000002,Service
 [UAC2.NTamd64.Services]
 AddService=uac2wdm,0x00000002,Service
 [Service]
-DisplayName=%Device%
+DisplayName=%Service%
 ServiceType=1
 StartType=3
 ErrorControl=1
@@ -251,11 +251,12 @@ RunOnceKey="Software\Microsoft\Windows\CurrentVersion\RunOnce"
 SysAudioDev="{A7C7A5B0-5AF3-11D1-9CED-00A024BF0407}"
 KsFilterRef="{9B365890-165F-11D0-A195-0020AFD156E4}"
 SysAudioCat="{A7C7A5B1-5AF3-11D1-9CED-00A024BF0407}"
-Device2="USB Audio 2.0 (uac2) 2"
-Device3="USB Audio 2.0 (uac2) 3"
-Device4="USB Audio 2.0 (uac2) 4"
+Device2="USB Audio 2.0 (wdm-free) 2"
+Device3="USB Audio 2.0 (wdm-free) 3"
+Device4="USB Audio 2.0 (wdm-free) 4"
 Provider="usb-wdm-free"
-Device="USB Audio 2.0 (uac2)"
+Device="USB Audio 2.0 (wdm-free)"
+Service="USB Audio 2.0 (uac2)"
 Disk="usb-wdm-free uac2 driver"
 Audio="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 Render="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"

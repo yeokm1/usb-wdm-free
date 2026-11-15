@@ -8,7 +8,7 @@ Signature="$Windows NT$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.3.0
+DriverVer=11/15/2026,0.1.4.0
 [Manufacturer]
 %Provider%=Models
 [Models]
@@ -40,7 +40,7 @@ CopyFiles=MiniFiles
 [Capture.NT.Services]
 AddService=uvcm2,0x00000002,MiniService
 [MiniService]
-DisplayName=%Uvc%
+DisplayName=%Service%
 ServiceType=1
 StartType=3
 ErrorControl=1
@@ -55,8 +55,9 @@ HKR,,CLSID,,%KSProxy%
 HKR,,FriendlyName,,%Uvc%
 [Strings]
 Provider="usb-wdm-free"
-Uvc="USB Video Class camera (uvc98)"
-UvcWhole="USB Video Class camera, whole device (uvc98)"
+Uvc="USB Video Class camera (wdm-free)"
+UvcWhole="USB Video Class camera, whole device (wdm-free)"
+Service="USB Video Class camera (uvc98)"
 Disk="usb-wdm-free uvc98"
 Video="{6994AD05-93EF-11D0-A3CC-00A0C9223196}"
 Capture="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"

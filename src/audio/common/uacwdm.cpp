@@ -1538,9 +1538,11 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
 }
 
 /* Name: the product string descriptor as read at start, NameLength 0
- * when there is none to use (docs/design/uac2.md section 21). */
+ * when there is none to use; Maker: the manufacturer's (iManufacturer),
+ * MakerLength 0 when there is none (docs/design/uac2.md sections 21,
+ * 21.7). */
 struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
-             ULONG NameLength; UCHAR Name[256]; };
+             ULONG NameLength; UCHAR Name[256]; ULONG MakerLength; UCHAR Maker[256]; };
 static PDRIVER_DISPATCH PortClsPnp;
 static EXT *Extension(PDEVICE_OBJECT fdo);
 static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo) { return Extension(fdo)->Pdo; }
@@ -1721,12 +1723,14 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
     return s;
 }
 
-/* The INF's name (its Device string; infchk.ps1 checks they agree): what a
- * device without a usable product string is named, a later pair " N". */
+/* The INF's name less UacName's UAC_NAME_MARK (its Device string is this
+ * and the mark; infchk.ps1 checks they agree): what a device without a
+ * usable product string is named, "USB Audio 2.0 (wdm-free)", a later
+ * pair " N" after it. */
 #ifdef UAC_V1
-static const char NameFallback[] = "USB Audio 1.0 (uac1)";
+static const char NameFallback[] = "USB Audio 1.0";
 #else
-static const char NameFallback[] = "USB Audio 2.0 (uac2)";
+static const char NameFallback[] = "USB Audio 2.0";
 #endif
 
 /* Windows Vista and later (WDM 6.00) name the audio endpoints after the
@@ -1790,6 +1794,7 @@ static void ReadName(PDEVICE_OBJECT fdo)
     ULONG got = 0, status = 0, language = 0x0409;
     UAC_WORD name[UAC_NAME_MAX + 1];
     ext->NameLength = 0;
+    ext->MakerLength = 0;
     if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
         got != sizeof(device) || device[0] != 18 || device[1] != 1) status = 2;
     else if (!device[15]) status = 1;
@@ -1801,7 +1806,14 @@ static void ReadName(PDEVICE_OBJECT fdo)
         if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
                                          ext->Name, sizeof(ext->Name), &got))) status = 3;
         else if (!UacName(ext->Name, got, 0, name, UAC_NAME_MAX)) status = 4;
-        else ext->NameLength = got;
+        else {
+            ext->NameLength = got;
+            /* The maker's name, which a product string too long for the
+             * name loses first (section 21.7); none if it cannot be read. */
+            if (device[14] && NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[14], (USHORT)language,
+                                                          ext->Maker, sizeof(ext->Maker), &got)))
+                ext->MakerLength = got;
+        }
     }
     if (!ext->NameLength) {
         /* The INF's name as a string descriptor, for UacName. */
@@ -1816,7 +1828,7 @@ static void ReadName(PDEVICE_OBJECT fdo)
         Name(&u, L"Uac2NameStatus");
         ZwSetValueKey(key, &u, 0, REG_DWORD, &status, sizeof(status));
         Name(&u, L"Uac2Name");
-        ULONG n = UacName(ext->Name, ext->NameLength, 0, name, UAC_NAME_MAX);
+        ULONG n = UacNameFrom(ext->Name, ext->NameLength, ext->Maker, ext->MakerLength, 0, name, UAC_NAME_MAX);
         ZwSetValueKey(key, &u, 0, REG_SZ, name, (n + 1) * sizeof(WCHAR));
         NTSTATUS devnode = n ? NameDevnode(fdo, name, n) : STATUS_UNSUCCESSFUL;
         Name(&u, L"Uac2NameDevnode");
@@ -1837,7 +1849,7 @@ static void NameInterfaces(PDEVICE_OBJECT fdo, ULONG k, PWSTR wave, PWSTR topo)
     ULONG n;
     PWSTR refs[2];
     if (!ext->NameLength) return;
-    n = UacName(ext->Name, ext->NameLength, k, name, UAC_NAME_MAX);
+    n = UacNameFrom(ext->Name, ext->NameLength, ext->Maker, ext->MakerLength, k, name, UAC_NAME_MAX);
     if (!n) return;
     refs[0] = wave; refs[1] = topo;
     for (ULONG i = 0; i < 2; i++) {

@@ -1271,6 +1271,8 @@ def main():
     ap.add_argument('--strict-volume', action='store_true',
                     help='refuse (stall) a volume SET_CUR off the range or between steps')
     ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N')
+    ap.add_argument('--product', help="iProduct's string instead of the profile's")
+    ap.add_argument('--manufacturer', help="iManufacturer's string instead of the profile's")
     ap.add_argument('--pcm', type=Path)
     ap.add_argument('--pcm-max', type=int, default=4, choices=range(1, 257), metavar='MIB')
     args = ap.parse_args()
@@ -1279,6 +1281,12 @@ def main():
                            refresh=args.refresh, strict_volume=args.strict_volume)
     except ValueError as error:
         ap.error(str(error))
+    # The same string setters as uacemu's profiles (the device descriptor
+    # and string table have the same shape here).
+    if args.product is not None:
+        uacemu.Profile.set_product(profile, args.product)
+    if args.manufacturer is not None:
+        uacemu.Profile.set_manufacturer(profile, args.manufacturer)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open('x', encoding='utf-8') as trace, socket.socket() as server:
         server.bind(('127.0.0.1', args.port))

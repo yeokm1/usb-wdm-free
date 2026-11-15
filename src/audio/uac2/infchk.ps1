@@ -130,21 +130,32 @@ foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
         $n++
     }
 }
-# The driver's fallback name (uac2wdm.cpp NameFallback, docs/design/uac2.md 21)
-# is each INF's Device string.
+# The driver's fallback name (uacwdm.cpp NameFallback, docs/design/uac2.md 21)
+# with UacName's mark (uacdesc.h UAC_NAME_MARK) is each INF's Device string,
+# at most 31 characters, and Device2 to Device4 are it with " 2" to " 4", as
+# UacName names a later pair.
+$h = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../common/uacdesc.h'))
+if ($h -notmatch '(?m)^#define UAC_NAME_MARK "([^"]*)"\s*$') { throw 'UAC_NAME_MARK not found in uacdesc.h' }
+$mark = $Matches[1]
+if ($mark -cne ' (wdm-free)') { throw "UAC_NAME_MARK is '$mark', not ' (wdm-free)'" }
 $cpp = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../common/uacwdm.cpp'))
-# uacwdm.cpp is shared with uac1 (UAC_V1): uac2's name is the #else branch's.
-if ($cpp -notmatch '#else\r?\nstatic const char NameFallback\[\] = "([^"]*)";') { throw 'NameFallback not found in uac2wdm.cpp' }
-$fallback = $Matches[1]
-foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) {
+function Assert-Names([string]$inf, [string]$name, [int]$pairs) {
     $t = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $inf))
     if ($t -notmatch '(?m)^Device="([^"]*)"\s*$') { throw "${inf}: no Device string" }
-    if ($Matches[1] -cne $fallback) { throw "${inf}: Device string '$($Matches[1])' is not the driver's fallback '$fallback'" }
+    if ($Matches[1] -cne $name) { throw "${inf}: Device string '$($Matches[1])' is not the driver's fallback '$name'" }
+    for ($k = 2; $k -le $pairs; $k++) {
+        if ($t -notmatch "(?m)^Device$k=""([^""]*)""\s*$") { throw "${inf}: no Device$k string" }
+        if ($Matches[1] -cne "$name $k") { throw "${inf}: Device$k string '$($Matches[1])' is not '$name $k'" }
+        if ($Matches[1].Length -gt 31) { throw "${inf}: Device$k string '$($Matches[1])' is longer than 31 characters" }
+    }
+    if ($name.Length -gt 31) { throw "${inf}: Device string '$name' is longer than 31 characters" }
 }
+# uacwdm.cpp is shared with uac1 (UAC_V1): uac2's name is the #else branch's.
+if ($cpp -notmatch '#else\r?\nstatic const char NameFallback\[\] = "([^"]*)";') { throw 'NameFallback not found in uacwdm.cpp' }
+$fallback = $Matches[1] + $mark
+foreach ($inf in @('uac2wdm.inf', 'x64\uac2wdm.inf')) { Assert-Names $inf $fallback 4 }
 # uac1 (the UAC_V1 branch) names its devices from uac1's INF the same way.
 if ($cpp -notmatch '#ifdef UAC_V1\r?\nstatic const char NameFallback\[\] = "([^"]*)";') { throw 'uac1 NameFallback not found in uacwdm.cpp' }
-$fallback1 = $Matches[1]
-$t = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\uac1\uac1wdm.inf'))
-if ($t -notmatch '(?m)^Device="([^"]*)"\s*$') { throw 'uac1wdm.inf: no Device string' }
-if ($Matches[1] -cne $fallback1) { throw "uac1wdm.inf: Device string '$($Matches[1])' is not the driver's fallback '$fallback1'" }
-Write-Output "PASS infchk: Uac2QueueMs at $default, Uac2VolAboveZero at 0 and SetupPreferredAudioDevices 2 (no-clobber) in every install section of both INFs, Device the driver fallback name (uac2 and uac1); $n mutations refused"
+$fallback1 = $Matches[1] + $mark
+Assert-Names '..\uac1\uac1wdm.inf' $fallback1 1
+Write-Output "PASS infchk: Uac2QueueMs at $default, Uac2VolAboveZero at 0 and SetupPreferredAudioDevices 2 (no-clobber) in every install section of both INFs, Device the driver fallback name with its mark ('$fallback', '$fallback1'), Device2 to Device4 numbered; $n mutations refused"

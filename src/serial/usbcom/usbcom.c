@@ -407,7 +407,7 @@ static void UcWriteNames(UC_PORT *p)
         return;
     UcPortNameW(p->PortNumber, com);
     friendly[0] = 0;
-    UcAppendAscii(friendly, 48, "USB Serial Port (");
+    UcAppendAscii(friendly, 48, "USB Serial Port (wdm-free) (");   /* the device text and USBCOMP.INF, and the port */
     UcAppend(friendly, 48, com, UcWcsLen(com));
     UcAppendAscii(friendly, 48, ")");
     if (NT_SUCCESS(UcSetString(h, L"PortName", com)) &&
@@ -1008,7 +1008,7 @@ static NTSTATUS UcPdoPnp(PDEVICE_OBJECT dev, PIRP irp)
         break;
     case IRP_MN_QUERY_DEVICE_TEXT:
         if (s->Parameters.QueryDeviceText.DeviceTextType == DeviceTextDescription)
-            return UcAllocString(irp, L"USB Serial Port", 16);
+            return UcAllocString(irp, L"USB Serial Port (wdm-free)", 27); /* USBCOMP.INF names it the same */
         if (s->Parameters.QueryDeviceText.DeviceTextType == DeviceTextLocationInformation)
             return UcAllocString(irp, L"USB CDC-ACM function", 21);
         break;

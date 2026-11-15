@@ -14,7 +14,7 @@ Signature="$CHICAGO$"
 Class=MEDIA
 ClassGuid={4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/26/2026,0.1.2.0
+DriverVer=11/15/2026,0.1.3.0
 
 [Manufacturer]
 %Provider%=Models
@@ -107,11 +107,11 @@ ServiceBinary=%12%\usbmidi.sys
 
 [Strings]
 Provider="usb-wdm-free"
-Device="USB MIDI"
+Device="USB MIDI (wdm-free)"
 Service="USB MIDI 1.0 driver (usbmidi)"
-Generic="USB MIDI device"
-Manual="USB MIDI device (class compliant)"
-UmOneTab="Roland UM-ONE mk2 (TAB)"
+Generic="USB MIDI device (wdm-free)"
+Manual="USB MIDI device (class compliant, wdm-free)"
+UmOneTab="Roland UM-ONE mk2 (TAB, wdm-free)"
 Simulation1="USB MIDI loopback (simulated, test only)"
 Simulation2="USB MIDI 2x2 (simulated, test only)"
 Simulation3="USB MIDI lone interface (simulated, test only)"

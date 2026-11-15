@@ -178,7 +178,7 @@ installed by hand, and the release notes document how (4.3).
 
 ### 4.3 Installing by hand
 
-The INF carries a model "USB MIDI device (class compliant)" with
+The INF carries a model "USB MIDI device (class compliant, wdm-free)" with
 `ExcludeFromSelect` off, so Update Driver / "Have Disk" with "show all
 hardware" (98 SE, ME) or "Show compatible hardware" cleared (2000 to 8)
 offers it for any audio function. This manual install is the documented
@@ -317,6 +317,24 @@ ANSI on 98 SE / ME):
 
 If a jack name already begins with the product name, it is used alone
 (Linux's `strncmp(card->shortname, jack_name, ...)` rule).
+
+Then the project's mark, " (wdm-free)" (owner, 2026-11-15: every name
+the project's drivers show carries it, so a device on one of them can be
+told from one on a maker's driver from usb-wdm-nonfree). The name before
+it has 20 of the 31 characters. A name that does not fit first loses the
+maker's name (`iManufacturer`) from the product's front, as `uac2` does
+([uac2.md](uac2.md) 21.7: whole leading words shared with the maker's
+name, never the whole product; owner, 2026-11-15), then the product
+string is cut from its end, so the part that tells the ports apart (the
+jack name, " MIDI n") stays: "UM-ONE mk2 Port A (wdm-free)" for "Roland
+UM-ONE mk2" by "Roland Corporation" with the jack "Port A", or with no
+maker's string
+"Roland UM-ONE Port A (wdm-free)"; "UM-ONE (wdm-free)", "USB MIDI MIDI
+4 (wdm-free)" (`UmPortName`, `UmMakerPrefix`, `UM_NAME_MARK` in
+`umcore.h`; `umtest`). A jack name that begins with the product name
+loses the maker's name from that front too. A jack name of 19
+characters or more is shown alone, cut at 20. The INF's names carry
+the same mark ("USB MIDI (wdm-free)", "USB MIDI device (wdm-free)").
 
 ## 6. USB side
 

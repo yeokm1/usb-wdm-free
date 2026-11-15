@@ -17,7 +17,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/10/2026,0.1.1.0
+DriverVer=11/15/2026,0.1.2.0
 
 [Manufacturer]
 %Provider%=Models
@@ -124,8 +124,8 @@ TxOnly="Transmit only"
 RxOnly="Receive only"
 RxTx="Transmit and receive"
 EeeDesc="Energy-Efficient Ethernet (EEE)"
-Ax88772b="ASIX AX88772B/AX88772C USB 2.0 Fast Ethernet (AX772F)"
-Asus="ASUS USB Ethernet Adapter (AX772F)"
-Lenovo="Lenovo U2L100P USB 2.0 Fast Ethernet (AX772F)"
-Dube100="D-Link DUB-E100 (C1) USB 2.0 Fast Ethernet (AX772F)"
-Sr9800="CoreChips SR9800 USB 2.0 Fast Ethernet (AX772F)"
+Ax88772b="ASIX AX88772B/AX88772C USB 2.0 Fast Ethernet (wdm-free)"
+Asus="ASUS USB Ethernet Adapter (wdm-free)"
+Lenovo="Lenovo U2L100P USB 2.0 Fast Ethernet (wdm-free)"
+Dube100="D-Link DUB-E100 (C1) USB 2.0 Fast Ethernet (wdm-free)"
+Sr9800="CoreChips SR9800 USB 2.0 Fast Ethernet (wdm-free)"

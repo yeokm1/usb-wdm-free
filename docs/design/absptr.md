@@ -464,9 +464,11 @@ NUSB's, xHCI98).
   `[Models.NTamd64.6.0]` (Vista x64) the PenPartner and the touch
   screens; `[Models.NTamd64.6.1]` (7 x64 and later) the PenPartner only
   (section 3.1). Its "Have Disk" entries read "HID touch screen, pen, or
-  12-bit or 0-65535 absolute mouse (absptr)" (XP x64), "HID touch screen,
-  or 12-bit or 0-65535 absolute mouse (absptr)" (Vista x64) and "12-bit
-  or 0-65535 absolute mouse (absptr)" (7 x64). The x64 binary is
+  12-bit or 0-65535 absolute mouse (wdm-free)" (XP x64), "HID touch
+  screen, or 12-bit or 0-65535 absolute mouse (wdm-free)" (Vista x64) and
+  "12-bit or 0-65535 absolute mouse (wdm-free)" (7 x64); "(absptr)"
+  before 2026-11-15, when every name the INFs give took the project's
+  mark, "(wdm-free)", in place of the driver's (owner). The x64 binary is
   unsigned as built; Vista x64 and 7 x64 load it only with a signature
   (the owner's test signature, build.md) or with driver signature
   enforcement disabled at boot.
@@ -478,7 +480,7 @@ NUSB's, xHCI98).
   absolute mouse with a 16-bit 0..32767 range (QEMU's tablet and the
   like) is left to Windows: the INF lists none, and its "Have Disk"
   entry reads "HID touch screen, pen, or 12-bit or 0-65535 absolute
-  mouse (absptr)".
+  mouse (wdm-free)".
 - **Which ids** (owner, 2026-11-06: known devices by id, each with its
   source): the PenPartner `USB\VID_056A&PID_0000`; 72 HID multi-touch
   screens from Linux v6.12 `drivers/hid/hid-multitouch.c`, `mt_devices[]`
@@ -656,7 +658,8 @@ For the owner's release notes when absptr is first released (not in
     and absolute mice that Windows does not place right (12-bit
     positions). The touch screens of section 8 are found by their ids;
     for another touch screen or pen, use Update Driver and "Have Disk"
-    with this folder and pick "HID touch screen or pen tablet (absptr)".
+    with this folder and pick "HID touch screen or pen tablet
+    (wdm-free)".
   - On 2000 and XP: only what Windows' own driver cannot use: the
     PenPartner, HID touch screens and pens, and absolute mice with
     12-bit positions or a 0..65535 range (KVM switches' and remote

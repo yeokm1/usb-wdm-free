@@ -577,6 +577,20 @@ class Profile:
             self.strings[device[15]] = usb_string(text)
         self.device = bytes(device)
 
+    def set_manufacturer(self, text):
+        """iManufacturer's string: text, or None for no iManufacturer
+        (index 0). An index the profile does not use is taken when it has
+        none."""
+        device = bytearray(self.device)
+        self.strings = dict(self.strings)   # never the module's shared table
+        if text is None:
+            device[14] = 0
+        else:
+            if not device[14]:
+                device[14] = max([i for i in self.strings if i < 255] + [device[15], device[16], 2]) + 1
+            self.strings[device[14]] = usb_string(text)
+        self.device = bytes(device)
+
     def stream_alt(self, interface, alternate):
         """The streaming facts of one alternate, or None."""
         a = self.alts.get((interface, alternate))
@@ -1253,6 +1267,8 @@ def main():
     ap.add_argument('--vol-cur', type=int, default=0, help='volume CUR at plug-in, 1/256 dB')
     ap.add_argument('--product', help="iProduct's string instead of the profile's ('' an empty one)")
     ap.add_argument('--no-product', action='store_true', help='iProduct 0: no product string')
+    ap.add_argument('--manufacturer', help="iManufacturer's string instead of the profile's")
+    ap.add_argument('--no-manufacturer', action='store_true', help='iManufacturer 0: no manufacturer string')
     ap.add_argument('--vol-cur-at', action='append', default=[], metavar='CH=V',
                     help='volume CUR at plug-in of logical channel CH (0 master) of every feature unit')
     ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N',
@@ -1271,6 +1287,10 @@ def main():
         profile.set_product(None)
     elif args.product is not None:
         profile.set_product(args.product)
+    if args.no_manufacturer:
+        profile.set_manufacturer(None)
+    elif args.manufacturer is not None:
+        profile.set_manufacturer(args.manufacturer)
     for item in args.vol_cur_at:
         try:
             ch, value = (int(v) for v in item.split('='))

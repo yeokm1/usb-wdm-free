@@ -84,7 +84,7 @@ that Windows.
 | Driver | 98 SE | ME | 2000 | XP | Vista | 7 | 8 |
 |---|---|---|---|---|---|---|---|
 | `uac1` | Real PC (r); real device (VM); simulator (o) | - | - | - | - | - | - |
-| `uac2` | Real PC (l); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b); real device (VM), x64 (q) | Simulator only; real device (VM), x64 (q) | Real device (VM); real device (VM), x64 (q) | Real device (VM), x64 (q) |
+| `uac2` | Real PC (l) (s); simulator (a) | Simulator only | Not evaluated | Real device (VM) (b); real device (VM), x64 (q) | Simulator only; real device (VM), x64 (q) | Real device (VM); real device (VM), x64 (q) | Real device (VM), x64 (q) |
 | `usbmidi` | Simulator only | Simulator only | Simulator only | Simulator only | Not evaluated | Real device (VM), open and close only | Not evaluated |
 | `uvc98` | Real PC (l); real device (VM) (c) | Not evaluated | Real device (VM) (d) | - | - | - | - |
 | `usbcom` | Simulator only | Simulator only | Simulator only (e) | Real device (VM), open and close only | Not evaluated | Simulator only, x64 | Not evaluated |
@@ -117,6 +117,7 @@ that Windows.
 - (p) A real RTL8157 (`0BDA:8157`) under xHCI98 at 5 Gb/s: link, pings, two-way TCP with every byte checked, unplug under traffic and replug, and Device Manager's disable and enable (`docs/testing/2026-11-07-rtl8157-hardware.md`, `2026-11-07-rtl8157-performance.md`).
 - (q) A real Creative Sound Blaster X4 (`041E:3278`) and X1 (`041E:3286`) on XP x64, Vista x64, 7 x64, 8 x64 and 8.1 x64: playback on both, and recording on the X1 (`docs/testing/2026-11-05-uac2-build26-nt6x64.md`).
 - (r) The owner's bench, 2026-11-09: the real Creative Sound Blaster Play! 2 (`041E:323D`) on a ThinkPad P14s Gen 1 under Windows 98 SE, xHCI98 3.4.2.0 and `uac1` 0.1.9: playback clean at 48 and 44.1 kHz (a 1 kHz tone, left and right, a 50 Hz to 15 kHz sweep), volume and mute, and recording from a microphone clean at 44.1 kHz, 16-bit stereo (Sound Recorder's default of 22.05 kHz, 8-bit mono is noisy by its format). Unplugged and plugged in again with nothing playing (the same port and another): still the preferred device, and playback clean.
+- (s) The owner's bench, 2026-11-16: two USB-C audio dongles built on the Conexant CX31993, one with an amplifier (`06CB:1595`) and one without (`3302:3366`), on a ThinkPad P14s Gen 1 under Windows 98 SE, xHCI98 3.5.0.0 and `uac2` 0.1.11.0 (the version that xHCI98 release carried): both work, by the owner's report. What was exercised beyond that is not recorded.
 
 Each run, with its device, host controller driver, date and result, is in
 [docs/status.md](docs/status.md) (with the layout, sources and install

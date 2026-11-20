@@ -282,6 +282,98 @@ class Tests(CoreCase):
                 link = self.link()
                 self.assertEqual((link.Up, link.Mbps, bool(link.FullDuplex)), (1, mbps, full))
 
+    def test_rtl8156b_forced_100_full(self):
+        """The RTL8156B cases of docs/testing/2026-11-09-advanced-tab.md
+        (*SpeedDuplex 4, *FlowControl 0) through the driver core and the
+        corrected PHY reset: at SuperSpeed against a 2.5G partner (98 SE,
+        xHCI98) and at High Speed against a 1000 partner (98 SE under NUSB's
+        EHCI, XP under Windows' EHCI): 100 full, BMCR 0x2100, no pause."""
+        for speed, partner in (('super', 2500), ('high', 1000)):
+            with self.subTest(speed=speed, partner=partner):
+                self.assertEqual(self.setup('8156b', speed, [4, 0, 0, 1000, 0, 0, 0], partner=partner), 0)
+                self.settle(1.3)
+                link = self.link()
+                self.assertEqual((link.Up, link.Mbps, bool(link.FullDuplex)), (1, 100, True))
+                s = self.m.chip.settings()
+                self.assertEqual(s['bmcr'], r.MIICTL_SPEED100 | r.MIICTL_FULL)
+                self.assertEqual(s['an_adv'] & 0x0de0, r.ANADV_100F)
+                self.assertEqual(self.m.chip.pla[r.MR_LINK] & 0x60, 0)
+
+    def test_forced_speed_with_a_reset_that_never_clears(self):
+        """rtlemu --reset-stuck: the PHY's reset bit stays set. A forced
+        *SpeedDuplex start writes the reset, polls it to the end, writes no
+        forced bits and fails (NC_E_DEVICE, -3): no link, no receiver. With
+        Automatic the start goes on; the PHY gives no link."""
+        for chip, speed in (('8153', 'high'), ('8152', 'high'), ('8156b', 'super'), ('8157', 'super')):
+            with self.subTest(chip=chip):
+                self.assertEqual(self.setup(chip, speed, [4, 3, 0, 1000, 0, 0, 0], reset_stuck=True), -3)
+                self.assertEqual(self.m.chip.bmcr_dropped, 0)          # nothing written after the reset
+                self.assertEqual(self.m.chip.phy_word(r.PR_MII), self.m.chip.bmcr_default)
+                self.settle(1.3)
+                self.assertFalse(self.m.link)
+                if chip not in r.REAL:      # the real RTL8157's profile starts with its receiver on
+                    self.assertFalse(self.m.chip.receiving())
+                self.assertEqual(self.setup(chip, speed, [0, 3, 0, 1000, 0, 0, 0], reset_stuck=True), 0)
+                self.settle(1.3)
+                self.assertFalse(self.m.link)
+
+    def test_speed_settings_on_a_kept_chip(self):
+        """*SpeedDuplex start after start on a chip that is not power-cycled
+        (rtlemu --keep-chip), in the order a real RTL8157 ran them
+        (docs/testing/2026-11-17-netopts-rtl8157.md): each start gets its
+        own setting whatever the one before left in the PHY, and Automatic
+        advertises everything again."""
+        runs = ((6, 1000, True), (2500, 2500, True), (5000, 5000, True), (4, 100, True),
+                (3, 100, False), (2, 10, True), (1, 10, False), (0, 5000, True))
+        kept = None
+        for speed, mbps, full in runs:
+            with self.subTest(speed=speed, after=kept and kept.settings()):
+                self.assertEqual(self.setup('8157', 'super', [speed, 3, 0, 1000, 0, 0, 0], kept=kept), 0)
+                self.settle(1.3)
+                link = self.link()
+                self.assertEqual((link.Up, link.Mbps, bool(link.FullDuplex)), (1, mbps, full))
+                s = self.m.chip.settings()
+                forced = 1 <= speed <= 4
+                self.assertEqual(bool(s['bmcr'] & r.MIICTL_AN_ENABLE), not forced)
+                self.assertEqual(self.m.chip.bmcr_dropped, 0)
+                self.assertEqual(self.chip.Stop(self.state, c.byref(self.io)), 0)
+                kept = self.m.chip
+        # Automatic, last: 10/100 half and full and both pause bits, 1000
+        # full, 2.5G and 5G (the RTL8157 at SuperSpeed).
+        self.assertEqual(s['an_adv'] & 0x0de0, 0x0de0)
+        self.assertEqual(s['gig_ctl'] & 0x0300, r.GIGCTL_1000_FULL)
+        self.assertEqual(s['xg_ctl'] & (r.XGCTL_2500 | r.XGCTL_5000 | r.XGCTL_10000), r.XGCTL_2500 | r.XGCTL_5000)
+
+    def test_pause_choices_resolve_with_the_partner(self):
+        """*FlowControl 0, 1, 3 (ethernet.md 4.10.9) against every partner
+        pause pair: the advertisement, and MR_LINK's flow bits as IEEE 802.3
+        Table 28B-3 resolves them (receive 0x20, transmit 0x40)."""
+        RX, TX = 0x20, 0x40
+        expect = {  # (local value, partner bits: 1 PAUSE, 2 ASM_DIR) -> flow bits
+            (0, 0): 0, (0, 1): 0, (0, 2): 0, (0, 3): 0,
+            (1, 0): 0, (1, 1): 0, (1, 2): 0, (1, 3): TX,
+            (3, 0): 0, (3, 1): RX | TX, (3, 2): RX, (3, 3): RX | TX}
+        for (flow, pp), bits in sorted(expect.items()):
+            with self.subTest(flow=flow, partner=pp):
+                self.assertEqual(self.setup('8157', 'super', [0, flow, 0, 1000, 0, 0, 0], partner_pause=pp), 0)
+                self.settle(1.2)
+                ups = [json.loads(l) for l in self.trace.getvalue().splitlines()]
+                e = [u for u in ups if u['event'] == 'link' and u['up']][-1]
+                self.assertEqual(e['an_adv'] & 0x0c00, {0: 0, 1: 0x0800, 3: 0x0c00}[flow])
+                self.assertEqual(self.m.chip.pla[r.MR_LINK] & (RX | TX), bits)
+        # Half duplex with autonegotiation: no pause (Annex 28B applies to
+        # full duplex only); the same link at full duplex resolves both.
+        self.assertEqual(self.setup('8157', 'super', [0, 3, 0, 1000, 0, 0, 0], partner_pause=3), 0)
+        self.settle(1.2)
+        self.m.chip.show_link((100, False), 10000, 3)
+        self.assertEqual(self.m.chip.pla[r.MR_LINK] & (RX | TX), 0)
+        self.m.chip.show_link((100, True), 10000, 3)
+        self.assertEqual(self.m.chip.pla[r.MR_LINK] & (RX | TX), RX | TX)
+        # Forced 100 full: no autonegotiation, so no pause whatever the value.
+        self.assertEqual(self.setup('8157', 'super', [4, 3, 0, 1000, 0, 0, 0], partner_pause=3), 0)
+        self.settle(1.2)
+        self.assertEqual(self.m.chip.pla[r.MR_LINK] & (RX | TX), 0)
+
     def test_interrupt_reports_link_changes(self):
         self.assertEqual(self.setup(flap_after=3.0, flap_for=1.0), 0)
         self.m.handle(15, 3, bytes((r.EP_INT,)))
@@ -646,7 +738,67 @@ class OffloadModelTests(unittest.TestCase):
         self.assertEqual(r.rx_checksum_bits(ping), 0x03004000)
         udp = struct.pack('!HHHH', 53, 1025, 8 + 4, 0) + b'abcd'
         dgram = r.HOST_MAC + bytes(6) + b'\x08\x00' + r.ipv4(r.HOST_IP, r.GUEST_IP, 17, udp)
-        self.assertEqual(r.rx_checksum_bits(dgram), 0x01004800)        # no UDP checksum: not failed
+        # No UDP checksum: none compared, so no UDP check bit (inferred).
+        self.assertEqual(r.rx_checksum_bits(dgram), 0x03004000)
+
+    def test_receive_bits_boundary_cases(self):
+        """The model's inferred verdicts (ethernet.md 4.10.9): fragments,
+        a total length that does not fit, IPv4 options; and what the driver's
+        RxChecksum reads from each (TCP or UDP only when checked)."""
+        good = bytearray(r.tx_checksum(tcp_frame(b'x' * 60), r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17))
+
+        def refix(f):
+            ihl = (f[14] & 15) * 4
+            struct.pack_into('!H', f, 24, 0)
+            struct.pack_into('!H', f, 24, r.ip_header_sum(bytes(f[14:14 + ihl])))
+            return bytes(f)
+        for frag in (0x2000, 0x0010, 0x2010):                 # first, later, middle fragment
+            f = bytearray(good)
+            struct.pack_into('!H', f, 20, frag)
+            bits = r.rx_checksum_bits(refix(f))
+            self.assertEqual(bits & r.RX2_IPF, 0)
+            self.assertEqual(bits & (r.RX2_TCP | r.RX2_UDP), 0)
+        for total in (10, len(good) - 14 + 40):               # shorter than the header, past the frame
+            f = bytearray(good)
+            struct.pack_into('!H', f, 16, total)
+            bits = r.rx_checksum_bits(refix(f))
+            self.assertEqual(bits & (r.RX2_TCP | r.RX2_UDP), 0)
+        # IPv4 options (one NOP word): header 24 bytes, TCP still checked.
+        tcp = bytes(good[34:])
+        hdr = bytearray(good[14:34])
+        hdr[0] = 0x46
+        struct.pack_into('!H', hdr, 2, len(hdr) + 4 + len(tcp))
+        opt = bytearray(good[:14]) + hdr + b'\x01\x01\x01\x00' + tcp
+        opt = bytearray(refix(opt))
+        # the TCP checksum covers a pseudo-header only: unchanged by options
+        self.assertEqual(r.rx_checksum_bits(bytes(opt)) & (r.RX2_TCP | r.RX2_TCPF | r.RX2_IPF), r.RX2_TCP)
+
+    def test_receive_bits_declared_lengths(self):
+        """The model checks a transport only when its declared length fits
+        (ethernet.md 4.10.9): a TCP data offset of 20 bytes or more inside
+        the IPv4 payload, a UDP length equal to the IPv4 payload."""
+        def tcp_with(offset_byte, payload=b'x' * 60):
+            f = bytearray(tcp_frame(payload))
+            f[14 + 20 + 12] = offset_byte
+            f = bytearray(r.tx_checksum(bytes(f), r.TX_IPV4_CS | r.TX_TCP_CS | 34 << 17))
+            return bytes(f)
+        for off in (0x40, 0x00, 0xf0):                         # 16, 0, 60 bytes in a 20-byte IPv4 payload
+            bits = r.rx_checksum_bits(tcp_with(off, b''))
+            self.assertEqual(bits & r.RX2_TCP, 0, hex(off))
+            self.assertEqual(bits & r.RX2_IPF, 0)
+        for off in (0x50, 0x60, 0xa0):                         # 20, 24 (an option word), 40 bytes: fit in 80
+            bits = r.rx_checksum_bits(tcp_with(off))
+            self.assertEqual(bits & (r.RX2_TCP | r.RX2_TCPF), r.RX2_TCP, hex(off))
+
+        def udp_with(length):
+            udp = bytearray(struct.pack('!HHHH', 53, 1025, 8 + 12, 0) + b'abcdefghijkl')
+            struct.pack_into('!H', udp, 4, length)
+            frame = bytearray(r.HOST_MAC + bytes(6) + b'\x08\x00' + r.ipv4(r.HOST_IP, r.GUEST_IP, 17, bytes(udp)))
+            struct.pack_into('!H', frame, 14 + 20 + 6, r.l4_sum(bytes(frame), 34, 17))
+            return bytes(frame)
+        self.assertEqual(r.rx_checksum_bits(udp_with(20)) & (r.RX2_UDP | r.RX2_UDPF), r.RX2_UDP)
+        for length in (7, 0, 21, 12):                          # below 8, past, short of the payload
+            self.assertEqual(r.rx_checksum_bits(udp_with(length)) & r.RX2_UDP, 0, length)
 
 
 @unittest.skipUnless(DLL_PATH.exists(), 'run host.ps1 first')
@@ -659,7 +811,7 @@ class OffloadCoreTests(CoreCase):
         for name in ('8157', '8159'):
             with self.subTest(chip=name):
                 self.assertEqual(self.setup(name, 'super'), 0)
-                self.assertEqual(self.params.Offload, 0x07)              # transmit checksums only
+                self.assertEqual(self.params.Offload, 0x77)              # transmit checksums and receive checks (4.10.9)
                 self.assertEqual(self.params.LsoMax, 0)
                 info = (c.c_ulong * 3)(8, 1460, 34)                # NC_TX_LSO4, MSS, TCP header
                 payload = bytes(range(256)) * 12
@@ -840,8 +992,19 @@ class NewerModelTests(unittest.TestCase):
                 self.assertTrue(g.phy(r.PR_PATCH_STATE) & r.PATCH_GRANTED)
                 g.phy(r.PR_PATCH_CMD, 0)
                 self.assertFalse(g.phy(r.PR_PATCH_STATE) & r.PATCH_GRANTED)
-                g.phy(r.PR_MII, r.MIICTL_RESET | r.MIICTL_AN_ENABLE | r.MIICTL_AN_RESTART)
-                self.assertFalse(g.phy(r.PR_MII) & r.MIICTL_RESET)
+                # A reset returns BMCR to its default (autonegotiation on) and
+                # drops the bits written with it, as a real RTL8157 did (IEEE
+                # 802.3 22.2.4.1.1); its bit reads set once, then clears, and
+                # a write made before that is not taken.
+                default = self.m.chip.bmcr_default
+                self.assertEqual(default, r.MIICTL_AN_ENABLE | r.MIICTL_SPEED1000)
+                g.phy(r.PR_MII, r.MIICTL_RESET | r.MIICTL_SPEED100 | r.MIICTL_FULL)
+                g.phy(r.PR_MII, r.MIICTL_SPEED100 | r.MIICTL_FULL)
+                self.assertEqual(g.phy(r.PR_MII), default | r.MIICTL_RESET)
+                self.assertEqual(g.phy(r.PR_MII), default)
+                self.assertEqual(self.m.chip.bmcr_dropped, 1)
+                g.phy(r.PR_MII, r.MIICTL_SPEED100 | r.MIICTL_FULL)    # after the reset: taken
+                self.assertEqual(g.phy(r.PR_MII), r.MIICTL_SPEED100 | r.MIICTL_FULL)
                 # Power-down shows in the PHY state until cleared.
                 g.phy(r.PR_MII, r.MIICTL_AN_ENABLE | r.MIICTL_POWERDOWN)
                 self.assertEqual(g.phy(r.PR_STATE) & 7, r.PHYST_POWER_DOWN)

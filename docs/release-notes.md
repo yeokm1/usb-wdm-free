@@ -4,6 +4,15 @@ Per package, newest first. A release is a commit and a tag
 (`<package>-<version>`); its files are under `free/` and listed in
 `SHA256.TXT`, and `STAGE.TXT` says which INFs xHCI98's installer may stage.
 
+## Release 0.1.12 (2026-11-21)
+
+- **rtl815x 0.2.4.0, forced speeds**: a forced 10 or 100 Mb/s value is written after the PHY reset has cleared, with only the forced ability advertised; before, the reset cleared it and the link autonegotiated (seen with a real RTL8157). [ethernet design, section 4.10.4](design/ethernet.md).
+- **rtl815x 0.2.4.0, the Advanced tab**: flow control off, transmit only or negotiated; receive checksums on the RTL8157 and RTL8159 on 2000 to 7, off by default; `EEEMaxSupportSpeed` on the 1 Gb/s class; no Advanced EEE on the RTL8159. [ethernet design, section 4.10.9](design/ethernet.md).
+- **cdcnet 0.1.6.0 (INFs only)**: the Advanced tab's protocol value is written only where none is stored; the image is 0.1.10's.
+- **Versions**: new image `rtl815x` 0.2.4.0 with its INFs; new INFs `cdcnet` 0.1.6.0; every other file is 0.1.11's byte for byte.
+- **Signing**: the x64 `RTL815X.SYS` is signed with the test certificate of 0.1.9 to 0.1.11 (`CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint `7A3C6E6289EC46E6E128D87BB54E87196B824959`); the other x64 images are 0.1.11's.
+- **Tests**: the rtl815x source of this release ran simulator legs (XP SP3, 98 SE under NUSB's EHCI and xHCI98, 2000 SP4) and the forced speeds on a real RTL8157 (XP SP3 and 98 SE under xHCI98). The released images are that source rebuilt with only the version lines changed and were not run in a guest (owner, 2026-11-20). No guest leg ran for the cdcnet INF change.
+
 ## Release 0.1.11 (2026-11-15)
 
 - **Every driver, the names**: every device name the drivers show now carries "(wdm-free)", e.g. "USB Audio 2.0 (wdm-free)", "Sound Blaster X4 (wdm-free)", so that a device on one of these drivers can be told from one on a maker's driver from usb-wdm-nonfree. Where a name had the driver's short name in brackets ("(uac2)", "(xpad98)", "(RTL815X)"), "(wdm-free)" replaces it; inside another bracket it is added there ("USB Ethernet (CDC-ECM, wdm-free)"); a later output of a sound device keeps its number after it ("USB Audio 2.0 (wdm-free) 2"), and a COM port its "(COM3)". [Record 2026-11-15](testing/2026-11-15-wdm-free-names.md).

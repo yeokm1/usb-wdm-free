@@ -245,7 +245,8 @@ typedef struct STEP {
 #define F_GREEN    0x02             /* EnableGreenEthernet */
 #define F_EEE_PLUS 0x04             /* AdvancedEEE (EEE+) */
 #define F_IDLE     0x08             /* EnableExtraPowerSaving (the USB 2 PHY's P3 state) */
-#define F_PAUSE    0x10             /* *FlowControl: pause advertised */
+#define F_PAUSE    0x10             /* *FlowControl 3: PAUSE and ASM_DIR advertised (negotiated) */
+#define F_TX_PAUSE 0x20             /* *FlowControl 1: ASM_DIR alone (may send pause, never obeys it) */
 
 /* Sequence numbers (Seq[]) */
 enum {
@@ -1433,7 +1434,8 @@ static void Run(RTL_STATE *s, NET_IO *io, int q);
  * read first and sleep after a miss, the others sleep before each read.
  * Returns 1 on a match; *last (if given) receives the last masked value.
  * A wait that runs out on a working device counts in Timeouts, except
- * the two "late" kinds, which are short settling waits. */
+ * OP_WAIT_LATE, a short settling wait. OP_PHY_WAIT counts (the PHY reset
+ * and the patch window). */
 static int WaitFor(RTL_STATE *s, NET_IO *io, const STEP *p, nc_u32 *last)
 {
     int early = p->Op == OP_WAIT || p->Op == OP_PHY_STATE;
@@ -1452,7 +1454,7 @@ static int WaitFor(RTL_STATE *s, NET_IO *io, const STEP *p, nc_u32 *last)
         if (early) NcIoSleep(io, p->Ms);
     }
     if (last) *last = v;
-    if (early && io->Status >= 0) s->Timeouts++;
+    if (p->Op != OP_WAIT_LATE && io->Status >= 0) s->Timeouts++;
     return 0;
 }
 
@@ -1594,7 +1596,7 @@ static nc_u16 MultiGig(const RTL_STATE *s)
 enum { S_SPEED, S_FLOW, S_EEE, S_EEE_MAX, S_GREEN, S_EEE_PLUS, S_IDLE, S_COUNT };
 static const NET_SETTING Settings[S_COUNT] = {
     { "*SpeedDuplex", 0, 9, { 0, 1, 2, 3, 4, 6, 2500, 5000, 10000 } },
-    { "*FlowControl", 3, 4, { 0, 1, 2, 3 } },
+    { "*FlowControl", 3, 3, { 0, 1, 3 } },   /* no receive-only choice (ethernet.md 4.10.9) */
     { "*EEE", 0, 2, { 0, 1 } },
     { "EEEMaxSupportSpeed", 1000, 4, { 10, 100, 1000, 2500 } },
     { "EnableGreenEthernet", 0, 2, { 0, 1 } },
@@ -1618,7 +1620,8 @@ static void TakeSettings(RTL_STATE *s, const NET_PROBE *probe, nc_u32 *ignored)
         (speed == 10000 && (mg & MGIG_10G)))
         s->Speed = (nc_u16)speed;
     else if (speed) *ignored |= 1UL << S_SPEED;
-    if (NcSetting(probe, S_FLOW)) s->Flags |= F_PAUSE;
+    if (NcSetting(probe, S_FLOW) == 3) s->Flags |= F_PAUSE;
+    else if (NcSetting(probe, S_FLOW) == 1) s->Flags |= F_TX_PAUSE;
     if (NcSetting(probe, S_EEE)) {
         if (s->Kind & K_7020) *ignored |= 1UL << S_EEE;     /* its setup never turns EEE on (Linux) */
         else s->Flags |= F_EEE;
@@ -1646,26 +1649,33 @@ static void TakeSettings(RTL_STATE *s, const NET_PROBE *probe, nc_u32 *ignored)
  * them; one speed alone from 6 up) advertised, the pause bits as
  * *FlowControl says, then the PHY reset with autonegotiation enabled and
  * restarted. *SpeedDuplex 1 to 4 instead force 10 or 100 Mb/s, half or
- * full duplex, with autonegotiation off (Linux rtl8152_set_speed). */
+ * full duplex, with autonegotiation off (ethernet.md 4.10.4): the forced
+ * ability alone advertised, the PHY reset on its own, and the speed and
+ * duplex written once the reset bit has cleared. A reset returns the
+ * control register to its defaults and the bits written with it may be
+ * lost (IEEE 802.3 22.2.4.1.1): a real RTL8157 read 0x1040 back after
+ * 0xa100 and autonegotiated. The poll is 50 reads, each after a 20 ms
+ * sleep (the sleeps alone 1 s, plus each read's transfer time). A reset
+ * that never clears on the forced path fails the start (s->Failed); on
+ * the autonegotiation path it is only counted in Timeouts. */
 static void Negotiate(RTL_STATE *s, NET_IO *io)
 {
     static const STEP reset = PHY_WAIT(PR_MII, MIICTL_RESET, 0, 50, 20);
-    nc_u16 adv = ANADV_10_100, gig = GIGCTL_1000_FULL, mg = MultiGig(s), ctl, was, now;
-    if (s->Speed >= 1 && s->Speed <= 4) {
+    static const nc_u16 one[4] = { ANADV_10_HALF, ANADV_10_FULL, ANADV_100_HALF, ANADV_100_FULL };
+    nc_u16 adv = ANADV_10_100, gig = GIGCTL_1000_FULL, mg = MultiGig(s), was, now;
+    nc_u16 ctl = MIICTL_AN_ENABLE | MIICTL_AN_RESTART;
+    int forced = s->Speed >= 1 && s->Speed <= 4;
+    if (forced) {
+        adv = one[s->Speed - 1]; gig = 0; mg = 0;
         ctl = (nc_u16)((s->Speed >= 3 ? MIICTL_SPEED100 : 0) | (s->Speed % 2 ? 0 : MIICTL_FULL));
-        if (!s->NoReset) ctl |= MIICTL_RESET;
-        PhyPut(s, io, MII(MII_CONTROL), ctl);
-        if (!s->NoReset) WaitFor(s, io, &reset, 0);
-        s->NoReset = 0;
-        return;
-    }
-    if (s->Speed == 6) { adv = 0; mg = 0; }
+    } else if (s->Speed == 6) { adv = 0; mg = 0; }
     else if (s->Speed >= 2500) {
         adv = 0; gig = 0;
         mg = (nc_u16)(s->Speed == 2500 ? MGIG_2G5 : s->Speed == 5000 ? MGIG_5G : MGIG_10G);
     }
     was = PhyGet(s, io, MII(MII_AN_ADV));
-    now = (nc_u16)((was & ~(ANADV_10_100 | ANADV_PAUSE)) | adv | ((s->Flags & F_PAUSE) ? ANADV_PAUSE : 0));
+    now = (nc_u16)((was & ~(ANADV_10_100 | ANADV_PAUSE)) | adv |
+                   ((s->Flags & F_PAUSE) ? ANADV_PAUSE : (s->Flags & F_TX_PAUSE) ? ANADV_ASM_DIR : 0));
     if (now != was) PhyPut(s, io, MII(MII_AN_ADV), now);
     if (s->Kind & (K_GIG | K_MG)) {
         was = PhyGet(s, io, MII(MII_GIG_CONTROL));
@@ -1679,11 +1689,23 @@ static void Negotiate(RTL_STATE *s, NET_IO *io)
     }
     if (s->NoReset) {
         /* An 8156-core PHY setup that gave up asks for no PHY reset. */
-        PhyPut(s, io, MII(MII_CONTROL), MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
+        PhyPut(s, io, MII(MII_CONTROL), ctl);
         s->NoReset = 0;
         return;
     }
-    PhyPut(s, io, MII(MII_CONTROL), MIICTL_RESET | MIICTL_AN_ENABLE | MIICTL_AN_RESTART);
+    if (forced) {
+        PhyPut(s, io, MII(MII_CONTROL), MIICTL_RESET);
+        if (!WaitFor(s, io, &reset, 0)) {
+            /* The reset bit never cleared (or the device went): the forced
+             * bits would be lost, so they are not written and the start
+             * fails as a refused chip setup does (H_RESTORE_WAIT). */
+            if (io->Status >= 0) { s->Failed = 1; s->Abort = 1; }
+            return;
+        }
+        PhyPut(s, io, MII(MII_CONTROL), ctl);
+        return;
+    }
+    PhyPut(s, io, MII(MII_CONTROL), (nc_u16)(MIICTL_RESET | ctl));
     WaitFor(s, io, &reset, 0);
 }
 
@@ -2031,6 +2053,10 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
     if (s->Kind & K_LATER) s->SetUpOnce = 1;
     PhySetup(s, io);
     Negotiate(s, io);
+    if (s->Failed) {    /* a forced speed whose PHY reset never cleared */
+        if (io->Status >= 0) io->Status = NC_E_DEVICE;
+        return io->Status;
+    }
     /* The station address: the 4C00 keeps it in MR_NODE_ID; the others
      * load it into MR_NODE_ID_SAVED, from where it is copied. */
     NcIoRead(io, RTL_REQ, (nc_u16)(s->Id == ID_4C00 ? MR_NODE_ID : MR_NODE_ID_SAVED), RTL_SPACE_MAC, b, 8);
@@ -2053,13 +2079,15 @@ static long BringUp(RTL_STATE *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS
     if (s->Desc == DESC_V2) {
         /* RTL8157/8159: transmit checksums (ethernet.md section 4.9),
          * checked on a real RTL8157; 32 KiB transfers as Realtek's driver
-         * sends. Not offered: the large send (RtlTxOffload's NC_TX_LSO4;
-         * 2000 and XP never used it, so it never ran on the chip) and the
-         * receive checksums (RtlRxChecksum; 2000 received slower with
-         * them). The first format keeps 16 KiB (Linux agg_buf_sz) and no
-         * offload: its bits are Linux's, unchecked on hardware here. */
+         * sends. The receive checksums (RtlRxChecksum) are offered too,
+         * but the keywords' default leaves them off (2000 received slower
+         * with them; ethernet.md 4.10.9). Not offered: the large send
+         * (RtlTxOffload's NC_TX_LSO4; 2000 and XP never used it, so it
+         * never ran on the chip). The first format keeps 16 KiB (Linux
+         * agg_buf_sz) and no offload: its bits are Linux's, unchecked on
+         * hardware here. */
         params->TxSize = TX2_BUFFER;
-        params->Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4;
+        params->Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4;
         params->LsoMax = 0;
     } else {
         params->TxSize = TX_BUFFER;

@@ -10,6 +10,7 @@ release INFs; only the models change. None of these is ever released
 (ethernet.md section 5.1).
 """
 import re
+import sys
 from pathlib import Path
 
 ID = r'USB\VID_0525&PID_A4A2'
@@ -51,8 +52,12 @@ write('RNDTEST.INF', 'CDCRNDIS.INF', "Binds Windows' own RNDIS driver to", body)
 for source, name in (('CDCTEST.INF', 'CDCTRND.INF'), ('CDCT98.INF', 'CDC98R.INF')):
     text = (here / source).read_text()
     text = text.replace('; %s - TEST ONLY' % source, '; %s - TEST ONLY (RNDIS preset)' % name)
-    text = text.replace('HKR,,Protocol,,0', 'HKR,,Protocol,,1')
+    # The value as the release INFs write it, no-clobber: 2 (9x) or
+    # 0x00000002 (NT), REG_SZ "0". Each replacement must hit exactly once.
+    text, n = re.subn(r'^(HKR,,Protocol,(?:2|0x00000002),)"0"$', r'\g<1>"1"', text, flags=re.M)
     # 98's network setup writes each parameter's default over the AddReg value.
-    text = text.replace(r'HKR,Ndi\params\Protocol,default,,0', r'HKR,Ndi\params\Protocol,default,,1')
+    text, m = re.subn(r'^(HKR,Ndi\\params\\Protocol,default,,)0$', r'\g<1>1', text, flags=re.M)
+    if n != 1 or m != 1:
+        sys.exit('%s: the Protocol lines of %s changed; gentest.py needs updating' % (name, source))
     text = text.replace('"CDCNET test: QEMU usb-net (not a release)"', '"CDCNET RNDIS test: QEMU usb-net (not a release)"')
     (here / name).write_text(text, newline='\n')

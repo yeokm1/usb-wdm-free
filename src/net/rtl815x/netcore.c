@@ -320,6 +320,37 @@ static void ReceiveFlush(ADAPTER *a, NET_RX_GATHER *g)
     g->Count = 0;
 }
 
+/* What a chip's receive checksum verdict may claim for this frame
+ * (ethernet.md 4.10.9): the IPv4 header only for an IPv4 frame (Ethernet
+ * II) whose header is whole and whose total length fits the frame; TCP
+ * or UDP only for an unfragmented datagram of that protocol whose
+ * transport header is inside it: TCP only when its data offset declares
+ * a header of at least 20 bytes that ends inside the IPv4 payload, UDP
+ * only when its length field is at least 8 and equals the IPv4 payload
+ * (any other length leaves unknown what the chip summed), and with a
+ * nonzero checksum (zero means none was sent, so none was compared).
+ * Anything else is reported as not checked, which TCP/IP then checks
+ * itself. */
+static nc_u32 ChecksumClaim(const nc_u8 *f, nc_u32 length, nc_u32 checksum)
+{
+    nc_u32 ihl, total, t;
+    checksum &= NC_RX_IP_OK | NC_RX_TCP_OK | NC_RX_UDP_OK;
+    if (!checksum || length < 14 + 20 || f[12] != 0x08 || f[13] != 0x00 || (f[14] >> 4) != 4) return 0;
+    ihl = (nc_u32)(f[14] & 15) * 4;
+    total = ((nc_u32)f[16] << 8) | f[17];
+    if (ihl < 20 || total < ihl || total > length - 14) return 0;
+    if (((((nc_u32)f[20] << 8) | f[21]) & 0x3fff) != 0)      /* more fragments, or an offset */
+        return checksum & NC_RX_IP_OK;
+    t = 14 + ihl;                               /* the transport header; total fits the frame */
+    if (f[23] != 6 || total < ihl + 20 || (nc_u32)(f[t + 12] >> 4) * 4 < 20 ||
+        (nc_u32)(f[t + 12] >> 4) * 4 > total - ihl)
+        checksum &= ~(nc_u32)NC_RX_TCP_OK;
+    if (f[23] != 17 || total < ihl + 8 || (f[t + 6] | f[t + 7]) == 0 ||
+        (((nc_u32)f[t + 4] << 8) | f[t + 5]) != total - ihl)
+        checksum &= ~(nc_u32)NC_RX_UDP_OK;
+    return checksum;
+}
+
 static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 length,
                     nc_u32 checksum)
 {
@@ -337,7 +368,7 @@ static void Receive(void *context, NET_RX_GATHER *g, const nc_u8 *frame, nc_u32 
     CoreLock(a);
     /* Only what the chip verified and TCP/IP enabled is reported; a
      * failure is never reported, so TCP/IP checks such a frame itself. */
-    checksum &= a->TaskRx;
+    checksum = ChecksumClaim(frame, length, checksum & a->TaskRx);
     if (checksum & NC_RX_IP_OK) info.Receive.NdisPacketIpChecksumSucceeded = 1;
     if (checksum & NC_RX_TCP_OK) info.Receive.NdisPacketTcpChecksumSucceeded = 1;
     if (checksum & NC_RX_UDP_OK) info.Receive.NdisPacketUdpChecksumSucceeded = 1;
@@ -666,9 +697,9 @@ static NDIS_STATUS QueryTasks(ADAPTER *a, PVOID buffer, ULONG length, PULONG wri
         if (offload & NC_OFFLOAD_RX4) {
             c->V4Receive.IpOptionsSupported = 1;
             c->V4Receive.TcpOptionsSupported = 1;
-            c->V4Receive.TcpChecksum = 1;
-            c->V4Receive.UdpChecksum = 1;
-            c->V4Receive.IpChecksum = 1;
+            c->V4Receive.TcpChecksum = (offload & NC_OFFLOAD_RX_TCP4) != 0;
+            c->V4Receive.UdpChecksum = (offload & NC_OFFLOAD_RX_UDP4) != 0;
+            c->V4Receive.IpChecksum = (offload & NC_OFFLOAD_RX_IP4) != 0;
         }
         at += csum;
     }
@@ -715,7 +746,10 @@ static NDIS_STATUS SetTasks(ADAPTER *a, PVOID buffer, ULONG length, PULONG read,
             if (c.V4Receive.TcpChecksum) rx |= NC_RX_TCP_OK;
             if (c.V4Receive.UdpChecksum) rx |= NC_RX_UDP_OK;
             if (c.V4Receive.IpChecksum) rx |= NC_RX_IP_OK;
-            if (c.V6Transmit.TcpChecksum || c.V6Transmit.UdpChecksum) return NDIS_STATUS_NOT_SUPPORTED;
+            /* No IPv6 check is offered either way; refused before anything is kept. */
+            if (c.V6Transmit.TcpChecksum || c.V6Transmit.UdpChecksum ||
+                c.V6Receive.TcpChecksum || c.V6Receive.UdpChecksum)
+                return NDIS_STATUS_NOT_SUPPORTED;
         } else if (t.Task == TcpLargeSendNdisTask) {
             if (t.TaskBufferLength < sizeof(NDIS_TASK_TCP_LARGE_SEND)) return NDIS_STATUS_INVALID_DATA;
             tx |= NC_TX_LSO4;
@@ -731,7 +765,9 @@ static NDIS_STATUS SetTasks(ADAPTER *a, PVOID buffer, ULONG length, PULONG read,
         ((tx & NC_TX_UDP4) && !(offload & NC_OFFLOAD_TX_UDP4)) ||
         ((tx & NC_TX_IP4) && !(offload & NC_OFFLOAD_TX_IP4)) ||
         ((tx & NC_TX_LSO4) && !(offload & NC_OFFLOAD_LSO4)) ||
-        (rx && !(offload & NC_OFFLOAD_RX4)))
+        ((rx & NC_RX_TCP_OK) && !(offload & NC_OFFLOAD_RX_TCP4)) ||
+        ((rx & NC_RX_UDP_OK) && !(offload & NC_OFFLOAD_RX_UDP4)) ||
+        ((rx & NC_RX_IP_OK) && !(offload & NC_OFFLOAD_RX_IP4)))
         return NDIS_STATUS_NOT_SUPPORTED;
     CoreLock(a);
     a->TaskTx = tx;
@@ -1140,14 +1176,16 @@ static BOOLEAN ReadKeyword(NDIS_HANDLE handle, const char *keyword, long *value)
     return TRUE;
 }
 
-/* The transmit checksum keywords (NT): 1 (Tx) or 3 (Rx and Tx) leave the
- * task on, 0 or 2 take it off; missing or anything else: on. */
-static ULONG ChecksumKeyword(NDIS_HANDLE handle, const char *keyword, ULONG bits)
+/* The checksum keywords (NT; ethernet.md 4.10.9): bit 0 of the value (1
+ * Tx, 3 Rx and Tx) leaves the transmit task on, bit 1 (2 Rx, 3) the
+ * receive check; missing or anything else: transmit on, receive off, as
+ * the INFs' default 1. */
+static ULONG ChecksumKeyword(NDIS_HANDLE handle, const char *keyword, ULONG tx, ULONG rx)
 {
     long v;
-    if (!ReadKeyword(handle, keyword, &v) || v < 0 || v > 3) return bits;
+    if (!ReadKeyword(handle, keyword, &v) || v < 0 || v > 3) return tx;
     NetTrace("setting %s = %d", keyword, v);
-    return (v & 1) ? bits : 0;
+    return ((v & 1) ? tx : 0) | ((v & 2) ? rx : 0);
 }
 
 static void ReadSettings(ADAPTER *a, NDIS_HANDLE config)
@@ -1158,7 +1196,9 @@ static void ReadSettings(ADAPTER *a, NDIS_HANDLE config)
     const NET_SETTING *s = NetPackageChip.Settings;
     UINT count = s ? NetPackageChip.SettingCount : 0;
     if (count > NC_SETTINGS_MAX) count = NC_SETTINGS_MAX;
-    a->OffloadAllowed = (ULONG)-1;
+    /* The keywords' fallback (transmit on, receive off) holds if the
+     * configuration cannot be opened (ethernet.md 4.10.9). */
+    a->OffloadAllowed = ~(ULONG)NC_OFFLOAD_RX4;
     for (i = 0; i < count; i++) a->Settings[i] = s[i].Default;
     NdisOpenConfiguration(&status, &handle, config);
     if (status != NDIS_STATUS_SUCCESS) return;
@@ -1177,10 +1217,14 @@ static void ReadSettings(ADAPTER *a, NDIS_HANDLE config)
         NetTrace("setting %s = %d", s[i].Name, v);
     }
     if (a->PerPacket) {         /* NT: 98 SE and ME have no offload */
-        a->OffloadAllowed &= ~(ULONG)(NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4);
-        a->OffloadAllowed |= ChecksumKeyword(handle, "*IPChecksumOffloadIPv4", NC_OFFLOAD_TX_IP4);
-        a->OffloadAllowed |= ChecksumKeyword(handle, "*TCPChecksumOffloadIPv4", NC_OFFLOAD_TX_TCP4);
-        a->OffloadAllowed |= ChecksumKeyword(handle, "*UDPChecksumOffloadIPv4", NC_OFFLOAD_TX_UDP4);
+        a->OffloadAllowed &= ~(ULONG)(NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 |
+                                      NC_OFFLOAD_RX4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*IPChecksumOffloadIPv4", NC_OFFLOAD_TX_IP4,
+                                             NC_OFFLOAD_RX_IP4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*TCPChecksumOffloadIPv4", NC_OFFLOAD_TX_TCP4,
+                                             NC_OFFLOAD_RX_TCP4);
+        a->OffloadAllowed |= ChecksumKeyword(handle, "*UDPChecksumOffloadIPv4", NC_OFFLOAD_TX_UDP4,
+                                             NC_OFFLOAD_RX_UDP4);
     }
     NdisCloseConfiguration(handle);
 }

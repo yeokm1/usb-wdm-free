@@ -115,7 +115,10 @@ typedef struct NET_PARAMS {
 #define NC_OFFLOAD_TX_TCP4 0x02  /* TCP checksum on transmit (the IPv4 header's with it) */
 #define NC_OFFLOAD_TX_UDP4 0x04  /* UDP checksum on transmit (the IPv4 header's with it) */
 #define NC_OFFLOAD_LSO4    0x08  /* TCP segmentation of a large send */
-#define NC_OFFLOAD_RX4     0x10  /* receive checksums checked (RxChecksum) */
+#define NC_OFFLOAD_RX_IP4  0x10  /* IPv4 header checksum checked on receive (RxChecksum) */
+#define NC_OFFLOAD_RX_TCP4 0x20  /* TCP checksum checked on receive */
+#define NC_OFFLOAD_RX_UDP4 0x40  /* UDP checksum checked on receive */
+#define NC_OFFLOAD_RX4     (NC_OFFLOAD_RX_IP4 | NC_OFFLOAD_RX_TCP4 | NC_OFFLOAD_RX_UDP4)
 
 /* One transmit frame's offload request (TxOffload). Transport is the
  * offset of the TCP or UDP header from the start of the frame; Mss the

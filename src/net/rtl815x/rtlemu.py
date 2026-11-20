@@ -55,10 +55,15 @@ Realtek's Windows driver uses, the bits that clear themselves, and an
 interrupt report every bInterval (--irq-on-change: only on a change).
 --speed super|high|full (super: the newer chips' default);
 --partner the link partner's fastest speed in Mb/s (default 10000);
+--partner-pause its pause bits: 1 PAUSE (the default), 2 ASM_DIR, 3 both,
+0 none; MR_LINK's flow bits resolve as IEEE 802.3 Table 28B-3;
 --link-after seconds after the PHY's autonegotiation restart (default
 1.0); --flap-after/--flap-for take the cable out once; --ext-init and
 --power-cut start the PHY in its external-init state or after a power cut;
 --phy-patched lets the 8159 link above 5 Gb/s, as with its PHY patch.
+--reset-stuck: the PHY's reset bit (BMCR bit 15), once written, never
+clears; the PHY takes no further BMCR write and gives no link (a fault
+case for the driver's reset poll; no real chip has shown it).
 --serial gives the device a serial number string (index 3, 7 on the 8157 as
 on a real one; 'mac' its form there; by default none) and --serial-stall N
 STALLs the first N reads of it in this run,
@@ -71,6 +76,12 @@ arriving on 127.0.0.1:LOCAL is a frame from the network (the framing of
 QEMU's "-netdev dgram"/"socket,udp=" backend, so a QEMU user-mode network
 behind a hub gives real TCP, for sustained-traffic legs); frames are then
 not logged one by one.
+--keep-chip serves one connection after another with the same chip: each
+new connection (a replug, a new guest) finds the registers as the last
+driver left them, as a real RTL8157 kept its PHY's advertisement and link
+across driver starts and guests (it is not power-cycled; record
+docs/testing/2026-11-17-netopts-rtl8157.md). Without it the simulator
+serves one connection from power-up values and exits.
 No physical USB device is accessed.
 """
 import argparse
@@ -104,6 +115,7 @@ MIICTL_RESET, MIICTL_SPEED100, MIICTL_AN_ENABLE = 0x8000, 0x2000, 0x1000
 MIICTL_POWERDOWN, MIICTL_AN_RESTART, MIICTL_FULL, MIICTL_SPEED1000 = 0x0800, 0x0200, 0x0100, 0x0040
 MIIST_LINK, MIIST_AN_DONE = 0x0004, 0x0020
 ANADV_10H, ANADV_10F, ANADV_100H, ANADV_100F, ANADV_PAUSE = 0x0020, 0x0040, 0x0080, 0x0100, 0x0400
+ANADV_ASM_DIR = 0x0800
 GIGCTL_1000_FULL, GIGST_PEER_1000_FULL = 0x0200, 0x0800
 XGCTL_2500, XGCTL_5000, XGCTL_10000 = 0x0080, 0x0100, 0x1000
 XGST_PEER_2500, XGST_PEER_5000, XGST_PEER_10000 = 0x0020, 0x0040, 0x0800
@@ -225,9 +237,14 @@ REAL8157 = {
         0xd404: '....4000', 0xd434: '....0000', 0xd4ac: '....0000', 0xd4e8: '0000....', 0xd620: '0000....',
         0xd808: '....8000', 0xd818: '....0000', 0xd81c: '00000000', 0xd848: '0006100c', 0xe434: '0000....'},
     # PHY OCP words (the low three bits of the state register 0xa420 and the
-    # SRAM data ports are the model's own).
+    # SRAM data ports are the model's own). The advertisement 0xa408 is
+    # 0x11e1, no pause bits, as the device read first through a passthrough
+    # on 2026-11-17 (docs/testing/2026-11-17-netopts-rtl8157.md); the
+    # 2026-11-07 runs had read 0x1de1, the pause bits an earlier driver had
+    # set. Neither is a power-on value; without the pause bits a driver that
+    # never writes them shows.
     'phy': {
-        0xa420: 0x0020, 0xa400: 0x1040, 0xa408: 0x1de1, 0xa40c: 0x006f, 0xa412: 0x0200, 0xa430: 0xa19f, 0xa442: 0x0c3c,
+        0xa420: 0x0020, 0xa400: 0x1040, 0xa408: 0x11e1, 0xa40c: 0x006f, 0xa412: 0x0200, 0xa430: 0xa19f, 0xa442: 0x0c3c,
         0xa4a2: 0x0101, 0xa5d0: 0x0006, 0xa5d4: 0x0181, 0xa5ea: 0x6298, 0xa654: 0x8bb0, 0xa6d4: 0x0003,
         0xac0e: 0x0140, 0xad94: 0x0032, 0xad9c: 0x00e0, 0xada0: 0x01a2, 0xade8: 0x1400, 0xae06: 0x7c00,
         0xb54c: 0x3719, 0xb648: 0x7254, 0xb800: 0x00e0},
@@ -286,6 +303,11 @@ HOST_MAC, HOST_IP = bytes.fromhex('02005e770001'), bytes((192, 168, 77, 1))
 GUEST_IP = bytes((192, 168, 77, 2))
 EP_IN, EP_OUT, EP_INT = 0x81, 0x02, 0x83
 SPEED_CODE = {'full': 1, 'high': 2, 'super': 3}  # usbredir speeds
+# Reads of BMCR that see its reset bit still set after a reset (the model's
+# choice: one, so that a driver must wait for it; a real RTL8157 read it
+# clear 30 ms after the reset through a passthrough, which bounds nothing
+# finer).
+RESET_READS = 1
 
 
 def default_speed(chip):
@@ -296,7 +318,8 @@ class Chip:
     """The register file (rtltest.c's MODEL in Python), with the newer chips'
     indirect windows, PHY state and link resolution."""
 
-    def __init__(self, chip='8153', ext_init=False, power_cut=False, phy_patch=False, pid=None):
+    def __init__(self, chip='8153', ext_init=False, power_cut=False, phy_patch=False, pid=None,
+                 reset_stuck=False):
         self.kind = k = CHIPS[chip]
         self.real = REAL.get(chip)
         self.tcr0, self.pid = k.id, pid if pid is not None else k.pid
@@ -326,6 +349,20 @@ class Chip:
         self.pla[MR_RX_ACCEPT] = ACC_ALL_PHYS | ACC_MY_PHYS | ACC_MCAST | ACC_BCAST
         self.usb[UR_CTRL] = CTRL_RX_ZERO | CTRL_RX_AGG_OFF
         self.pla[MR_CPLUS] = 0x40
+        # BMCR at power-up and after a reset: autonegotiation on (and the
+        # 1000 Mb/s speed bits on a gigabit PHY), as a real RTL8157 read it
+        # after a reset (0x1040). The advertisement at power-up: 10 and 100
+        # Mb/s, half and full duplex, and 1000 full on a gigabit PHY, on
+        # every chip (the RTL8152 and 8153 had none, so a driver that
+        # autonegotiated without writing it got no link here).
+        self.bmcr_default = MIICTL_AN_ENABLE | (MIICTL_SPEED1000 if k.top >= 1000 else 0)
+        self.phy[PR_MII // 2] = self.bmcr_default
+        self.phy[(PR_MII + 8) // 2] = ANADV_10H | ANADV_10F | ANADV_100H | ANADV_100F | 1
+        self.phy[(PR_MII + 18) // 2] = GIGCTL_1000_FULL if k.top >= 1000 else 0
+        self.bmcr_resetting = 0                      # reads of BMCR still to show the reset bit
+        self.bmcr_seen = False
+        self.bmcr_dropped = 0                        # BMCR writes made while a reset was under way
+        self.reset_stuck = reset_stuck               # a reset never ends (bmcr_resetting -1)
         if self.newer:
             # Power-up values the facts do not give are chosen so that the
             # bring-up's clears and polls are visible (the record, "Limits").
@@ -340,9 +377,7 @@ class Chip:
                 self.adv['bmu'][BR_RX_ZLP] = BMU_RX_ZLP
             xg = (XGCTL_2500 if k.top >= 2500 else 0) | (XGCTL_5000 if k.top >= 5000 else 0) | \
                 (XGCTL_10000 if k.top >= 10000 else 0)
-            for reg, value in ((PR_MII, MIICTL_AN_ENABLE | MIICTL_SPEED1000), (PR_MII + 2, 0x7949),
-                               (PR_MII + 8, ANADV_10H | ANADV_10F | ANADV_100H | ANADV_100F | 1),
-                               (PR_MII + 18, GIGCTL_1000_FULL), (PR_XG_CTRL, xg)):
+            for reg, value in ((PR_MII + 2, 0x7949), (PR_XG_CTRL, xg)):
                 self.phy[reg // 2] = value
             if ext_init:
                 self.phy[PR_INIT_GATE // 2] = INIT_GATE_BITS
@@ -399,24 +434,50 @@ class Chip:
             return self.sram2.get(self.sram2_at, 0)
         if addr == PR_STATE and self.newer:
             return (self.phy[addr // 2] & ~7) | self.phy_state()
+        if addr == PR_MII and self.bmcr_resetting:
+            self.bmcr_seen = True
+            return self.phy[addr // 2] | MIICTL_RESET
         return self.phy[addr // 2]
+
+    def bmcr_read_done(self):
+        """After a register read: one read of BMCR has seen the reset under way."""
+        if self.bmcr_seen:
+            self.bmcr_seen = False
+            if self.bmcr_resetting > 0:
+                self.bmcr_resetting -= 1
 
     def phy_written(self, addr, value):
         if addr == PR_MII:                     # BMCR
-            # A restart, a reset, or a change of the forced speed and duplex
+            if self.bmcr_resetting:
+                # IEEE 802.3 22.2.4.1.1: a PHY need not accept a write to its
+                # control register until a reset is over; this one does not.
+                self.bmcr_dropped += 1
+                return
+            if value & MIICTL_RESET:
+                # The reset returns the control register to its default,
+                # autonegotiation on, whatever else the write carried
+                # (22.2.4.1.1): a real RTL8157 read 0x1040 back after 0xa100
+                # and autonegotiated (docs/testing/2026-11-17-netopts-rtl8157.md).
+                # It takes the link down and autonegotiates. The reset bit
+                # reads set until RESET_READS reads of the register have seen
+                # it, then clears itself.
+                self.autoneg += 1
+                self.bmcr_resetting = -1 if self.reset_stuck else RESET_READS
+                self.phy[addr // 2] = self.bmcr_default
+                return
+            # A restart, or a change of the forced speed and duplex
             # (autonegotiation off: the Advanced tab's *SpeedDuplex 1 to 4)
             # takes the link down and brings it up as the PHY now says.
             forced = MIICTL_AN_ENABLE | MIICTL_SPEED100 | MIICTL_FULL | MIICTL_SPEED1000
             if value & MIICTL_AN_RESTART or \
-                    (not value & MIICTL_AN_ENABLE and (value & MIICTL_RESET or
-                                                      (value ^ self.phy[addr // 2]) & forced)) or \
-                    (self.newer and (value & MIICTL_RESET or not value & MIICTL_AN_ENABLE or
+                    (not value & MIICTL_AN_ENABLE and (value ^ self.phy[addr // 2]) & forced) or \
+                    (self.newer and (not value & MIICTL_AN_ENABLE or
                                      (value ^ self.phy[addr // 2]) & MIICTL_POWERDOWN)):
                 self.autoneg += 1
-            # The reset and the autonegotiation restart both clear themselves
-            # (IEEE 802.3 22.2.4.1); a real RTL8157 read BMCR back without the
-            # restart bit, and Realtek's driver waited for that.
-            value &= ~(MIICTL_RESET | MIICTL_AN_RESTART)
+            # The autonegotiation restart clears itself (IEEE 802.3
+            # 22.2.4.1); a real RTL8157 read BMCR back without the restart
+            # bit, and Realtek's driver waited for that.
+            value &= ~MIICTL_AN_RESTART
         if addr == PR_PATCH_CMD:
             st = self.phy[PR_PATCH_STATE // 2]
             self.phy[PR_PATCH_STATE // 2] = st | PATCH_GRANTED if value & PATCH_ASK else st & ~PATCH_GRANTED
@@ -448,6 +509,7 @@ class Chip:
                 out[k] = space[a]
         if index & RTL_SPACE_MAC and value == MR_TX_CONFIG and length >= 4:
             out[2], out[3] = self.tcr_word & 255, self.tcr_word >> 8
+        self.bmcr_read_done()
         return bytes(out)
 
     def write(self, value, index, data):
@@ -499,6 +561,7 @@ class Chip:
             self.phy_written(addr & 0xfffe, data)
         else:
             struct.pack_into('<HH', self.usb, UR_OCP_ADDR, 0x0001, self.phy_read(addr & 0xfffe))
+            self.bmcr_read_done()
         struct.pack_into('<H', self.usb, UR_OCP_CMD, 0)
         self.ocp_ops += 1
 
@@ -550,7 +613,7 @@ class Chip:
         """(Mb/s, full duplex) of the link with a partner whose fastest speed
         is partner, from the PHY's control and advertisement; None if none."""
         bmcr, top = self.phy_word(PR_MII), min(self.top, partner)
-        if self.phy_state() != PHYST_LAN_ON:
+        if self.phy_state() != PHYST_LAN_ON or self.bmcr_resetting < 0:
             return None                                # powered down or still in external init
         if not bmcr & MIICTL_AN_ENABLE:
             mbps = 100 if bmcr & MIICTL_SPEED100 else 1000 if bmcr & MIICTL_SPEED1000 else 10
@@ -567,8 +630,9 @@ class Chip:
                 return mbps, full
         return None
 
-    def show_link(self, got, partner):
-        """MR_LINK and the PHY's status registers for a link (None: down)."""
+    def show_link(self, got, partner, partner_pause=1):
+        """MR_LINK and the PHY's status registers for a link (None: down).
+        partner_pause: the partner's PAUSE (1) and ASM_DIR (2) bits."""
         status = self.phy_word(PR_MII + 2) & ~(MIIST_LINK | MIIST_AN_DONE)
         if got is None:
             word, peer, peer_gig, peer_xg = 0, 0, 0, 0
@@ -576,11 +640,24 @@ class Chip:
             mbps, full = got
             autoneg = bool(self.phy_word(PR_MII) & MIICTL_AN_ENABLE)
             word = LNK_UP | LNK_SPEED[mbps] | (LNK_FULL if full else 0)
-            if full and autoneg and self.phy_word(PR_MII + 8) & ANADV_PAUSE:
-                word |= LNK_RX_FLOW | LNK_TX_FLOW        # the partner offers pause
+            if full and autoneg:
+                # IEEE 802.3 Table 28B-3: both ends PAUSE, both ways; this end
+                # PAUSE and ASM_DIR, the partner ASM_DIR alone: this end obeys
+                # (receive); this end ASM_DIR alone, the partner both: this
+                # end sends (transmit).
+                adv = self.phy_word(PR_MII + 8)
+                lp, la = bool(adv & ANADV_PAUSE), bool(adv & ANADV_ASM_DIR)
+                pp, pa = bool(partner_pause & 1), bool(partner_pause & 2)
+                if lp and pp:
+                    word |= LNK_RX_FLOW | LNK_TX_FLOW
+                elif lp and la and pa:
+                    word |= LNK_RX_FLOW
+                elif la and pp and pa:
+                    word |= LNK_TX_FLOW
             status |= MIIST_LINK | (MIIST_AN_DONE if autoneg else 0)
             peer = (ANADV_10H | ANADV_10F | (ANADV_100H | ANADV_100F if partner >= 100 else 0) |
-                    ANADV_PAUSE | 1) if autoneg else 0
+                    (ANADV_PAUSE if partner_pause & 1 else 0) |
+                    (ANADV_ASM_DIR if partner_pause & 2 else 0) | 1) if autoneg else 0
             peer_gig = GIGST_PEER_1000_FULL if autoneg and partner >= 1000 else 0
             peer_xg = (XGST_PEER_2500 if partner >= 2500 else 0) | (XGST_PEER_5000 if partner >= 5000 else 0) | \
                 (XGST_PEER_10000 if partner >= 10000 else 0) if autoneg else 0
@@ -894,7 +971,11 @@ def tx_large_send(frame, opts1, opts2):
 
 
 def rx_checksum_bits(frame):
-    """The receive descriptor's third dword for a frame (16-byte format)."""
+    """The receive descriptor's third dword for a frame (16-byte format).
+    Inferred, not seen on a real chip (ethernet.md 4.10.9): a total length
+    shorter than the header or past the frame, a fragment (more fragments
+    or an offset) and a UDP datagram with checksum 0 get no transport check
+    bit, so the driver reports them not checked."""
     info = ipv4_parse(frame)
     if not info:
         return RX2_IPF | RX2_UDPF | RX2_TCPF
@@ -902,17 +983,32 @@ def rx_checksum_bits(frame):
     bits = RX2_IPV4
     if ip_header_sum(frame[14:14 + ihl]) != struct.unpack_from('!H', frame, 24)[0]:
         return bits | RX2_IPF | RX2_UDPF | RX2_TCPF
+    if total < ihl or 14 + total > len(frame):
+        return bits | RX2_TCPF | RX2_UDPF
+    if struct.unpack_from('!H', frame, 20)[0] & 0x3fff:
+        return bits | RX2_TCPF | RX2_UDPF
     transport = 14 + ihl
     body = frame[:14 + total]
+    # A declared transport length that does not fit (a TCP data offset
+    # below 20 bytes or past the IPv4 payload, a UDP length other than the
+    # payload): no transport check bit (inferred, as above).
+    if proto == 6 and len(body) >= transport + 20 and not 20 <= (body[transport + 12] >> 4) * 4 <= total - ihl:
+        return bits | RX2_TCPF | RX2_UDPF
+    if proto == 17 and len(body) >= transport + 8 and struct.unpack_from('!H', body, transport + 4)[0] != total - ihl:
+        return bits | RX2_TCPF | RX2_UDPF
     if proto == 6 and len(body) >= transport + 20:
         bits |= RX2_TCP | RX2_UDPF
         if l4_sum(body, transport, 6) != struct.unpack_from('!H', body, transport + 16)[0]:
             bits |= RX2_TCPF
     elif proto == 17 and len(body) >= transport + 8:
-        bits |= RX2_UDP | RX2_TCPF
         given = struct.unpack_from('!H', body, transport + 6)[0]
-        if given and l4_sum(body, transport, 17) != given:
-            bits |= RX2_UDPF
+        bits |= RX2_TCPF
+        if not given:
+            bits |= RX2_UDPF          # none sent, none compared: not checked
+        else:
+            bits |= RX2_UDP
+            if l4_sum(body, transport, 17) != given:
+                bits |= RX2_UDPF
     else:
         bits |= RX2_TCPF | RX2_UDPF
     return bits
@@ -920,20 +1016,23 @@ def rx_checksum_bits(frame):
 
 class Model:
     def __init__(self, connection, trace, chip='8153', speed='high', now=time.monotonic,
-                 link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, ext_init=False,
+                 link_after=1.0, flap_after=None, flap_for=2.0, partner=10000, partner_pause=1,
+                 ext_init=False, reset_stuck=False,
                  power_cut=False, phy_patch=False, serial=None, serial_stall=0,
                  serial_skip=0, vid=None, pid=None, bcd_device=None, irq_on_change=False,
-                 bridge=None):
+                 bridge=None, kept=None):
         self.connection, self.trace, self.now = connection, trace, now
         self.bridge = bridge                       # (socket, remote) of --udp, or None
         self.chip_name, self.speed = chip, speed or default_speed(chip)
-        self.chip = Chip(chip, ext_init, power_cut, phy_patch, pid)
+        # kept: the Chip of an earlier connection (--keep-chip), its
+        # registers as the last driver left them; else one from power-up.
+        self.chip = kept or Chip(chip, ext_init, power_cut, phy_patch, pid, reset_stuck)
         kind = self.chip.kind
         if self.speed == 'super' and not kind.usb3:
             raise ValueError('%s is a USB 2.0 chip' % kind.name)
         self.vid = 0x0bda if vid is None else vid
         self.bcd_device = kind.bcd if bcd_device is None else bcd_device
-        self.partner = partner
+        self.partner, self.partner_pause = partner, partner_pause
         self.net = Network(self.log)
         real = self.chip.real
         self.serial_index = (real['serial_index'] if real else 3) if serial is not None else 0
@@ -983,7 +1082,12 @@ class Model:
         self.link_mbps, self.link_full = 0, False
         self.link_at = self.flap_at = self.restore_at = None
         self.flapped = False
-        self.autoneg_seen = 0
+        self.autoneg_seen = self.chip.autoneg
+        if kept and self.chip.pla[MR_LINK] & LNK_UP:
+            # A kept chip's link stays up with the partner (a real RTL8157
+            # read MR_LINK up before a new guest's driver wrote anything).
+            self.link = True
+            self.link_mbps, self.link_full = self.chip.negotiate(partner) or (0, False)
         self.irq = collections.deque()
         self.totals = collections.Counter()
 
@@ -1042,11 +1146,12 @@ class Model:
         if self.chip.newer:
             got = self.chip.negotiate(self.partner) if up else None
             if up and got is None:
-                why = 'no_common_speed' if self.chip.phy_state() == PHYST_LAN_ON else 'phy_not_on'
+                why = 'phy_in_reset' if self.chip.bmcr_resetting < 0 else \
+                    'no_common_speed' if self.chip.phy_state() == PHYST_LAN_ON else 'phy_not_on'
                 self.log(why, partner=self.partner, phy_state=self.chip.phy_state())
                 self.totals[why] += 1
                 return
-            self.chip.show_link(got, self.partner)
+            self.chip.show_link(got, self.partner, self.partner_pause)
             self.link_mbps, self.link_full = got if got else (0, False)
             if got and got[0] > 1000 and self.speed != 'super':   # off Linux's default advertisement
                 self.totals['multigig_below_superspeed'] += 1
@@ -1062,8 +1167,15 @@ class Model:
             self.chip.pla[MR_LINK] = (LNK_UP | LNK_SPEED[got[0]] | (LNK_FULL if got[1] else 0)) if up else 0
             self.link_mbps, self.link_full = got if up else (0, False)
         self.link = up
+        # The 8156 core and later: the pause directions MR_LINK resolved
+        # (Table 28B-3, show_link), so a leg reads them from this log.
+        flow = {}
+        if up and self.chip.newer:
+            word = self.chip.pla_word(MR_LINK)
+            flow = dict(pause_rx=bool(word & LNK_RX_FLOW), pause_tx=bool(word & LNK_TX_FLOW),
+                        partner_pause=self.partner_pause)
         self.log('link', up=up, why=why, mbps=self.link_mbps, full=self.link_full,
-                 **(self.chip.settings() if up else {}))
+                 **(self.chip.settings() if up else {}), **flow)
         if not self.irq_period:
             self.irq.append(self.irq_word(up))                # the bit is the link state
             self.flush_irq()
@@ -1472,11 +1584,15 @@ def main():
                     help='USB speed (default: super for the newer chips, high for the others)')
     ap.add_argument('--partner', type=int, choices=PARTNERS, default=10000,
                     help="the link partner's fastest speed in Mb/s (newer chips)")
+    ap.add_argument('--partner-pause', type=int, choices=(0, 1, 2, 3), default=1,
+                    help="the partner's pause bits: 1 PAUSE, 2 ASM_DIR, 3 both, 0 none")
     ap.add_argument('--link-after', type=float, default=1.0)
     ap.add_argument('--flap-after', type=float, help='seconds after link-up to take the cable out, once')
     ap.add_argument('--flap-for', type=float, default=2.0)
     ap.add_argument('--ext-init', action='store_true', help='the PHY starts in its external-init state')
     ap.add_argument('--power-cut', action='store_true', help='the chip reports a power cut at start')
+    ap.add_argument('--reset-stuck', action='store_true',
+                    help="the PHY's reset bit never clears once written (a fault case)")
     ap.add_argument('--phy-patched', action='store_true',
                     help='8159: links above 5 Gb/s as if its PHY patch were loaded (none is modelled)')
     ap.add_argument('--serial', help='a serial number string (iSerialNumber 3; 7 on the 8157, as the real '
@@ -1492,6 +1608,9 @@ def main():
     ap.add_argument('--serial-skip', type=int, default=0,
                     help='answer the first K reads of the serial string before those STALLs')
     ap.add_argument('--udp', help='LOCAL:REMOTE UDP ports on 127.0.0.1: bridge frames there (QEMU dgram framing)')
+    ap.add_argument('--keep-chip', action='store_true',
+                    help='serve one connection after another, each finding the registers as the last '
+                    'driver left them (a chip that is not power-cycled)')
     args = ap.parse_args()
     bridge = None
     if args.udp:
@@ -1517,23 +1636,32 @@ def main():
         server.bind(('127.0.0.1', args.port))
         server.listen(1)
         print(f'SIMULATED {CHIPS[args.chip].name} ({args.chip}) listening on 127.0.0.1:{args.port}', flush=True)
-        connection, _ = server.accept()
-        with connection:
-            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            model = Model(connection, trace, args.chip, speed, link_after=args.link_after,
-                          flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
-                          ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched,
-                          serial=args.serial, serial_stall=args.serial_stall,
-                          serial_skip=args.serial_skip, vid=args.vid, pid=args.pid,
-                          bcd_device=args.bcd_device, irq_on_change=args.irq_on_change,
-                          bridge=bridge)
-            try:
-                model.run()
-            except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-                model.log('disconnected', **model.totals)
-            except Exception as error:
-                model.log('fatal', error=repr(error), **model.totals)
-                raise
+        kept = None
+        while True:
+            connection, _ = server.accept()
+            with connection:
+                connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                model = Model(connection, trace, args.chip, speed, link_after=args.link_after,
+                              flap_after=args.flap_after, flap_for=args.flap_for, partner=args.partner,
+                              partner_pause=args.partner_pause,
+                              ext_init=args.ext_init, power_cut=args.power_cut, phy_patch=args.phy_patched,
+                              reset_stuck=args.reset_stuck,
+                              serial=args.serial, serial_stall=args.serial_stall,
+                              serial_skip=args.serial_skip, vid=args.vid, pid=args.pid,
+                              bcd_device=args.bcd_device, irq_on_change=args.irq_on_change,
+                              bridge=bridge, kept=kept)
+                if kept:
+                    model.log('chip_kept', **model.chip.settings())
+                try:
+                    model.run()
+                except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                    model.log('disconnected', **model.totals)
+                except Exception as error:
+                    model.log('fatal', error=repr(error), **model.totals)
+                    raise
+            if not args.keep_chip:
+                break
+            kept = model.chip
 
 
 if __name__ == '__main__':

@@ -68,6 +68,28 @@ Leg `advrtl-w98-xh-a`: 17 of 17 PASS.
 `AdvancedEEE` acts only at a 10 Mb/s link (EEE+, section 4.10.4) after the
 link-up the simulator logs; it is covered by the host tests, not here.
 
+**Note added 2026-11-17, after the real RTL8157 legs
+([netopts-rtl8157](2026-11-17-netopts-rtl8157.md)).** The `*SpeedDuplex`
+4 rows of this leg and of the two RTL8156B legs below (98 SE under NUSB's
+EHCI, XP under Windows' EHCI) were observed against a simulator whose
+PHY reset kept the bits written with it (`rtlemu.py` before `3ad31d9`);
+the driver then wrote the forced speed and duplex in the same write as
+the reset, and a real RTL8157 drops such bits and autonegotiates. These
+PASS results stand as observed but do not show a forced speed on a real
+chip; the guest legs are to be re-run with the fixed driver (`e69e740`,
+`68c758e`) ([open-items](open-items.md)). The same cases through the
+driver's chip core and the corrected simulator, without a guest
+(`rtlsimtest.py`, `3b921a9`): 100 full, BMCR 0x2100, no pause, at
+SuperSpeed and at High Speed. The `rtltest` forced 10/100 checks of this
+record's host tests ran on a model that also kept those bits. The
+autonegotiated rows (the defaults, 6, 2500, 7) are not affected.
+**Note added 2026-11-18:** the three RTL8156B legs' forced speeds were
+run again with the fixed driver against the corrected simulator (98 SE
+under xHCI98 3.5.0.0 and under NUSB's EHCI, XP under Windows' EHCI),
+every value 1 to 4, each linked as set
+([rtl815x-sim-legs](2026-11-18-rtl815x-sim-legs.md); simulator
+evidence).
+
 ### The Advanced tab itself on 98 SE
 
 On a new overlay of that leg's disk (`gui-rtl`, screenshots
@@ -92,6 +114,9 @@ ran under xHCI98 and, the latter, on XP at High Speed):
 | after install | `NETSET`: the seven keywords at their defaults, as under xHCI98 | PASS, ping |
 | `*EEE` 1, `EEEMaxSupportSpeed` 2500, `EnableGreenEthernet` 1, `EnableExtraPowerSaving` 1 | 1000 full; EEE MAC 3, advertisement 6, 2.5G 1; U2P3 1; green 8000 | PASS, ping |
 | `*SpeedDuplex` 4, `*FlowControl` 0 | 100 full, BMCR 2100 (autonegotiation off) | PASS, ping |
+
+(The `*SpeedDuplex` 4 row: see the note added 2026-11-17 under the
+xHCI98 leg above; to be re-run.)
 
 (Leg `n1` was stopped before its cases to free the slot for the real
 AX88179; void.)
@@ -155,6 +180,9 @@ run and again after the harness's replug: PASS, ping PASS each time.
 | `*EEE` 1, `EEEMaxSupportSpeed` 2500, `EnableGreenEthernet` 1, `EnableExtraPowerSaving` 1 | EEE MAC 3, advertisement 6, green on, U2P3 1 (1000 full) | PASS |
 | `*SpeedDuplex` 4, `*FlowControl` 0 | 100 full, BMCR 2100 | PASS |
 | `*SpeedDuplex` 6, `*EEE` 0, green 0, idle 0 | 1000 full, advertisement 0001, EEE and U2P3 off | PASS |
+
+(The `*SpeedDuplex` 4 row: see the note added 2026-11-17 under the 98 SE
+xHCI98 leg above; to be re-run.)
 
 The harness's replug and restart runs of the same test then reported
 FAIL only at their first check, the defaults, which the first run had

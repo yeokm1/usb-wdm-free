@@ -142,6 +142,18 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   speed is a new adapter to Windows**, and after five such adapters a
   new one gets no TCP/IP (Windows' own limit). Remove unused adapters
   in Network properties, or add TCP/IP to the new one.
+- **98 SE: updating a network adapter's driver can reset its Advanced
+  settings.** In our tests, updates to a different INF through Device
+  Manager's Update Driver set the Advanced-tab values back to the new
+  INF's defaults. Note your settings before updating and set them again
+  afterwards. Close Network properties and the adapter's property sheet
+  before updating: one update made with the sheet open failed and left
+  the adapter without its driver; later tests did not reproduce that,
+  and closing them first is still advised.
+- **A forced full-duplex speed (10 or 100 Mb/s full duplex) works only
+  when the other end is forced to the same speed and duplex**; against a
+  port left on automatic the link comes up half duplex at that end, and
+  the adapter's sending slows to a crawl.
 - **XP and XP x64 install their own USB audio driver for a `uac2` device
   first** ("USB Audio Device"). Changing it to `uac2` then hangs, and so
   do disabling it and shutting down after unplugging it; after a restart
@@ -156,19 +168,22 @@ notes) and [docs/testing/hcd-matrix.md](docs/testing/hcd-matrix.md).
   0x0000001E in Windows' `usbhub20.sys`). Unplug the device instead of
   disabling it. From 0.1.6 changing a device's driver to `uac2` on 2000
   asks for a restart and no longer stops.
+- **Windows XP, the free USB Audio 2.0 driver (uac2): plugging in a USB
+  audio device can, rarely, end in a blue screen** (STOP 0x7E). If it
+  happens to you, use the device maker's own driver instead.
 
 ## Installing
 
 The built drivers and their INFs are committed in this repository under
 `free/`, so no build is needed: download the whole repository (on GitHub,
-Code > Download ZIP, or the `v0.1.11` tag's source zip) and unzip it.
+Code > Download ZIP, or the `v0.1.12` tag's source zip) and unzip it.
 Then point the Add New Hardware Wizard, or Update Driver, at the
-driver's folder under `free/` for your Windows (release 0.1.11). `SHA256.TXT` lists
+driver's folder under `free/` for your Windows (release 0.1.12). `SHA256.TXT` lists
 every file's hash. The x86 drivers are unsigned. The x64 drivers carry
 the project's own test signature: on Vista and later x64, add
 `usb-wdm-free-test.cer` to the Trusted Root and Trusted Publishers
 stores and turn test signing on (`bcdedit /set testsigning on`).
-0.1.9 to 0.1.11 are signed with the test certificate
+0.1.9 to 0.1.12 are signed with the test certificate
 `CN=usb-wdm-free test signing SHA-1 (not trusted)`, thumbprint
 `7A3C6E6289EC46E6E128D87BB54E87196B824959`; 7 x64 needs no update for
 it. Trust the `usb-wdm-free-test.cer` of this release; 0.1.4's
@@ -262,6 +277,10 @@ The agents wrote and revised code, tests and documentation under the guidance in
 
 Each tag is a release. [docs/release-notes.md](docs/release-notes.md) has the detail.
 
+- **v0.1.12** (2026-11-21):
+  - `rtl815x` 0.2.4.0: the forced 10 and 100 Mb/s speeds on the Advanced tab now take effect (before, the adapter autonegotiated anyway); flow control offers "Transmit only"; on the RTL8157 and RTL8159 receive checksum offload can be turned on (2000 to 7, off by default); the RTL8153D offers its EEE maximum speed; the RTL8159 no longer offers Advanced EEE, which it never applied.
+  - `cdcnet` 0.1.6.0 (its INFs only): reinstalling keeps the protocol chosen on the Advanced tab.
+  - Every other driver is 0.1.11's, unchanged.
 - **v0.1.11** (2026-11-15):
   - Every device name the drivers show now carries "(wdm-free)", e.g. "USB Audio 2.0 (wdm-free)", "Sound Blaster X4 (wdm-free)", "USB Ethernet (CDC-ECM, wdm-free)"; a sound or MIDI name too long for the mark loses the maker's name first.
   - A device keeps its old name until its driver is updated. On 98 SE the preferred playback device is kept by name: choose it again after the update.

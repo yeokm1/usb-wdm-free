@@ -12,7 +12,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/22/2026,0.1.0.0
+DriverVer=11/15/2026,0.1.5.0
 
 [Manufacturer]
 %Provider%=Models,NTx86.5.1,NTx86.6.0,NTx86.6.1,NTamd64,NTamd64.6.0,NTamd64.6.1
@@ -23,6 +23,8 @@ DriverVer=10/22/2026,0.1.0.0
 [Models.NTx86.6.0]
 %Test%=Rndis5,USB\VID_0525&PID_A4A2
 
+; 7: not EF/04/01, which Windows' own rndiscmp.inf matches (owner,
+; 2026-10-26; build.md section 7.1).
 [Models.NTx86.6.1]
 %Test%=Rndis6,USB\VID_0525&PID_A4A2
 
@@ -66,4 +68,4 @@ Needs=usbrndis6.ndi.Services
 [Strings]
 Test="CDCRNDIS test: QEMU usb-net on the Windows RNDIS driver (not a release)"
 Provider="usb-wdm-free"
-Rndis="USB Ethernet (RNDIS, Windows driver)"
+Rndis="USB Ethernet (RNDIS, Windows driver, wdm-free)"

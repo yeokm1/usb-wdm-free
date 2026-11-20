@@ -12,7 +12,7 @@ Signature="$Chicago$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/22/2026,0.1.0.0
+DriverVer=11/21/2026,0.1.6.0
 
 [Manufacturer]
 %Provider%=Models
@@ -60,8 +60,19 @@ HKR,Ndi\Install,ndis5,,CDC.ndis
 [CDC.ndis]
 CopyFiles=Copy9x
 
-; The Advanced tab: which protocol to prefer when a device offers several.
+; The Advanced tab: which protocol to prefer when a device offers several;
+; its value is written only where none is (no-clobber), so a reinstall keeps
+; a choice made.
+; The Advanced tab (ethernet.md sections 4.8, 4.10): a locally administered
+; address, which an NCM function offering SetNetAddress takes; ECM and
+; RNDIS define no way to set one, so there it is left unused (logged).
 [Params]
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%AddressDesc%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,12
+HKR,Ndi\params\NetworkAddress,UpperCase,,1
+HKR,Ndi\params\NetworkAddress,optional,,1
+HKR,Ndi\params\NetworkAddress,default,,""
 HKR,Ndi\params\Protocol,ParamDesc,,%ProtocolDesc%
 HKR,Ndi\params\Protocol,type,,enum
 HKR,Ndi\params\Protocol,default,,0
@@ -69,18 +80,19 @@ HKR,Ndi\params\Protocol\enum,0,,%Auto%
 HKR,Ndi\params\Protocol\enum,1,,%ForceRndis%
 HKR,Ndi\params\Protocol\enum,2,,%ForceEcm%
 HKR,Ndi\params\Protocol\enum,3,,%ForceNcm%
-HKR,,Protocol,,0
+HKR,,Protocol,2,"0"
 
 [Strings]
 Test="CDCNET test: QEMU usb-net (not a release)"
 Provider="usb-wdm-free"
 Disk="CDCNET installation disk"
-Ecm="USB Ethernet (CDC-ECM)"
-Ncm="USB Ethernet (CDC-NCM)"
-Rndis="USB Ethernet (RNDIS)"
-Rtl8153="Realtek RTL8153 USB Ethernet (CDC-ECM mode)"
+Ecm="USB Ethernet (CDC-ECM, wdm-free)"
+Ncm="USB Ethernet (CDC-NCM, wdm-free)"
+Rndis="USB Ethernet (RNDIS, wdm-free)"
+Gadget="USB Ethernet (Linux USB gadget, wdm-free)"
 Service="usb-wdm-free CDCNET USB Ethernet"
 ProtocolDesc="USB protocol"
+AddressDesc="Network Address"
 Auto="Automatic (NCM, ECM, RNDIS)"
 ForceRndis="RNDIS only"
 ForceEcm="CDC-ECM only"

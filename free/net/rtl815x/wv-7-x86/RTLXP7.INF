@@ -51,7 +51,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/15/2026,0.2.3.0
+DriverVer=11/21/2026,0.2.4.0
 
 [Manufacturer]
 %Provider%=Models,NTx86.5.1,NTamd64.5.2,NTx86.6.0,NTamd64.6.0,NTx86.6.1,NTamd64.6.1,NTx86.6.2,NTamd64.6.2
@@ -176,7 +176,7 @@ CopyNT=12
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params,Speed6,Flow,Eee,Green,AdvEee,Idle
+AddReg=RegNT,Params,Speed6,Flow,Eee,EeeMax1G,Green,AdvEee,Idle
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
@@ -203,7 +203,7 @@ AddReg=RegNT,Params,Speed5G,Flow,Eee,Green,AdvEee,Csum
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params,Speed10G,Flow,Eee,Green,AdvEee,Csum
+AddReg=RegNT,Params,Speed10G,Flow,Eee,Green,Csum
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
@@ -212,7 +212,7 @@ AddReg=RegNT,Params,Speed10G,Flow,Eee,Green,AdvEee,Csum
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params,Speed6,Flow,Eee,Green,AdvEee,Idle
+AddReg=RegNT,Params,Speed6,Flow,Eee,EeeMax1G,Green,AdvEee,Idle
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
@@ -239,7 +239,7 @@ AddReg=RegNT,Params,Speed5G,Flow,Eee,Green,AdvEee,Csum
 Characteristics=0x84
 BusType=15
 CopyFiles=CopyNT
-AddReg=RegNT,Params,Speed10G,Flow,Eee,Green,AdvEee,Csum
+AddReg=RegNT,Params,Speed10G,Flow,Eee,Green,Csum
 *IfType=6
 *MediaType=0
 *PhysicalMediaType=14
@@ -326,7 +326,8 @@ HKR,Ndi\params\*FlowControl,ParamDesc,,%FlowDesc%
 HKR,Ndi\params\*FlowControl,type,,enum
 HKR,Ndi\params\*FlowControl,default,,3
 HKR,Ndi\params\*FlowControl\enum,0,,%Off%
-HKR,Ndi\params\*FlowControl\enum,3,,%On%
+HKR,Ndi\params\*FlowControl\enum,1,,%TxOnly%
+HKR,Ndi\params\*FlowControl\enum,3,,%FlowOn%
 HKR,,*FlowControl,0x00000002,"3"
 
 [Eee]
@@ -384,6 +385,19 @@ HKR,Ndi\params\EEEMaxSupportSpeed\enum,1000,,%M1000%
 HKR,Ndi\params\EEEMaxSupportSpeed\enum,2500,,%M2500%
 HKR,,EEEMaxSupportSpeed,0x00000002,"1000"
 
+; EEEMaxSupportSpeed in the 1 Gb/s class: the RTL8153D (the 8156 core)
+; applies it; the RTL8153, 8153B and 8153C have no such step and leave
+; it as they run (a value other than 1000 is traced). No 2.5 Gb/s value:
+; no chip of this class has that speed.
+[EeeMax1G]
+HKR,Ndi\params\EEEMaxSupportSpeed,ParamDesc,,%EeeMaxDesc%
+HKR,Ndi\params\EEEMaxSupportSpeed,type,,enum
+HKR,Ndi\params\EEEMaxSupportSpeed,default,,1000
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,10,,%M10%
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,100,,%M100%
+HKR,Ndi\params\EEEMaxSupportSpeed\enum,1000,,%M1000%
+HKR,,EEEMaxSupportSpeed,0x00000002,"1000"
+
 [Speed5G]
 HKR,Ndi\params\*SpeedDuplex,ParamDesc,,%SpeedDesc%
 HKR,Ndi\params\*SpeedDuplex,type,,enum
@@ -404,18 +418,24 @@ HKR,Ndi\params\*IPChecksumOffloadIPv4,type,,enum
 HKR,Ndi\params\*IPChecksumOffloadIPv4,default,,1
 HKR,Ndi\params\*IPChecksumOffloadIPv4\enum,0,,%Off%
 HKR,Ndi\params\*IPChecksumOffloadIPv4\enum,1,,%TxOn%
+HKR,Ndi\params\*IPChecksumOffloadIPv4\enum,2,,%RxOn%
+HKR,Ndi\params\*IPChecksumOffloadIPv4\enum,3,,%RxTxOn%
 HKR,,*IPChecksumOffloadIPv4,0x00000002,"1"
 HKR,Ndi\params\*TCPChecksumOffloadIPv4,ParamDesc,,%TcpCsDesc%
 HKR,Ndi\params\*TCPChecksumOffloadIPv4,type,,enum
 HKR,Ndi\params\*TCPChecksumOffloadIPv4,default,,1
 HKR,Ndi\params\*TCPChecksumOffloadIPv4\enum,0,,%Off%
 HKR,Ndi\params\*TCPChecksumOffloadIPv4\enum,1,,%TxOn%
+HKR,Ndi\params\*TCPChecksumOffloadIPv4\enum,2,,%RxOn%
+HKR,Ndi\params\*TCPChecksumOffloadIPv4\enum,3,,%RxTxOn%
 HKR,,*TCPChecksumOffloadIPv4,0x00000002,"1"
 HKR,Ndi\params\*UDPChecksumOffloadIPv4,ParamDesc,,%UdpCsDesc%
 HKR,Ndi\params\*UDPChecksumOffloadIPv4,type,,enum
 HKR,Ndi\params\*UDPChecksumOffloadIPv4,default,,1
 HKR,Ndi\params\*UDPChecksumOffloadIPv4\enum,0,,%Off%
 HKR,Ndi\params\*UDPChecksumOffloadIPv4\enum,1,,%TxOn%
+HKR,Ndi\params\*UDPChecksumOffloadIPv4\enum,2,,%RxOn%
+HKR,Ndi\params\*UDPChecksumOffloadIPv4\enum,3,,%RxTxOn%
 HKR,,*UDPChecksumOffloadIPv4,0x00000002,"1"
 
 [Speed10G]
@@ -451,6 +471,8 @@ S10000="10 Gb/s full duplex"
 FlowDesc="Flow control"
 Off="Off"
 On="On"
+FlowOn="Enabled (negotiated)"
+TxOnly="Transmit only"
 EeeDesc="Energy-Efficient Ethernet (EEE)"
 EeeMaxDesc="EEE up to"
 M10="10 Mb/s"
@@ -464,6 +486,8 @@ IpCsDesc="IPv4 checksum offload"
 TcpCsDesc="TCP checksum offload (IPv4)"
 UdpCsDesc="UDP checksum offload (IPv4)"
 TxOn="On, transmit"
+RxOn="Receive enabled"
+RxTxOn="Transmit and receive enabled"
 D8153D="Realtek RTL8153D USB Gigabit Ethernet (wdm-free)"
 D8156="Realtek RTL8156 USB 2.5G Ethernet (wdm-free)"
 D8157="Realtek RTL8157 USB 5G Ethernet (wdm-free)"

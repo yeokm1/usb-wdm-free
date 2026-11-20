@@ -215,7 +215,12 @@
 #define MIICTL_SPEED100  0x2000 /* a forced speed: 100 Mb/s (else 10) */
 #define MIICTL_FULL      0x0100 /* a forced speed: full duplex */
 #define ANADV_10_100     0x01e0 /* 10 and 100, half and full duplex */
+#define ANADV_10_HALF    0x0020 /* IEEE 802.3 Annex 28B: 10BASE-T */
+#define ANADV_10_FULL    0x0040 /* 10BASE-T full duplex */
+#define ANADV_100_HALF   0x0080 /* 100BASE-TX */
+#define ANADV_100_FULL   0x0100 /* 100BASE-TX full duplex */
 #define ANADV_PAUSE      0x0c00 /* symmetric and asymmetric pause */
+#define ANADV_ASM_DIR    0x0800 /* asymmetric pause alone */
 #define GIGCTL_1000_MASK 0x0300
 #define GIGCTL_1000_FULL 0x0200
 /* IEEE 802.3 clause 45, MMD 7 (auto-negotiation) register 60: EEE advertisement */

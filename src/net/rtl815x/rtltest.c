@@ -53,6 +53,8 @@ typedef struct MODEL {
     nc_u16 Lane[4];             /* 0xd06a per pair, selected by 0xd068 bits 3-4 */
     nc_u16 SramAt[2];
     nc_u32 BmcrResets, BmcrWrites, CmdResets;
+    nc_u16 BmcrLast[2];         /* the last two values written to BMCR, newest first */
+    int ResetStuck;             /* BMCR's reset bit never clears */
 } MODEL;
 
 static nc_u16 PhyAddr(MODEL *m, nc_u16 pla)
@@ -70,6 +72,7 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
     if (addr == MII(MII_CONTROL)) {
         m->BmcrWrites++;
         if (v & MIICTL_RESET) m->BmcrResets++;
+        m->BmcrLast[1] = m->BmcrLast[0]; m->BmcrLast[0] = v;
     }
     if ((addr == 0xa466 || addr == 0xa468) && (m->Phy[PR_STATE / 2] & PHYST_MASK) == PHYST_EXT_INIT &&
         !((addr == 0xa466 ? v : m->Phy[0xa466 / 2]) & 0x0001) &&
@@ -80,7 +83,7 @@ static void PhyWritten(MODEL *m, nc_u16 addr, nc_u16 v)
     if (addr == PR_SRAM2_ADDR) m->SramAt[1] = v;
     if (addr == PR_SRAM_DATA) m->Sram[0][m->SramAt[0]++] = v;
     if (addr == PR_SRAM2_DATA) m->Sram[1][m->SramAt[1]++] = v;
-    if (addr == MII(MII_CONTROL)) v = (nc_u16)(v & ~MIICTL_RESET);  /* reset completes */
+    if (addr == MII(MII_CONTROL) && !m->ResetStuck) v = (nc_u16)(v & ~MIICTL_RESET);  /* reset completes */
     if (addr == PR_PATCH_CMD) {
         /* PATCH_GRANTED follows PATCH_ASK. */
         nc_u16 st = m->Phy[PR_PATCH_STATE / 2];
@@ -745,7 +748,9 @@ static void BringUpV2(nc_u16 id, nc_u8 speed)
     CHECK(par.RxSize == 32768UL);
     CHECK(par.TxHeader == 16 && par.TxAlign == 16 && par.TxSize == 32768 && par.TxSlots == 4);
     CHECK(par.TxBatch == 64 && par.LsoMax == 0);                       /* no large send offered */
-    CHECK(par.Offload == (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4));  /* transmit only */
+    /* transmit checksums and the three receive checks; the core's keyword
+     * default (1) leaves the receive checks off (ethernet.md 4.10.9) */
+    CHECK(par.Offload == (NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4));
     CHECK(par.RxCount == 8);
     /* base setup */
     CHECK(m->Usb[0xcffe] & 0x08);
@@ -1215,14 +1220,78 @@ static void Settings(void)
     CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK);
     CHECK((ADV(m) & 0x0c00) == 0 && (ADV(m) & ANADV_10_100) == ANADV_10_100);
 
-    /* Forced 10/100: autonegotiation off, speed and duplex in the
-     * control register, after a PHY reset. */
+    /* *FlowControl offers 0, 1 and 3 (ethernet.md 4.10.9), on every chip:
+     * 0 neither pause bit, 1 ASM_DIR alone (transmit only, IEEE 802.3
+     * Table 28B-3), 3 PAUSE and ASM_DIR (negotiated, Linux
+     * r8152b_enable_fc). No receive-only value: a stored 2 is not in the
+     * table, so the core gives the default. */
+    CHECK(NetPackageChip.Settings[1].Count == 3 && NetPackageChip.Settings[1].Values[0] == 0 &&
+          NetPackageChip.Settings[1].Values[1] == 1 && NetPackageChip.Settings[1].Values[2] == 3);
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        static const long flow[3] = { 0, 1, 3 };
+        static const nc_u16 bits[3] = { 0, 0x0800, 0x0c00 };
+        unsigned k;
+        for (k = 0; k < 3; k++) {
+            Set(0, flow[k], 0, 1000, 0, 0, 0);
+            CHECK(Start(ids[i], NC_SPEED_HIGH, Values, &par) == NC_OK && par.Ignored == 0);
+            CHECK((ADV(m) & 0x0c00) == bits[k] && (ADV(m) & ANADV_10_100) == ANADV_10_100);
+            CHECK(BMCR(m) & MIICTL_AN_ENABLE);
+        }
+    }
+
+    /* Forced 10/100 (ethernet.md 4.10.4), on every chip: autonegotiation
+     * off, speed and duplex in the control register, written on their own
+     * after a PHY reset written on its own (IEEE 802.3 22.2.4.1.1: bits
+     * written with a reset may be lost; a real RTL8157 lost them). Only
+     * the forced ability is advertised, with the pause bits: no gigabit or
+     * multi-gigabit speed stays from an earlier start. */
     for (i = 1; i <= 4; i++) {
-        Set((long)i, 3, 0, 1000, 0, 0, 0);
-        CHECK(Start(ID_5C30, NC_SPEED_HIGH, Values, &par) == NC_OK && s->Timeouts == 0 && par.Ignored == 0);
-        CHECK((BMCR(m) & (MIICTL_AN_ENABLE | MIICTL_SPEED100 | MIICTL_FULL)) ==
-              ((i >= 3 ? MIICTL_SPEED100 : 0) | (i % 2 ? 0 : MIICTL_FULL)));
-        CHECK(m->BmcrResets >= 1);
+        static const nc_u16 one[4] = { 0x0020, 0x0040, 0x0080, 0x0100 };
+        nc_u16 ctl = (nc_u16)((i >= 3 ? MIICTL_SPEED100 : 0) | (i % 2 ? 0 : MIICTL_FULL));
+        unsigned k;
+        for (k = 0; k < sizeof(ids) / sizeof(ids[0]); k++) {
+            Set((long)i, 3, 0, 1000, 0, 0, 0);
+            CHECK(Start(ids[k], (nc_u8)(ids[k] == ID_4C10 ? NC_SPEED_HIGH : NC_SPEED_SUPER), Values, &par) == NC_OK);
+            CHECK(s->Timeouts == 0 && par.Ignored == 0);
+            CHECK(BMCR(m) == ctl && m->BmcrLast[0] == ctl && m->BmcrLast[1] == MIICTL_RESET);
+            CHECK(m->BmcrResets == 1);
+            CHECK((ADV(m) & ANADV_10_100) == one[i - 1] && (ADV(m) & 0x0c00) == 0x0c00);
+            CHECK((m->Phy[(MII(MII_GIG_CONTROL)) / 2] & GIGCTL_1000_MASK) == 0);
+            CHECK((m->Phy[PR_MGIG_CTRL / 2] & (MGIG_2G5 | MGIG_5G | MGIG_10G)) == 0);
+        }
+    }
+    /* After a PHY setup that gave up (8156 core, no PHY reset): the forced
+     * bits alone. */
+    {
+        NET_PROBE p = Probe(NC_SPEED_SUPER);
+        Set(4, 3, 0, 1000, 0, 0, 0);
+        p.Settings = Values;
+        Reset(0x7400UL << 16);
+        m->NoGrant = 1;
+        CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK);
+        CHECK(m->BmcrResets == 0 && BMCR(m) == (MIICTL_SPEED100 | MIICTL_FULL));
+    }
+    /* A PHY reset that never clears (ethernet.md 4.10.4): with a forced
+     * speed no forced write follows the reset, the wait counts in Timeouts
+     * and the start fails as a refused chip setup does (NC_E_DEVICE), so
+     * the core opens no data path. With autonegotiation the start goes on,
+     * the wait counted; a Resume that then forces a speed fails as Start. */
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        NET_PROBE p = Probe((nc_u8)(ids[i] == ID_4C10 ? NC_SPEED_HIGH : NC_SPEED_SUPER));
+        p.Settings = Values;
+        Set(2, 3, 0, 1000, 0, 0, 0);
+        Reset((nc_u32)ids[i] << 16);
+        m->ResetStuck = 1;
+        CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_E_DEVICE);
+        CHECK(m->BmcrResets == 1 && m->BmcrLast[0] == MIICTL_RESET && s->Timeouts == 1);
+        CHECK((Word(m->Pla, MR_COMMAND) & (CMD_RX_ON | CMD_TX_ON)) == 0);
+        Set(0, 3, 0, 1000, 0, 0, 0);
+        Reset((nc_u32)ids[i] << 16);
+        m->ResetStuck = 1;
+        CHECK(NetPackageChip.Start(state, &io, &p, &par) == NC_OK && s->Timeouts == 1);
+        Set(1, 3, 0, 1000, 0, 0, 0);
+        CHECK(NetPackageChip.Resume(state, &io, &p, &par) == NC_E_DEVICE);
+        CHECK(m->BmcrLast[0] == MIICTL_RESET && s->Timeouts == 2);
     }
     /* 1000 full alone on a gigabit chip; on the RTL8152 it is not offered. */
     Set(6, 3, 0, 1000, 0, 0, 0);

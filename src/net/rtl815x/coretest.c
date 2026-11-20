@@ -47,7 +47,7 @@ typedef struct CHIP_MODEL {
     nc_u32 RxSum;               /* RxChecksum's answer */
     int Offloads;               /* TxOffload calls */
     NET_TX_INFO LastInfo;       /* the last TxOffload request */
-    long Seen[2];               /* the settings the last Start read (NcSetting) */
+    long Seen[3];               /* the settings the last Start read (NcSetting) */
 } CHIP_MODEL;
 static CHIP_MODEL chip;
 
@@ -70,6 +70,7 @@ static long CStart(void *s, NET_IO *io, const NET_PROBE *probe, NET_PARAMS *p)
     chip.Starts++;
     chip.Seen[0] = NcSetting(probe, 0);
     chip.Seen[1] = NcSetting(probe, 1);
+    chip.Seen[2] = NcSetting(probe, 2);
     if (chip.FailStart) return NC_E_DEVICE;
     NcIoRead(io, 0x11, 0, 0, p->Mac, 6);
     p->RxSize = 2048; p->RxCount = 4;
@@ -178,13 +179,14 @@ static nc_u32 CRxChecksum(void *s, const nc_u8 *frame) { (void)s; (void)frame; r
 static const NET_SETTING CSettings[] = {
     { "*TestSpeed", 0, 3, { 0, 6, 2500 } },
     { "TestFlag", 1, 2, { 0, 1 } },
+    { "*FlowControl", 3, 3, { 0, 1, 3 } },     /* as rtl815x's (ethernet.md 4.10.9) */
 };
 
 const NET_CHIP NetPackageChip = {
     "coretest", "coretest double", 1,
     CProbe, CStart, CSetMac, CLink, CPoll, CSetFilter, CStop, CSuspend, CResume,
     CStatus, CRxParse, CTxHeader, CTxEnd, 0, CTxOffload, CRxChecksum,
-    CSettings, 2
+    CSettings, 3
 };
 
 /* ---------------- the fake USB device ---------------- */
@@ -276,6 +278,31 @@ static ULONG OneFrame(UCHAR *b, ULONG cap)
     b[0] = (UCHAR)n; b[1] = 0;
     memcpy(b + 2, dev.Mac, 6);
     memset(b + 8, 0x22, n - 6);
+    return n + 2;
+}
+
+/* One received record (as OneFrame) holding an IPv4 frame: an ihl-byte
+ * header (more than 20: options), the protocol, the flags and fragment
+ * word, then 40 bytes (a TCP header declaring 20 bytes, or a UDP header
+ * whose length is the 40, its checksum nonzero unless udp0), its total
+ * length as built plus delta. */
+static ULONG IpFrame(UCHAR *b, ULONG cap, UCHAR proto, ULONG ihl, USHORT frag, int udp0, int delta)
+{
+    ULONG n = 14 + ihl + 40, total = (ULONG)((long)(ihl + 40) + delta);
+    UCHAR *f = b + 2;
+    CHECK(cap >= n + 2);
+    b[0] = (UCHAR)n; b[1] = (UCHAR)(n >> 8);
+    memcpy(f, dev.Mac, 6);
+    memset(f + 6, 0x22, 6);
+    f[12] = 0x08; f[13] = 0x00;
+    memset(f + 14, 0, ihl + 40);
+    f[14] = (UCHAR)(0x40 | (ihl / 4));
+    f[16] = (UCHAR)(total >> 8); f[17] = (UCHAR)total;
+    f[20] = (UCHAR)(frag >> 8); f[21] = (UCHAR)frag;
+    f[22] = 64; f[23] = proto;
+    if (proto == 6) f[14 + ihl + 12] = 0x50;                 /* data offset: 5 words */
+    if (proto == 17) f[14 + ihl + 5] = 40;                   /* UDP length */
+    if (proto == 17 && !udp0) f[14 + ihl + 6] = 0x12;
     return n + 2;
 }
 
@@ -959,6 +986,10 @@ static PNDIS_PACKET TcpPacket(int i, UINT length, ULONG mss, ULONG checksum, UCH
 #define CS_UDP 0x09UL       /* V4 and UDP */
 #define CS_IP  0x11UL       /* V4 and IP */
 
+/* 1 or 2: SetTaskList's checksum task also asks an IPv6 receive check
+ * (TCP, UDP), with no IPv4 receive check. */
+static int taskV6Rx;
+
 static NDIS_STATUS SetTaskList(int checksum, int lso, ULONG encapsulation)
 {
     union { UCHAR b[256]; ULONG align; } u;
@@ -977,6 +1008,10 @@ static NDIS_STATUS SetTaskList(int checksum, int lso, ULONG encapsulation)
         t->TaskBufferLength = sizeof(*c);
         c->V4Transmit.TcpChecksum = 1; c->V4Transmit.IpChecksum = 1;
         c->V4Receive.TcpChecksum = 1; c->V4Receive.UdpChecksum = 1; c->V4Receive.IpChecksum = 1;
+        if (taskV6Rx) {
+            c->V4Receive.TcpChecksum = 0; c->V4Receive.UdpChecksum = 0; c->V4Receive.IpChecksum = 0;
+            if (taskV6Rx == 1) c->V6Receive.TcpChecksum = 1; else c->V6Receive.UdpChecksum = 1;
+        }
         last = t;
         at += (FIELD_OFFSET(NDIS_TASK_OFFLOAD, TaskBuffer) + sizeof(*c) + 3) & ~3UL;
     }
@@ -991,6 +1026,8 @@ static NDIS_STATUS SetTaskList(int checksum, int lso, ULONG encapsulation)
     }
     return Fake.Chars.SetInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, at, &r, &n);
 }
+
+static void Keyword(const char *name, const char *text);
 
 static void TaskOffload(void)
 {
@@ -1008,6 +1045,10 @@ static void TaskOffload(void)
     chip.TxSlots = 1;
     chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_LSO4 | NC_OFFLOAD_RX4;
     chip.LsoMax = 8000;                              /* capped to one buffer: 4096 - 4 */
+    /* the receive checks need the keywords' value 2 or 3 (ethernet.md 4.10.9) */
+    Keyword("*IPChecksumOffloadIPv4", "3");
+    Keyword("*TCPChecksumOffloadIPv4", "3");
+    Keyword("*UDPChecksumOffloadIPv4", "3");
     CHECK(Init() == NDIS_STATUS_SUCCESS);
     LinkUp();
     SetFilter(NDIS_PACKET_TYPE_DIRECTED);
@@ -1126,16 +1167,84 @@ static void TaskOffload(void)
     /* Receive: what the chip verified and TCP/IP enabled, as succeeded. */
     chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
     UNTIL(Queued(P_IN) == 4, 2000);
-    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
     CHECK(nd.Received == 1 && nd.LastChecksum == 0x28);       /* TCP (bit 3) and IP (bit 5) succeeded */
     chip.RxSum = NC_RX_IP_OK | NC_RX_UDP_OK;
     UNTIL(Queued(P_IN) == 4, 2000);
-    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 17, 20, 0, 0, 0));
     CHECK(nd.Received == 2 && nd.LastChecksum == 0x30);
     chip.RxSum = 0;
     UNTIL(Queued(P_IN) == 4, 2000);
-    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
+    CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
     CHECK(nd.Received == 3 && nd.LastChecksum == 0);
+    /* What a verdict may claim (ethernet.md 4.10.9): the chip here says
+     * all three were good, and the core keeps only what the frame allows.
+     * IPv4 options: IP and TCP (the options the query offers). */
+    {
+        static const struct { UCHAR Proto; ULONG Ihl; USHORT Frag; int Udp0, Delta; ULONG Want; } c[] = {
+            { 6, 24, 0, 0, 0, 0x28 },           /* IPv4 options, TCP */
+            { 17, 60, 0, 0, 0, 0x30 },          /* the longest header, UDP */
+            { 6, 20, 0x2000, 0, 0, 0x20 },      /* first fragment: IP only */
+            { 17, 20, 0x0010, 0, 0, 0x20 },     /* a later fragment: IP only */
+            { 17, 20, 0, 1, 0, 0x20 },          /* UDP checksum 0: none compared */
+            { 1, 20, 0, 0, 0, 0x20 },           /* not TCP or UDP */
+            { 6, 20, 0, 0, 100, 0 },            /* total length past the frame */
+            { 6, 20, 0, 0, -50, 0 },            /* total length shorter than the header */
+            { 6, 20, 0, 0, -30, 0x20 },         /* a TCP header cut short */
+        };
+        ULONG k;
+        int at = nd.Received;
+        chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK | NC_RX_UDP_OK;
+        for (k = 0; k < sizeof(c) / sizeof(c[0]); k++) {
+            UNTIL(Queued(P_IN) == 4, 2000);
+            CompleteIn(P_IN, b, IpFrame(b, sizeof(b), c[k].Proto, c[k].Ihl, c[k].Frag, c[k].Udp0, c[k].Delta));
+            CHECK(nd.Received == ++at && nd.LastChecksum == c[k].Want);
+        }
+        UNTIL(Queued(P_IN) == 4, 2000);
+        k = IpFrame(b, sizeof(b), 6, 20, 0, 0, 0);
+        b[2 + 14] = 0x44;                                    /* a header length below 20 */
+        CompleteIn(P_IN, b, k);
+        CHECK(nd.Received == ++at && nd.LastChecksum == 0);
+        UNTIL(Queued(P_IN) == 4, 2000);
+        CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));         /* not IPv4 */
+        CHECK(nd.Received == ++at && nd.LastChecksum == 0);
+        /* The declared transport lengths (the chip still says all good):
+         * a TCP header below 20 bytes or past the payload, a UDP length
+         * below 8, past the payload or short of it: transport not claimed;
+         * a 40-byte TCP header (options) inside the payload: claimed. */
+        {
+            static const struct { UCHAR Proto, At, Value; ULONG Want; } d[] = {
+                { 6, 12, 0x40, 0x20 },          /* data offset 4 words: 16 bytes */
+                { 6, 12, 0x00, 0x20 },          /* data offset 0 */
+                { 6, 12, 0xb0, 0x20 },          /* 44 bytes, past the 40 of payload */
+                { 6, 12, 0xf0, 0x20 },          /* 60 bytes */
+                { 6, 12, 0xa0, 0x28 },          /* 40 bytes: TCP options, the whole payload */
+                { 6, 12, 0x60, 0x28 },          /* 24 bytes: one option word */
+                { 17, 5, 7, 0x20 },             /* UDP length 7 */
+                { 17, 5, 0, 0x20 },             /* UDP length 0 */
+                { 17, 5, 41, 0x20 },            /* past the payload */
+                { 17, 5, 32, 0x20 },            /* short of the payload: what was summed is unknown */
+                { 17, 5, 40, 0x30 },            /* the payload exactly */
+            };
+            for (k = 0; k < sizeof(d) / sizeof(d[0]); k++) {
+                ULONG len = IpFrame(b, sizeof(b), d[k].Proto, 20, 0, 0, 0);
+                b[2 + 14 + 20 + d[k].At] = d[k].Value;
+                UNTIL(Queued(P_IN) == 4, 2000);
+                CompleteIn(P_IN, b, len);
+                CHECK(nd.Received == ++at && nd.LastChecksum == d[k].Want);
+            }
+        }
+        /* An IPv6 receive check is not offered: such a set is refused, and
+         * the receive checks enabled before stay (the refused set had
+         * none for IPv4). */
+        for (taskV6Rx = 1; taskV6Rx <= 2; taskV6Rx++)
+            CHECK(SetTaskList(1, 1, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
+        taskV6Rx = 0;
+        UNTIL(Queued(P_IN) == 4, 2000);
+        CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
+        CHECK(nd.Received == ++at && nd.LastChecksum == 0x28);
+        chip.RxSum = 0;
+    }
 
     /* A large send whose transfer fails sent nothing. */
     p = TcpPacket(9, 3000, 1460, 0, 6);
@@ -1210,8 +1319,8 @@ static void TaskOffload(void)
               NDIS_STATUS_SUCCESS);
     }
     chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
-    CompleteIn(P_IN, b, OneFrame(b, sizeof(b)));
-    CHECK(nd.Received == 4);
+    CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
+    CHECK(nd.Received == 4 + 11 + 11 + 1);                   /* after the cases above */
     CHECK(nd.LastChecksum == 0);
     p = TcpPacket(10, 200, 0, CS_TCP, 6);
     Fake.Chars.SendPacketsHandler(ctx, &p, 1);
@@ -1468,6 +1577,65 @@ static void PowerAndReset(void)
     }
     Halt();
     Balanced();
+    /* The receive checks across a reset: what TCP/IP enabled and the
+     * keywords allowed stay (ethernet.md 4.10.9). */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    Keyword("*IPChecksumOffloadIPv4", "3");
+    Keyword("*TCPChecksumOffloadIPv4", "3");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);   /* UDP's not allowed */
+    Halt();
+    Balanced();
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    Keyword("*IPChecksumOffloadIPv4", "3");
+    Keyword("*TCPChecksumOffloadIPv4", "3");
+    Keyword("*UDPChecksumOffloadIPv4", "3");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);
+    {
+        BOOLEAN addressing = TRUE;
+        CHECK(Fake.Chars.ResetHandler(&addressing, ctx) == NDIS_STATUS_PENDING);
+        UNTIL(nd.ResetCompletes == 1, 5000);
+    }
+    chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
+    UNTIL(Queued(P_IN) == 4, 3000);
+    {
+        UCHAR ip[128];
+        CompleteIn(P_IN, ip, IpFrame(ip, sizeof(ip), 6, 20, 0, 0, 0));
+    }
+    CHECK(nd.LastChecksum == 0x28);
+    chip.RxSum = 0;
+    Halt();
+    Balanced();
+    /* The configuration cannot be opened: the fallback, transmit only. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    Fake.FailOpenConfiguration = 1;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);   /* no receive check */
+    {
+        union { UCHAR b[256]; ULONG align; } u;
+        NDIS_TASK_OFFLOAD_HEADER *h = (NDIS_TASK_OFFLOAD_HEADER *)u.b;
+        NDIS_TASK_TCP_IP_CHECKSUM *c;
+        ULONG w = 0, n = 0;
+        memset(&u, 0, sizeof(u));
+        h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
+        h->EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+        h->EncapsulationFormat.EncapsulationHeaderSize = 14;
+        CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+              NDIS_STATUS_SUCCESS);
+        c = (NDIS_TASK_TCP_IP_CHECKSUM *)((NDIS_TASK_OFFLOAD *)(u.b + h->OffsetFirstTask))->TaskBuffer;
+        CHECK(c->V4Transmit.IpChecksum && c->V4Transmit.TcpChecksum);
+        CHECK(!c->V4Receive.IpChecksum && !c->V4Receive.TcpChecksum && !c->V4Receive.UdpChecksum);
+    }
+    Halt();
+    Balanced();
 }
 
 /* 98 SE and ME: a receive queued for the timer when a sleep request
@@ -1623,6 +1791,30 @@ static void Settings(void)
         Balanced();
     }
 
+    /* rtl815x's *FlowControl lists 0, 1 and 3: a stored 2, as text or as
+     * an integer, is not offered and becomes the default 3; 1 is kept. */
+    Fresh();
+    Keyword("*FlowControl", "2");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[2] == 3);
+    Halt();
+    Balanced();
+    Fresh();
+    Fake.Keywords[0].Name = "*FlowControl";
+    Fake.Keywords[0].IsInteger = 1;
+    Fake.Keywords[0].Integer = 2;
+    Fake.KeywordCount = 1;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[2] == 3);
+    Halt();
+    Balanced();
+    Fresh();
+    Keyword("*FlowControl", "1");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    CHECK(chip.Seen[2] == 1);
+    Halt();
+    Balanced();
+
     /* Malformed or not offered: the default. */
     Fresh();
     Keyword("*TestSpeed", "25x0");
@@ -1686,6 +1878,60 @@ static void Settings(void)
     CHECK(Init() == NDIS_STATUS_SUCCESS);
     CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
           NDIS_STATUS_NOT_SUPPORTED);
+    Halt();
+    Balanced();
+
+    /* The receive checks (ethernet.md 4.10.9), per keyword and protocol, on
+     * a chip that has all six: missing (the IPv4 header's) transmit only,
+     * 2 (TCP) receive only, 3 (UDP) both. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_TX_UDP4 | NC_OFFLOAD_RX4;
+    Keyword("*TCPChecksumOffloadIPv4", "2");
+    Keyword("*UDPChecksumOffloadIPv4", "3");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    memset(&u, 0, sizeof(u));
+    h->Version = NDIS_TASK_OFFLOAD_VERSION; h->Size = sizeof(*h);
+    h->EncapsulationFormat.Encapsulation = IEEE_802_3_Encapsulation;
+    h->EncapsulationFormat.EncapsulationHeaderSize = 14;
+    CHECK(Fake.Chars.QueryInformationHandler(ctx, OID_TCP_TASK_OFFLOAD, u.b, sizeof(u.b), &w, &n) ==
+          NDIS_STATUS_SUCCESS);
+    t = (NDIS_TASK_OFFLOAD *)(u.b + h->OffsetFirstTask);
+    c = (NDIS_TASK_TCP_IP_CHECKSUM *)t->TaskBuffer;
+    CHECK(c->V4Transmit.IpChecksum && !c->V4Transmit.TcpChecksum && c->V4Transmit.UdpChecksum);
+    CHECK(!c->V4Receive.IpChecksum && c->V4Receive.TcpChecksum && c->V4Receive.UdpChecksum);
+    /* A set asking for the IPv4 header's receive check, not offered: refused. */
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
+    Halt();
+    Balanced();
+    /* Receive checks on (all three): reported as the chip verified them;
+     * a later set without them turns them off again; the default is off. */
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    Keyword("*IPChecksumOffloadIPv4", "3");
+    Keyword("*TCPChecksumOffloadIPv4", "3");
+    Keyword("*UDPChecksumOffloadIPv4", "3");
+    CHECK(Init() == NDIS_STATUS_SUCCESS);
+    LinkUp();
+    SetFilter(NDIS_PACKET_TYPE_DIRECTED);
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);
+    {
+        UCHAR b[2048];
+        chip.RxSum = NC_RX_IP_OK | NC_RX_TCP_OK;
+        UNTIL(Queued(P_IN) == 4, 2000);
+        CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
+        CHECK(nd.Received == 1 && nd.LastChecksum == 0x28);
+        CHECK(SetTaskList(0, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_SUCCESS);   /* none */
+        UNTIL(Queued(P_IN) == 4, 2000);
+        CompleteIn(P_IN, b, IpFrame(b, sizeof(b), 6, 20, 0, 0, 0));
+        CHECK(nd.Received == 2 && nd.LastChecksum == 0);
+        chip.RxSum = 0;
+    }
+    Halt();
+    Balanced();
+    Fresh();
+    chip.Offload = NC_OFFLOAD_TX_IP4 | NC_OFFLOAD_TX_TCP4 | NC_OFFLOAD_RX4;
+    CHECK(Init() == NDIS_STATUS_SUCCESS);                /* no keyword: receive checks not offered */
+    CHECK(SetTaskList(1, 0, IEEE_802_3_Encapsulation) == NDIS_STATUS_NOT_SUPPORTED);
     Halt();
     Balanced();
 }

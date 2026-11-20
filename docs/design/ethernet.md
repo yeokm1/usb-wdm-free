@@ -633,7 +633,9 @@ Record: `docs/testing/2026-11-07-rtl8157-performance.md`.
   against 161 Mb/s, mean 151 against 176): TCP/IP kept the checked
   packets, the 64-packet receive pool ran down to 9 free and 27% of the
   frames went up as copies. XP showed no gain. `RtlRxChecksum` and the
-  core's reporting stay, covered by the host and simulator tests.
+  core's reporting stay, covered by the host and simulator tests. From
+  2026-11-17 they are offered again behind the checksum keywords, whose
+  default leaves them off (owner; 4.10.9).
 - **The model** (`rtlemu.py`) segments a large send and computes the
   checksums asked for on the RTL8157/8159, and writes the receive checksum
   bits as the real RTL8157 did; what was not seen is marked inferred there.
@@ -729,12 +731,12 @@ them. A keyword is offered only where the driver performs the function
 
 | Package, chips | Keywords (default) |
 |---|---|
-| `rtl815x`, RTL8152 family | `NetworkAddress`; `*SpeedDuplex` 0-4 (0); `*FlowControl` 0, 3 (3); `*EEE` (0) |
-| `rtl815x`, 1 Gb/s (RTL8153, 8153B, 8153C, 8153D, and every id whose chip is not known from it) | as the RTL8152's, `*SpeedDuplex` adds 6; and `EnableGreenEthernet` (0), `AdvancedEEE` (0), `EnableExtraPowerSaving` (0) |
+| `rtl815x`, RTL8152 family | `NetworkAddress`; `*SpeedDuplex` 0-4 (0); `*FlowControl` 0, 3 (3), and 1 from 2026-11-17 (4.10.9); `*EEE` (0) |
+| `rtl815x`, 1 Gb/s (RTL8153, 8153B, 8153C, 8153D, and every id whose chip is not known from it) | as the RTL8152's, `*SpeedDuplex` adds 6; and `EnableGreenEthernet` (0), `AdvancedEEE` (0), `EnableExtraPowerSaving` (0); and (2026-11-17) `EEEMaxSupportSpeed` 10, 100, 1000 (1000), which the RTL8153D applies and the RTL8153, 8153B and 8153C ignore (below) |
 | `rtl815x`, 2.5 Gb/s (RTL8155 id, 8156, 8156B) | as 1 Gb/s, `*SpeedDuplex` adds 2500; and `EEEMaxSupportSpeed` 10, 100, 1000, 2500 (1000) |
-| `rtl815x`, RTL8157 / RTL8159 | as the RTL8152's, `*SpeedDuplex` 0-4, 6, 2500, 5000 (and 10000 on the RTL8159, by the pattern of Realtek's values: no INF read here lists it); `EnableGreenEthernet` (0), `AdvancedEEE` (0); on 2000 to 7 also the three transmit checksum keywords, 0 off, 1 Tx (1) |
+| `rtl815x`, RTL8157 / RTL8159 | as the RTL8152's, `*SpeedDuplex` 0-4, 6, 2500, 5000 (and 10000 on the RTL8159, by the pattern of Realtek's values: no INF read here lists it); `EnableGreenEthernet` (0), `AdvancedEEE` (0, the RTL8157 only from 2026-11-17); on 2000 to 7 also the three checksum keywords, 0 off, 1 Tx (1), and from 2026-11-17 2 Rx and 3 Rx and Tx (4.10.9) |
 | `ax88179`, AX88179, AX88178A | `NetworkAddress`; `*SpeedDuplex` 0-4, 6 (0); `*FlowControl` 0-3 (3); `*EEE` (1, ASIX's 7 default; owner question 12.3) |
-| `ax88179`, the Allied Telesis media converters `07C9:000E`, `000F`, `0010` | as ASIX's sections for them: `*SpeedDuplex` one value each (6, 4, 0); `*FlowControl` 0-3 (0); `*EEE` 0 only |
+| `ax88179`, the Allied Telesis media converters `07C9:000E`, `000F`, `0010` | as ASIX's sections for them: `*SpeedDuplex` one value each (6, 4, 0); `*FlowControl` 0-3 (0); `*EEE` 0 only. Copied from ASIX's INF: `AxStart` applies every value of the AX88179's set on these ids too, and that the media converters cannot use the others is not established (open point, 12.3) |
 | `ax88772`, AX88772B, AX88772C | `NetworkAddress`; `*SpeedDuplex` 0-4 (0); `*FlowControl` 0-3 (3) |
 | `ax88772`, SR9800 (no maker INF) | `NetworkAddress`; `*SpeedDuplex` 0-4 (0): its PHY is a clause 22 MII PHY (Linux `sr9800.c` drives it through the generic MII calls) |
 | `sr9700` (no maker INF) | `NetworkAddress` only: the chip runs 10 Mb/s half duplex only and has no MII (section 6.9.2) |
@@ -748,7 +750,43 @@ and the rebrands in Realtek's RTL8156 and 8156B sections), the RTL8157
 and RTL8159 ids, and 1 Gb/s for every other id. Within a class the chip
 is read at start (`RtlChipId`); a keyword the chip lacks is ignored and
 traced (green Ethernet and Advanced EEE on an RTL8153 of a 1 Gb/s id,
-idle power saving on an RTL8153 5C00 or 5C10, an 8153B or an 8153C).
+idle power saving on an RTL8153 5C00 or 5C10, an 8153B or an 8153C,
+`EEEMaxSupportSpeed` other than 1000 on any 1 Gb/s chip but the
+RTL8153D).
+
+Owner, 2026-11-17: "If the ethernet drivers support certain options, it
+should have the options configurable in Device Manager." The 1 Gb/s class
+lacked `EEEMaxSupportSpeed`, which the RTL8153D (the 8156 core, on
+`0BDA:8053` and also behind `0BDA:8153`) reads and applies (`H_EEE_MAX`);
+it is offered there from 2026-11-17 without the 2.5 Gb/s value, which no
+chip of the class has (record `docs/testing/2026-11-17-advanced-tab-eeemax.md`),
+on 98 SE, ME and 2000 (`RTL81598.INF`, `RTL815X.INF`) and on XP and
+Vista (`RTLXP7.INF`, by `0BDA:8053`). On 7 the entry reaches no device:
+`RTLXP7.INF`'s 7 models sections list only RTL8157 and RTL8159 ids
+(section 7.6), so none takes `RTL_GE` there.
+
+Owner, 2026-11-17, the rule: every option an Ethernet driver actually
+supports is settable from the adapter's Advanced tab on every Windows its
+INF serves, and an entry that does nothing on the plugged chip is also
+wrong. The new entry breaks the second half on the RTL8153, 8153B and
+8153C, which share `0BDA:8153` and `0BDA:8053` with the RTL8153D and
+leave it as they run (traced, not applied). An INF cannot tell them
+apart: it matches the USB ids and revision, not the chip's version
+register, and no revision that separates them is known. The no-ops
+traced above are in the same position (green Ethernet and Advanced EEE
+on an RTL8153, idle power saving on an RTL8153 5C00 or 5C10, an 8153B or
+an 8153C; `*EEE` and `EEEMaxSupportSpeed` on the RTL8156 7020, 4.10.4):
+a trace and this text do not satisfy the rule. Owner, 2026-11-17: the
+driver is to trim the tab to the chip at start, removing the entries the
+detected chip does not support (designed in 4.10.8, not implemented);
+until the adapter has started once, the tab shows the INF's full list.
+Owner, 2026-11-17: `AdvancedEEE` is no longer offered on the RTL8159
+(`RTL_G10`), whose EEE+ step is never run (4.10.4); the RTL8157's
+section (`RTL_G5`) keeps it. An adapter installed from an earlier INF
+keeps the entry and its value after an update, since an INF's `AddReg`
+adds keys and removes none; the driver's own trimming of the tab
+(owner, 2026-11-17; designed in 4.10.8, not implemented) is to take
+such leftovers out.
 Idle power saving is not offered on the RTL8152, RTL8157 and RTL8159,
 which Realtek's INFs offer it on with 0 as the default: the driver never
 turns the USB 2 PHY's P3 state on there (Linux has no such step for the
@@ -762,7 +800,8 @@ Wake-on-LAN of every kind (`*WakeOnMagicPacket`, `*WakeOnPattern`,
 `WakeUp`): no wake-up source (section 4.7). VLAN and priority
 (`*PriorityVLANTag`, `VlanID`, `VLAN_ID`): no tags (4.6). Jumbo frames
 (`*JumboPacket`): MTU 1500 (4.6). Large send (`*LsoV2IPv4`,
-`*LsoV1IPv4`), IPv6 and receive checksums, ARP and NS offload: not
+`*LsoV1IPv4`), IPv6 checksums (IPv4 receive checksums: the RTL8157 and
+RTL8159 from 2026-11-17, 4.10.9), ARP and NS offload: not
 offered by the driver (4.9). Realtek's `GigaLite` (the 8156 core's setup
 turns its "lite" modes off, as Linux does; turning them on is not
 described), `EnableExtraTransmissionParm`, `BatteryModeLinkSpeed`,
@@ -791,9 +830,59 @@ each is mapped to the chip function of the same name that Linux drives
   speeds are never advertised, section 6.4.1; 1000 on an RTL8152) is
   taken as 0, and traced. The link the chip then reports is the link
   (section 4.6).
+
+  **`rtl815x`'s forced sequence** (2026-11-17). For 1 to 4 `Negotiate`
+  writes the PHY's control register (BMCR) twice: first the reset bit
+  alone, then, once BMCR reads with the reset bit clear, the speed and
+  duplex bits alone, autonegotiation off. The poll is up to 50 reads, each
+  after a requested 20 ms sleep: 1 s of sleeps, plus the USB and
+  scheduling latency of each sleep and read, each control transfer also
+  under its own time-out (the clause allows the reset 0.5 s). IEEE 802.3
+  22.2.4.1.1: a reset
+  sets the control register to its defaults, and until the reset is over
+  writes to its other bits may have no effect. Before, the reset and the
+  forced bits went in one write (0xA100, 0xA000, 0x8100, 0x8000), as
+  Linux's `rtl8152_set_speed` writes them when a PHY reset is due. A real
+  RTL8157 read BMCR back as 0x1040 (autonegotiation on, no forced bits)
+  about 30 ms after such a write, autonegotiated and linked at 5 Gb/s for
+  every one of the four values (record `2026-11-17-netopts-rtl8157.md`).
+  With 1 to 4 the advertisement also holds only the forced ability: its
+  one 10/100 bit and the pause bits as `*FlowControl` says, 1000 Mb/s
+  (register 9) and the multi-gigabit speeds (register 7.32) cleared.
+  With autonegotiation off the advertisement is not used, so this is a
+  safeguard: a PHY that autonegotiates after all comes up at the chosen
+  speed or not at all, and nothing an earlier start advertised stays in
+  it. The chip is not power-cycled between driver starts or guests (the
+  real RTL8157 kept a forced 1 Gb/s run's advertisement, 0x1C01, until a
+  start in Automatic), so no setting may depend on the values a chip
+  starts with: 0 (Automatic) writes every field it sets again (10/100
+  half and full, 1000 full on a gigabit chip, the multi-gigabit speeds
+  the chip and the USB link carry, the pause bits), and 6 and above write
+  their one speed and clear the others. These are masked updates: the
+  registers' other bits (the selector field, for one) are kept as read.
+  A reset bit that has not cleared when the poll ends (or a device that
+  fails a transfer) leaves the forced bits unwritten, counts in the
+  chip's `Timeouts`, and fails the start as a refused chip setup does
+  (`NC_E_DEVICE`: the core's start then fails with
+  `STATUS_DEVICE_DATA_ERROR` and opens no data path; on resume, after the
+  core's three tries, the adapter is reported gone). On the
+  autonegotiation path such a reset is counted only. A removal during
+  the poll stops it: the core's sticky I/O failure (`Gone`, or a failed
+  control transfer) ends the reads and every later write. A halt does
+  not interrupt it: halt waits for the chip operation in progress, so a
+  stop or shutdown can wait for the poll to end. The autonegotiation
+  path keeps
+  its one write of reset, enable and restart (0x9200): its other bits are
+  the defaults the reset restores, and the real RTL8157 autonegotiated
+  after it at each speed asked. The sequence is the same on every chip
+  (RTL8152 to RTL8159). Whether the older PHYs lose bits written with a
+  reset is not known; the separate writes are what the clause asks of
+  any PHY. Only the RTL8157 has been seen on a real PHY, and the new
+  sequence has run on the simulator and the host model only.
 - **`*FlowControl`**: `rtl815x` (Realtek offers on or off): 0 clears the
-  two pause bits of the advertisement, any other value sets them (as now;
-  Linux `r8152b_enable_fc`). `ax88179` and `ax88772` (ASIX offers Tx and
+  two pause bits of the advertisement, 3 sets them (as before; Linux
+  `r8152b_enable_fc`); from 2026-11-17 also 1, ASM_DIR alone, and no 2
+  (4.10.9). `ax88179` and `ax88772` (ASIX offers Tx and
   Rx apart): 3, the default, keeps what each driver does today (Linux's:
   on the AX88179 the PHY's own advertisement and both medium pause
   enables, here on a full-duplex autonegotiated link, where Linux sets
@@ -823,7 +912,9 @@ each is mapped to the chip function of the same name that Linux drives
 - **`EEEMaxSupportSpeed`** (RTL8156 core, with EEE on): the EEE
   advertisement stops at that speed: 2500 advertises 100, 1000 and 2.5G;
   1000 (the default) 100 and 1000; 100 only 100; 10 none (EEE at 10 Mb/s
-  is the PHY's own 10BASE-Te enable, which `*EEE` sets).
+  is the PHY's own 10BASE-Te enable, which `*EEE` sets). The RTL8153D, a
+  1 Gb/s chip of the 8156 core, takes it too; its tab offers 10, 100 and
+  1000 (from 2026-11-17).
 - **`EnableGreenEthernet`** (RTL8153B, 8153C and the 8156 core): Linux's
   `GREEN_ETHERNET`. Off: the 8153B/C keep the full PHY bias
   (`r8153b_green_en(false)`'s values) and the 8156 core clears
@@ -831,7 +922,7 @@ each is mapped to the chip function of the same name that Linux drives
   `GREEN_ETH_EN` set), which is what the driver does now.
 - **`AdvancedEEE`** (RTL8153B and later): Linux's EEE+ (`PLA_EEEP_CR`,
   `rtl_set_eee_plus`). Off: never on. On: as now, at 10 Mb/s only, never
-  on the RTL8159.
+  on the RTL8159, whose tab does not offer it (from 2026-11-17).
 - **`EnableExtraPowerSaving`**, "Idle Power Saving": the USB 2 PHY's P3
   state (`UR_U2P3` bit 0; Linux `r8153_u2p3en`), which Realtek's XP and
   Vista INFs name `EnableU2P3` under the same description. The driver
@@ -839,9 +930,11 @@ each is mapped to the chip function of the same name that Linux drives
   and the 8156 core (PHY setup and wake), as Linux does. Off: those
   steps are skipped, the ones that clear it stay, so it stays off. On: as
   now. On the other chips it is never on (above).
-- **Transmit checksums** (RTL8157 and RTL8159, 2000 to 7): 0 takes the
-  task out of what the core offers TCP/IP (section 4.9); 1, 3 keep it; 2
-  (receive only) is taken as 0, the receive checks not being offered.
+- **Checksums** (RTL8157 and RTL8159, 2000 to 7): bit 0 of the value (1,
+  3) keeps the transmit task in what the core offers TCP/IP (section
+  4.9), bit 1 (2, 3) the receive check (from 2026-11-17, 4.10.9); 0
+  offers neither. Missing or malformed: transmit only, as the default
+  1.
 - **`NetworkAddress`**: as section 4.8; on `cdcnet` (NCM with D1 only)
   `SetNetAddress` is sent with the data interface at alternate 0, before
   it is selected. A refusal at start leaves the function's own address
@@ -893,9 +986,19 @@ The NT INFs (2000 to 7) and the 98 SE/ME INFs carry the same keys, one
 the `enum` values, and the value itself in the driver key at its default
 (`HKR,,<keyword>,0x00000002,"<default>"`, `FLG_ADDREG_NOCLOBBER`, so a
 reinstall keeps a changed value). `NetworkAddress` stays optional with
-no stored value. The descriptions are this repository's own wording.
+no stored value. `cdcnet`'s own `Protocol` is written the same way from
+2026-11-17 (owner; before, written without the flag, a reinstall set a
+changed value back to the INF's), each INF keeping its initial value: 0
+in `CDC98.INF` and `CDCNET.INF`, 1 in the test-only RNDIS presets
+`CDC98R.INF` and `CDCTRND.INF` that `gentest.py` derives from them. On
+98 SE and ME the network setup writes each entry's `Ndi\params` default
+over the INF's value at a first install (record
+`docs/testing/2026-10-22-cdcnet.md`); whether it does so over a value
+already in the key at a reinstall has not been read on a guest, for
+`Protocol` or any other keyword. The descriptions are this repository's own wording.
 `RTL81598.INF`, `RTL815X.INF` and `RTLXP7.INF` gain one install section
-per speed class; `AX772F98.INF` and `AX772F.INF` one for the SR9800;
+per speed class (the 1 Gb/s class's `EEEMaxSupportSpeed` is its own
+`AddReg` section, `EeeMax1G`, from 2026-11-17); `AX772F98.INF` and `AX772F.INF` one for the SR9800;
 `AX179F98.INF` and `AX179F.INF` one for each Allied Telesis id.
 
 
@@ -918,6 +1021,650 @@ xHCI98, on XP (the NT form), and on 7 x64 for `rtl815x`:
   value sets (EEE enables and advertisement, the PHY control register and
   advertisement, the pause bits, green and bias, EEE+, U2P3, the node id),
   and the link and a ping pass.
+
+#### 4.10.8 The driver trims the tab to the chip (design, 2026-11-17)
+
+Status: design, revised 2026-11-17; no trimming code. Step 0 run
+2026-11-17 (record `2026-11-17-trim-step0.md`): its load, delete and
+key-access subgate passed on 98 SE, ME and XP SP3 (the new imports
+resolve, deletion behaved, handle reuse consistent with the documented
+ownership rule, the device-object key is the one NDIS and the property
+page read); not run on 2000. Installer completeness, interruption and
+recovery have not passed on any system. The INF experiment showed the
+`DelReg` clean-up on XP SP3 only. In the 98 SE update paths tested (Device
+Manager, Have Disk, a scratch package) the entry was replaced whole with
+or without `DelReg`, the root value tested was reset on an update to a
+different INF, and one update made with the adapter's property sheet
+open failed and left the adapter without its driver key. The control
+since run (second round of `2026-11-17-netopts-legs.md`, "98 SE: the
+sheet-open update control") did not reproduce that failure, either with
+our released package or with 98 SE's own PCnet driver, with the sheet
+open or closed; its cause stays unattributed (the failing run had taken
+the installed model without Have Disk, a recorded procedural difference
+not taken as the explanation). ME's Advanced page and update
+behaviour are untested; ME inherits none of the 98 SE conclusions.
+Owner,
+2026-11-17 (E1): where chips share a USB id, the driver removes at start
+the Advanced-tab entries the detected chip, or the connection kind, does
+not support, so the tab shows only options that work. Until the adapter
+has started once, the tab shows the INF's full list (the owner was told
+so). Trimming is presentation only: what the driver applies is decided
+by the chip code from the stored value (4.10.5), whatever the tab shows.
+
+**The owner's answers of 2026-11-17** (to the open points of the first
+draft):
+
+- Speeds of 2500 Mb/s and above stay on the tab of a chip that has them,
+  named "(USB SuperSpeed only)", with the fallback to automatic on a
+  High Speed link documented (4.10.4). The owner accepts that this one
+  setting's effect depends on the connection; such choices are not
+  trimmed by the link.
+- If the load test of step 0 shows that 98 SE or ME cannot resolve a
+  registry routine the trimming needs, a separate 98 SE/ME build without
+  that import keeps the adapter working there; its tab shows the INF's
+  full list until another proven method exists. The owner accepts that
+  exception to his rule on 98 SE and ME meanwhile.
+
+Taken provisionally, not put to the owner: `cdcnet`'s `Protocol` choices
+derived from the protocols the
+function offers, a stored preference the function lacks falling back to
+automatic (logged), and the entry hidden when one protocol only remains;
+the store's name `TrimmedParams`; the Allied Telesis restriction kept
+until documentation or a device settles it (12.3).
+
+**Revisions after step 0 (2026-11-17), binding over the text below
+where they differ.** No trimming code until they are settled.
+
+- *Platform rule (owner, 2026-11-17).* Trimming runs on qualified
+  Windows 2000 and later only; 98 SE and ME show the INF's list. The
+  owner's earlier exception of 2026-11-17 covered a missing import
+  only; this decision extends it to 98 SE and ME although their imports
+  resolve, because their installer behaviour, not feasibility, is the
+  obstacle.
+- *Admission.* Step 0 has two parts: a feasibility subgate (the imports
+  load, deletion behaves, the device-object key is the page's key),
+  passed on 98 SE, ME and XP SP3; and a qualification of the installer
+  (complete metadata regeneration, an interrupted install, recovery),
+  passed on none. A system is admitted only when both pass on that
+  system; resolving imports admits nothing. ME is qualified on its own
+  and inherits no 98 SE conclusion.
+- *Clean-up.* Authoritative metadata regeneration is qualified per
+  system. On the 98 SE paths tested the installer's replacement, not
+  `DelReg`, gave the clean-up seen; `DelReg` itself is unproved there.
+  Where behaviour is unknown: no capture and no trimming. A clean-up
+  is never assumed to keep the user's settings or the store.
+- *Complete source.* The fallback that took `ParamDesc`, `type` and one
+  `enum` value as a complete entry is withdrawn: it can certify a list
+  installed part way. A capture needs a verified completion (the marker
+  pair shown on that system to be written last and cleared first, with
+  an earlier failed operation, not only an interruption, leaving it
+  absent) or an exact comparison with the current template; otherwise
+  nothing is captured.
+- *Store.* Schema identity (the stamp) is kept apart from the state of
+  `Ndi\params`, which may be trimmed by the driver or regenerated by the
+  installer. A restoration in progress is never recaptured. A refresh
+  first empties its destination generation, then copies, then checks
+  exact equality, extra values and subkeys included. The unnamed
+  current-value entries 98 SE's installer created are its data, not
+  template data, and are not copied as such. Whether the store survives
+  installer actions outside `Ndi\params` is untested.
+- *User values.* Trimming itself never deletes a root choice; that
+  guarantee stays. No other "stays" or "survives" is promised beyond the
+  operations shown to keep it: tested 98 SE updates to a different INF
+  reset the root value, and XP's open sheet wrote a stale choice after an
+  update. Restoring metadata and keeping a preference are separate
+  matters; keeping a preference across an update needs its own,
+  tested mechanism (an export before the update, outside installer-owned
+  state, restored after setup with the sheets closed) and is not part of
+  this design.
+- *Recovery.* `Pending` names its source stamp and generation, and
+  before replaying it the job checks the current state: the stamp, the
+  chip's support for the keyword, the generation still valid. An old hide
+  never deletes an entry a new install supplies as supported; an old show
+  never brings back a keyword the INF dropped. An obsolete `Pending` is
+  cleared, not applied. The generation a `Pending` names is kept until it
+  is resolved.
+- *Missing instance, uninstall.* Recovery at a later start needs a
+  surviving instance key with a valid store and a driver that starts.
+  The worker never recreates a removed instance or driver key; the
+  98 SE sheet-open failure (the driver key gone) is repaired by setup,
+  and an in-key journal cannot recover a deleted key.
+- *UI, concurrency, tests.* Nothing promises serialisation with the
+  installer or a property page that the driver cannot enforce. Tests add:
+  installer replacement during reconciliation, same-stamp reinstall, a
+  stale `Pending` (old hide, old show), a chip change during recovery,
+  store loss, a failed installation, and a pending sheet write after an
+  update (XP wrote the old sheet's choice to the root).
+
+**What is removed.** An entry on the tab is a subkey `Ndi\params\<keyword>`
+of the adapter's instance software key (the driver key), with an `enum`
+subkey for a list (4.10.6; Microsoft Learn, "Specifying configuration
+parameters for the Advanced properties page": `ParamDesc`, `Type`,
+`Default`, `Optional`, `Min`, `Max`, `Step` and the `enum` subkey; no
+documented value hides an entry, and the page's user values go to the
+instance key's root). The value the user chose (`HKR,,<keyword>`) is a
+different registry value and is never removed (below). The driver opens
+the key through its device object and names everything under it
+relatively; it never builds a class-key pathname.
+
+**Registry access a miniport has, per system.**
+
+- NDIS 5 has no delete. The configuration functions of the 2000 DDK's
+  `ndis.h` and WDK 7.1's `inc\ddk\ndis.h` (`NdisOpenConfiguration`,
+  `NdisOpenConfigurationKeyByName`, `NdisOpenConfigurationKeyByIndex`,
+  `NdisReadConfiguration`, `NdisWriteConfiguration`,
+  `NdisCloseConfiguration`) remove neither a value nor a key.
+- The route used: the PDO from `NdisMGetDeviceProperty` (Learn's page
+  names NDIS 5.1 and later; the 2000 DDK's `ndis.h` declares it and the
+  5.0 build here has used it since the first load, 4.3), then
+  `IoOpenDeviceRegistryKey(pdo, PLUGPLAY_REGKEY_DRIVER, access, &key)`
+  (Learn: the device's software key; PASSIVE_LEVEL "in the context of a
+  system thread"; Learn's "Opening a device's software key" names this
+  flag as the kernel-mode route). Under that handle: `ZwOpenKey`,
+  `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwEnumerateKey`
+  (whose indexes are not stable while keys change, so a walk restarts
+  after any change), `ZwClose`, and the deletion below. Every call is at
+  PASSIVE_LEVEL with no spin lock held.
+- Deletion follows Learn's order: values first, then keys, leaf first.
+  A value is removed with `RtlDeleteRegistryValue(RTL_REGISTRY_HANDLE,
+  handle, name)`, declared by the 98 DDK's `INC_WIN98_WDM.H` and the 2000
+  DDK's `wdm.h`; Learn: with `RTL_REGISTRY_HANDLE` "On Windows 98/Me and
+  Windows NT 4.0, the routine closes the specified handle before
+  returning. On Windows 2000 and later versions of Windows, the routine
+  leaves the handle open." So each call gets a handle opened for it alone
+  (`ZwOpenKey` of the same key), closed by the driver afterwards on 2000
+  and later and never touched again on 98 SE and ME (the system is told
+  apart as the core does now, `IoIsWdmVersionAvailable(1, 0x10)`); step
+  0 tests that rule. A key, once empty, is removed with `ZwDeleteKey`
+  (Learn: the handle opened for `DELETE`; every handle to the key becomes
+  unusable and is still closed). `enum` goes before its parameter key.
+  A key deleted while another handle (an open property page's) is open
+  may stay until that handle closes (Learn, `RegDeleteKey`), so a delete
+  or a re-creation is checked by reading back, not assumed.
+- 2000 to 7: these routines are `ntoskrnl` exports declared by the 2000
+  DDK's `wdm.h`; the import gate (build.md section 5) takes them as
+  declared.
+- 98 SE and ME: declared by the 98 DDK's header, which is not proof that
+  NTKERN resolves them. 98 SE and ME have no PE export table for NTKERN
+  (the `imports-ndis5.txt` note): a load is the only evidence, and one
+  import that does not resolve keeps the whole driver from loading.
+  Loaded on 98 SE by drivers here already: `IoOpenDeviceRegistryKey`
+  with `PLUGPLAY_REGKEY_DRIVER`, `ZwOpenKey`, `ZwQueryValueKey`,
+  `ZwSetValueKey` (`uac2`, `uac2.md` 19.3), `ZwCreateKey`,
+  `ZwEnumerateKey` (`usbcom`). Not established by anything read for this
+  design: `ZwDeleteKey` and `RtlDeleteRegistryValue` on 98 SE, any of
+  them on ME, and that this adapter's software key is the instance whose
+  `Ndi\params` its property page reads. Step 0 (record
+  `2026-11-17-trim-step0.md`) loaded the whole set and ran the deletions
+  on 98 SE, ME and XP SP3, and showed the key (the load, delete and
+  key-access subgate only).
+- One binary cannot step around a missing import at run time: if step
+  0 fails on 98 SE or ME, the owner's answer above applies (a separate
+  98 SE/ME build with the trimming compiled out, `NET_TRIM=0`, released
+  in the 98 SE/ME folder only).
+- Not documented in anything read, each read on a guest, not assumed:
+  that a miniport may change its own `Ndi\params`; when 98's `netdi.dll`
+  page and NT's Advanced page read it, and what an open page does when
+  it changes; whether NT's network configuration (`INetCfg` keeps
+  networking state in memory and applies changes to the registry) ever
+  writes `Ndi\params` back; what 98's network setup writes besides the
+  first-install defaults it is known to write (record
+  `2026-10-22-cdcnet.md`: a second writer of this key); and what an
+  uninstall leaves of the instance key on each system.
+
+**Step 0, before any trimming code.** A disposable test build of
+`rtl815x` (test-only, never released), run with the simulator on 98 SE
+and on ME, each on its own: it loads with the complete new import set;
+under its own driver key it creates scratch metadata with values and an
+`enum` subkey with values, deletes it values first and leaf first, and
+creates and deletes it again twenty times, reading back each step; it
+exercises the handle rule by instrumentation, never by using a handle
+after it may have been closed: on 98 SE and ME each
+`RtlDeleteRegistryValue` gets a handle opened for it alone, which the
+test never touches again, and the test counts that it never closes it
+and that its own later opens and closes of the same key succeed (on 2000
+and later it closes each handle itself); and it establishes the key
+mapping: its INF writes a distinctive value (`HKR,,TrimProbe,,"<random
+text>"` and `Ndi\params\TrimProbe`), the driver reads the value through
+NDIS (`NdisReadConfiguration`) and through the device-object handle and
+compares, then writes a second value through the device-object handle
+and reads it back through NDIS. The same build runs on 2000, XP, Vista
+and 7. With it, the INF experiment: on 98 SE, 2000 and XP (and ME, Vista
+and 7 where a rig is ready), install a first INF that writes
+`Ndi\params\TrimProbeList` with an `enum` of four choices and a stray
+value, then update to a second INF whose install section has
+`DelReg=` with the key form `HKR,Ndi\params\TrimProbeList` (no value
+name, no flags) and whose `AddReg` writes the entry back with two
+choices and another default; read back that the subtree was removed and
+rewritten (the two dropped choices and the stray value gone), which
+shows both the recursive removal and that `DelReg` ran before `AddReg`
+on that system's network installer; repeat the update with the
+adapter's property sheet open (with an edit pending, then Apply, then
+Cancel) and read the key, the root value and the sheet after each.
+Nothing else starts before 98 SE and ME have their answer, and nothing
+relies on the `DelReg` clean-up on a system where the experiment did not
+show it.
+
+**When and where.** After a successful start only. The scheduling point
+is the end of the core's `Initialize`: once `NetUsbOpen` has succeeded
+and `Ready` is set, the last statement before `return
+NDIS_STATUS_SUCCESS` queues one job to the adapter's control thread
+(the lower edge's worker, a `PsCreateSystemThread` system thread, so
+the "system thread" condition holds; the worker drains queued jobs in
+order). Nothing after that statement can fail the start, and the job
+needs nothing from the return. It runs at every start (plug, enable,
+the restart after a tab change, boot), not on a resume. Halt and a
+surprise removal set a stop flag the job tests between registry steps;
+Halt waits for the job before it frees the adapter, which keeps the PDO
+and the key handles valid while it runs; a job stopped part way leaves
+its recovery state (below) and is never resumed during halt or removal:
+nothing is restored or created then.
+
+**What "supported" means (the singleton rule).** A choice is effective
+when the chip applies it as itself, not as another value. An entry with
+fewer than two distinct effective choices on the started chip is hidden;
+the rule applies the same way to every package (a `cdcnet` function with
+one protocol: `Protocol` hidden). The chip interface (`netchip.h`) gains
+an optional routine, `Usable(chip, index)`, called after `Start`: the
+bit mask of the entry's `Values[]` the chip applies, for any USB link it
+can use (choices that need SuperSpeed count, by the owner's answer).
+`TakeSettings` decides `NET_PARAMS.Ignored` from the same routine. The
+core's keywords: the checksum keywords by `NET_PARAMS.Offload` (NT
+only); `NetworkAddress` on every shared-core chip (each sets its node
+id). A keyword that acts only while another is on (`EEEMaxSupportSpeed`
+with `*EEE` off) is supported: one entry's value never changes another
+entry's presence. From the code as it stands:
+
+| Chip (version) | Ids that also carry another chip | Hidden |
+|---|---|---|
+| RTL8152 (4C00, 4C10, 4800) | none (`RTL_FE` holds RTL8152 ids) | `EEEMaxSupportSpeed`, `EnableGreenEthernet`, `AdvancedEEE`, `EnableExtraPowerSaving` (none offered there) |
+| RTL8153 (5C00, 5C10) | `0BDA:8153`, `0BDA:8053` and the 1 Gb/s rebrands | `EEEMaxSupportSpeed`, `EnableGreenEthernet`, `AdvancedEEE`, `EnableExtraPowerSaving` |
+| RTL8153 (5C20, 5C30) | as above | `EEEMaxSupportSpeed`, `EnableGreenEthernet`, `AdvancedEEE` |
+| RTL8153B (6000, 6010), RTL8153C (6400) | as above | `EEEMaxSupportSpeed`, `EnableExtraPowerSaving` |
+| RTL8153D (7420) | as above | none |
+| RTL8156 (7020) | `0BDA:8156` and the 2.5 Gb/s rebrands | `*EEE`, `EEEMaxSupportSpeed` |
+| RTL8156 (7030), RTL8156B (7400, 7410) | as above | none |
+| RTL8157 (1030) | none known | none |
+| RTL8159 (2020) | none known | `AdvancedEEE` (an earlier INF's leftover; `TakeSettings` gains its `Ignored` bit) |
+| `ax88179`, `ax88772`, `sr9700` chips | none with a different set | none |
+| `cdcnet` function | every id | `NetworkAddress` on ECM, RNDIS and NCM without `SetNetAddress` (D1); `Protocol` when one protocol only is offered |
+
+**The capability test.** `Usable` is checked against expectations
+stated per chip model, independently of the chip code, each with its
+source (Linux `r8152.c`, `ax88179_178a.c`, `asix_devices.c`; IEEE 802.3
+clause 28 and Annex 28B; CDC NCM 1.0; this document): for each chip
+version, keyword and value, what the value must do, such as the pause
+bits advertised and their resolution against each partner advertisement
+in full and half duplex, the EEE advertisement and MAC enables and the
+highest EEE speed, the PHY control and advertisement for a speed, the
+green bias values or `GREEN_ETH_EN`, EEE+ at a 10 Mb/s link, the U2P3
+bit, the node id written and read back, and, for the core's checksum
+keywords, which change no register, the task-offload answer and the
+packet indications (`coretest`). The test fails if `Usable` lists a
+value whose expectation is "same as another value" or leaves out one
+with a distinct expectation, if a hidden entry has two distinct
+expectations, or if `Ignored` disagrees. Comparing the model's whole
+register image between values stays as a supplement: a difference no
+expectation explains, or none where one is expected, fails it too. The
+expectation tables are written by hand as text, not generated from the
+code.
+
+**The stored value of a hidden entry** stays. A chip without the
+function ignores it (traced, as now); a chip with it uses it after the
+usual check (the value must be in the table's list and usable,
+otherwise the default, traced), so the choice survives a swap of chips.
+
+**The store: what makes a template.**
+
+- Clean-up at install, a prerequisite. Each install section of the
+  package's INFs begins with a `DelReg` of every `Ndi\params\<keyword>`
+  the package has ever written, in the key form `HKR,Ndi\params\<keyword>`
+  (no value name, no flags: the pre-XP syntax, so 98 SE, ME and 2000 read
+  it the same way), then its `AddReg` writes the entries it offers. That
+  this removes the whole subtree and runs before `AddReg` in each
+  system's network installer is unproved until step 0's INF experiment
+  shows it on that system (shown on XP SP3, 2026-11-17; in the 98 SE
+  update paths tested the entry was replaced whole with or without
+  `DelReg`, so `DelReg`'s own effect is not shown there; 2000 and ME not
+  run). Where it is not shown, the driver keeps no
+  templates at all on that system (no capture, no trimming; the tab
+  shows the INF's list): removing only `enum` choices outside the
+  driver's table would not recover the INF's template (a choice the INF
+  dropped but the driver knows, a dropped keyword, a stale type, range,
+  default or text would remain), so it never authorises capture.
+- Schema stamp. The same install section writes, without no-clobber,
+  `HKR,,AdvTabSchema,,"<package> <INF version> <install section>
+  <variant>"` (draft name), and the package's rule is that the stamp
+  changes with every change of any `Ndi\params` line of that section:
+  the INF version is bumped for any such change, and the variant names
+  the INF file and its language (`infchk` compares each section's
+  metadata lines with those of the last release and fails if they
+  differ under an unchanged stamp). The package's INFs never write
+  `Ndi\params` with no-clobber (`infchk` enforces it).
+- A complete current-INF source. The stamp proves which INF wrote the
+  key, not that it finished. The install section writes, as its last
+  `AddReg` line, `HKR,,AdvTabDone,,"<the same stamp text>"` (draft name),
+  and its first line deletes it (`DelReg=` `HKR,,AdvTabDone`), so an
+  install interrupted after the clean-up or during the `AddReg` leaves
+  `AdvTabDone` absent or different from `AdvTabSchema`. Only when both
+  are equal is `Ndi\params` a complete source for that stamp; otherwise
+  the driver captures nothing and restores nothing until a later install
+  completes (the tab may meanwhile show an incomplete list, the
+  installer's own state). That `AddReg` writes its lines in order, so
+  `AdvTabDone` comes last, is read on the guests in step 0's experiment
+  (an install stopped part way); until shown on a system, nothing is
+  captured there (the earlier fallback on `ParamDesc`, `type` and one
+  `enum` value is withdrawn: see the revisions above).
+- Store layout, wholly inside the instance key. Each keyword has up to
+  two generations, `TrimmedParams\<keyword>\A` and `\B`; each holds a
+  copy of the entry (its values and its `enum` subkey with values), the
+  stamp it was copied under, and `Complete`, written last after the copy
+  has been read back value by value. A generation without `Complete`, or
+  with another stamp than the current complete source, is not a
+  template.
+- Refresh. A new copy is always written into the other generation: its
+  `Complete` is deleted before the first write to it, the copy written
+  and read back, `Complete` written, and only then is the old
+  generation deleted. An interrupted refresh therefore leaves the old
+  verified generation in place. A reinstall with the same stamp (the
+  same INF installed again) rewrote `Ndi\params` from the same lines: a
+  valid generation of that stamp stays valid and is not refreshed; an
+  entry present in `Ndi\params` and absent from the store is captured as
+  usual.
+- What an install or update does: a new stamp makes every generation
+  stale; `Ndi\params` holds the new INF's full list once `AdvTabDone`
+  matches, and the next start captures afresh what it hides. Stale-store
+  clean-up enumerates `TrimmedParams` itself (`ZwEnumerateKey`, the walk
+  restarted after each deletion), so a keyword the driver's current
+  table no longer has is removed too; a keyword the new INF dropped is
+  then in neither place and never comes back.
+
+**The user's value.** Deleting `Ndi\params\<keyword>` does not delete
+the root value `HKR,,<keyword>`, but it removes the metadata the page
+needs to show it. A kept value is validated at every start as now (in
+the table's list and usable on the chip, otherwise the default, traced),
+so a value whose choice an update removed falls back. The root value is
+read before and after an update, Apply, Cancel and a reboot in the legs
+(no-clobber protects it against the `AddReg` only, not against every
+action of the network setup).
+
+**Reconciliation, repeated at every start.** One job per start, with
+the stop flag tested between steps:
+
+1. Source check: `AdvTabSchema` and `AdvTabDone` equal, and the probe
+   checks of step 0 hold; otherwise the job stops (nothing captured,
+   restored or deleted) and traces why.
+2. Recovery first. `TrimmedParams\Pending` records one operation: the
+   keyword, the direction (hide or show) and the target state (entry
+   absent from `Ndi\params`; or entry present and equal to generation A
+   or B of the current stamp). While it exists, the job does nothing
+   but drive it to its target: for hide, delete whatever of the entry is
+   in `Ndi\params` (values first, leaf first) and read back that nothing
+   is left; for show, delete whatever partial entry is there and write
+   the whole entry from the named generation, then read back every value
+   and choice. Partial metadata in `Ndi\params` is never copied over a
+   generation. If recovery fails, `Pending` stays and the job stops for
+   this start; nothing else is touched until it succeeds.
+3. Stale store: delete every generation that is not a complete copy
+   under the current stamp, by enumerating `TrimmedParams`.
+4. For each keyword of the driver's table: hidden here and present in
+   `Ndi\params`: refresh the copy into a free generation (as above),
+   write `Pending` (hide, target absent), delete, read back, delete
+   `Pending`. Supported here, absent from `Ndi\params`, with a valid
+   generation: write `Pending` (show, target that generation), write the
+   entry, read back, delete `Pending`. Present and supported, or absent
+   and hidden: nothing. A keyword in `Ndi\params` that the table does not
+   have is left alone.
+5. A failure in step 4 leaves its `Pending` and stops the job for this
+   start; the next start begins at step 2. Only one operation is ever
+   recorded, so none is lost.
+
+The tab can therefore show an entry incomplete for a while (a step
+interrupted, a key held open by a page so that its deletion or
+re-creation is deferred): recoverable at a later start only while the
+instance key and its store survive and the driver starts (revisions
+above), and the trace says so. The adapter's start never depends on any of it,
+and no event-log entry is written (nothing the user can act on).
+
+**Uninstall.** The store and `Pending` live only under the instance
+key. Nothing is restored or created from Halt or a removal. Whether an
+uninstall on each system deletes the instance key (and so the store) or
+keeps it for a reinstall is read on the guests; a reinstall that keeps
+it finds a new stamp, or the same stamp with complete copies, and
+reconciles as above.
+
+**An adapter that has never started** shows the INF's full list for its
+section (installed with the device absent, or before its first start),
+as does a 98 SE/ME build without the trimming.
+
+**`cdcnet`** runs its own copy of the job (`cdcnet.c`): `NetworkAddress`
+hidden on a function that cannot take it (ECM, RNDIS, NCM without D1),
+kept on an NCM function with D1 even if the function refuses an address
+(logged, as now). Provisional, as above: the `Protocol` choices are
+automatic and the protocols this devnode's function offers; a stored
+choice it lacks starts the adapter with automatic and logs it (today
+such a start fails, no configuration matching); with one protocol the
+entry is hidden. The function is chosen at start from `Protocol`, so a
+change of `Protocol` can bring `NetworkAddress` back at the next start.
+
+**What the user sees** (to be read on the guests, not promised):
+
+- 98 SE and ME (Network, the adapter's Properties, Advanced): a change
+  takes effect after the restart 98 asks for, or a replug; that start
+  reconciles the tab.
+- 2000 to 7 (Device Manager, the adapter, Advanced): OK or Apply
+  restarts the adapter at once (seen on XP SP3, record
+  `2026-11-17-advanced-tab-eeemax.md`); that start reconciles. What a
+  sheet left open shows after it, and what its next Apply or Cancel
+  writes, is not documented and is read on each system.
+
+**Tests.** Host: the capability test above (`rtltest`, and the same
+for `ax88179`, `ax88772`); reconciliation on the shim's fake registry
+(`shim/fakeos.c` gains a key tree behind `IoOpenDeviceRegistryKey`, the
+`Zw` calls and `RtlDeleteRegistryValue` with both handle rules): a first
+start, a second that changes nothing, chips swapped on one key (RTL8153B
+then RTL8153D: `EEEMaxSupportSpeed` back with its text and `enum`), an
+update with a new stamp (copies dropped, keyword dropped by the INF not
+resurrected, a changed default and range carried), the same stamp
+reinstalled, a missing or incomplete generation, an interrupted
+refresh (the old generation kept), `AdvTabDone` absent or different
+(nothing done), a store keyword the table no longer has (removed),
+every registry call failing in turn and at each point of recovery (the
+job stops with one `Pending`, the next start finishes it, a partly
+present entry rewritten whole from its generation, never captured), a
+key held open (delete deferred), the stop flag at each step, a key
+without `Ndi\params` or with a probe mismatch (nothing done), `cdcnet`
+by protocol including one protocol.
+Simulator, each chip on the shared ids: `0BDA:8153` with the RTL8153
+5C10 and 5C30, 8153B, 8153C and 8153D; `0BDA:8053` with the 8153B, 8153C
+and 8153D; `0BDA:8156` with the RTL8156 7020 and 7030 and the 8156B;
+the RTL8159 installed from an INF of before 2026-11-17 and then updated;
+`ncmemu.py` with and without D1, and QEMU's `usb-net` as ECM and RNDIS.
+Guests, after step 0: 98 SE under NUSB's EHCI and under xHCI98, ME, 2000,
+XP SP3, XP x64, Vista and 7 x64, as the sections reach them. Each leg:
+the tab before the first start and after; `Ndi\params`, `TrimmedParams`
+and `Pending` read back (`NETSET.EXE` gains a listing); a different chip
+in the same port (same devnode); a sheet left open across the restart
+with Apply, and with Cancel; a driver update made while the sheet is
+open with an edit pending, then Apply, then Cancel (deferred deletion
+under its handles, its cached descriptions, its later writes); a binding
+change (a protocol added and removed on the adapter); a driver update
+with a new stamp and one with the same; a reboot; an uninstall and
+reinstall; the root values read before and after each update, Apply,
+Cancel and reboot; and the trace.
+
+#### 4.10.9 New options (design, 2026-11-17)
+
+Status: revised with the owner's answers of 2026-11-17.
+Owner, 2026-11-17: a 98 SE update from a previous INF resetting stored
+values to the defaults is answered by a README note, not by a
+mechanism that saves and restores them. Owner, 2026-11-17: these
+options may merge as a development step, with the systems not run
+listed in the record.
+Owner, 2026-11-17 (E3): separate receive and transmit pause on the
+Realtek chips, then receive checksum offload on the RTL8157 and RTL8159,
+off by default; receive aggregation time dropped for now (below).
+Owner, 2026-11-20: release 0.1.12 carries this section's core changes
+(`netcore.c`, `netchip.h`, `shim/fakeos.*`, `coretest.c`) in `rtl815x`'s
+copy only; `ax88179`, `ax88772` and `sr9700` keep 0.1.11's copy, source
+and images, so the four copies differ until those packages are next
+released.
+
+**1. Pause (`rtl815x`, every chip).** Owner, 2026-11-17: three choices
+of Windows' standard `*FlowControl` (Learn, "Enumeration keywords"): 0
+off, 1 transmit only, 3 "Enabled (negotiated)"; no receive-only choice.
+The public sources give only the advertisement: Linux
+`rtl8152_set_pauseparam` writes the pause bits (`mii_advertise_flowctrl`)
+and the MAC follows what the link resolves (`MR_LINK`'s `LNK_TX_FLOW`,
+`LNK_RX_FLOW`); no register that enables the two directions apart is
+named in anything read (Linux sets one bit, `FLOW_CTRL_EN` in
+`PLA_CPCR`, on the RTL8156B and RTL8153D, as `SqSetupMG` does here).
+
+- 0: neither PAUSE nor ASM_DIR advertised: no pause either way.
+- 1: ASM_DIR alone. IEEE 802.3 Table 28B-3: with a partner advertising
+  PAUSE and ASM_DIR this end may send pause frames and does not obey
+  them; with any other partner, no pause.
+- 3 (the default, today's "On"): PAUSE and ASM_DIR, as now (Linux
+  `r8152b_enable_fc`). It enables negotiated flow control: the
+  directions are what the link resolves with the partner (both, or
+  receive only against a partner advertising ASM_DIR alone, or none); it
+  does not guarantee both directions.
+- 2 is not in the table: a stored 2 is taken as the default, traced
+  (4.10.5).
+- A forced speed (`*SpeedDuplex` 1 to 4) has no autonegotiation, so no
+  pause; half duplex has none.
+
+Code: the table entry lists 0, 1, 3; `TakeSettings` keeps the value;
+`Negotiate` writes the two bits by it. The resolved directions are in
+`MR_LINK` (the simulator logs them); a driver trace of them is left for
+later. Implemented 2026-11-17 with the host and simulator tests below.
+Guest legs 2026-11-17 with the simulator (record
+`2026-11-17-netopts-legs.md`): XP SP3 under Windows' EHCI, all of it
+(update from the previous INF, the tab's three choices, restart, reboot,
+stored 2, the twelve partner combinations, forced speeds); 98 SE under
+NUSB's EHCI in part (an update from the previous INF reset the stored
+value to the default, as in the step 0 record's tested 98 SE updates to
+a different INF). Second round (the same record, tree at `d89f912`):
+98 SE under NUSB's EHCI, a fresh install's default, the tab's three
+choices, 0, 1, 3 and a stored 2 against a partner with both bits, a
+restart and a reboot keeping 1, forced 100 full and half without pause;
+98 SE under xHCI98 3.5.0.0, the default, 0, 1, 3, a stored 2, a reboot
+keeping 1; ME (its UHCI at Full Speed), the default, the tab's three
+choices, 1 from the tab, 0, a stored 2. 2000, XP under xHCI98 and the
+other systems not run.
+Tests: `rtltest` checks the advertisement per value
+for every chip (with autonegotiation on; a forced speed leaves it off);
+the resolution against every partner pause-bit pair, from Table 28B-3
+as stated in the test, is checked through the model at full duplex,
+and half duplex resolving to none; `coretest` checks that a stored 2 (as
+text or as an integer) becomes the default 3 through the core's
+settings validation, with a table entry like `rtl815x`'s;
+`rtlemu.py` takes the partner's pause bits (`--partner-pause`) and
+reports the resolved directions in `MR_LINK` for the 8156 core and
+later (the RTL8152 and 8153 model shows none); `rtlsimtest.py` runs the
+three values against the four partner pairs and a forced speed. Strings
+(new keys; `On` stays for the other on/off entries): `FlowOn` "Enabled
+(negotiated)", `TxOnly` "Transmit only".
+
+**2. Receive checksums on the RTL8157 and RTL8159 (2000 to 7).** As
+designed (owner, 2026-11-17): the three standard keywords already
+offered there, `*IPChecksumOffloadIPv4`, `*TCPChecksumOffloadIPv4`,
+`*UDPChecksumOffloadIPv4` (Learn: 0 disabled, 1 Tx, 2 Rx, 3 Rx and Tx;
+optional but recommended for NDIS 5.1 and earlier, Learn "Standardized
+INF keywords for network devices"), gain 2 and 3; the default stays 1,
+so receive checks are off unless chosen (measured slower on 2000, 4.9).
+98 SE and ME: no offload and no such keyword (unchanged).
+
+- Three masks kept apart: what the chip checks (`NET_PARAMS.Offload`),
+  what the keywords allow (`OffloadAllowed`), and what TCP/IP enabled
+  (`OID_TCP_TASK_OFFLOAD`'s set). The core's one receive bit
+  `NC_OFFLOAD_RX4` becomes three (`NC_OFFLOAD_RX_IP4`, `_TCP4`, `_UDP4`;
+  `netchip.h`; in 0.1.12 `rtl815x`'s copy only, above);
+  `ChecksumKeyword` maps bit 1 of each keyword to its receive bit as
+  bit 0 to its transmit bit;
+  `QueryTasks` reports `V4Receive` per bit; `SetTasks` refuses a receive
+  task not offered and keeps per protocol what was enabled; a later set
+  without it turns it off; `RtlStart` reports the three on the second
+  descriptor format.
+- A frame is marked good for a protocol only when the chip's
+  descriptor says it checked it and found it good (`RtlRxChecksum`, the
+  conditions of Linux `r8157_rx_csum`) and TCP/IP enabled that check;
+  anything else (a failure, a status without the check bit) is reported
+  as not checked, never as failed, so TCP/IP checks it itself, as now
+  (4.9).
+- The core also limits what any verdict may claim, from the frame
+  itself (`ChecksumClaim` in `netcore.c`), since how the real chip marks
+  unusual frames was not read: the IPv4 header only for an Ethernet II
+  IPv4 frame whose header length is at least 20 and whose total length
+  fits the frame; TCP or UDP only for an unfragmented datagram (no more
+  fragments flag, offset 0) of that protocol whose transport header lies
+  inside the total length, TCP only when its data offset declares 20
+  bytes or more ending inside the IPv4 payload, UDP only when its length
+  field equals the IPv4 payload (another length leaves unknown what the
+  chip summed) and its checksum is nonzero (zero: none sent, none
+  compared). Anything else is reported not checked. An IPv6 checksum task
+  is refused either way, leaving the enabled tasks as they were.
+- If the configuration cannot be opened, the keywords' fallback holds
+  (transmit on, receive off): the allowed mask is set before the open.
+- Implemented 2026-11-17. Guest legs 2026-11-17 on XP SP3 under
+  Windows' EHCI with the simulated RTL8157 and RTL8159 (record
+  `2026-11-17-netopts-legs.md`): the tab's four choices, what TCP/IP
+  enabled per value (on XP, IPv4 and TCP, never UDP; not inferred for
+  other systems), crafted good, bad, fragmented, IPv4-optioned,
+  zero-checksum and malformed-IPv4-length frames at values 2 and 3 (in
+  those cases a bad checksum was never claimed good and was dropped by
+  the stack; the verdicts are the simulator's model), a throughput note;
+  98 SE and ME without the keywords as before; second
+  round (tree at `d89f912`): on XP SP3 each value 0 to 3 kept across a
+  reboot, TCP/IP enabling after it what it enabled after a restart; ME
+  again without the keywords and without a task-offload answer; 2000,
+  XP x64, Vista and 7 and xHCI98 not run. `coretest`: the
+  keyword-to-task answer per keyword and protocol (missing, 2, 3); a
+  receive task not offered refused; results reported while enabled and
+  not after a set without them; no receive check without the keyword or
+  when the configuration cannot be opened (a fake open that fails); the
+  policy kept across an NDIS reset; through the indication path IPv4
+  options (24- and 60-byte headers: IP and TCP or UDP reported, the
+  options the query offers), first, later fragments (IP only), UDP
+  checksum 0 (IP only), another protocol (IP only), a total length past
+  the frame or shorter than the header, a header length below 20, a TCP
+  header cut short, a frame that is not IPv4 (nothing claimed). `rtltest`:
+  the RTL8157/8159 `Start` reports the three receive bits; descriptor
+  cases good, failed TCP, IP not checked. The model (`rtlemu.py`
+  `rx_checksum_bits`): fragments, a total length that does not fit and
+  UDP checksum 0 get no transport check bit, IPv4 options keep the TCP
+  check (`rtlsimtest.py`); these are the model's assumptions, not
+  observed chip behaviour, and the core's limits above hold whatever the
+  real chip reports. A restart re-reads the keywords (`ReadSettings`). Strings: `RxOn`
+  "Receive enabled", `RxTxOn` "Transmit and receive enabled"; the three
+  descriptions keep IPv4 in their text (`IpCsDesc` "IPv4 checksum
+  offload", `TcpCsDesc` "TCP checksum offload (IPv4)", `UdpCsDesc` "UDP
+  checksum offload (IPv4)"). Measurements: interleaved TCP receive runs
+  on 2000 SP4 and XP SP3 with receive checks on and off, as 4.9; the
+  default stays off whatever they show unless the owner decides
+  otherwise.
+
+**Candidate, not planned: receive aggregation time.** Owner, 2026-11-17:
+dropped for now; the RTL8157 latency study found the chip's timers equal
+to Linux's and no need for a tunable. Kept as a candidate only: a
+non-standard `RxAggregationTime` enum in microseconds (converted to the
+timer's 8 ns ticks; Linux `r8153_set_rx_early_timeout`, at most 524280
+ns), "Automatic (driver default)" keeping today's values, on every chip
+but the RTL8152; `ax88179`'s bulk-in timer (Linux `ax88179_178a.c`) the
+same. It sets aggregation timing, not an end-to-end latency bound.
+
+**User-visible strings, drafts for the owner.** `S2500` "2.5 Gb/s full
+duplex (USB SuperSpeed only)", `S5000` "5 Gb/s full duplex (USB
+SuperSpeed only)", `S10000` "10 Gb/s full duplex (USB SuperSpeed only)"
+(owner, the labelling; the text is a draft); `FlowOn` (`rtl815x`'s
+`*FlowControl` 3) "Enabled (negotiated)"; `TxOnly` "Transmit only";
+`RxOn` "Receive enabled"; `RxTxOn` "Transmit and receive enabled";
+"Automatic (driver default)" wherever a preset rather than adaptive
+tuning is meant (none offered now). Unchanged: `TxOn` "On, transmit".
+
+**Still open.** Whether 98 SE and ME resolve the deletion routines
+(step 0) and so which 98 SE/ME build ships; the provisional points
+above; the Allied Telesis sections (12.3).
 
 ## 5. USB side: binding and configuration
 
@@ -2447,6 +3194,22 @@ After the first `ax88179` and `rtl815x` builds
   cause not known. Not read: whether EEE was negotiated (the
   driver reads no EEE status; low-power idle is not visible from the
   guest), the guest-to-host direction, and a switch in between.
+- **The Allied Telesis sections of `ax88179`** (4.10.2; 2026-11-17).
+  `AX179F98.INF` and `AX179F.INF` give the AT-UMC2000, AT-UMC200 and
+  AT-UMC2000/SP (`07C9:000E`, `000F`, `0010`) one speed each, flow
+  control 0 to 3 with 0 as the default, and EEE off only, as ASIX's 7
+  INF does. `AxStart` applies every value of the AX88179's set on these
+  ids, and no source read here says the converters cannot use the
+  others, so under the rule of 2026-11-17 the sections may hide options
+  that work. Options: (a) keep ASIX's restriction and record it as the
+  maker's choice, not a hardware fact; (b) offer the full AX88179 set
+  there too; (c) keep (a) until the converters' own documentation or a
+  device shows which values work, then enforce the limit in the driver
+  (ignored and trimmed like the Realtek no-ops) or offer the values.
+  Recommended: (c). Open.
+- **The Advanced tab trimmed to the chip, and the new options**
+  (2026-11-17): the owner's answers, the provisional points and what
+  stays open are in 4.10.8 and 4.10.9.
 
 
 

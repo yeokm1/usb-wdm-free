@@ -1,0 +1,340 @@
+# Jobs, callbacks and re-entry: docs/design/mtp.md 7.9, "Jobs", "Jobs and
+# cancel", "Callbacks: which thread, and what each may call"; 12, "M1's
+# library stage". Format: ../README.md. Every case opens the default
+# device first unless it says otherwise.
+
+case JOB-001
+  title  MtpQueue accepted: run once on the I/O thread, drop never
+  from   7.9/Jobs and cancel; 12/host/MtpQueue accepted
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2; post } -> r
+  wait job j1 done
+end
+
+case JOB-002
+  title  job ids nonzero and never reused for the device
+  from   7.9/Jobs and cancel
+  dev d0
+  open d0
+  queue d0 j1 { post } -> r1
+  queue d0 j2 { post } -> r2
+  wait job j2 done
+  queue d0 j3 { post } -> r3
+  wait job j3 done
+end
+
+case JOB-003
+  title  MtpQueue in CLOSING: MTPE_CLOSING, neither callback
+  from   7.9/Jobs and cancel; 7.9/Callers are counted; 12/host/MtpQueue rejected
+  dev d0
+  open d0
+  retain d0
+  close d0
+  queue d0 j1 { post } -> r
+  release d0
+  wait notice d0 CLOSED
+end
+
+case JOB-004
+  title  MtpQueue in GIVENUP: MTPE_GIVENUP, neither callback
+  from   7.9/Jobs and cancel; 12/host/MtpQueue rejected
+  dev d0
+  open d0
+  retain d0
+  sim d0 stuck read
+  queue d0 j0 { GetObject h=4 sink=s; post }
+  wait io.call
+  close d0
+  clock +30000
+  wait state d0 GIVENUP
+  queue d0 j1 { post } -> r
+  sim d0 unstick
+  release d0
+  wait notice d0 CLOSED
+end
+
+case JOB-005
+  title  MtpQueue with no run function: MTPE_ARG, neither callback
+  from   7.9/Jobs and cancel; 7.9/Results (MTPE_ARG)
+  dev d0
+  open d0
+  queue d0 j1 run=NULL -> r
+end
+
+case JOB-006
+  title  MtpQueue's allocation failing: MTPE_NOMEM, ctx stays the caller's
+  from   7.9/Jobs and cancel; 7.9/The host test, Allocation
+  dev d0
+  open d0
+  allocfail next
+  queue d0 j1 { post } -> r
+end
+
+case JOB-007
+  title  a queued job cancelled: dropped at the head with MTPE_CANCELLED on the I/O thread
+  from   7.9/Jobs and cancel (the cancel latch)
+  dev d0
+  open d0
+  hold io.dequeue.in#1
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  queue d0 j2 { GetObjectInfo h=2; post }
+  cancel d0 j2 -> rc
+  go io.dequeue.in
+  wait job j2 done
+end
+
+case JOB-008
+  title  jobs queued at the close: each dropped once with MTPE_CLOSING on the I/O thread
+  from   7.9/Close step 1; 7.9/The host test, Jobs (drop once for every job that does not run)
+  dev d0
+  open d0
+  at io.dequeue.in#1 : async close d0      # inside j1's dequeue hold: the close lands as the hold is left
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  queue d0 j2 { post }
+  queue d0 j3 { post }
+  wait notice d0 CLOSED
+end
+
+case JOB-009
+  title  jobs queued when the device goes GIVENUP: dropped by the deadline observer with MTPE_GIVENUP
+  from   7.9/Jobs and cancel; 7.9/The deadline observer
+  dev d0
+  open d0
+  sim d0 stuck read
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  wait io.call#2                           # the data read, which pends (the command write returned)
+  queue d0 j2 { post }
+  queue d0 j3 { post }
+  close d0
+  clock +30000
+  wait state d0 GIVENUP
+  sim d0 unstick
+  sim d0 quiet=1
+  wait notice d0 CLOSED
+end
+
+case JOB-010
+  title  a job of an old session: dropped at its dequeue with MTPE_SESSION
+  from   7.9/Events (tagged with the session); 7.9/Jobs and cancel
+  dev d0
+  open d0
+  hold io.dequeue.pre#2                    # the dequeue after j1's publication, outside the section
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  queue d0 j2 { GetObjectInfo h=2; post }
+  wait job j1 done
+  sim d0 event DeviceReset
+  wait ev.route.in                         # applied: the session count raised, the resume job at the head
+  go io.dequeue.pre
+  wait job j2 done
+  wait idle d0
+end
+
+case JOB-011
+  title  drop never runs on MtpQueue's or MtpClose's thread
+  from   7.9/Jobs and cancel; 7.9/Close step 1
+  dev d0
+  open d0
+  queue d0 j1 { post }                     # the control thread keeps the baton (X1): these
+  queue d0 j2 { post }                     # four steps come before any dequeue, so the
+  cancel d0 j2                             # close is at the head of the queue
+  close d0
+  wait notice d0 CLOSED
+end
+
+case JOB-012
+  title  an operation called off the I/O thread: MTPE_ARG, nothing sent
+  from   7.9/Callbacks (markers); 7.9/The host test, Jobs (an operation off the I/O thread)
+  dev d0
+  open d0
+  call GetObjectInfo d0 h=2 from=test -> r
+end
+
+case JOB-013
+  title  an operation from run: accepted
+  from   7.9/Callbacks; 12/interleavings/callbacks
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  wait job j1 done
+end
+
+case JOB-014
+  title  an operation from the event callback: accepted
+  from   7.9/Callbacks; 12/interleavings/callbacks
+  dev d0
+  open d0 host.event={ GetObjectInfo h=2 -> r }
+  sim d0 event ObjectAdded h=2
+  wait event-callback d0 done
+end
+
+case JOB-015
+  title  an operation from a sink: MTPE_ARG at once; the outer GetObject goes on to MTPE_OK
+  from   7.9/Callbacks (recursive operation); 12/host (an operation from a sink)
+  dev d0
+  open d0
+  queue d0 j1 { GetObject h=3 sink=s(call=GetObjectInfo h=2 -> ri) -> r; post }
+  wait job j1 done
+end
+
+case JOB-016
+  title  an operation from a source: MTPE_ARG
+  from   7.9/Callbacks; 12/interleavings/callbacks
+  dev d0
+  open d0
+  queue d0 j1 { SendObject parent=1 name="n.bin" size=100 src=src(call=GetObjectInfo h=2 -> ri) -> r; post }
+  wait job j1 done
+end
+
+case JOB-017
+  title  an operation from a progress callback: MTPE_ARG
+  from   7.9/Callbacks; 12/interleavings/callbacks
+  dev d0
+  open d0
+  queue d0 j1 { GetObject h=3 sink=s prog=prog(call=GetObjectInfo h=2 -> ri) -> r; post }
+  wait job j1 done
+end
+
+case JOB-018
+  title  library calls from drop: each MTPE_ARG
+  from   7.9/Callbacks (drop: nothing of the library); 12/interleavings/callbacks
+  dev d0
+  open d0
+  hold io.dequeue.in#1
+  queue d0 j1 { post }
+  queue d0 j2 drop={ call GetObjectInfo h=2 -> ra; queue d0 j9 { post } -> rb; cancel d0 0 -> rc }
+  cancel d0 j2
+  go io.dequeue.in
+  wait job j2 done
+end
+
+case JOB-019
+  title  library calls from the notice callback: each MTPE_ARG
+  from   7.9/Callbacks (notice: nothing of the library); 12/interleavings/callbacks
+  dev d0
+  open d0 host.notice={ queue d0 j9 { post } -> ra; call GetObjectInfo h=2 -> rb }
+  sim d0 fault reset_event
+  wait notice d0 SESSION_LOST
+end
+
+case JOB-020
+  title  MtpQueue from a trace hook: MTPE_ARG
+  from   7.9/Callbacks; 12/host (MtpQueue from a trace hook)
+  init   hooks.trace={ queue d0 j9 { post } -> ra }
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2; post }
+  wait job j1 done
+end
+
+case JOB-021
+  title  library calls from the allocation hook: MTPE_ARG
+  from   7.9/Callbacks; 12/interleavings/callbacks (a hook)
+  init   hooks.alloc={ once: call GetObjectInfo h=2 -> ra }
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2; post }
+  wait job j1 done
+end
+
+case JOB-022
+  title  MtpCancel from a sink: allowed; it cancels the running transfer
+  from   7.9/Callbacks (sink: MtpCancel only)
+  dev d0
+  open d0
+  queue d0 j1 { GetObject h=4 sink=s(after=65536 cancel=0) -> r; post }
+  wait job j1 done
+end
+
+case JOB-023
+  title  from run: MtpQueue, MtpCancel, MtpRetain, MtpRelease and MtpClose accepted
+  from   7.9/Callbacks (run)
+  dev d0
+  open d0
+  queue d0 j1 { queue d0 j2 { post } -> ra; retain d0 -> rb; release d0 -> rc; GetObjectInfo h=2; cancel d0 0 -> rd; close -> re; post }
+  wait notice d0 CLOSED
+end
+
+case JOB-024
+  title  the job's ctx is not touched after run returns; nothing of the job is called after it
+  from   7.9/Jobs and cancel (run's last act posts; ctx no more)
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2; post; free-ctx }
+  wait job j1 done
+  queue d0 j2 { post }
+  wait job j2 done
+end
+
+case JOB-025
+  title  jobs queued from two threads run in each thread's order, one at a time
+  from   7.9/Jobs; 7.3 (one transaction at a time)
+  dev d0
+  open d0
+  par
+    thread t1: queue d0 a1..a50 { GetObjectInfo h=2; post }
+    thread t2: queue d0 b1..b50 { GetObjectInfo h=3; post }
+  end
+  wait idle d0
+end
+
+case JOB-026
+  title  MtpCancel with a finished or unknown id does nothing
+  from   7.9/Jobs and cancel (the cancel latch)
+  dev d0
+  open d0
+  queue d0 j1 { post }
+  wait job j1 done
+  queue d0 j2 { GetObject h=3 sink=s; post }
+  cancel d0 j1 -> ra
+  cancel d0 999999 -> rb
+  wait job j2 done
+end
+
+case JOB-027
+  title  the event callback is a job: it waits behind a running job, and while HELD
+  from   7.9/Notices (event callback run as a job); 7.9/Standby (HELD stops dequeues)
+  rule   A
+  power P
+  dev d0
+  open d0 host.event={ rec ev }
+  bcast PBT_APMQUERYSUSPEND
+  sim d0 event ObjectAdded h=2
+  clock +5000
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait event-callback d0 done
+end
+
+case JOB-028
+  title  the next job is dequeued only after the previous job's end is published
+  from   7.9/Jobs and cancel; 7.9/A transfer active (publication hold)
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2; post }
+  queue d0 j2 { GetObjectInfo h=3; post }
+  wait job j2 done
+end
+
+case JOB-029
+  title  a job cancelled while queued and then reached by the close's step 1: one drop, its code
+  from   7.9/Jobs and cancel; 7.9/Close step 1; 7.9/One code, and flags (the order)
+  dev d0
+  open d0
+  at io.dequeue.in#1 : async close d0      # j1 taken; the close lands as its dequeue hold is left
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  queue d0 j2 { post }
+  cancel d0 j2                             # j2 marked while queued, before any dequeue (X1)
+  wait notice d0 CLOSED
+end
+
+case JOB-030
+  title  an operation of a job after its session was lost: MTPE_SESSION at once, nothing sent; no operation of that job ever reaches the new session
+  from   7.3 (an operation after the loss, in the same job: CQ4); 7.9/The cancel latch (the session tag read with the flag); U2
+  dev d0
+  open d0
+  queue d0 j1 { GetObjectInfo h=2 -> r1; GetObjectInfo h=3 -> r2; StorageIds -> r3; post }
+  at io.op.begin#2 : sim d0 event DeviceReset ; wait ev.route.in   # j1's I/O thread stopped outside every lock; the loss applied before its second operation
+  wait job j1 done
+  queue d0 j2 { GetObjectInfo h=2 -> r4; post }
+  wait job j2 done
+end

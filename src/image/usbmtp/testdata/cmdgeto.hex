@@ -1,0 +1,13 @@
+# A command container: GetObject (1009h) of handle 0002C3D4h, tid 00012345h, as the library must send it.
+# Written by hand from MTP 1.1, D.2 and 7.2 here.
+# @0 length UINT32 = 16 (4 bytes)
+10 00 00 00
+# @4 type UINT16 = 0001h (2 bytes)
+01 00
+# @6 code UINT16 = 1009h (2 bytes)
+09 10
+# @8 tid UINT32 = 00012345h (4 bytes)
+45 23 01 00
+# @12 parameter 1 UINT32 = 0002C3D4h ObjectHandle (4 bytes)
+d4 c3 02 00
+# total 16 bytes

@@ -1,0 +1,23 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: QEMU 11.1.0's top-level meson.build skips its
+symlink-install-tree post-configure step on a Windows host, where the
+build account has no right to create symbolic links. No qemu-bundle tree
+is made; the build runs with -L <source>/pc-bios. For the MTP task's M0
+build (2026-11-16-mtp-m0.md), after qemu-mtp-win32.patch.
+
+--- a/meson.build
++++ b/meson.build
+@@ -15,7 +15,11 @@
+ add_test_setup('thorough',
+                env: ['G_TEST_SLOW=1', 'SPEED=thorough', 'RUST_BACKTRACE=1'])
+ 
+-meson.add_postconf_script(find_program('scripts/symlink-install-tree.py'))
++# Windows test build: no symbolic links (they need a privilege this host's
++# account lacks), so no qemu-bundle tree; run with -L <source>/pc-bios.
++if host_machine.system() != 'windows'
++  meson.add_postconf_script(find_program('scripts/symlink-install-tree.py'))
++endif
+ 
+ ####################
+ # Global variables #

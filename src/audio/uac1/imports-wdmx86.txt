@@ -56,3 +56,9 @@ NTOSKRNL.EXE!IoOpenDeviceInterfaceRegistryKey
 # Vista+: the devnode FriendlyName (docs/design/uac2.md section 21)
 NTOSKRNL.EXE!ZwQueryKey
 NTOSKRNL.EXE!ZwOpenKey
+# The failed state (docs/design/uac2.md 29.9), called on 2000 and later only;
+# present in 98 SE's and ME's NTKERN by name (stock 98 SE usbhub.sys imports
+# it; absptr's x86 build imports it and ran on 98 SE and ME).
+NTOSKRNL.EXE!IoInvalidateDeviceState
+# 98 SE and ME remove (docs/design/uac2.md 30.6): a powered-down device asked back to D0
+PORTCLS.SYS!PcRequestNewPowerState

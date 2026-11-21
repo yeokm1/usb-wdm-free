@@ -1,0 +1,223 @@
+# Expected results of job.cas, written by hand from docs/design/mtp.md 7.9.
+# Format: ../README.md. I1 to I10 hold in every case.
+
+JOB-001
+  ret r = MTPE_OK
+  jobid j1 != 0
+  run j1 = 1 on io
+  drop j1 = none
+  wire d0 after open = [GetObjectInfo h=2 tid=1]
+end
+
+JOB-002
+  ret r1 = MTPE_OK
+  ret r2 = MTPE_OK
+  ret r3 = MTPE_OK
+  jobid j1, j2, j3: all != 0, all different
+end
+
+JOB-003
+  ret r = MTPE_CLOSING
+  run j1 = 0
+  drop j1 = none
+end
+
+JOB-004
+  ret r = MTPE_GIVENUP
+  run j1 = 0
+  drop j1 = none
+  alloc = balanced
+end
+
+JOB-005
+  ret r = MTPE_ARG
+  run j1 = 0
+  drop j1 = none
+  wire d0 after open = []
+end
+
+JOB-006
+  ret r = MTPE_NOMEM
+  run j1 = 0
+  drop j1 = none
+  alloc = balanced
+end
+
+JOB-007
+  run j1 = 1
+  run j2 = 0
+  drop j2 = MTPE_CANCELLED on io
+  wire d0 after open = [GetObject h=4 tid=1]
+  wire d0 !has GetObjectInfo
+end
+
+JOB-008
+  run j1 = 1; ret r1 = MTPE_CLOSING flags=none bytes=0 (the latch read at the operation's start; nothing submitted)
+  run j2 = 0
+  run j3 = 0
+  drop j2 = MTPE_CLOSING on io
+  drop j3 = MTPE_CLOSING on io
+  order: close.req.in < io.op.begin of j1's GetObject < run j1 returns < drop j2 < drop j3 < notice CLOSED
+  wire d0 after open = [CloseSession tid=1]
+  ctl d0 after open = [EVENTS stop -> 1, SETTLE] (close step 6)
+  notice d0 = [CLOSED]
+end
+
+JOB-009
+  run j1 = 1
+  run j2 = 0
+  run j3 = 0
+  drop j2 = MTPE_GIVENUP on cx
+  drop j3 = MTPE_GIVENUP on cx
+  GIVENUP set within [close+20000, close+20500]: the latched cancel's procedure began at the close and its outer bound (7.5, CQ19) comes before the close's own 30 s
+  order: GIVENUP set < drop j2 < drop j3 < notice GIVENUP < unstick < notice CLOSED
+  notice d0 = [GIVENUP, CLOSED]
+  wire d0 after GIVENUP = []
+  alloc = balanced
+end
+
+JOB-010
+  run j1 = 1; ret r1 = MTPE_OK bytes=5242880
+  run j2 = 0
+  drop j2 = MTPE_SESSION on io
+  order: run j1 returns < ev.route.in < OpenSession (the resume job, at the head) < drop j2
+  session d0 = 2
+  notice d0 has SESSION_LOST
+  wire d0 after j1 = [OpenSession tid=0]
+  ctl d0 after j1 = [EVSTART] (no RESET6: the device reset itself; nothing was in progress)
+end
+
+JOB-011
+  run j1 = 0
+  run j2 = 0
+  drop j1 = MTPE_CLOSING on io
+  drop j2 = MTPE_CLOSING on io (cancelled while queued, then dropped by the close's step 1: CLOSING comes first in the order, CQ15)
+  order: drop j1 < drop j2 < notice CLOSED
+  never drop on the thread that called MtpQueue or MtpClose
+  never drop with a library lock held
+end
+
+JOB-012
+  ret r = MTPE_ARG flags=none reason=MTPR_ARG_CONTEXT
+  wire d0 after open = []
+end
+
+JOB-013
+  ret r = MTPE_OK
+  wire d0 after open = [GetObjectInfo h=2 tid=1]
+end
+
+JOB-014
+  ret r = MTPE_OK
+  event-callback d0 = 1 on io target=folder 1
+  wire d0 after open = [GetObjectInfo h=2 tid=1]
+end
+
+JOB-015
+  ret ri = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  ret r = MTPE_OK bytes=70000
+  wire d0 after open = [GetObject h=3 tid=1]
+end
+
+JOB-016
+  ret ri = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  wire d0 !has GetObjectInfo
+end
+
+JOB-017
+  ret ri = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  ret r = MTPE_OK
+  wire d0 after open = [GetObject h=3 tid=1]
+end
+
+JOB-018
+  ret ra = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  ret rb = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  ret rc = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  run j9 = 0
+  drop j9 = none
+  drop j2 = MTPE_CANCELLED on io
+  wire d0 !has GetObjectInfo
+end
+
+JOB-019
+  ret ra = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  ret rb = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  run j9 = 0
+  drop j9 = none
+end
+
+JOB-020
+  ret ra = MTPE_ARG reason=MTPR_ARG_CONTEXT (every time the hook ran)
+  run j9 = 0
+  drop j9 = none
+  wire d0 after open = [GetObjectInfo h=2 tid=1]
+end
+
+JOB-021
+  ret ra = MTPE_ARG reason=MTPR_ARG_CONTEXT
+  wire d0 after open = [GetObjectInfo h=2 tid=1]
+end
+
+JOB-022
+  ret r = MTPE_CANCELLED flags=none
+  ctl d0 starts [ABORT in|out]
+  order: cancel < io.phase.CANCELLING < ABORT
+  run j1 = 1
+end
+
+JOB-023
+  ret ra = MTPE_OK
+  ret rb, rc, rd, re != MTPE_ARG (accepted; their own codes not judged here)
+  run j1's GetObjectInfo = MTPE_OK
+  run j2 = 0
+  drop j2 = MTPE_CLOSING on io
+  order: run j1 returns < drop j2 < notice CLOSED
+end
+
+JOB-024
+  run j1 = 1
+  run j2 = 1
+  never access to j1's ctx after its run returned
+end
+
+JOB-025
+  run a1..a50 = 1 each, in order a1 < a2 < ... < a50
+  run b1..b50 = 1 each, in order b1 < b2 < ... < b50
+  never two runs at once
+  wire d0: tids 1 to 100 in order, one transaction at a time
+end
+
+JOB-026
+  ret r for ra, rb: no effect (code not judged)
+  run j2 = 1
+  ret j2 GetObject = MTPE_OK bytes=70000
+  ctl d0 after open = []
+end
+
+JOB-027
+  event-callback d0 = 1 on io
+  order: PBT_APMQUERYSUSPENDFAILED answered < event-callback starts
+  never event-callback while held d0 = 1
+end
+
+JOB-028
+  order: j1 io.publish.in < io.dequeue.in of j2
+  busy d0 = 1 from j1's dequeue to j1's publication, and again for j2
+end
+
+JOB-029
+  run j1 = 1; ret r1 = MTPE_CLOSING flags=none (the close's latch; nothing submitted)
+  run j2 = 0
+  drop j2 = MTPE_CLOSING on io, once (CLOSING comes before CANCELLED in the order: CQ15)
+  order: cancel j2 < close.req.in < run j1 returns < drop j2 < notice CLOSED
+  wire d0 after open = [CloseSession tid=1]
+end
+
+JOB-030
+  ret r1 = MTPE_OK
+  ret r2 = MTPE_SESSION flags=none; ret r3 = MTPE_SESSION flags=none (nothing sent for either)
+  wire d0 after open = [GetObjectInfo h=2 tid=1, OpenSession tid=0, GetObjectInfo h=2 tid=1]
+  order: run j1 returns < OpenSession (the resume job) < j2's dequeue
+  ret r4 = MTPE_OK (j2 was queued after the loss: its tag is the new count)
+end

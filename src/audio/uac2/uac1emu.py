@@ -1092,7 +1092,8 @@ class Model1(uacemu.Model):
         actual = len(data) if rt & 128 else (0 if status else length)
         self.send(100, ident, struct.pack('<BBBBHHH', ep, request, rt, status, value, index, actual) + data)
         self.log('control', request=request, request_type=rt, value=value, index=index,
-                 requested=length, status=status, actual=actual)
+                 requested=length, status=status, actual=actual,
+                 data=(data if rt & 128 else payload).hex())
 
     def hid_descriptor(self, interface):
         off, current = 9, None

@@ -30,6 +30,7 @@ typedef struct FAKE {
     long Depth, MaxDepth;             /* IoCallDriver nesting, any thread */
     long Submissions;
     int Wdm110;                       /* IoIsWdmVersionAvailable(1, 0x10) */
+    int FailOpenConfiguration;        /* NdisOpenConfiguration fails */
     /* registry */
     unsigned char NetworkAddress[6];
     int HaveNetworkAddress;

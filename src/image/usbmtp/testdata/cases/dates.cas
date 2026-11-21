@@ -1,0 +1,48 @@
+# Dates (7.7), pure functions. docs/design/mtp.md 7.7; 11.4 (dates).
+# Format: ../README.md. `tz` is the PC's zone for the case (minutes east
+# of UTC, no daylight saving unless a row says so).
+
+case DTE-001
+  title  PTP date strings read: local without a zone, converted with one; tenths; outside 1980 to 2107 or unreadable not used
+  from   7.7
+  table  text                     tz
+    a  "20261117T083015"          480
+    b  "20261117T083015.5"        480
+    c  "20261117T003015Z"         480
+    d  "20261117T083015+0800"     0
+    e  "20261116T233015-0900"     0
+    f  "19800101T000000"          0
+    g  "19791231T235959"          0
+    h  "21071231T235958"          0
+    i  "21080101T000000"          0
+    j  "2026111T083015"           0
+    k  "20261317T083015"          0
+    l  "20260230T083015"          0
+    m  "20261117T246015"          0
+    n  ""                         0
+    o  "20261117T083015+08"       0
+    p  "20261117T083015.55"       0
+  end
+  readdate <text> tz=<tz> -> r
+end
+
+case DTE-002
+  title  set on the copied file: FAT's 2-second steps; a missing date leaves the time of the copy
+  from   7.7 (copied to the PC)
+  table  text
+    a  "20261117T083015"
+    b  "20261117T083016"
+    c  ""
+  end
+  setdate <text> on a FAT32 file -> r
+end
+
+case DTE-003
+  title  sent to the device: the PC file's modification time as local time without a zone
+  from   7.7 (copied to the device)
+  table  filetime-utc          tz
+    a  2026-11-17 00:30:15     480
+    b  1999-12-31 23:59:58     0
+  end
+  todevice-date <filetime-utc> tz=<tz> -> r
+end

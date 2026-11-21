@@ -1,0 +1,7 @@
+# Expected decoding of plcnt.hex, written by hand from MTP 1.1, 5.4; 7.9 here (a property list element is at least 9 bytes) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectPropList
+result = MTPE_PROTOCOL (3 elements need at least 27 bytes; 22 are left); nothing allocated
+NumberOfElements = 3
+end

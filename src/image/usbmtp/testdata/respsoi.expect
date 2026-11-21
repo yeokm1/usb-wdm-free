@@ -1,0 +1,13 @@
+# Expected decoding of respsoi.hex, written by hand from MTP 1.1, D.2.9; 7.9 here (Uploads) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = SendObjectInfo's response, sent storage 00020001h and parent 0001A2B3h, expected tid 00045678h
+result = MTPE_OK
+length = 24
+type = 0003h
+code = 2001h
+tid = 00045678h
+parameters[] = 00020001h, 0001A2B3h, 0007B8C9h
+storage = 00020001h, parent = 0001A2B3h, new handle = 0007B8C9h
+ownership = established (three parameters, storage and parent as sent, the handle neither 0 nor FFFFFFFFh)
+end

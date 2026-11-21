@@ -1,0 +1,43 @@
+# ObjectInfo dataset: a file.
+# Written by hand from MTP 1.1, 5.3.1 (ObjectInfo Dataset); dates as 3.2.5.
+# @0 StorageID UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# @4 ObjectFormat UINT16 = 3801h (2 bytes)
+01 38
+# @6 ProtectionStatus UINT16 = 0001h (2 bytes)
+01 00
+# @8 ObjectCompressedSize UINT32 = 0003D4E5h (4 bytes)
+e5 d4 03 00
+# @12 ThumbFormat UINT16 = 3808h (2 bytes)
+08 38
+# @14 ThumbCompressedSize UINT32 = 00011F2Eh (4 bytes)
+2e 1f 01 00
+# @18 ThumbPixWidth UINT32 = 000200A0h (4 bytes)
+a0 00 02 00
+# @22 ThumbPixHeight UINT32 = 00030078h (4 bytes)
+78 00 03 00
+# @26 ImagePixWidth UINT32 = 00040FC0h (4 bytes)
+c0 0f 04 00
+# @30 ImagePixHeight UINT32 = 00050BD0h (4 bytes)
+d0 0b 05 00
+# @34 ImageBitDepth UINT32 = 00060018h (4 bytes)
+18 00 06 00
+# @38 ParentObject UINT32 = 0001A2B3h (4 bytes)
+b3 a2 01 00
+# @42 AssociationType UINT16 = 0000h (2 bytes)
+00 00
+# @44 AssociationDesc UINT32 = 0007A1B2h (4 bytes)
+b2 a1 07 00
+# @48 SequenceNumber UINT32 = 0008C3D4h (4 bytes)
+d4 c3 08 00
+# @52 Filename String = "a.jpg" (13 bytes)
+06 61 00 2e 00 6a 00 70 00 67 00 00 00
+# @65 DateCreated String = "20260101T120000" (33 bytes)
+10 32 00 30 00 32 00 36 00 30 00 31 00 30 00 31 00 54 00 31 00 32 00 30 00 30 00 30 00 30 00 00
+00
+# @98 DateModified String = "20261117T083015.5" (37 bytes)
+12 32 00 30 00 32 00 36 00 31 00 31 00 31 00 37 00 54 00 30 00 38 00 33 00 30 00 31 00 35 00 2e
+00 35 00 00 00
+# @135 Keywords String = "" (1 bytes)
+00
+# total 136 bytes

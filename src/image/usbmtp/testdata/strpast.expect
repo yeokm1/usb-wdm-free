@@ -1,0 +1,6 @@
+# Expected decoding of strpast.hex, written by hand from MTP 1.1, 3.2.3; 7.2 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectInfo
+result = MTPE_PROTOCOL (the count of 200 units does not fit in the 20 bytes left); nothing allocated for it
+end

@@ -1,0 +1,92 @@
+# The library against mtpemu.py through hostredir.c, on the build host:
+# real time, real threads, built as shipped (MSVC 6.0, x86). No guest, no
+# QEMU. docs/design/mtp.md 7.9, "What the build host can test"; 11.2; 12,
+# "M1's library stage", item 2. Format: ../README.md; here each case names
+# an mtpemu.py profile and speed (`serve --profile P --speed S --ctl`), the
+# library's calls through MTPTEST's operations, and the --ctl lines sent.
+# The objects put are generated (sizes below) and their CRC-32 is compared
+# with the one the test computed before sending.
+
+case RDR-001
+  title  list, get and put with CRC-32 compared, in every profile at high and full speed, and android at SuperSpeed
+  from   12/M1's library stage, item 2
+  table  profile    speed
+    a  single     high
+    b  single     full
+    c  android    high
+    d  android    full
+    e  android    super
+    f  androidff  high
+    g  androidff  full
+    h  camera     high
+    i  camera     full
+    j  split      high
+    k  split      full
+    l  locked     high
+    m  locked     full
+  end
+  serve --profile <profile> --speed <speed> --ctl
+  open ; list every storage to the leaves
+  get every object listed, CRC-32 against the simulator's
+  put 1 KB, 64 KB - 12, 64 KB, 1 MB, 100 MB (camera: refused, read-only), then get each back
+  if <profile>=locked : list (no storage) ; ctl {"unlock": 1} ; wait the StoreAdded refresh ; list ; get ; put
+  close
+end
+
+case RDR-002
+  title  every --ctl fault, each in the place it applies
+  from   12/M1's library stage, item 2; 11.2 (faults)
+  table  ctl                                          action
+    a  {"fault": "stall_data"}                        get 1 MB
+    b  {"fault": "short_data"}                        get 1 MB
+    c  {"fault": "no_response"}                       get 1 MB
+    d  {"fault": "stale_response"}                    get 1 MB, MtpCancel at 50%
+    e  {"fault": "response_for_zlp"}                  get 1 MB
+    f  {"fault": "busy", "n": 3}                      get 1 MB, MtpCancel at 50%
+    g  {"fault": "bad_status", "kind": "length"}      get 1 MB, MtpCancel at 50%
+    h  {"fault": "bad_status", "kind": "code"}        get 1 MB, MtpCancel at 50%
+    i  {"fault": "bad_status", "kind": "endpoint"}    get 1 MB, MtpCancel at 50%
+    j  {"fault": "bad_status", "kind": "repeat"}      get 1 MB, MtpCancel at 50%
+    k  {"fault": "ignore_cancel"}                     get 1 MB, MtpCancel at 50%
+    l  {"fault": "ep0_hang"}                          get 1 MB, MtpCancel at 50%
+    m  {"fault": "out_hang"}                          put 1 MB, MtpCancel 2 s after the put began
+    n  {"fault": "reset_event"}                       get 1 MB
+    o  {"fault": "cancel_event"}                      get 1 MB
+    p  {"delay_ms": 5}                                get 1 MB
+  end
+  serve --profile android --speed high --ctl
+  open ; arm <ctl> ; <action>
+  if <ctl> is ep0_hang : wait the GIVENUP notice ; MtpClose ; stop the simulator and serve it again (a new connection: a replug) ; open
+  then get a 1 KB object and compare
+  close
+end
+
+case RDR-003
+  title  the event flood of 100
+  from   12/M1's library stage, item 2; 11.2 (flood)
+  serve --profile android --speed high --ctl
+  open ; ctl {"flood": 100} ; wait 5 s
+  close
+end
+
+case RDR-004
+  title  MtpClose during a transfer
+  from   12/M1's library stage, item 2
+  table  dir
+    a  get
+    b  put
+  end
+  serve --profile android --speed high --ctl
+  open ; start a 100 MB <dir> ; MtpClose at 30%
+  wait the CLOSED notice
+  open again ; get a 1 KB object and compare
+  close
+end
+
+case RDR-005
+  title  the simulator gone mid-transfer (the test host's unplug)
+  from   11.2 ({"quit": 1}); 7.9/Removal frees nothing of a pending call
+  serve --profile android --speed high --ctl
+  open ; start a 100 MB get ; ctl {"quit": 1} at 30%
+  close
+end

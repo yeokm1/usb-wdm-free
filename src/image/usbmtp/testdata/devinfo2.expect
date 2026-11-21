@@ -1,0 +1,32 @@
+# Expected decoding of devinfo2.hex, written by hand from MTP 1.1, 5.1.1; 7.2 here (bytes left over are ignored) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = DeviceInfo
+result = MTPE_OK
+StandardVersion = 110
+VendorExtensionID = 00000006h
+VendorExtensionVersion = 100
+MTPVendorExtensions = "android.com: 1.0;"
+FunctionalMode = 0001h
+OperationsSupported[] = 1001h, 1002h
+EventsSupported[] = 4002h, 4003h
+DevicePropertiesSupported[] = D402h
+CaptureFormats[] = 3801h
+PlaybackFormats[] = 3000h, 3001h
+Manufacturer = "M"
+Model = "X"
+DeviceVersion = ""
+SerialNumber = ""
+trailing = 7 bytes, ignored
+counts
+  at 8 1 elem 2 cap 255
+  at 47 4 elem 2 cap fit
+  at 55 4 elem 2 cap fit
+  at 63 4 elem 2 cap fit
+  at 69 4 elem 2 cap fit
+  at 75 4 elem 2 cap fit
+  at 83 1 elem 2 cap 255
+  at 88 1 elem 2 cap 255
+  at 93 1 elem 2 cap 255
+  at 94 1 elem 2 cap 255
+end

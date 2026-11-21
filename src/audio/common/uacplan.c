@@ -169,6 +169,24 @@ unsigned int UacPlanWorkerExit(unsigned int stop, unsigned int slotsOut, unsigne
     return stop && !slotsOut && !frameOut;
 }
 
+unsigned int UacPlanRemoveHold(unsigned long streams, unsigned long busy, unsigned long quietMs,
+                               unsigned long heldMs)
+{
+    if (heldMs >= UAC_REMOVE_HOLD_MS) return 0;
+    return streams || busy || quietMs < UAC_REMOVE_QUIET_MS;
+}
+
+unsigned int UacPlanRemoveHoldTake(unsigned int d0, unsigned long streams, unsigned long opens,
+                                   unsigned long busy)
+{
+    return d0 && (streams || opens || busy);
+}
+
+unsigned int UacPlanRemoveWake(unsigned int old, unsigned int surprised, unsigned int down)
+{
+    return old && !surprised && down;
+}
+
 unsigned int UacPlanLostLimit(unsigned long spanUs)
 {
     unsigned long n;

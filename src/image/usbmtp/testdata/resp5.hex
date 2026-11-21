@@ -1,0 +1,21 @@
+# A response container: OK, tid 00034567h, five parameters (the largest response, 32 bytes).
+# Written by hand from MTP 1.1, D.2.
+# @0 length UINT32 = 32 (4 bytes)
+20 00 00 00
+# @4 type UINT16 = 0003h (2 bytes)
+03 00
+# @6 code UINT16 = 2001h (2 bytes)
+01 20
+# @8 tid UINT32 = 00034567h (4 bytes)
+67 45 03 00
+# @12 parameter 1 UINT32 = 12345678h (4 bytes)
+78 56 34 12
+# @16 parameter 2 UINT32 = 9ABCDEF0h (4 bytes)
+f0 de bc 9a
+# @20 parameter 3 UINT32 = 0F1E2D3Ch (4 bytes)
+3c 2d 1e 0f
+# @24 parameter 4 UINT32 = 00C0FFEEh (4 bytes)
+ee ff c0 00
+# @28 parameter 5 UINT32 = 7654ABCDh (4 bytes)
+cd ab 54 76
+# total 32 bytes

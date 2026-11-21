@@ -103,6 +103,120 @@ static void Codec(void)
         if(a==15) CHECK(r==1 && data[0]==b);
     }
 }
+/* Feeds n bytes; the packets emitted, 4 bytes each, go to out. Returns
+ * the packet count; every byte must be accepted (no -1). */
+static unsigned int Feed(UM_ENCODER *s,const unsigned char *bytes,unsigned int n,
+                         unsigned char *out)
+{
+    unsigned int i,count=0; int r;
+    for(i=0;i<n;i++) {
+        r=UmEncodeByte(s,bytes[i],out+4*count);
+        CHECK(r==0 || r==1);
+        count+=(unsigned int)r;
+    }
+    return count;
+}
+/* A program's byte stream in any chunking (design 6.5): the encoder state
+ * is per port and outlives a Write, so a message split across writes, a
+ * running status, a real-time byte inside another message, a status that
+ * cuts a message short and every SysEx end come out as whole events. */
+static void Stream(void)
+{
+    UM_ENCODER s,t; unsigned char p[4],out[64*4],alone[64*4],mixed[2][64*4];
+    unsigned int i,j,k,n,na,nb,count[2];
+    /* SysEx end forms (Table 4-2): 1, 2 or 3 final bytes. */
+    {
+        static const unsigned char in0[]={0xf0,0xf7},in1[]={0xf0,1,0xf7},
+            in2[]={0xf0,1,2,0xf7},in3[]={0xf0,1,2,3,0xf7},in4[]={0xf0,1,2,3,4,0xf7};
+        static const unsigned char w0[]={6,0xf0,0xf7,0},w1[]={7,0xf0,1,0xf7},
+            w2[]={4,0xf0,1,2,5,0xf7,0,0},w3[]={4,0xf0,1,2,6,3,0xf7,0},
+            w4[]={4,0xf0,1,2,7,3,4,0xf7};
+        CHECK(UmEncoderInit(&s,0));
+        CHECK(Feed(&s,in0,2,out)==1 && !memcmp(out,w0,4));
+        CHECK(Feed(&s,in1,3,out)==1 && !memcmp(out,w1,4));
+        CHECK(Feed(&s,in2,4,out)==2 && !memcmp(out,w2,8));
+        CHECK(Feed(&s,in3,5,out)==2 && !memcmp(out,w3,8));
+        CHECK(Feed(&s,in4,6,out)==2 && !memcmp(out,w4,8));
+    }
+    /* A status cuts an unfinished message short: the new one is whole,
+     * the cut one is not sent, and the running status is the new one. */
+    CHECK(UmEncoderInit(&s,2));
+    CHECK(UmEncodeByte(&s,0x90,p)==0); CHECK(UmEncodeByte(&s,0x3c,p)==0);
+    CHECK(UmEncodeByte(&s,0x80,p)==0); CHECK(UmEncodeByte(&s,0x3c,p)==0);
+    CHECK(UmEncodeByte(&s,0x40,p)==1 && p[0]==0x28 && p[1]==0x80 && p[2]==0x3c && p[3]==0x40);
+    CHECK(UmEncodeByte(&s,0x3d,p)==0);
+    CHECK(UmEncodeByte(&s,0x41,p)==1 && p[0]==0x28 && p[1]==0x80 && p[2]==0x3d && p[3]==0x41);
+    /* A status inside a SysEx ends it; the bytes not yet packed are not
+     * sent (no end packet exists for them), the new message is whole. */
+    CHECK(UmEncoderInit(&s,0));
+    {
+        static const unsigned char in[]={0xf0,1,2,3,4,0x90,0x3c,0x40};
+        static const unsigned char want[]={4,0xf0,1,2, 9,0x90,0x3c,0x40};
+        CHECK(Feed(&s,in,sizeof(in),out)==2 && !memcmp(out,want,8));
+    }
+    /* SysEx and system common cancel the running status (MIDI 1.0);
+     * real-time does not, inside or between messages. */
+    {
+        static const unsigned char a[]={0x90,0x3c,0x40,0xf0,0x7d,0xf7};
+        static const unsigned char b[]={0x90,0x3c,0x40,0xf1,0x10};
+        static const unsigned char c[]={0x90,0x3c,0x40,0xf6};
+        static const unsigned char d[]={0x90,0x3c,0x40,0xf5};
+        const unsigned char *list[4]; unsigned int size[4];
+        list[0]=a;list[1]=b;list[2]=c;list[3]=d;
+        size[0]=sizeof(a);size[1]=sizeof(b);size[2]=sizeof(c);size[3]=sizeof(d);
+        for(i=0;i<4;i++) {
+            CHECK(UmEncoderInit(&s,0));
+            for(j=0;j<size[i];j++) (void)UmEncodeByte(&s,list[i][j],p);
+            CHECK(UmEncodeByte(&s,0x3c,p)==-1);
+        }
+        CHECK(UmEncoderInit(&s,0));
+        CHECK(Feed(&s,a,3,out)==1);
+        CHECK(UmEncodeByte(&s,0xf8,p)==1 && p[0]==0x0f && p[1]==0xf8);
+        CHECK(UmEncodeByte(&s,0x3d,p)==0);
+        CHECK(UmEncodeByte(&s,0xfe,p)==1 && p[1]==0xfe);
+        CHECK(UmEncodeByte(&s,0x41,p)==1 && p[0]==9 && p[1]==0x90 && p[2]==0x3d && p[3]==0x41);
+    }
+    /* System common of 1, 2 and 3 bytes with a real-time byte inside. */
+    {
+        static const unsigned char in[]={0xf2,0xf8,0x10,0xfa,0x20, 0xf3,0xfc,5, 0xf1,0x23, 0xf6};
+        static const unsigned char want[]={15,0xf8,0,0, 15,0xfa,0,0, 3,0xf2,0x10,0x20,
+            15,0xfc,0,0, 2,0xf3,5,0, 2,0xf1,0x23,0, 5,0xf6,0,0};
+        CHECK(UmEncoderInit(&s,0));
+        CHECK(Feed(&s,in,sizeof(in),out)==7 && !memcmp(out,want,sizeof(want)));
+    }
+    /* Two ports' encoders interleaved byte by byte (the OUT worker fills
+     * a transfer a packet per port in turn, so each port's stream stops
+     * and resumes at any byte): each yields what it yields alone. */
+    {
+        static const unsigned char x[]={0x90,0x3c,0x40,0x3d,0xf8,0x41,0xf0,1,2,3,0xfe,4,5,0xf7,
+            0xc0,5,6,0xb0,7,0xf8,8,0xe0,0,0x40};
+        static const unsigned char y[]={0xf0,0x7d,0xf8,0x10,0x20,0x30,0x40,0xf7,0x80,0x30,0,
+            0x31,0,0xf2,1,2,0x90,1};
+        const unsigned char *src[2]; unsigned int len[2],at[2];
+        src[0]=x;src[1]=y;len[0]=sizeof(x);len[1]=sizeof(y);
+        for(k=1;k<=5;k++) {   /* k bytes of one port, then of the other */
+            CHECK(UmEncoderInit(&s,0) && UmEncoderInit(&t,1));
+            at[0]=at[1]=count[0]=count[1]=0;
+            while(at[0]<len[0] || at[1]<len[1])
+                for(j=0;j<2;j++) for(i=0;i<k && at[j]<len[j];i++) {
+                    int r=UmEncodeByte(j?&t:&s,src[j][at[j]++],mixed[j]+4*count[j]);
+                    CHECK(r==0 || r==1); count[j]+=(unsigned int)r;
+                }
+            for(j=0;j<2;j++) {
+                CHECK(UmEncoderInit(&s,j));
+                n=Feed(&s,src[j],len[j],alone);
+                CHECK(n==count[j] && !memcmp(alone,mixed[j],4*n));
+            }
+        }
+        /* The same stream cut into two writes at every point. */
+        CHECK(UmEncoderInit(&s,0)); na=Feed(&s,x,sizeof(x),alone);
+        for(i=0;i<=sizeof(x);i++) {
+            CHECK(UmEncoderInit(&t,0));
+            nb=Feed(&t,x,i,out); nb+=Feed(&t,x+i,sizeof(x)-i,out+4*nb);
+            CHECK(nb==na && !memcmp(out,alone,4*na));
+        }
+    }
+}
 static int Zero(const UM_INTERFACE *out)
 {
     static UM_INTERFACE zero;
@@ -270,7 +384,7 @@ static void Guarded(void)
 }
 int main(void)
 {
-    Codec();Descriptors();Names();Guarded();
+    Codec();Stream();Descriptors();Names();Guarded();
     printf("PASS %u checks; MIDI1 portable core only, no kernel/VM claim\n",checks);
     return 0;
 }

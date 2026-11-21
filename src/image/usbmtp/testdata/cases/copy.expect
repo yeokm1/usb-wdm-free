@@ -1,0 +1,33 @@
+# Expected results of copy.cas, written by hand from docs/design/mtp.md
+# 7.8. Format: ../README.md. At every point of every row: the existing
+# file's contents are under its own name or under a backup name reported;
+# a copy reported done has its data under the target name; a copy failed
+# after its data was complete keeps it under a reported temporary path or
+# is reported failed with the temporary file deleted, never done.
+
+CPY-001
+  row a: done; C:\Dest\a.jpg holds the 1,000 bytes; no ~MTP file left
+  rows b, d, e, f, g, j, k: failed (k: cancelled); the temporary file deleted; no a.jpg; nothing else reported
+  row c: ~MTP0001.TMP used; done
+  row h: the temporary file kept and its exact path reported; not done
+  row i: as row h (the temporary kept; its path reported)
+  never the target touched before size check, flush and close have all succeeded
+end
+
+CPY-002
+  row a: done; a.jpg holds N; the backup deleted; no ~MTP file left
+  row b: failed; a.jpg holds O; the temporary deleted; nothing changed
+  row c: ~MTP0001.OLD used; done
+  row d: a.jpg holds O again (moved back); the error reported; the temporary deleted
+  row e: done; the backup's exact path reported (it stays)
+  row f: both stay: "Your original file is now <backup path>; the copied file is <temporary path>." with both exact paths
+  row g: a.jpg holds O; the error reported; the temporary's path reported
+end
+
+CPY-003
+  row a: copied (at the ceiling)
+  rows b, c: refused before the copy, with the size shown
+  row d: refused or failed by free space (FAT16: no per-file rule); the original untouched
+  row e: not refused in advance; a write failing mid-copy fails the copy by step 2
+  row f: copied; the sizes past 2^31 written with SetFilePointer's high part
+end

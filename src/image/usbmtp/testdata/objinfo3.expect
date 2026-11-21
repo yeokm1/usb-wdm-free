@@ -1,0 +1,30 @@
+# Expected decoding of objinfo3.hex, written by hand from MTP 1.1, 5.3.1 and 3.2.3; 7.2 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectInfo
+result = MTPE_OK
+StorageID = 00050003h
+ObjectFormat = 3000h
+ProtectionStatus = 8003h
+ObjectCompressedSize = FFFFFFFFh (the size is read from ObjectSize, DC04h)
+ThumbFormat = 380Bh
+ThumbCompressedSize = 0021C4D5h
+ThumbPixWidth = 00220140h
+ThumbPixHeight = 002300F0h
+ImagePixWidth = 00241E00h
+ImagePixHeight = 00251680h
+ImageBitDepth = 00260030h
+ParentObject = 0006A7B8h
+AssociationType = 0000h (not an association)
+AssociationDesc = 0027E6F7h
+SequenceNumber = 00280918h
+Filename = "\u03A9\u03BC\u03AD\u03B3\u03B1\uD83D\uDE00.bin" (11 units and the NUL)
+DateCreated = "20991231T235959Z"
+DateModified = "20000229T000000+0800"
+Keywords = "k"
+counts
+  at 52 1 elem 2 cap 255
+  at 77 1 elem 2 cap 255
+  at 112 1 elem 2 cap 255
+  at 155 1 elem 2 cap 255
+end

@@ -24,6 +24,16 @@ extern "C" {
 #include "uacplan.h"
 #include "uactopo.h"
 #include "uacvol.h"
+#include "uaccap.h"
+/* Design 28.15: the playback level engine. The default build uses
+ * uaclevel.c; UAC_LEVEL_RETAINED (defined on the compiler command line)
+ * builds the shipped implementation kept below instead. uaclevel.obj is
+ * linked in both builds; preprocessing selects one Wave path, so exactly
+ * one is referenced, and a retained image's linker (/Gy, /OPT:REF)
+ * removes the unreferenced engine functions. */
+#ifndef UAC_LEVEL_RETAINED
+#include "uaclevel.h"
+#endif
 #ifdef UAC_V1
 #include "uac1desc.h"
 #include "uacconv.h"
@@ -37,6 +47,9 @@ extern "C" {
 #endif
 #ifndef VT_BOOL
 #define VT_BOOL 11
+#endif
+#ifndef PNP_DEVICE_FAILED
+#define PNP_DEVICE_FAILED 0x00000004   /* wdm.h's PNP_DEVICE_STATE flags */
 #endif
 
 static KSDATARANGE analog = {
@@ -82,6 +95,7 @@ static BOOLEAN GetValue(PDEVICE_OBJECT fdo, PWSTR name, void *data, ULONG size);
 static ULONG GetDwordRaw(PDEVICE_OBJECT fdo, PWSTR value);
 static ULONG GetQueueRaw(PDEVICE_OBJECT fdo);
 static ULONG GetRealtimeRaw(PDEVICE_OBJECT fdo);
+static UAC_GATE *GateOf(PDEVICE_OBJECT fdo);
 #ifndef _WIN64
 /* Windows 98 SE's NTKERN exports no IoAllocateWorkItem/IoQueueWorkItem/
  * IoFreeWorkItem (link probe against the 98 DDK wdm.lib, 2026-10-22). The
@@ -118,6 +132,162 @@ static VOID UacQueueItem(PIO_WORKITEM i, PIO_WORKITEM_ROUTINE r, WORK_QUEUE_TYPE
 #define IoFreeWorkItem UacFreeItem
 #define IoQueueWorkItem UacQueueItem
 #endif
+/* docs/design/uac2.md 30: a bounded mitigation for 98 SE and ME, where
+ * the remove comes with no surprise removal before it while clients still
+ * hold the device's pins and filters. Observed with the trace build's
+ * markers (x4full removals while recording): after the forward to PortCls a
+ * client thread stopped and closed the pin and its filter; where a final
+ * Wave release was logged before that close, the close did not return and
+ * the KS fault screen came up, or the client's state request returned
+ * pending and nothing followed. The mitigation: at PortCls's first call
+ * back into a miniport during that remove (a release, on the PnP thread, at
+ * PASSIVE, once), wait while a stream of the device is not yet destroyed,
+ * a create or close is executing, or one ended less than
+ * UAC_REMOVE_QUIET_MS ago; never past UAC_REMOVE_HOLD_MS
+ * (UacPlanRemoveHold). It is a timing rule, not a barrier: a client that
+ * starts late or pauses longer than the quiet time inside its teardown can
+ * still meet the old order, and at the cap the remove goes on regardless.
+ * A remove after a surprise removal (2000 and later) waits for nothing.
+ * The hold is not taken (UacPlanRemoveHoldTake) when nothing of the device
+ * is left to tear down (no stream, no handle, no create or close
+ * executing), or when PortCls's last device power state for it was not
+ * D0. With a uac2 and a uac1 device removed together, the uac1 device had
+ * been set to D3 during the other's remove, and a client's close that came
+ * in its remove returned pending and the remove did not return; asked back
+ * to D0 before its remove (UacPlanRemoveWake, PcRequestNewPowerState), its
+ * closes in the hold returned (section 30.6).
+ *
+ * Each device's entry is allocated at AddDevice (no allocation, no device:
+ * AddDevice fails before PcAddAdapterDevice), kept in a list outside the
+ * device extension, and freed when PortCls's remove has returned; a close
+ * or destroy that comes later finds no entry and touches nothing. The list
+ * holds no reference on the device object: an entry is found by address. */
+struct UAC_FILES {
+    LIST_ENTRY Link;
+    PDEVICE_OBJECT Fdo;
+    LONG Opens, Streams;
+    LONG Busy;                  /* creates and closes executing in PortCls's dispatch */
+    ULONGLONG Last;             /* interrupt time of the last create or close end, or stream destroy */
+    PVOID Remover;              /* the thread in PortCls's remove (98 SE, ME), or NULL */
+    LONG Held;                  /* that remove's hold has been taken */
+    LONG Down;                  /* PortCls's last device power state for it was not D0 */
+};
+static KSPIN_LOCK FilesLock;
+static LIST_ENTRY FilesList;
+static UAC_FILES *FilesFind(PDEVICE_OBJECT fdo)
+{
+    for (PLIST_ENTRY e = FilesList.Flink; e != &FilesList; e = e->Flink) {
+        UAC_FILES *f = CONTAINING_RECORD(e, UAC_FILES, Link);
+        if (f->Fdo == fdo) return f;
+    }
+    return NULL;
+}
+/* AddDevice: the entry, allocated before the device exists (NULL: fail). */
+static UAC_FILES *FilesAlloc(void)
+{
+    UAC_FILES *f = (UAC_FILES *)ExAllocatePoolWithTag(NonPagedPool, sizeof(UAC_FILES), 'f2aU');
+    if (f) RtlZeroMemory(f, sizeof(*f));
+    return f;
+}
+static void FilesLink(UAC_FILES *f, PDEVICE_OBJECT fdo)
+{
+    KIRQL old;
+    f->Fdo = fdo;
+    KeAcquireSpinLock(&FilesLock, &old);
+    InsertTailList(&FilesList, &f->Link);
+    KeReleaseSpinLock(&FilesLock, old);
+}
+/* opens, streams, busy: the changes; a change of busy or streams ending
+ * (busy -1, streams -1) is stamped. */
+static void FilesNote(PDEVICE_OBJECT fdo, LONG opens, LONG streams, LONG busy)
+{
+    KIRQL old;
+    KeAcquireSpinLock(&FilesLock, &old);
+    UAC_FILES *f = FilesFind(fdo);
+    if (f) {
+        f->Opens += opens; f->Streams += streams; f->Busy += busy;
+        f->Last = KeQueryInterruptTime();
+    }
+    KeReleaseSpinLock(&FilesLock, old);
+}
+/* PortCls's device power state for the device: down when not D0. */
+static void FilesPower(PDEVICE_OBJECT fdo, BOOLEAN down)
+{
+    KIRQL old;
+    KeAcquireSpinLock(&FilesLock, &old);
+    UAC_FILES *f = FilesFind(fdo);
+    if (f) f->Down = down;
+    KeReleaseSpinLock(&FilesLock, old);
+}
+static BOOLEAN FilesDown(PDEVICE_OBJECT fdo)
+{
+    KIRQL old;
+    BOOLEAN down = FALSE;
+    KeAcquireSpinLock(&FilesLock, &old);
+    UAC_FILES *f = FilesFind(fdo);
+    if (f) down = f->Down != 0;
+    KeReleaseSpinLock(&FilesLock, old);
+    return down;
+}
+/* The remove's forward: thread marks the hold's thread; forget unlinks and
+ * frees the entry once PortCls's remove has returned. */
+static void FilesRemover(PDEVICE_OBJECT fdo, PVOID thread, BOOLEAN forget)
+{
+    KIRQL old;
+    UAC_FILES *gone = NULL;
+    KeAcquireSpinLock(&FilesLock, &old);
+    UAC_FILES *f = FilesFind(fdo);
+    if (f) {
+        if (forget) { RemoveEntryList(&f->Link); gone = f; }
+        else { f->Remover = thread; f->Held = 0; }
+    }
+    KeReleaseSpinLock(&FilesLock, old);
+    if (gone) ExFreePool(gone);
+}
+static void RemoveHold(PDEVICE_OBJECT fdo)
+{
+    KIRQL old;
+    BOOLEAN hold = FALSE;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) return;
+    KeAcquireSpinLock(&FilesLock, &old);
+    UAC_FILES *f = FilesFind(fdo);
+    LONG streams0 = 0, opens0 = 0, busy0 = 0, down = 0;
+    if (f && f->Remover && f->Remover == (PVOID)PsGetCurrentThread() && !f->Held) {
+        f->Held = 1; hold = TRUE;
+        streams0 = f->Streams; opens0 = f->Opens; busy0 = f->Busy; down = f->Down;
+    }
+    KeReleaseSpinLock(&FilesLock, old);
+    if (!hold) return;
+    /* 30: no hold for a device powered down, or with nothing left to tear down */
+    if (!UacPlanRemoveHoldTake(!down, streams0 > 0 ? (ULONG)streams0 : 0, opens0 > 0 ? (ULONG)opens0 : 0,
+                               busy0 > 0 ? (ULONG)busy0 : 0)) {
+        UAC_TRACE(("rmskip", (ULONG)streams0 << 16 | (ULONG)(busy0 & 0xFFFF), (ULONG)opens0, (ULONG)down));
+        return;
+    }
+    ULONGLONG start = KeQueryInterruptTime();
+    for (;;) {
+        LONG streams = 0, opens = 0, busy = 0;
+        ULONGLONG last = start, now;
+        KeAcquireSpinLock(&FilesLock, &old);
+        f = FilesFind(fdo);
+        if (f) { streams = f->Streams; opens = f->Opens; busy = f->Busy; if (f->Last > last) last = f->Last; }
+        KeReleaseSpinLock(&FilesLock, old);
+        now = KeQueryInterruptTime();
+        /* 100 ns units to milliseconds with no 64-bit divide (VC6). */
+        ULONG quiet = (ULONG)((now - last) >> 4) / 625, held = (ULONG)((now - start) >> 4) / 625;
+        if (!UacPlanRemoveHold(streams > 0 ? (ULONG)streams : 0, busy > 0 ? (ULONG)busy : 0, quiet, held)) {
+            UAC_TRACE(("rmhold", (ULONG)streams << 16 | (ULONG)(busy & 0xFFFF), (ULONG)opens, held));
+            break;
+        }
+        LARGE_INTEGER t;
+        t.QuadPart = -100000;   /* 10 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &t);
+    }
+}
+/* 30: a stream counts from Create's publication to the end of its
+ * destroy (uacstream.h); a failed creation never counts. */
+#define UAC_STREAM_BORN(device) FilesNote((device), 0, 1, 0)
+#define UAC_STREAM_GONE(device) FilesNote((device), 0, -1, 0)
 #include "uacstream.h"
 
 #define UAC_PAIRS 4
@@ -146,6 +316,7 @@ struct UAC_DIR {
 #endif
 };
 
+#ifdef UAC_LEVEL_RETAINED
 /* Playback volume and mute: the topology filter's VOLUME and MUTE nodes
  * (uacvol.h). Each node channel has a level in KS units (1/65536 dB);
  * the device's Feature Unit does what it can and the rest is a software
@@ -204,6 +375,17 @@ struct UAC_LEVEL_DIAG {
     LONG KsTop;
     ULONG AboveZero, Lowered;
 };
+#else
+/* The engine's state with the driver's part: the spin lock its Lock
+ * callback takes, and the work item that applies SETs made at raised
+ * IRQL, as in the retained UAC_LEVEL. */
+struct UAC_LEVEL_HOSTED : public UAC_LEVEL {
+    KSPIN_LOCK Lock;
+    PIO_WORKITEM Item;          /* preallocated: applies SETs made at raised IRQL */
+    LONG Pending, Queued, Work; /* a SET to apply; Item queued; work items not finished */
+    LONG Closed;                /* removal: no more work items */
+};
+#endif
 
 class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     static void operator delete(PVOID memory) { ExFreePool(memory); }
@@ -217,7 +399,11 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
     KMUTEX operation;
     BOOLEAN removed, pnpBlocked, powerBlocked;
     UAC_DIR dir[2];             /* 0 render, 1 capture */
+#ifdef UAC_LEVEL_RETAINED
     UAC_LEVEL level;
+#else
+    UAC_LEVEL_HOSTED level;
+#endif
     /* Endpoint pair `index` (docs/design/uac2.md section 15.3): pair 0
      * owns the function (descriptor model, transport); a later pair holds
      * a reference to pair 0 and borrows them. Pair 0 names the others
@@ -327,6 +513,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         else if (NT_SUCCESS(s) && length != size) s = STATUS_DEVICE_DATA_ERROR;
         return s;
     }
+#ifdef UAC_LEVEL_RETAINED
     /* Room for UAC_VOL_RANGES subranges in one request; a device that
      * refuses it is asked for one subrange, the wLength Linux uses
      * ([linux] sound/usb/mixer.c), and its first subrange is the range. */
@@ -736,8 +923,108 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         }
         PutValue(device, L"Uac2VolMap", &g, sizeof(g));
     }
+#else
+    /* Design 28.15: the playback level engine is uaclevel.c (UAC_LEVEL,
+     * the engine's state, inside UAC_LEVEL_HOSTED with the driver's spin
+     * lock and work item); these are its callbacks, each what the
+     * retained methods above did themselves. */
+    UAC_LEVEL_OPS levelOps;
+    KIRQL levelIrql;            /* the level spin lock's IRQL while held */
+    static long OpFeature(void *c, UAC_BYTE unit, unsigned long selector, unsigned long channel, int read,
+                          unsigned long attribute, void *bytes, unsigned long size, unsigned long *got) {
+        return ((Wave *)c)->Feature(unit, selector, channel, read ? TRUE : FALSE, attribute, bytes, size, got);
+    }
+    static int OpReady(void *c) { return ((Wave *)c)->DeviceReady() ? 1 : 0; }
+    static int OpRunning(void *c) { return ((Wave *)c)->Running() ? 1 : 0; }
+    static int OpRemoved(void *c) { return ((Wave *)c)->removed ? 1 : 0; }
+    static void OpDelay40(void *c) {
+        LARGE_INTEGER t;
+        UNREFERENCED_PARAMETER(c);
+        t.QuadPart = -400000;   /* 40 ms: the queued USB audio plays out */
+        KeDelayExecutionThread(KernelMode, FALSE, &t);
+    }
+    static void OpLock(void *c) { Wave *w = (Wave *)c; KeAcquireSpinLock(&w->level.Lock, &w->levelIrql); }
+    static void OpUnlock(void *c) { Wave *w = (Wave *)c; KeReleaseSpinLock(&w->level.Lock, w->levelIrql); }
+    static void OpPublish(void *c, long *target, const unsigned long *gain) {
+        UNREFERENCED_PARAMETER(c);
+        for (ULONG k = 0; k < UAC_VOL_CHANNELS; k++) InterlockedExchange(&target[k], (LONG)gain[k]);
+    }
+    /* The engine asks one value by name, Uac2VolAboveZero. */
+    static unsigned long OpGetDword(void *c, const char *name) {
+        static const char want[] = "Uac2VolAboveZero";
+        ULONG i;
+        for (i = 0; want[i] && name[i] == want[i]; i++) ;
+        if (want[i] || name[i]) return 0xFFFFFFFFUL;
+        return GetDwordRaw(((Wave *)c)->device, L"Uac2VolAboveZero");
+    }
+    static int OpGetValue(void *c, int pair, void *data, unsigned long size) {
+        Wave *w = (Wave *)c;
+        UNREFERENCED_PARAMETER(pair);   /* levelName is this pair's (Uac2Level, Uac2LevelPnn) */
+        return GetValue(w->device, w->levelName, data, size) ? 1 : 0;
+    }
+    static void OpPutValue(void *c, int pair, void *data, unsigned long size) {
+        Wave *w = (Wave *)c;
+        UNREFERENCED_PARAMETER(pair);
+        PutValue(w->device, w->levelName, data, size);
+    }
+    static void OpPutDiag(void *c, void *data, unsigned long size) {
+        PutValue(((Wave *)c)->device, L"Uac2VolMap", data, size);
+    }
+    static int OpTaken(void *c, UAC_BYTE unit) {
+        Wave *w = (Wave *)c;
+        return w->primary && w->primary->UnitTaken(unit) ? 1 : 0;
+    }
+    const UAC_VOL_RANGE *KsRange(ULONG c) const { return UacLevelKsRange(&level, c); }
+    /* PnP start, after Learn: the render line's controls and levels. The
+     * driver's part (the lock, the work item's counters) is cleared as the
+     * retained LevelSetup's RtlZeroMemory of the whole level cleared it. */
+    void LevelSetup() {
+        ULONG c, most = 1, formats = dir[0].Formats.Count;
+        unsigned int terminal = 0;
+        level.Item = NULL; level.Pending = level.Queued = level.Work = level.Closed = 0;
+        KeInitializeSpinLock(&level.Lock);
+        levelOps.Context = this;
+        levelOps.Feature = OpFeature; levelOps.Ready = OpReady; levelOps.Running = OpRunning;
+        levelOps.Removed = OpRemoved; levelOps.Delay40 = OpDelay40; levelOps.Lock = OpLock;
+        levelOps.Unlock = OpUnlock; levelOps.Publish = OpPublish; levelOps.GetDword = OpGetDword;
+        levelOps.GetValue = OpGetValue; levelOps.PutValue = OpPutValue; levelOps.PutDiag = OpPutDiag;
+        levelOps.Taken = OpTaken;
+        for (c = 0; c < formats; c++)
+            if (dir[0].Formats.Format[c].Channels > most) most = dir[0].Formats.Format[c].Channels;
+        if (formats) terminal = dir[0].Formats.Format[0].Terminal;
+        UacLevelSetup(&level, &levelOps, (int)index, descriptor, formats, most, terminal);
+    }
+    BOOLEAN DeviceReady() const { return dev && !removed && !pnpBlocked && !powerBlocked; }
+    BOOLEAN Running() const { return dir[0].Usb != NULL; }
+    BOOLEAN LevelStale() { return UacLevelStale(&level) ? TRUE : FALSE; }
+    void ApplyLocked() { UacLevelApply(&level); }
+    void VolumeStats(UAC_USB_STATS *s) const {
+        UAC_LEVEL_STATS v;
+        UacLevelStats(&level, &v);
+        s->VolLayout = v.VolLayout; s->VolUnit = v.VolUnit; s->VolMode = v.VolMode;
+        s->VolChannels = v.VolChannels; s->VolAboveZero = v.VolAboveZero; s->VolLowered = v.VolLowered;
+        s->VolRangeRead = v.VolRangeRead; s->VolStartKnown = v.VolStartKnown;
+        for (ULONG n = 0; n < 3; n++) {
+            s->VolCount[n] = v.VolCount[n]; s->VolMin[n] = v.VolMin[n]; s->VolMax[n] = v.VolMax[n];
+            s->VolRes[n] = v.VolRes[n]; s->VolTop[n] = v.VolTop[n]; s->VolOffered[n] = v.VolOffered[n];
+            s->VolStartCur[n] = v.VolStartCur[n];
+        }
+    }
+#endif
+    /* Design 28.18, stage 1: this pair's capture graph (nonpaged pool,
+     * built once in Prepare; NULL when there is no capture line or no
+     * memory) and its Uac2VolMapC record. Nothing reads the graph yet.
+     * The last members, so every earlier member keeps its offset. */
+    UAC_CAP_GRAPH *capGraph;
+    UCHAR capDiag[UAC_CAP_DIAG_SIZE];
     void Apply() {
-        KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+        /* docs/design/uac2.md 29.9: on a failed device a SET stays in the
+         * cache and nothing is written. The operation mutex is taken as
+         * NewStream and Run take it (29.5.7): a SET that waits behind a
+         * request that then expires, and the level work item Shutdown
+         * waits for, give up once the device has failed, even while the
+         * holder stays blocked in the cancellation's drain. */
+        if (!TakeOperation()) return;
         ApplyLocked();
         KeReleaseMutex(&operation, FALSE);
     }
@@ -811,6 +1098,7 @@ class Wave : public IMiniportWaveCyclic, public IAdapterPowerManagement {
         return STATUS_BUFFER_TOO_SMALL;
     }
 public:
+#ifdef UAC_LEVEL_RETAINED
     /* KSPROPERTY_AUDIO_VOLUMELEVEL (volume) or KSPROPERTY_AUDIO_MUTE on
      * the topology filter's node; the channel is the KSNODEPROPERTY_AUDIO_
      * CHANNEL's (0..Channels-1, or -1 for all). A SET takes the control
@@ -855,6 +1143,11 @@ public:
             }
             v->Change++;
             KeReleaseSpinLock(&v->Lock, irql);
+            /* Trace builds: each accepted SET (pair, volume or mute,
+             * Change read after it, outside the lock: a trace only; the
+             * channel; the value asked). */
+            UAC_TRACE(("lvset", index << 24 | (volume ? 1UL : 0UL) << 16 | (v->Change & 0xFFFF), (ULONG)channel,
+                       (ULONG)value));
             Changed();
             return STATUS_SUCCESS;
         }
@@ -867,6 +1160,42 @@ public:
         return !volume && level.Map.MuteMode != UAC_VOL_NONE ?
                KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU : KSAUDIO_CPU_RESOURCES_HOST_CPU;
     }
+#else
+    /* KSPROPERTY_AUDIO_VOLUMELEVEL (volume) or KSPROPERTY_AUDIO_MUTE on
+     * the topology filter's node, through the engine (uaclevel.c): the
+     * same checks, GET of the loudest channel for -1, a SET snapped and
+     * owned, applied at once at PASSIVE or by the work item. */
+    NTSTATUS LevelProperty(PPCPROPERTY_REQUEST r, BOOLEAN volume) {
+        UAC_LEVEL_HOSTED *v = &level;
+        if (!v->Present) return STATUS_INVALID_DEVICE_REQUEST;
+        if (r->Verb & KSPROPERTY_TYPE_BASICSUPPORT) return LevelBasic(r, volume);
+        if (r->InstanceSize < sizeof(LONG) || !r->Instance) return STATUS_INVALID_PARAMETER;
+        LONG channel = *(PLONG)r->Instance;
+        if (channel != -1 && (channel < 0 || (ULONG)channel >= v->Channels)) return STATUS_INVALID_PARAMETER;
+        if (!r->ValueSize) { r->ValueSize = sizeof(LONG); return STATUS_BUFFER_OVERFLOW; }
+        if (r->ValueSize < sizeof(LONG) || !r->Value) return STATUS_BUFFER_TOO_SMALL;
+        if (r->Verb & KSPROPERTY_TYPE_GET) {
+            *(PLONG)r->Value = UacLevelGet(v, volume ? 1 : 0, channel);
+            r->ValueSize = sizeof(LONG);
+            return STATUS_SUCCESS;
+        }
+        if (r->Verb & KSPROPERTY_TYPE_SET) {
+            if (v->Closed) return STATUS_DEVICE_NOT_READY;
+            UacLevelSet(v, volume ? 1 : 0, channel, *(PLONG)r->Value);
+            /* Trace builds: as the retained handler's (Change read after
+             * the SET, outside the lock: a trace only). */
+            UAC_TRACE(("lvset", index << 24 | (volume ? 1UL : 0UL) << 16 | (v->Change & 0xFFFF), (ULONG)channel,
+                       (ULONG)*(PLONG)r->Value));
+            Changed();
+            return STATUS_SUCCESS;
+        }
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+    ULONG LevelCpu(BOOLEAN volume) const {
+        return UacLevelNotHostCpu(&level, volume ? 1 : 0) ?
+               KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU : KSAUDIO_CPU_RESOURCES_HOST_CPU;
+    }
+#endif
 private:
     /* The device format (index) a stream format maps to, or -1. The
      * container must be the subslot; valid bits may differ (a 24-bit
@@ -900,12 +1229,33 @@ private:
         if (d->Capture != capture) return FALSE;
         return Lookup(&d->Formats, capture, channels, bits, container, rate, mask) >= 0;
     }
+    /* docs/design/uac2.md 29.5.7: the operation mutex, for an entry that
+     * may be refused (NewStream, Run, a level SET). Inactive gate: the
+     * untimed wait of before. Active: UacGateAcquire's 100 ms tries that
+     * read the gate, and its read after the acquisition; FALSE (nothing
+     * held) once failed. */
+    static int OperationFailed(void *c) { return UacGateFailed(GateOf(((Wave *)c)->device)) ? 1 : 0; }
+    static int OperationTry(void *c) {
+        LARGE_INTEGER t;
+        t.QuadPart = -1000000;
+        return KeWaitForSingleObject(&((Wave *)c)->operation, Executive, KernelMode, FALSE, &t) ==
+               STATUS_SUCCESS;
+    }
+    static void OperationRelease(void *c) { KeReleaseMutex(&((Wave *)c)->operation, FALSE); }
+    BOOLEAN TakeOperation() {
+        if (!GateOf(device)->Active) {
+            KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+            return TRUE;
+        }
+        return UacGateAcquire(this, OperationFailed, OperationTry, OperationRelease) ? TRUE : FALSE;
+    }
     static NTSTATUS Run(PVOID context, UacStream *stream) {
         UAC_DIR *d = (UAC_DIR *)context;
         Wave *w = d->Owner;
-        KeWaitForSingleObject(&w->operation, Executive, KernelMode, FALSE, NULL);
+        /* 29.5.5: a failed device refuses before any wait. */
+        if (UacGateFailed(GateOf(w->device)) || !w->TakeOperation()) return STATUS_DEVICE_NOT_READY;
         NTSTATUS status = STATUS_DEVICE_NOT_READY;
-        if (!w->removed && !w->pnpBlocked && !w->powerBlocked && w->dev) {
+        if (!w->removed && !w->pnpBlocked && !w->powerBlocked && w->dev && !UacGateFailed(GateOf(w->device))) {
             const UAC_PCM *pcm = stream->Format();
             LONG i = Lookup(&d->Formats, d->Capture, pcm->Channels, pcm->Bits, pcm->Container,
                             pcm->Rate, pcm->Mask);
@@ -939,6 +1289,12 @@ private:
             /* The device may have lost its levels in D3 or a stop. */
             if (NT_SUCCESS(status) && !d->Capture && w->LevelStale()) w->ApplyLocked();
             if (NT_SUCCESS(status)) status = UacUsbStart(d->Usb);
+            /* 29.5.7: a late success never lets a RUN succeed on a failed
+             * device. */
+            if (NT_SUCCESS(status) && UacGateFailed(GateOf(w->device))) {
+                UacUsbStop(d->Usb);
+                status = STATUS_DEVICE_NOT_READY;
+            }
             Record(w->device, 31, status);
         }
         KeReleaseMutex(&w->operation, FALSE);
@@ -1072,8 +1428,9 @@ public:
          Wave *owner = NULL)
         : refs(1), device(fdo), lower(target), descriptor(model), dev(NULL), graph(NULL),
           port(NULL), removed(FALSE), pnpBlocked(FALSE), powerBlocked(FALSE),
-          index(pair), primary(owner), peerCount(0) {
+          index(pair), primary(owner), peerCount(0), capGraph(NULL) {
         KeInitializeMutex(&operation, 0);
+        RtlZeroMemory(capDiag, sizeof(capDiag));
         RtlZeroMemory(dir, sizeof(dir));
         RtlZeroMemory(&level, sizeof(level));
         RtlZeroMemory(peers, sizeof(peers));
@@ -1086,6 +1443,7 @@ public:
         /* Close and PnP Shutdown own all USB destruction at PASSIVE. */
         ASSERT(dir[0].Usb == NULL && dir[1].Usb == NULL);
         if (level.Item) IoFreeWorkItem(level.Item);
+        if (capGraph) ExFreePool(capGraph);
         if (primary) { primary->Release(); return; }
         if (dev) UacUsbClose(dev);
         if (descriptor) {
@@ -1183,12 +1541,30 @@ public:
         }
     }
     const GUID *Jack(BOOLEAN capture) const { return jack[capture ? 1 : 0]; }
+    /* Design 28.18, stage 1: the capture endpoint's graph, from the
+     * descriptors alone (no request to the device), at PASSIVE at the end
+     * of a successful Prepare, and its route diagnostics written once
+     * (Uac2VolMapC, Uac2VolMapCnn). The graph's storage comes from
+     * nonpaged pool, never the stack, with no spin lock held. No other
+     * state reads it yet: whether the graph is complete, incomplete or not
+     * allocated at all, everything else the driver does is as before. */
+    void Discover() {
+        WCHAR name[UAC_CAP_NAME_UNITS];
+        ULONG c, most = 1;
+        const UAC_DIR_FORMATS *f = &dir[1].Formats;
+        if (!f->Count) return;
+        for (c = 0; c < f->Count; c++) if (f->Format[c].Channels > most) most = f->Format[c].Channels;
+        capGraph = (UAC_CAP_GRAPH *)ExAllocatePoolWithTag(NonPagedPool, sizeof(UAC_CAP_GRAPH), 'g2aU');
+        UacCapStart(descriptor, f->Format[0].Terminal, most, capGraph, capDiag);
+        UacCapDiagName(index, (unsigned short *)name);
+        PutValue(device, name, capDiag, sizeof(capDiag));
+    }
     /* PnP start: open the transport, learn both directions and build the
      * wave filter for what the device has. */
     NTSTATUS Prepare() {
         NTSTATUS s = STATUS_SUCCESS;
         if (primary) dev = primary->dev;
-        else s = UacUsbOpen(lower, PdoOf(device), descriptor, &dev);
+        else s = UacUsbOpen(lower, PdoOf(device), descriptor, GateOf(device), &dev);
         if (!NT_SUCCESS(s)) return s;
         Learn(&dir[0]); Learn(&dir[1]);
         graph = UacGraphFor(dir[0].Formats.Count != 0, dir[1].Formats.Count != 0);
@@ -1231,9 +1607,11 @@ public:
         filter.ConnectionCount = graph->WaveLinkCount;
         filter.Connections = (const PCCONNECTION_DESCRIPTOR *)graph->WaveLinks;
         filter.CategoryCount = c; filter.Categories = categories;
+        Discover();
         return STATUS_SUCCESS;
     }
     const UAC_GRAPH *Graph() const { return graph; }
+    PDEVICE_OBJECT Device() const { return device; }
     void Shutdown(BOOLEAN permanent) {
         PAGED_CODE();
         /* A level work item still to run takes the operation mutex: wait
@@ -1268,6 +1646,7 @@ public:
     }
     STDMETHODIMP_(ULONG) AddRef() { return InterlockedIncrement(&refs); }
     STDMETHODIMP_(ULONG) Release() {
+        RemoveHold(device);   /* 30: PortCls's remove on 98 SE and ME */
         LONG n = InterlockedDecrement(&refs);
         if (!n) { this->~Wave(); ExFreePool(this); }
         return n;
@@ -1362,9 +1741,15 @@ public:
         /* 27: the stream of the pin closed just before may still hold the
          * gate until its queued destroy runs Close, which takes the
          * operation mutex: wait for it here, before taking the mutex. */
+        /* 29.5.5, 29.5.7: a failed device refuses before the wait for a
+         * closing stream, which itself reads the gate, as does the wait for
+         * the operation mutex. */
+        UAC_GATE *g = GateOf(device);
+        if (UacGateFailed(g)) return STATUS_DEVICE_NOT_READY;
         ULONG waitedMs = 0;
-        BOOLEAN waited = UacStream::WaitClosing(&d->Active, UAC_CLOSE_WAIT_MS, &waitedMs);
-        KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
+        BOOLEAN waited = UacStream::WaitClosing(&d->Active, UAC_CLOSE_WAIT_MS, &waitedMs,
+                                                g->Active ? &g->Failed : NULL);
+        if (!TakeOperation()) return STATUS_DEVICE_NOT_READY;
         UAC_STREAM_HOOKS hooks = { d, Run, Halt, Close, Notify, Accept };
         d->Attempts++;
         if (waited) {
@@ -1376,7 +1761,7 @@ public:
          * The gate admits one stream a direction, so nothing else uses
          * d->Queue* while this one is open. */
         ULONG queueRead = GetQueueRaw(device), queueMs = UacPlanQueueMs(queueRead);
-        NTSTATUS status = removed || pnpBlocked || powerBlocked ? STATUS_DEVICE_NOT_READY :
+        NTSTATUS status = removed || pnpBlocked || powerBlocked || UacGateFailed(g) ? STATUS_DEVICE_NOT_READY :
             UacStream::Create((PMINIPORTWAVECYCLIC)this, &d->Active, format,
                 stream, dma, service, &hooks, device, capture, queueMs);
         if (NT_SUCCESS(status)) { d->QueueRead = queueRead; d->QueueMs = queueMs; }
@@ -1395,6 +1780,7 @@ public:
  * later pairs' streams down (and back) too, before its own. */
 STDMETHODIMP_(void) Wave::PowerChangeState(POWER_STATE state) {
     PAGED_CODE();
+    FilesPower(device, state.DeviceState != PowerDeviceD0);   /* 30 */
     KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
     for (ULONG i = 0; i < peerCount; i++) peers[i]->PowerLocal(state);
     KeReleaseMutex(&operation, FALSE);
@@ -1404,6 +1790,7 @@ void Wave::PowerLocal(POWER_STATE state) {
     PAGED_CODE();
     KeWaitForSingleObject(&operation, Executive, KernelMode, FALSE, NULL);
     powerBlocked = state.DeviceState != PowerDeviceD0;
+    UAC_TRACE(("power", index, (ULONG)state.DeviceState, 0));
     if (powerBlocked) {
         Drain(&dir[0], FALSE); Drain(&dir[1], FALSE);
         /* The device may come back with its own levels: read them again. */
@@ -1492,6 +1879,7 @@ public:
     }
     STDMETHODIMP_(ULONG) AddRef() { return InterlockedIncrement(&refs); }
     STDMETHODIMP_(ULONG) Release() {
+        RemoveHold(wave->Device());   /* 30: PortCls's remove on 98 SE and ME */
         LONG n = InterlockedDecrement(&refs);
         if (!n) { this->~Topology(); ExFreePool(this); }
         return n;
@@ -1542,13 +1930,21 @@ static NTSTATUS LevelHandler(PPCPROPERTY_REQUEST r)
  * MakerLength 0 when there is none (docs/design/uac2.md sections 21,
  * 21.7). */
 struct EXT { PDEVICE_OBJECT Pdo, Lower; Wave *Miniport; Wave *Pair[UAC_PAIRS - 1];
-             ULONG NameLength; UCHAR Name[256]; ULONG MakerLength; UCHAR Maker[256]; };
+             ULONG NameLength; UCHAR Name[256]; ULONG MakerLength; UCHAR Maker[256];
+             /* docs/design/uac2.md 29.5.5, 29.9: the gate, from AddDevice,
+              * and the notifier thread (2000 and later, gate active). */
+             UAC_GATE Gate;
+             PVOID Notifier;            /* its thread object, referenced */
+             KEVENT NotifierReady, NotifierExited;
+             LONG NotifierExit;
+             LONG Surprised;            /* 30: a surprise removal came (2000 and later) */ };
 static PDRIVER_DISPATCH PortClsPnp;
 static EXT *Extension(PDEVICE_OBJECT fdo);
 static PDEVICE_OBJECT PdoOf(PDEVICE_OBJECT fdo) { return Extension(fdo)->Pdo; }
 static EXT *Extension(PDEVICE_OBJECT fdo) {
     return (EXT *)((PUCHAR)fdo->DeviceExtension + PORT_CLASS_DEVICE_EXTENSION_SIZE);
 }
+static UAC_GATE *GateOf(PDEVICE_OBJECT fdo) { return &Extension(fdo)->Gate; }
 
 /* Per-instance M0 diagnostics survive a failed START (Code 10), without
  * relying on a kernel debugger. Best effort: diagnostics never change the
@@ -1723,6 +2119,135 @@ static NTSTATUS Descriptor(PDEVICE_OBJECT lower, PVOID buffer, USHORT size)
     return s;
 }
 
+/* The configuration descriptor at PnP start. With the gate active
+ * (docs/design/uac2.md 29.9) through the shared owned-IRP path, with its
+ * 5 s deadline and the startup latch; otherwise as before, untimed. */
+static NTSTATUS ConfigDescriptor(PDEVICE_OBJECT fdo, PVOID buffer, USHORT size)
+{
+    EXT *ext = Extension(fdo);
+    ULONG got = 0;
+    if (!ext->Gate.Active) return Descriptor(ext->Lower, buffer, size);
+    NTSTATUS s = UacUsbDescriptor(&ext->Gate, ext->Lower, USB_CONFIGURATION_DESCRIPTOR_TYPE, 0, 0,
+                                  buffer, size, &got);
+    if (NT_SUCCESS(s) && got != size) s = STATUS_DEVICE_DATA_ERROR;
+    return s;
+}
+
+/* docs/design/uac2.md 29.9: the record of the failure in the driver key,
+ * written by the notifier (never by the expiry hook). 14 DWORDs: Version,
+ * Count, TimeLow, TimeHigh, Kind, Setup0, Setup1, Status, UrbStatus,
+ * LateMs, MsSinceAltChange, AltChanges10s, Streams, Build. This step
+ * records no wall time and no alternate history: those words read
+ * 0xFFFFFFFF ("not recorded"). Status is the lower stack's own completion
+ * status (STATUS_CANCELLED when the cancellation took it; the caller was
+ * given STATUS_IO_TIMEOUT), UrbStatus the URB's; both 0, and LateMs
+ * 0xFFFFFFFF, until the expired request has completed; LateMs saturates
+ * at 0xFFFFFFFE. */
+static void WriteFailed(PDEVICE_OBJECT fdo, ULONG count)
+{
+    UAC_GATE *g = &Extension(fdo)->Gate;
+    ULONG v[14];
+    KIRQL old;
+    KeAcquireSpinLock(&g->Lock, &old);
+    v[0] = 1; v[1] = count; v[2] = v[3] = 0xFFFFFFFF;
+    v[4] = g->Kind; v[5] = g->Setup0; v[6] = g->Setup1;
+    v[7] = g->Completed ? (ULONG)g->Status : 0;
+    v[8] = g->Completed ? g->UrbStatus : 0;
+    v[9] = g->Completed ? g->LateMs : 0xFFFFFFFF;
+    KeReleaseSpinLock(&g->Lock, old);
+    v[10] = v[11] = v[12] = 0xFFFFFFFF;
+#ifdef UAC_V1
+    v[13] = UAC1_BUILD;
+#else
+    v[13] = 29;
+#endif
+    PutValue(fdo, L"Uac2Failed", v, sizeof(v));
+}
+
+/* The notifier (29.9): a system thread of its own, 2000 and later, that
+ * sends no USB request and takes no transport, Wave or stream mutex, so
+ * it reports a failure even while every other thread is blocked in the
+ * expired request. Its call to IoInvalidateDeviceState is admitted under
+ * the gate lock while Life reads started; a teardown changes Life first
+ * and then joins this thread, so an admitted call finishes before the
+ * IRP goes on. It runs from before the start's first request (Start),
+ * Life starting: it records a startup expiry and calls nothing for a
+ * device that has not started. Each wake is UacNotifyStep's: the exit
+ * flag read first, a pending record written before the exit. */
+static VOID NotifierMain(PVOID context)
+{
+    PDEVICE_OBJECT fdo = (PDEVICE_OBJECT)context;
+    EXT *ext = Extension(fdo);
+    UAC_GATE *g = &ext->Gate;
+    UAC_NOTIFY n = { 0, 0, 0 };
+    ULONG count = 0;
+    ext->Notifier = KeGetCurrentThread();
+    ObReferenceObject(ext->Notifier);
+    KeSetEvent(&ext->NotifierReady, IO_NO_INCREMENT, FALSE);
+    for (;;) {
+        KeClearEvent(&g->NotifyWake);
+        int exitAsked = InterlockedCompareExchange(&ext->NotifierExit, 0, 0) ? 1 : 0;
+        int failed = InterlockedCompareExchange(&g->Failed, 0, 0) ? 1 : 0;
+        int completed = InterlockedCompareExchange(&g->Completed, 0, 0) ? 1 : 0;
+        unsigned int a = UacNotifyStep(&n, exitAsked, failed, completed);
+        if (a & UAC_NOTIFY_WRITE) {
+            if (a & UAC_NOTIFY_FIRST) {
+                ULONG prev[14];
+                count = GetValue(fdo, L"Uac2Failed", prev, sizeof(prev)) && prev[0] == 1 ? prev[1] + 1 : 1;
+            }
+            WriteFailed(fdo, count);
+        }
+        if (a & UAC_NOTIFY_ADMIT) {
+            KIRQL old;
+            KeAcquireSpinLock(&g->Lock, &old);
+            int call = UacNotifyLife(&n, (int)g->Life);
+            if (call) g->Notifying = 1;   /* the admission point */
+            KeReleaseSpinLock(&g->Lock, old);
+            if (call) {
+                IoInvalidateDeviceState(ext->Pdo);
+                KeAcquireSpinLock(&g->Lock, &old);
+                g->Notifying = 0;
+                KeReleaseSpinLock(&g->Lock, old);
+            }
+            /* Starting: the start sets the wake event when it has started. */
+        }
+        if (a & UAC_NOTIFY_EXIT) break;
+        KeWaitForSingleObject(&g->NotifyWake, Executive, KernelMode, FALSE, NULL);
+    }
+    KeSetEvent(&ext->NotifierExited, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/* Created in the PnP start, in its system thread (no executive work item),
+ * the handle closed there; the thread references its own object before it
+ * signals ready, and the join waits for that object (2000 and later). */
+static NTSTATUS StartNotifier(PDEVICE_OBJECT fdo)
+{
+    EXT *ext = Extension(fdo);
+    HANDLE thread;
+    KeClearEvent(&ext->NotifierReady);
+    KeClearEvent(&ext->NotifierExited);
+    InterlockedExchange(&ext->NotifierExit, 0);
+    NTSTATUS s = PsCreateSystemThread(&thread, THREAD_ALL_ACCESS, NULL, NULL, NULL, NotifierMain, fdo);
+    if (!NT_SUCCESS(s)) return s;
+    ZwClose(thread);
+    KeWaitForSingleObject(&ext->NotifierReady, Executive, KernelMode, FALSE, NULL);
+    return STATUS_SUCCESS;
+}
+
+static void StopNotifier(PDEVICE_OBJECT fdo)
+{
+    EXT *ext = Extension(fdo);
+    PVOID thread = ext->Notifier;
+    if (!thread) return;
+    InterlockedExchange(&ext->NotifierExit, 1);
+    KeSetEvent(&ext->Gate.NotifyWake, IO_NO_INCREMENT, FALSE);
+    KeWaitForSingleObject(&ext->NotifierExited, Executive, KernelMode, FALSE, NULL);
+    KeWaitForSingleObject(thread, Executive, KernelMode, FALSE, NULL);
+    ObDereferenceObject(thread);
+    ext->Notifier = NULL;
+}
+
 /* The INF's name less UacName's UAC_NAME_MARK (its Device string is this
  * and the mark; infchk.ps1 checks they agree): what a device without a
  * usable product string is named, "USB Audio 2.0 (wdm-free)", a later
@@ -1795,22 +2320,22 @@ static void ReadName(PDEVICE_OBJECT fdo)
     UAC_WORD name[UAC_NAME_MAX + 1];
     ext->NameLength = 0;
     ext->MakerLength = 0;
-    if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
+    if (!NT_SUCCESS(UacUsbDescriptor(&ext->Gate, ext->Lower, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, device, sizeof(device), &got)) ||
         got != sizeof(device) || device[0] != 18 || device[1] != 1) status = 2;
     else if (!device[15]) status = 1;
     else {
-        if (NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
+        if (NT_SUCCESS(UacUsbDescriptor(&ext->Gate, ext->Lower, USB_STRING_DESCRIPTOR_TYPE, 0, 0, list, sizeof(list), &got))) {
             unsigned int l = UacNameLanguage(list, got);
             if (l) language = l;
         }
-        if (!NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
+        if (!NT_SUCCESS(UacUsbDescriptor(&ext->Gate, ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[15], (USHORT)language,
                                          ext->Name, sizeof(ext->Name), &got))) status = 3;
         else if (!UacName(ext->Name, got, 0, name, UAC_NAME_MAX)) status = 4;
         else {
             ext->NameLength = got;
             /* The maker's name, which a product string too long for the
              * name loses first (section 21.7); none if it cannot be read. */
-            if (device[14] && NT_SUCCESS(UacUsbDescriptor(ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[14], (USHORT)language,
+            if (device[14] && NT_SUCCESS(UacUsbDescriptor(&ext->Gate, ext->Lower, USB_STRING_DESCRIPTOR_TYPE, device[14], (USHORT)language,
                                                           ext->Maker, sizeof(ext->Maker), &got)))
                 ext->MakerLength = got;
         }
@@ -1894,7 +2419,7 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
      * whose hub does not split an IAD device); the function is found in
      * the configuration below (UacWholeFirst). */
     USB_CONFIGURATION_DESCRIPTOR header;
-    s = Descriptor(ext->Lower, &header, sizeof(header));
+    s = ConfigDescriptor(fdo, &header, sizeof(header));
     Record(fdo, 2, s);
     if (!NT_SUCCESS(s)) return s;
     if (header.bLength != sizeof(header) || header.bDescriptorType != 2 ||
@@ -1902,7 +2427,7 @@ static NTSTATUS ParseDevice(PDEVICE_OBJECT fdo, UAC_DESC **model)
     PUCHAR bytes = (PUCHAR)ExAllocatePoolWithTag(NonPagedPool, header.wTotalLength, 'd2aU');
     UAC_DESC *parsed = (UAC_DESC *)ExAllocatePoolWithTag(NonPagedPool, sizeof(UAC_DESC), 'p2aU');
     if (!bytes || !parsed) { s = STATUS_INSUFFICIENT_RESOURCES; goto done; }
-    s = Descriptor(ext->Lower, bytes, header.wTotalLength);
+    s = ConfigDescriptor(fdo, bytes, header.wTotalLength);
     Record(fdo, 3, s);
 #ifdef UAC_V1
     /* USB Audio 1.0 (section 26): the function the PDO names (its MI_
@@ -2021,13 +2546,30 @@ static NTSTATUS StartPair(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources,
     return s;
 }
 
-static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
+/* docs/design/uac2.md 29.9: a request that expired during the start fails
+ * the start (the startup latch), whatever a step that tolerates failures
+ * made of it. Never true while the gate is inactive. */
+static BOOLEAN StartLatched(EXT *ext) { return UacGateFailed(&ext->Gate) ? TRUE : FALSE; }
+/* A step's status as the start takes it (UacStartVerdict): the latch wins
+ * over a success, a tolerated failure and any other failure alike. */
+static NTSTATUS StartStep(EXT *ext, NTSTATUS s)
+{
+    return (NTSTATUS)UacStartVerdict((long)s, StartLatched(ext) ? 1 : 0);
+}
+
+/* The start's steps, from the configuration descriptor on; every path
+ * returns to Start, which ends the start. The latch is tested after each
+ * step that may swallow a failure (29.9), before any fallback or
+ * success branch is taken. */
+static NTSTATUS StartSteps(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
 {
     EXT *ext = Extension(fdo);
-    ShutdownPairs(ext, TRUE, TRUE);
     UAC_DESC *model = NULL;
-    NTSTATUS s = ParseDevice(fdo, &model);
-    if (!NT_SUCCESS(s)) return s;
+    NTSTATUS s = StartStep(ext, ParseDevice(fdo, &model));
+    if (!NT_SUCCESS(s)) {
+        if (model) { ExFreePool((PVOID)model->Bytes); ExFreePool(model); }
+        return s;
+    }
 #ifdef UAC_V1
     /* A null function (section 26.6, G3): nothing this driver runs (a
      * MIDI-only function, say, or formats it does not carry). It starts
@@ -2047,20 +2589,29 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
     Wave *w = new(wm) Wave(fdo, ext->Lower, model);
     ext->Miniport = w; /* the adapter/PnP reference: the construction's */
     ReadName(fdo);
-    s = w->Prepare();
+    /* 29.9: ReadName never fails a start (its fallback name); a latched
+     * expiry still does. Prepare's own tolerated failures (Learn skipping
+     * a format whose rates failed, the level setup) and uac1's null
+     * function below are decided after the latch, never before it. */
+    s = StartStep(ext, STATUS_SUCCESS);
+    if (NT_SUCCESS(s)) s = StartStep(ext, w->Prepare());
     Record(fdo, 13, s);
 #ifdef UAC_V1
     /* No format either direction can run: a null function too. */
-    if (s == STATUS_NOT_SUPPORTED) {
+    if (UacStartNullFunction((long)s)) {
         ShutdownPairs(ext, TRUE, TRUE);
         Record(fdo, 0x41, s);
         return STATUS_SUCCESS;
     }
 #endif
-    if (NT_SUCCESS(s)) s = StartPair(fdo, irp, resources, w, 0);
-    if (NT_SUCCESS(s)) { s = PcRegisterAdapterPowerManagement((PMINIPORTWAVECYCLIC)w, fdo); Record(fdo, 12, s); }
+    if (NT_SUCCESS(s)) s = StartStep(ext, StartPair(fdo, irp, resources, w, 0));
+    if (NT_SUCCESS(s)) {
+        s = PcRegisterAdapterPowerManagement((PMINIPORTWAVECYCLIC)w, fdo); Record(fdo, 12, s);
+        s = StartStep(ext, s);
+    }
     /* The later pairs (section 15.3): a pair that cannot be brought up is
-     * left out; pair 0 stands on its own. */
+     * left out; pair 0 stands on its own. A latched expiry is no pair left
+     * out: it ends the start before the next pair is built. */
     ULONG pairs = NT_SUCCESS(s) ? w->Pairs() : 1;
     for (ULONG k = 1; k < pairs && k < UAC_PAIRS && NT_SUCCESS(s); k++) {
         void *pm = ExAllocatePoolWithTag(NonPagedPool, sizeof(Wave), 'w2aU');
@@ -2068,6 +2619,12 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
         Wave *v = new(pm) Wave(fdo, ext->Lower, NULL, k, w);
         NTSTATUS e = v->Prepare();
         Record(fdo, 0x100 | (k << 4) | 1, e);
+        if (StartLatched(ext)) {
+            v->Shutdown(TRUE);
+            v->Release();
+            s = STATUS_IO_TIMEOUT;
+            break;
+        }
         if (!NT_SUCCESS(e)) {
             /* Nothing of this pair is registered yet (no usable format,
              * say): leave it and the pairs after it out. */
@@ -2077,6 +2634,7 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
         }
         e = StartPair(fdo, irp, resources, v, k);
         Record(fdo, 0x100 | (k << 4) | 2, e);
+        e = StartStep(ext, e);
         if (!NT_SUCCESS(e)) {
             /* A pair half registered cannot be taken back on every
              * target: the start fails as a whole. */
@@ -2088,25 +2646,66 @@ static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
         ext->Pair[k - 1] = v;
         w->AddPeer(v);
     }
-    if (!NT_SUCCESS(s)) ShutdownPairs(ext, TRUE, TRUE);
+    return s;
+}
+
+static NTSTATUS Start(PDEVICE_OBJECT fdo, PIRP irp, PRESOURCELIST resources)
+{
+    EXT *ext = Extension(fdo);
+    ShutdownPairs(ext, TRUE, TRUE);
+    StopNotifier(fdo);
+    /* 29.9: the gate for this start. Active only on 2000 and later (WDM
+     * 1.10 and above) with Uac2FailOnTimeout set to 1; in this step the
+     * setting is off unless written (no INF line yet), so a device behaves
+     * as before unless a test sets it. 98 SE and ME never read it. */
+    UacGateReset(&ext->Gate, IoIsWdmVersionAvailable(1, 0x10) &&
+                             GetDwordRaw(fdo, L"Uac2FailOnTimeout") == 1);
+    /* 29.9: the notifier before the start's first request (ParseDevice's
+     * configuration descriptor), Life starting: an expiry anywhere in the
+     * start is recorded by a thread that sends nothing, and no device-state
+     * call is made for a device that has not started. */
+    NTSTATUS s = ext->Gate.Active ? StartNotifier(fdo) : STATUS_SUCCESS;
+    if (NT_SUCCESS(s)) s = StartSteps(fdo, irp, resources);
+    /* The last test of the latch, over every outcome; only then is the
+     * device started for the notification's admission. Every failed start
+     * joins the notifier, which writes a pending record before it leaves. */
+    s = StartStep(ext, s);
+    if (!NT_SUCCESS(s)) {
+        ShutdownPairs(ext, TRUE, TRUE);
+        StopNotifier(fdo);
+    } else if (ext->Gate.Active) {
+        UacGateSetLife(&ext->Gate, UAC_LIFE_STARTED);
+        KeSetEvent(&ext->Gate.NotifyWake, IO_NO_INCREMENT, FALSE);   /* a failure in between */
+    }
     DbgPrint("uac2wdm: start %08X\n", s);
     return s;
 }
 
 static NTSTATUS Add(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
+    /* 30: the device's entry first, so a device is never added without it. */
+    UAC_FILES *files = FilesAlloc();
+    if (!files) return STATUS_INSUFFICIENT_RESOURCES;
     NTSTATUS s = PcAddAdapterDevice(driver, pdo, Start, 2 * UAC_PAIRS,
                                     PORT_CLASS_DEVICE_EXTENSION_SIZE + sizeof(EXT));
-    if (!NT_SUCCESS(s)) return s;
+    if (!NT_SUCCESS(s)) { ExFreePool(files); return s; }
     /* Old-target path from the design: no XP-only IoGetLowerDeviceObject.
      * AddDevice runs before PnP starts this stack. */
     PDEVICE_OBJECT lower = pdo, fdo = pdo->AttachedDevice;
     while (fdo && fdo->DriverObject != driver) { lower = fdo; fdo = fdo->AttachedDevice; }
-    if (!fdo) return STATUS_NO_SUCH_DEVICE;
+    if (!fdo) { ExFreePool(files); return STATUS_NO_SUCH_DEVICE; }
     Extension(fdo)->Pdo = pdo;
     Extension(fdo)->Lower = lower;
     Extension(fdo)->Miniport = NULL;
     RtlZeroMemory(Extension(fdo)->Pair, sizeof(Extension(fdo)->Pair));
+    /* docs/design/uac2.md 29.5.5: the gate and its lock exist from here. */
+    UacGateInit(&Extension(fdo)->Gate);
+    Extension(fdo)->Notifier = NULL;
+    Extension(fdo)->NotifierExit = 0;
+    Extension(fdo)->Surprised = 0;
+    FilesLink(files, fdo);
+    KeInitializeEvent(&Extension(fdo)->NotifierReady, NotificationEvent, FALSE);
+    KeInitializeEvent(&Extension(fdo)->NotifierExited, NotificationEvent, FALSE);
     return STATUS_SUCCESS;
 }
 
@@ -2121,18 +2720,68 @@ static NTSTATUS DispatchPnp(PDEVICE_OBJECT fdo, PIRP irp)
         stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         PAGED_CODE();
         EXT *ext = Extension(fdo);
+        if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) ext->Surprised = 1;
+        /* 29.9: Life first, so no notification is admitted from here on;
+         * the notifier's join then waits for one already admitted. */
+        if (ext->Gate.Active)
+            UacGateSetLife(&ext->Gate, stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL ?
+                                       UAC_LIFE_SURPRISE : UAC_LIFE_TEARDOWN);
         ShutdownPairs(ext, stack->MinorFunction != IRP_MN_STOP_DEVICE,
                       stack->MinorFunction == IRP_MN_REMOVE_DEVICE);
+        StopNotifier(fdo);
+    } else if (stack->MinorFunction == IRP_MN_QUERY_PNP_DEVICE_STATE &&
+               UacGateFailed(&Extension(fdo)->Gate)) {
+        /* 29.9: the device has failed: PNP_DEVICE_FAILED added to the flags
+         * already there, then the IRP goes on to PortCls as before. */
+        irp->IoStatus.Information |= PNP_DEVICE_FAILED;
+        irp->IoStatus.Status = STATUS_SUCCESS;
     }
-    return PortClsPnp(fdo, irp);
+    /* docs/design/uac2.md 30: a remove with no surprise removal before it
+     * (98 SE, ME: WDM below 1.10) marks this thread for RemoveHold; the
+     * entry goes once PortCls's remove has returned. */
+    BOOLEAN remove = stack->MinorFunction == IRP_MN_REMOVE_DEVICE;
+    BOOLEAN old = !IoIsWdmVersionAvailable(1, 0x10), surprised = Extension(fdo)->Surprised != 0;
+    if (remove && old && !surprised) FilesRemover(fdo, (PVOID)PsGetCurrentThread(), FALSE);
+    /* 30.6: a device PortCls left powered down is asked back to D0 first
+     * (PowerChangeState then records D0, and the hold's rule applies as for
+     * any device in D0); if PortCls does not bring it back, no hold. */
+    if (remove && UacPlanRemoveWake(old, surprised, FilesDown(fdo)))
+        PcRequestNewPowerState(fdo, PowerDeviceD0);
+    NTSTATUS ps = PortClsPnp(fdo, irp);
+    if (remove) FilesRemover(fdo, NULL, TRUE);
+    return ps;
+}
+
+/* docs/design/uac2.md 30: every create and close through PortCls's
+ * dispatch, counted as in flight from entry to return and its end stamped
+ * (the major is read before the call: the IRP may be completed when it
+ * returns). */
+static PDRIVER_DISPATCH PortClsDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
+static NTSTATUS DispatchFile(PDEVICE_OBJECT fdo, PIRP irp)
+{
+    ULONG major = IoGetCurrentIrpStackLocation(irp)->MajorFunction;
+    FilesNote(fdo, 0, 0, 1);            /* in flight from entry */
+    NTSTATUS s = PortClsDispatch[major](fdo, irp);
+    /* at return, whatever the status: a failed or pending create counts as
+     * an open only when it succeeded here; its end is stamped either way */
+    LONG opens = major == IRP_MJ_CREATE ? (NT_SUCCESS(s) && s != STATUS_PENDING ? 1 : 0) : -1;
+    FilesNote(fdo, opens, 0, -1);
+    return s;
 }
 
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING path)
 {
+    KeInitializeSpinLock(&FilesLock);
+    InitializeListHead(&FilesList);
     NTSTATUS status = PcInitializeAdapterDriver(driver, path, Add);
     if (NT_SUCCESS(status)) {
         PortClsPnp = driver->MajorFunction[IRP_MJ_PNP];
         driver->MajorFunction[IRP_MJ_PNP] = DispatchPnp;
+        static const UCHAR majors[] = { IRP_MJ_CREATE, IRP_MJ_CLOSE };
+        for (ULONG i = 0; i < sizeof(majors); i++) {
+            PortClsDispatch[majors[i]] = driver->MajorFunction[majors[i]];
+            driver->MajorFunction[majors[i]] = DispatchFile;
+        }
     }
     return status;
 }

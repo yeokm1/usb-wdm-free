@@ -1,0 +1,63 @@
+# Expected results of event.cas, written by hand from docs/design/mtp.md
+# 7.2, 7.4 and 7.9 "Events" and MTP 1.1 G.2. Format: ../README.md.
+# "callback = [t, ...]": the event callback's targets, in order, each run
+# as a job on the I/O thread. FULL = a full refresh of the device.
+
+EVT-001
+  rows a to g: callback = [<target>]; wire d0 after open = [] (the library itself sends nothing for these events)
+  row h: wire d0 after open = [GetDeviceInfo tid=1] (in the session, its next id), then callback = [device]; the DeviceInfo kept replaced by it before the callback (CQ32)
+end
+
+EVT-002
+  every row: callback = [FULL]; the event thread goes on waiting; trace has MTPR_EVENT
+end
+
+EVT-003
+  callback = [folder 1, row 2] (one each: ObjectAdded 2 and 3 share folder 1; the two ObjectInfoChanged 2 are one), after j0
+end
+
+EVT-004
+  callback = [FULL] only (64 refresh jobs queued, the 65th replacing them by one full refresh), after j0
+  never more than 64 refresh jobs queued; the lost flag never set (each event drained before the next)
+end
+
+EVT-005
+  the event thread saw USBMTP_EVENT_LOST; callback = [FULL] (once, or with the coalesced targets before it, never more than 64 refresh jobs queued at once)
+  never more than 64 refresh jobs queued
+end
+
+EVT-006
+  rows a, b: callback = []; ret r = MTPE_OK
+  rows c, d: callback = [folder 1] after j1; ret r = MTPE_OK bytes=5242880 (the event's tid not compared; j1 not cancelled)
+  every row: ctl d0 after open = [] (no cancel of any kind)
+end
+
+EVT-007
+  ret r1 = MTPE_CANCELLED flags=SESSION_LOST (CQ5)
+  ctl d0 after the event = [HC(1), EVSTART] (the transaction in progress cancelled; EVENTS start after the resume job's OpenSession)
+  then the resume job: GET_INFO, OpenSession tid=0, EVENTS start
+  notice d0 has SESSION_LOST; session d0 = 2
+end
+
+EVT-008
+  the session count raised at the DeviceReset's routing (7.3): the resume job at the head
+  order: OpenSession tid=0 (the resume job) < drop j0 = MTPE_SESSION on io < the refresh for folder 1 (session 1) dropped
+  run j0 = 0; callback = [] for the old refresh
+  notice d0 has SESSION_LOST
+end
+
+EVT-009
+  every call of d0's event thread = WAIT_EVENT with 1,000 ms
+end
+
+EVT-010
+  callback = [folder 1], after PBT_APMQUERYSUSPENDFAILED, never while held d0 = 1
+end
+
+EVT-011
+  ret r1 = MTPE_OK, the DeviceInfo of the open; wire d0 after open = [] for j1 (nothing sent)
+  row a: no event callback; wire d0 after open = []
+  row b: wire d0 after j1 = [GetDeviceInfo tid=1]; then the callback with the device as its target; ret rc = MTPE_OK with Model "Second model" (replaced before the callback)
+  row c: wire d0 after j1 = [GetDeviceInfo tid=1 -> 2002h]; the callback still called; ret rc = MTPE_OK with the open's DeviceInfo (kept); trace has the failure
+  every row: the split form and the endpoint addresses learned at the open unchanged
+end

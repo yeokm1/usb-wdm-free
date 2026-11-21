@@ -356,6 +356,76 @@ static void LostTests(void)
         CHECK(UacPlanWorkerExit(1, 0, 0));
     }
     {
+        /* Section 30, the hold in PortCls's remove (98 SE, ME), modelled as
+         * RemoveHold reads it every 10 ms. The clients' teardown as the
+         * traces read it: their first request 3 ms into the hold, the pin's
+         * close executing from 8 to 10, the filter's from 18 to 20, the
+         * stream's destroy finished at 37; a handle that is never closed does
+         * not keep the hold. */
+        unsigned long t, last, end, busy;
+        CHECK(UAC_REMOVE_QUIET_MS == 250UL && UAC_REMOVE_HOLD_MS == 5000UL);
+        /* the hold is taken only for a device in D0 with something left to
+         * tear down: the uac2 and uac1 pair removed together read a pended close
+         * at a remove that met the device powered down (D3) */
+        CHECK(UacPlanRemoveHoldTake(1, 1, 3, 0));
+        CHECK(UacPlanRemoveHoldTake(1, 0, 1, 0));                    /* a handle only */
+        CHECK(UacPlanRemoveHoldTake(1, 0, 0, 1));                    /* a create or close executing */
+        CHECK(UacPlanRemoveHoldTake(1, 1, 0, 0));                    /* a stream whose handle closed */
+        CHECK(!UacPlanRemoveHoldTake(1, 0, 0, 0));                   /* nothing to tear down */
+        CHECK(!UacPlanRemoveHoldTake(0, 1, 3, 0));                   /* powered down: never */
+        CHECK(!UacPlanRemoveHoldTake(0, 0, 1, 0));
+        CHECK(!UacPlanRemoveHoldTake(0, 0, 0, 1));
+        CHECK(!UacPlanRemoveHoldTake(0, 0, 0, 0));
+        /* 30.6: asked back to D0 before the remove: 98 SE and ME only, no
+         * surprise removal before it, the device powered down */
+        CHECK(UacPlanRemoveWake(1, 0, 1));
+        CHECK(!UacPlanRemoveWake(1, 0, 0));                         /* in D0 */
+        CHECK(!UacPlanRemoveWake(1, 1, 1));                         /* after a surprise removal */
+        CHECK(!UacPlanRemoveWake(0, 0, 1));                         /* 2000 and later */
+        CHECK(!UacPlanRemoveWake(0, 1, 1));
+        CHECK(UacPlanRemoveHold(0, 0, 0, 0));                        /* never at once */
+        CHECK(UacPlanRemoveHold(0, 0, UAC_REMOVE_QUIET_MS - 1, 4000UL));
+        CHECK(!UacPlanRemoveHold(0, 0, UAC_REMOVE_QUIET_MS, 300UL));
+        CHECK(UacPlanRemoveHold(1, 0, 4000UL, 4000UL));              /* a stream not destroyed */
+        CHECK(UacPlanRemoveHold(0, 1, 4000UL, 4000UL));              /* a create or close executing */
+        CHECK(UacPlanRemoveHold(0, 2, UAC_REMOVE_QUIET_MS, 300UL));
+        CHECK(!UacPlanRemoveHold(1, 0, 4000UL, UAC_REMOVE_HOLD_MS)); /* the bound, whatever is left */
+        CHECK(!UacPlanRemoveHold(0, 1, 4000UL, UAC_REMOVE_HOLD_MS));
+        CHECK(!UacPlanRemoveHold(1, 1, 0, UAC_REMOVE_HOLD_MS + 1));
+        CHECK(!UacPlanRemoveHold(0, 0, 0, UAC_REMOVE_HOLD_MS));
+        for (end = 0, last = 0, t = 0; t <= 6000UL && !end; t += 10) {
+            unsigned long streams = t < 37 ? 1 : 0;
+            busy = (t >= 8 && t < 10) || (t >= 18 && t < 20) ? 1 : 0;
+            if (t >= 10 && last < 10) last = 10;   /* pin close returned */
+            if (t >= 20 && last < 20) last = 20;   /* filter close returned */
+            if (t >= 37 && last < 37) last = 37;   /* stream destroy finished */
+            if (!UacPlanRemoveHold(streams, busy, t - last, t)) end = t;
+        }
+        CHECK(end == 290);                         /* 250 ms after the destroy, on the 10 ms reads */
+        /* a close that executes for 400 ms with nothing else left: the hold
+         * stays through it and the quiet time after it */
+        for (end = 0, t = 0; t <= 6000UL && !end; t += 10) {
+            busy = t >= 100 && t < 500;
+            last = t >= 500 ? 500 : 0;
+            if (!UacPlanRemoveHold(0, busy, t >= 500 ? t - last : (t < 100 ? t : 0), t)) end = t;
+        }
+        CHECK(end == 750);
+        /* a client that starts its close only after the quiet time is not
+         * waited for: the window the design states */
+        for (end = 0, t = 0; t <= 6000UL && !end; t += 10)
+            if (!UacPlanRemoveHold(0, t >= 300 && t < 320, t, t)) end = t;
+        CHECK(end == 250);
+        for (end = 0, t = 0; t <= 6000UL && !end; t += 10)   /* no client: the quiet time alone */
+            if (!UacPlanRemoveHold(0, 0, t, t)) end = t;
+        CHECK(end == 250);
+        for (end = 0, t = 0; t <= 6000UL && !end; t += 10)   /* a stream left: the bound */
+            if (!UacPlanRemoveHold(1, 0, t, t)) end = t;
+        CHECK(end == 5000);
+        for (end = 0, t = 0; t <= 6000UL && !end; t += 10)   /* a close never returning: the bound */
+            if (!UacPlanRemoveHold(0, 1, 0, t)) end = t;
+        CHECK(end == 5000);
+    }
+    {
         /* 26.13, a frame request the stack holds during a stop or removal,
          * the worker's passes modelled as Worker() makes them (10 ms each):
          * four idle data slots while LagSuspect; the stack keeps the request

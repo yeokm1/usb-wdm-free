@@ -203,6 +203,11 @@ struct UAC_DEV {
     KMUTEX Lock;            /* control requests, clock and configuration state */
     BOOLEAN HighSpeed;
     CLAIM Claim[CLAIMS];
+    /* docs/design/uac2.md 29.5: the FDO's gate. While it is active the
+     * claims are also taken under ClaimLock, so a release never waits on
+     * the device mutex behind a hung request. */
+    UAC_GATE *Gate;
+    KSPIN_LOCK ClaimLock;
 };
 
 struct UAC_USB {
@@ -234,6 +239,8 @@ struct UAC_USB {
     ULONG DoneCount, QuietFrom, FeedbackStamp; /* section 25: completions, the last usable and the newest feedback's stamps */
     UAC_RATE Rate_;
     UAC_USB_STATS Stats;
+    LIST_ENTRY Link;          /* 29.9: in the gate's list while the gate is active */
+    BOOLEAN Registered;
 #ifdef UAC_V1
     /* docs/design/uac2.md 26.12: an adaptive source's synch OUT endpoint
      * fed Ff (the feedback slots, sending), MaxPacketsOnly either way, and
@@ -252,33 +259,210 @@ static NTSTATUS SyncDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+/* ---- docs/design/uac2.md 29.5.5, 29.9: the gate. While it is inactive
+ * (always on 98 SE and ME) the feature stays inactive and the old
+ * functional paths remain: the gate's checks below still run there and
+ * refuse nothing (29.17). ---- */
+static BOOLEAN GateOn(UAC_GATE *g)
+{
+    return g && InterlockedCompareExchange(&g->Active, 0, 0) ? TRUE : FALSE;
+}
+
+void UacGateInit(UAC_GATE *g)
+{
+    RtlZeroMemory(g, sizeof(*g));
+    KeInitializeSpinLock(&g->Lock);
+    InitializeListHead(&g->Streams);
+    KeInitializeEvent(&g->NotifyWake, NotificationEvent, FALSE);
+}
+
+void UacGateReset(UAC_GATE *g, BOOLEAN active)
+{
+    KIRQL old;
+    KeAcquireSpinLock(&g->Lock, &old);
+    g->Active = active ? 1 : 0;
+    g->Failed = 0; g->Life = UAC_LIFE_STARTING; g->Notifying = 0;
+    g->Kind = g->Setup0 = g->Setup1 = 0; g->ExpiredAt = 0;
+    g->Completed = 0; g->Status = STATUS_SUCCESS; g->UrbStatus = 0; g->LateMs = 0;
+    g->Refused = g->HostTimeouts = 0;
+    KeClearEvent(&g->NotifyWake);
+    KeReleaseSpinLock(&g->Lock, old);
+}
+
+LONG UacGateFailed(UAC_GATE *g)
+{
+    return GateOn(g) && InterlockedCompareExchange(&g->Failed, 0, 0) ? 1 : 0;
+}
+
+LONG UacGateSetLife(UAC_GATE *g, LONG life)
+{
+    KIRQL old;
+    LONG was;
+    KeAcquireSpinLock(&g->Lock, &old);
+    was = g->Life; g->Life = life;
+    KeReleaseSpinLock(&g->Lock, old);
+    return was;
+}
+
+/* What a request is, for the expiry's record (29.9). */
+typedef struct UAC_REQ {
+    UAC_GATE *Gate;
+    ULONG Kind, Setup0, Setup1;
+    BOOLEAN First;            /* this request's expiry failed the device */
+    NTSTATUS Raw;             /* the lower stack's completion status, unmapped */
+} UAC_REQ;
+
+static VOID Describe(UAC_REQ *q, UAC_GATE *g, PURB urb)
+{
+    q->Gate = g; q->Kind = UAC_REQ_STANDARD; q->Setup0 = q->Setup1 = 0; q->First = FALSE;
+    q->Raw = STATUS_SUCCESS;
+    switch (urb->UrbHeader.Function) {
+    case URB_FUNCTION_GET_CURRENT_FRAME_NUMBER:
+        q->Kind = UAC_REQ_HOST;
+        break;
+    case URB_FUNCTION_CLASS_INTERFACE:
+    case URB_FUNCTION_CLASS_ENDPOINT: {
+        struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST *c = (struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST *)urb;
+        ULONG type = (c->TransferFlags & USBD_TRANSFER_DIRECTION_IN ? 0x80 : 0) | 0x20 |
+                     (urb->UrbHeader.Function == URB_FUNCTION_CLASS_INTERFACE ? 1 : 2);
+        q->Kind = UAC_REQ_CLASS;
+        q->Setup0 = type | (ULONG)c->Request << 8 | (ULONG)c->Value << 16;
+        q->Setup1 = (ULONG)c->Index | (c->TransferBufferLength & 0xffff) << 16;
+        break;
+    }
+    case URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE: {
+        struct _URB_CONTROL_DESCRIPTOR_REQUEST *c = (struct _URB_CONTROL_DESCRIPTOR_REQUEST *)urb;
+        q->Setup0 = 0x80 | 6UL << 8 | ((ULONG)c->DescriptorType << 8 | c->Index) << 16;
+        q->Setup1 = (ULONG)c->LanguageId | (c->TransferBufferLength & 0xffff) << 16;
+        break;
+    }
+    case URB_FUNCTION_SELECT_INTERFACE: {
+        struct _URB_SELECT_INTERFACE *c = (struct _URB_SELECT_INTERFACE *)urb;
+        q->Kind = UAC_REQ_SELECT_IF;
+        q->Setup0 = (ULONG)c->Interface.InterfaceNumber << 8 | c->Interface.AlternateSetting;
+        break;
+    }
+    case URB_FUNCTION_SELECT_CONFIGURATION:
+        q->Kind = UAC_REQ_SELECT_CF;
+        break;
+    }
+}
+
+/* The expiry hook (29.9): in the requesting thread, which may hold any of
+ * the driver's mutexes, so spin locks only, no wait, nothing sent. The
+ * failure is published here, before the cancellation, whatever the
+ * request's final status turns out to be. */
+static VOID GateExpire(UAC_REQ *q)
+{
+    UAC_GATE *g = q->Gate;
+    PLIST_ENTRY e;
+    KIRQL old, old2;
+    if (!GateOn(g)) return;
+    if (q->Kind == UAC_REQ_HOST) { InterlockedIncrement((LONG *)&g->HostTimeouts); return; }
+    KeAcquireSpinLock(&g->Lock, &old);
+    if (!g->Failed) {
+        g->Kind = q->Kind; g->Setup0 = q->Setup0; g->Setup1 = q->Setup1;
+        g->ExpiredAt = KeQueryInterruptTime();
+        g->Failed = 1;
+        q->First = TRUE;
+    }
+    /* Every registered stream stops as the worker's own Fail stops it
+     * (its bounded part, no trace): its worker cancels, drains, exits. */
+    for (e = g->Streams.Flink; e != &g->Streams; e = e->Flink) {
+        UAC_USB *s = CONTAINING_RECORD(e, UAC_USB, Link);
+        KeAcquireSpinLock(&s->Lock, &old2);
+        if (NT_SUCCESS(s->Stats.LastStatus)) s->Stats.LastStatus = STATUS_IO_TIMEOUT;
+        s->Stop = TRUE;
+        KeSetEvent(&s->Wake, IO_NO_INCREMENT, FALSE);
+        KeReleaseSpinLock(&s->Lock, old2);
+    }
+    KeSetEvent(&g->NotifyWake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&g->Lock, old);
+}
+
+/* The expired request has completed: its final status beside the expiry.
+ * status is the lower stack's raw completion status (q->Raw), never the
+ * caller's mapping of it (UacGateCallerStatus). */
+static VOID GateFinal(UAC_REQ *q, NTSTATUS status, ULONG urbStatus)
+{
+    UAC_GATE *g = q->Gate;
+    KIRQL old;
+    ULONGLONG now = KeQueryInterruptTime();
+    KeAcquireSpinLock(&g->Lock, &old);
+    g->Status = status; g->UrbStatus = urbStatus;
+    g->LateMs = UacGateLateMs(now, g->ExpiredAt);
+    g->Completed = 1;
+    KeSetEvent(&g->NotifyWake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&g->Lock, old);
+}
+
+/* The admission point of a request to the device (29.5.8): under the gate
+ * lock, with the request's IRP and URB built and nothing between here and
+ * IoCallDriver that waits or blocks; the lock is released before the call
+ * and never held across anything that blocks. Admitted when the device
+ * has not failed: a failure published after this point is ordered after
+ * the request (it is that request's own expiry if it does not complete).
+ * The earlier checks (UsbRequest's, LockDev's) can only refuse. Inactive
+ * gate: no check, as before. */
+static BOOLEAN GateAdmit(UAC_GATE *g)
+{
+    KIRQL old;
+    BOOLEAN admit;
+    if (!GateOn(g)) return TRUE;
+    KeAcquireSpinLock(&g->Lock, &old);
+    admit = g->Failed ? FALSE : TRUE;
+    if (!admit) InterlockedIncrement((LONG *)&g->Refused);
+    KeReleaseSpinLock(&g->Lock, old);
+    return admit;
+}
+
 /* The timeout requests cancellation. Only observed completion permits free.
  * A broken lower stack may make this wait unbounded; never free its IRP,
- * URB, buffer, event or device owner just to return after a deadline. */
-static NTSTATUS CallAndDrain(PDEVICE_OBJECT lower, PIRP irp, PKEVENT event)
+ * URB, buffer, event or device owner just to return after a deadline.
+ * q (may be NULL): the expiry is acted on when the 5 s wait ends, before
+ * the cancellation (29.9); q->Raw keeps the lower stack's own completion
+ * status for the record, apart from what the caller is returned; and the
+ * request is admitted (GateAdmit) as the last step before the call: a
+ * refused one is freed here, never sent. */
+static NTSTATUS CallAndDrain(PDEVICE_OBJECT lower, PIRP irp, PKEVENT event, UAC_REQ *q)
 {
     LARGE_INTEGER timeout;
     NTSTATUS wait, status;
+    if (q && !GateAdmit(q->Gate)) {
+        IoFreeIrp(irp);
+        return STATUS_DEVICE_NOT_READY;
+    }
     IoSetCompletionRoutine(irp, SyncDone, event, TRUE, TRUE, TRUE);
     (void)IoCallDriver(lower, irp);
     timeout.QuadPart = -50000000;
     wait = KeWaitForSingleObject(event, Executive, KernelMode, FALSE, &timeout);
     if (wait == STATUS_TIMEOUT) {
+        if (q) GateExpire(q);
         (void)IoCancelIrp(irp);
         KeWaitForSingleObject(event, Executive, KernelMode, FALSE, NULL);
         status = irp->IoStatus.Status;
-        if (status == STATUS_CANCELLED) status = STATUS_IO_TIMEOUT;
-    } else status = irp->IoStatus.Status;
+        if (q) q->Raw = status;
+        status = (NTSTATUS)UacGateCallerStatus((long)status);
+    } else {
+        status = irp->IoStatus.Status;
+        if (q) q->Raw = status;
+    }
     IoFreeIrp(irp);
     return status;
 }
 
-static NTSTATUS UsbRequest(PDEVICE_OBJECT lower, PURB urb)
+/* One request through the owned-IRP path. With the gate active, a failed
+ * device refuses it early, before anything is allocated, and again at the
+ * admission point (CallAndDrain's GateAdmit), which decides (29.5.8). */
+static NTSTATUS UsbRequest(UAC_GATE *g, PDEVICE_OBJECT lower, PURB urb)
 {
-    PIRP irp = IoAllocateIrp(lower->StackSize, FALSE);
+    PIRP irp;
     PIO_STACK_LOCATION stack;
     KEVENT event;
     NTSTATUS status;
+    UAC_REQ q;
+    if (UacGateFailed(g)) { InterlockedIncrement((LONG *)&g->Refused); return STATUS_DEVICE_NOT_READY; }
+    irp = IoAllocateIrp(lower->StackSize, FALSE);
     if (!irp) return STATUS_INSUFFICIENT_RESOURCES;
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     KeInitializeEvent(&event, NotificationEvent, FALSE);
@@ -287,10 +471,34 @@ static NTSTATUS UsbRequest(PDEVICE_OBJECT lower, PURB urb)
     stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
     stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_INTERNAL_USB_SUBMIT_URB;
     stack->Parameters.Others.Argument1 = urb;
-    status = CallAndDrain(lower, irp, &event);
+    Describe(&q, g, urb);
+    status = CallAndDrain(lower, irp, &event, &q);
+    if (q.First) GateFinal(&q, q.Raw, (ULONG)urb->UrbHeader.Status);
     if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status))
         status = STATUS_DEVICE_DATA_ERROR;
     return status;
+}
+
+/* The device mutex (29.5.8). Inactive gate: the untimed wait of before.
+ * Active: 100 ms timed waits (a polling interval, not a guarantee) that
+ * end with STATUS_DEVICE_NOT_READY once the device has failed; only
+ * STATUS_SUCCESS from the wait means acquired. */
+static NTSTATUS LockDev(UAC_DEV *d)
+{
+    LARGE_INTEGER t;
+    if (!GateOn(d->Gate)) {
+        KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+        return STATUS_SUCCESS;
+    }
+    t.QuadPart = -1000000;
+    for (;;) {
+        if (UacGateFailed(d->Gate)) {
+            InterlockedIncrement((LONG *)&d->Gate->Refused);
+            return STATUS_DEVICE_NOT_READY;
+        }
+        if (KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, &t) == STATUS_SUCCESS)
+            return STATUS_SUCCESS;
+    }
 }
 
 /* ABI field layout/GUID facts: WDK7.1 usbbusif.h USB_BUS_INTERFACE_USBDI_V1.
@@ -329,7 +537,7 @@ static NTSTATUS BusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
     stack->Parameters.QueryInterface.Version = 1;
     stack->Parameters.QueryInterface.Interface = (PINTERFACE)&bus;
     stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
-    status = CallAndDrain(lower, irp, &event);
+    status = CallAndDrain(lower, irp, &event, NULL);   /* host-local, no gate */
     TR_LINE(("busif", (ULONG)status, (ULONG)bus.Size << 16 | bus.Version, bus.IsHighSpeed ? 1 : 0));
     if (!NT_SUCCESS(status)) return status;
     /* Answered, but not with an interface this module can use: refused. */
@@ -361,7 +569,7 @@ static NTSTATUS EntityRequest(UAC_DEV *d, UCHAR entity, int input, UCHAR request
     urb.Request = request;
     urb.Value = ((USHORT)selector << 8) | channel;
     urb.Index = ((USHORT)entity << 8) | d->Desc.Control;
-    status = UsbRequest(d->Lower, (PURB)&urb);
+    status = UsbRequest(d->Gate, d->Lower, (PURB)&urb);
     *length = urb.TransferBufferLength;
     return status;
 }
@@ -612,7 +820,11 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
     if (!w) return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(w, sizeof(*w));
     w->Rates = rates; w->Max = max; w->Count = count;
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+    if (!NT_SUCCESS(LockDev(d))) {   /* 29.5.8: refused, never partial rates */
+        ExFreePool(w);
+        *count = 0;
+        return STATUS_DEVICE_NOT_READY;
+    }
     (void)Walk(d, clock, w, 0);
     /* The second pass only for stepped ranges: a device of discrete rates
      * sees one walk's requests, as before the two passes. With both
@@ -624,6 +836,8 @@ NTSTATUS UacUsbRates(UAC_DEV *d, UAC_BYTE terminal, ULONG *rates, ULONG max, ULO
     }
     KeReleaseMutex(&d->Lock, FALSE);
     ExFreePool(w);
+    /* 29.5.8: a failure during the walk is no discovery. */
+    if (UacGateFailed(d->Gate)) { *count = 0; return STATUS_DEVICE_NOT_READY; }
     return *count ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 }
 #endif
@@ -638,8 +852,8 @@ NTSTATUS UacUsbBusSpeed(PDEVICE_OBJECT lower, BOOLEAN *high)
 }
 #endif
 
-NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
-                          PVOID buffer, USHORT size, ULONG *got)
+NTSTATUS UacUsbDescriptor(UAC_GATE *gate, PDEVICE_OBJECT lower, UCHAR type, UCHAR index,
+                          USHORT language, PVOID buffer, USHORT size, ULONG *got)
 {
     struct _URB_CONTROL_DESCRIPTOR_REQUEST urb;
     NTSTATUS status;
@@ -652,7 +866,7 @@ NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT 
     urb.DescriptorType = type;
     urb.Index = index;
     urb.LanguageId = language;
-    status = UsbRequest(lower, (PURB)&urb);
+    status = UsbRequest(gate, lower, (PURB)&urb);
     if (NT_SUCCESS(status)) *got = urb.TransferBufferLength > size ? size : urb.TransferBufferLength;
     TR_LINE(("desc", (ULONG)type << 16 | index, (ULONG)status, *got));
     return status;
@@ -674,8 +888,9 @@ NTSTATUS UacUsbClassRequest(UAC_DEV *d, const UCHAR *setup, PVOID bytes, ULONG *
     urb.Request = setup[1];
     urb.Value = (USHORT)(setup[2] | (setup[3] << 8));
     urb.Index = (USHORT)(setup[4] | (setup[5] << 8));
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
-    status = UsbRequest(d->Lower, (PURB)&urb);
+    status = LockDev(d);
+    if (!NT_SUCCESS(status)) { *length = 0; return status; }   /* 29.5.8 */
+    status = UsbRequest(d->Gate, d->Lower, (PURB)&urb);
     KeReleaseMutex(&d->Lock, FALSE);
     *length = urb.TransferBufferLength;
     return status;
@@ -739,7 +954,7 @@ static CLAIM *FindClaim(UAC_DEV *d, UAC_BYTE id)
 
 /* Device lock held. The first count hops of path and the source at rate
  * agree with every claim. */
-static BOOLEAN PathFree(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG count, UAC_BYTE source, ULONG rate)
+static BOOLEAN PathFreeClaims(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG count, UAC_BYTE source, ULONG rate)
 {
     ULONG i;
     CLAIM *c;
@@ -752,9 +967,34 @@ static BOOLEAN PathFree(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG count, UAC
     return !c || c->Value == rate;
 }
 
+/* With the gate active the claim table is also under ClaimLock (29.5.2),
+ * so ReleasePath can take it without the device mutex. */
+static BOOLEAN PathFree(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG count, UAC_BYTE source, ULONG rate)
+{
+    KIRQL old;
+    BOOLEAN free;
+    if (!GateOn(d->Gate)) return PathFreeClaims(d, path, count, source, rate);
+    KeAcquireSpinLock(&d->ClaimLock, &old);
+    free = PathFreeClaims(d, path, count, source, rate);
+    KeReleaseSpinLock(&d->ClaimLock, old);
+    return free;
+}
+
+static NTSTATUS ClaimPathClaims(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate);
+static NTSTATUS ClaimPath(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate)
+{
+    KIRQL old;
+    NTSTATUS status;
+    if (!GateOn(d->Gate)) return ClaimPathClaims(d, path, rate);
+    KeAcquireSpinLock(&d->ClaimLock, &old);
+    status = ClaimPathClaims(d, path, rate);
+    KeReleaseSpinLock(&d->ClaimLock, old);
+    return status;
+}
+
 /* Device lock held. Every entity is checked before any is taken: a stream
  * never moves a selector or a rate another running stream depends on. */
-static NTSTATUS ClaimPath(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate)
+static NTSTATUS ClaimPathClaims(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate)
 {
     UAC_BYTE ids[UAC_CLOCK_HOPS + 1];
     ULONG values[UAC_CLOCK_HOPS + 1], n = PathClaims(path, rate, ids, values), i, j, free = 0;
@@ -781,13 +1021,19 @@ static VOID ReleasePath(UAC_DEV *d, const UAC_CLOCK_PATH *path, ULONG rate)
 {
     UAC_BYTE ids[UAC_CLOCK_HOPS + 1];
     ULONG values[UAC_CLOCK_HOPS + 1], n, i;
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+    KIRQL old;
+    BOOLEAN on = GateOn(d->Gate);
+    /* 29.5.8: cleanup is never refused; with the gate active it takes the
+     * claim lock alone, never waiting behind a hung request. */
+    if (on) KeAcquireSpinLock(&d->ClaimLock, &old);
+    else KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
     n = PathClaims(path, rate, ids, values);
     for (i = 0; i < n; i++) {
         CLAIM *c = FindClaim(d, ids[i]);
         if (c) c->Users--;
     }
-    KeReleaseMutex(&d->Lock, FALSE);
+    if (on) KeReleaseSpinLock(&d->ClaimLock, old);
+    else KeReleaseMutex(&d->Lock, FALSE);
 }
 
 #ifdef UAC_V1
@@ -822,8 +1068,10 @@ static NTSTATUS EndpointRate(UAC_USB *s)
     urb.Request = 0x01;
     urb.Value = 0x0100;
     urb.Index = s->Alt.DataEndpoint;
-    KeWaitForSingleObject(&s->Dev->Lock, Executive, KernelMode, FALSE, NULL);
-    status = UsbRequest(s->Dev->Lower, (PURB)&urb);
+    status = LockDev(s->Dev);
+    if (!NT_SUCCESS(status)) return status;   /* 29.5.8 */
+    status = UsbRequest(s->Dev->Gate, s->Dev->Lower, (PURB)&urb);
+    /* The advisory GET is admitted on its own (UsbRequest's check). */
     if (NT_SUCCESS(status)) {
         RtlZeroMemory(&urb, sizeof(urb));
         RtlZeroMemory(b, sizeof(b));
@@ -834,7 +1082,7 @@ static NTSTATUS EndpointRate(UAC_USB *s)
         urb.Request = 0x81;
         urb.Value = 0x0100;
         urb.Index = s->Alt.DataEndpoint;
-        if (NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&urb)) && urb.TransferBufferLength == 3)
+        if (NT_SUCCESS(UsbRequest(s->Dev->Gate, s->Dev->Lower, (PURB)&urb)) && urb.TransferBufferLength == 3)
             s->Stats.ClockHz = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16);
     }
     KeReleaseMutex(&s->Dev->Lock, FALSE);
@@ -858,7 +1106,8 @@ static NTSTATUS SetClock(UAC_USB *s)
     if (!w) return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(w, sizeof(*w));
     w->Rate = s->Rate;
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+    status = LockDev(d);
+    if (!NT_SUCCESS(status)) { ExFreePool(w); return status; }   /* 29.5.8: nothing claimed */
     if (!Walk(d, clock, w, 0)) { status = STATUS_NOT_SUPPORTED; goto done; }
     status = ClaimPath(d, &w->Path, s->Rate);
     if (!NT_SUCCESS(status)) goto done;
@@ -941,7 +1190,7 @@ static NTSTATUS Configure(UAC_DEV *d)
         for (j = 0; j < d->IfPipes[i]; j++) info->Pipes[j].MaximumTransferSize = 4096;
         info = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)info + info->Length);
     }
-    status = UsbRequest(d->Lower, (PURB)urb);
+    status = UsbRequest(d->Gate, d->Lower, (PURB)urb);
     if (NT_SUCCESS(status)) {
         d->Configuration = urb->ConfigurationHandle;
         if (!d->Configuration) status = STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -965,7 +1214,7 @@ static ULONG TrFrame(UAC_USB *s)
     RtlZeroMemory(&frame, sizeof(frame));
     frame.Hdr.Length = sizeof(frame);
     frame.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&frame)))
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !NT_SUCCESS(UsbRequest(s->Dev->Gate, s->Dev->Lower, (PURB)&frame)))
         return 0xffffffff;
     return frame.FrameNumber;
 }
@@ -1005,8 +1254,9 @@ static NTSTATUS SelectAlt(UAC_USB *s, BOOLEAN active)
     urb->Interface.AlternateSetting = active ? s->Alt.Alternate : 0;
     urb->Interface.NumberOfPipes = pipes;
     for (i = 0; i < pipes; i++) urb->Interface.Pipes[i].MaximumTransferSize = s->SlotBytes;
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
-    status = UsbRequest(d->Lower, (PURB)urb);
+    status = LockDev(d);
+    if (!NT_SUCCESS(status)) { ExFreePool(urb); return status; }   /* 29.5.8: nothing submitted */
+    status = UsbRequest(d->Gate, d->Lower, (PURB)urb);
     KeReleaseMutex(&d->Lock, FALSE);
     TR_LINE(("alt", (ULONG)s->Alt.Interface << 16 | urb->Interface.AlternateSetting, (ULONG)status,
              (ULONG)urb->Hdr.Status));
@@ -1272,17 +1522,20 @@ static LONG FramePhase(UAC_USB *s)
 }
 
 /* 26.13, the worker only: sends a frame request and returns without
- * waiting for it (FrameDone wakes the worker). FALSE when one is still
- * out or back and not taken (its storage is not reused before FrameTake),
- * or no IRP could be had. */
-static BOOLEAN FrameSend(UAC_USB *s, BOOLEAN forResync)
+ * waiting for it (FrameDone wakes the worker). STATUS_SUCCESS sent;
+ * STATUS_DEVICE_BUSY when one is still out or back and not taken (its
+ * storage is not reused before FrameTake); STATUS_INSUFFICIENT_RESOURCES
+ * when no IRP could be had; STATUS_DELETE_PENDING when a Stop was seen at
+ * the admission point (nothing sent). */
+static NTSTATUS FrameSend(UAC_USB *s, BOOLEAN forResync)
 {
     PIO_STACK_LOCATION stack;
     KIRQL old;
     PIRP irp;
-    if (FramePhase(s)) return FALSE;
+    ULONGLONG sentAt;
+    if (FramePhase(s)) return STATUS_DEVICE_BUSY;
     irp = IoAllocateIrp(s->Dev->Lower->StackSize, FALSE);
-    if (!irp) return FALSE;
+    if (!irp) return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(&s->Frame.Urb, sizeof(s->Frame.Urb));
     s->Frame.Urb.Hdr.Length = sizeof(s->Frame.Urb);
     s->Frame.Urb.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
@@ -1293,13 +1546,28 @@ static BOOLEAN FrameSend(UAC_USB *s, BOOLEAN forResync)
     stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_INTERNAL_USB_SUBMIT_URB;
     stack->Parameters.Others.Argument1 = &s->Frame.Urb;
     IoSetCompletionRoutine(irp, FrameDone, s, TRUE, TRUE, TRUE);
+    sentAt = KeQueryInterruptTime();
+    /* The admission point (29.5.8), as SubmitSlot's: published as the
+     * stack's only with no Stop seen under the stream lock, where the
+     * expiry hook marks every stream (after the gate lock), and passed on
+     * at once. The worker's earlier Stop read is not authority to send: a
+     * failure published since then leaves nothing sent. Inactive gate (98
+     * SE and ME always): as before, a request sent at a stop is cancelled
+     * by the stop's drain. */
+    KeAcquireSpinLock(&s->Lock, &old);
+    if (s->Stop && GateOn(s->Dev->Gate)) {
+        KeReleaseSpinLock(&s->Lock, old);
+        IoFreeIrp(irp);
+        return STATUS_DELETE_PENDING;
+    }
     s->Frame.Irp = irp;
     s->Frame.Cancelled = FALSE;
     s->Frame.ForResync = forResync;
-    s->Frame.SentAt = KeQueryInterruptTime();
-    KeAcquireSpinLock(&s->Lock, &old); s->Frame.Phase = 1; KeReleaseSpinLock(&s->Lock, old);
+    s->Frame.SentAt = sentAt;
+    s->Frame.Phase = 1;
+    KeReleaseSpinLock(&s->Lock, old);
     (void)IoCallDriver(s->Dev->Lower, irp);
-    return TRUE;
+    return STATUS_SUCCESS;
 }
 
 /* The worker only: a request that is back is taken (its IRP freed): TRUE,
@@ -1738,7 +2006,11 @@ static VOID Worker(PVOID context)
                 gate = UacPlanDataGate(s->Rec.LagSuspect, taken && !forResync, FramePhase(s) != 0,
                                        s->Frame.Cancelled);
                 if (gate == UAC_GATE_ASK) {
-                    if (!FrameSend(s, FALSE)) gate = UAC_GATE_SUBMIT;
+                    status = FrameSend(s, FALSE);
+                    /* a Stop seen at its admission: nothing sent, the
+                     * stop's own status kept, as SubmitSlot's */
+                    if (status == STATUS_DELETE_PENDING) { stop = TRUE; continue; }
+                    if (!NT_SUCCESS(status)) gate = UAC_GATE_SUBMIT;
                     else if (FrameTake(s, &ok, &frame, &forResync)) {
                         /* back at once, as most stacks give it; the Stop
                          * is read again after it */
@@ -1785,7 +2057,9 @@ static VOID Worker(PVOID context)
                 gate = UAC_RSY_ASK;
             }
             if (gate == UAC_RSY_ASK) {
-                if (!FrameSend(s, TRUE)) {
+                status = FrameSend(s, TRUE);
+                if (status == STATUS_DELETE_PENDING) stop = TRUE;   /* nothing sent; the stop's status kept */
+                else if (!NT_SUCCESS(status)) {
                     TR_LINE(("rsyirp", 0, 0, 0));
                     Fail(s, STATUS_INSUFFICIENT_RESOURCES);
                 } else if (FrameTake(s, &ok, &frame, &forResync)) {
@@ -1853,8 +2127,8 @@ static VOID Worker(PVOID context)
 #endif
         if (realtime) {
             runStart = (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
-            /* A wait that returned at once is not idle time (Codex, build
-             * 23): shorter than UAC_DUTY_SHORT_WAIT_US, it counts as busy. */
+            /* A wait that returned at once is not idle time (build 23):
+             * shorter than UAC_DUTY_SHORT_WAIT_US, it counts as busy. */
             if (runStart - waitStart < shortWait) busy += runStart - waitStart;
         }
     }
@@ -1864,7 +2138,8 @@ static VOID Worker(PVOID context)
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
-NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_DEV **out)
+NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_GATE *gate,
+                    UAC_DEV **out)
 {
     UAC_DEV *d;
     UAC_BYTE numbers[32], pipes[32];
@@ -1919,6 +2194,8 @@ NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *de
     d->IfCount = ifCount;
     d->Lower = lower; d->HighSpeed = high;
     KeInitializeMutex(&d->Lock, 0);
+    d->Gate = gate;
+    KeInitializeSpinLock(&d->ClaimLock);
     status = Configure(d);
     TR_LINE(("config", (ULONG)status, d->IfCount, d->HighSpeed));
     if (!NT_SUCCESS(status)) { ExFreePool(d->Config); ExFreePool(d); return status; }
@@ -2000,9 +2277,21 @@ NTSTATUS UacUsbCreate(UAC_DEV *d, int capture, UAC_BYTE terminal, ULONG channels
     KeInitializeEvent(&s->Exited, NotificationEvent, FALSE);
     s->WaitThread = IoIsWdmVersionAvailable(1, 0x10);
     s->RealtimeRead = UAC_QUEUE_NONE; s->Realtime = UacPlanRealtime(UAC_QUEUE_NONE);
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
-    d->Streams++;
-    KeReleaseMutex(&d->Lock, FALSE);
+    if (GateOn(d->Gate)) {
+        /* 29.5.2, 29.9: counted without the device mutex, and listed so
+         * the expiry hook can stop it. */
+        KIRQL old;
+        InterlockedIncrement((LONG *)&d->Streams);
+        KeAcquireSpinLock(&d->Gate->Lock, &old);
+        InsertTailList(&d->Gate->Streams, &s->Link);
+        s->Registered = TRUE;
+        if (d->Gate->Failed) s->Stop = TRUE;
+        KeReleaseSpinLock(&d->Gate->Lock, old);
+    } else {
+        KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+        d->Streams++;
+        KeReleaseMutex(&d->Lock, FALSE);
+    }
     *out = s; return STATUS_SUCCESS;
 }
 
@@ -2080,7 +2369,20 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     KIRQL old;
     BOOLEAN already;
     if (!s || KeGetCurrentIrql() != PASSIVE_LEVEL) return STATUS_INVALID_DEVICE_STATE;
-    KeWaitForSingleObject(&s->Operation, Executive, KernelMode, FALSE, NULL);
+    /* 29.5.5, 29.5.7: a failed device refuses before any wait, and the
+     * stream's mutex is waited for in timed tries that read the gate. */
+    if (GateOn(s->Dev->Gate)) {
+        LARGE_INTEGER t;
+        t.QuadPart = -1000000;
+        for (;;) {
+            if (UacGateFailed(s->Dev->Gate)) return STATUS_DEVICE_NOT_READY;
+            if (KeWaitForSingleObject(&s->Operation, Executive, KernelMode, FALSE, &t) == STATUS_SUCCESS) break;
+        }
+        if (UacGateFailed(s->Dev->Gate)) {   /* before the "already running" shortcut */
+            KeReleaseMutex(&s->Operation, FALSE);
+            return STATUS_DEVICE_NOT_READY;
+        }
+    } else KeWaitForSingleObject(&s->Operation, Executive, KernelMode, FALSE, NULL);
     KeAcquireSpinLock(&s->Lock, &old);
     already = s->Thread && s->Stats.Running && !s->Stop;
     KeReleaseSpinLock(&s->Lock, old);
@@ -2114,7 +2416,7 @@ NTSTATUS UacUsbStart(UAC_USB *s)
         RtlZeroMemory(&frame, sizeof(frame));
         frame.Hdr.Length = sizeof(frame);
         frame.Hdr.Function = URB_FUNCTION_GET_CURRENT_FRAME_NUMBER;
-        if (NT_SUCCESS(UsbRequest(s->Dev->Lower, (PURB)&frame))) s->Stats.StartCurrentFrame = frame.FrameNumber;
+        if (NT_SUCCESS(UsbRequest(s->Dev->Gate, s->Dev->Lower, (PURB)&frame))) s->Stats.StartCurrentFrame = frame.FrameNumber;
         else s->Stats.StartCurrentFrame = 0xffffffff;
         TR_LINE(("frame", s->Stats.StartCurrentFrame, s->Rate, s->Capacity));
     }
@@ -2150,7 +2452,22 @@ NTSTATUS UacUsbStart(UAC_USB *s)
 #ifdef UAC_V1
     s->FfRun = 0; s->FfDelivered = FALSE; s->Cadence.Acc = 0; s->Cadence.Owed = 0;
 #endif
-    s->Stop = FALSE; s->Stats.Running = 1;
+    if (GateOn(s->Dev->Gate)) {
+        /* The start's commit (29.5.7): the stop mark is cleared only under
+         * the gate lock and then the stream lock, after the gate is read;
+         * the expiry hook marks under the same two, so it is never undone. */
+        KIRQL gold;
+        BOOLEAN failed;
+        KeAcquireSpinLock(&s->Dev->Gate->Lock, &gold);
+        KeAcquireSpinLock(&s->Lock, &old);
+        failed = s->Dev->Gate->Failed ? TRUE : FALSE;
+        if (!failed) { s->Stop = FALSE; s->Stats.Running = 1; }
+        KeReleaseSpinLock(&s->Lock, old);
+        KeReleaseSpinLock(&s->Dev->Gate->Lock, gold);
+        if (failed) { status = STATUS_DEVICE_NOT_READY; goto done; }
+    } else {
+        s->Stop = FALSE; s->Stats.Running = 1;
+    }
     s->LastFeedbackPacket = KeQueryInterruptTime();
     s->LastFeedbackValueAt = s->LastFeedbackPacket;
     s->FeedbackUnusableUs = s->FeedbackQuietUs = 0;
@@ -2173,6 +2490,9 @@ NTSTATUS UacUsbStart(UAC_USB *s)
     }
     if (!NT_SUCCESS(status)) { s->Stats.Running = 0; goto done; }
     KeWaitForSingleObject(&s->Ready, Executive, KernelMode, FALSE, NULL);
+    /* 29.5.7: a failure published meanwhile: the stream stops, the start
+     * fails (its alternate 0 is refused by the gate). */
+    if (UacGateFailed(s->Dev->Gate)) status = STATUS_DEVICE_NOT_READY;
 done:
     if (!NT_SUCCESS(status)) { StopLocked(s); s->Stats.LastStatus = status; }
     KeReleaseMutex(&s->Operation, FALSE);
@@ -2193,9 +2513,17 @@ void UacUsbDestroy(UAC_USB *s)
     if (!s || KeGetCurrentIrql() != PASSIVE_LEVEL) return;
     UacUsbStop(s);
     d = s->Dev;
-    KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
-    d->Streams--;
-    KeReleaseMutex(&d->Lock, FALSE);
+    if (s->Registered) {
+        KIRQL old;
+        KeAcquireSpinLock(&d->Gate->Lock, &old);
+        RemoveEntryList(&s->Link);
+        KeReleaseSpinLock(&d->Gate->Lock, old);
+        InterlockedDecrement((LONG *)&d->Streams);
+    } else {
+        KeWaitForSingleObject(&d->Lock, Executive, KernelMode, FALSE, NULL);
+        d->Streams--;
+        KeReleaseMutex(&d->Lock, FALSE);
+    }
     ExFreePool(s);
 }
 

@@ -1,0 +1,161 @@
+# Expected results of if11.cas, written by hand from docs/design/mtp.md
+# 7.9 and 5.3. Format: ../README.md. I1 to I10 hold. Gate reasons: 1 a
+# system sleep set, 2 a device state below D0, 4 a standby prepared or
+# accepted, 8 draining, 16 another component's device query (usbmtp.h).
+
+IF-001
+  rows a, b, d, e: ret r = MTPE_DEVICE resp=0 win32=0 (a failed reading: the call succeeded, CQ2)
+  row c: ret r = MTPE_DEVICE resp=0 win32=31
+  every row: no MTP_DEV; never CLAIM; alloc = balanced
+  no field past the bytes returned read (simdev fills those bytes with a poison the library must not show)
+end
+
+IF-002
+  every row: ret r = MTPE_DEVICE resp=0 win32=0; trace has getinfo-short bytes=<n>; never CLAIM; no MTP_DEV; alloc = balanced
+end
+
+IF-003
+  ret r = MTPE_OK; ret r1 = MTPE_OK; ret r2 = MTPE_OK
+  the device's endpoints = 82h in, 01h out (from offsets 40 to 42)
+  trace has no-power-fields, once
+  never MTPE_POWER, never MTPF_STANDBY or MTPF_POWER_SEEN for d0
+end
+
+IF-004
+  ret r = MTPE_OK
+  ret r1 = MTPE_STOPPED flags=SESSION_LOST   (gate=4 not read: the fields are off)
+  trace has no-power-fields, once
+  wire d0 after j1 = []: the gate stays closed to the end of the steps, the retries failing 21 send nothing that reaches the device
+end
+
+IF-005
+  every row: read#2 failed 21; the reading after it counted failed (row a: 43 bytes; row b: 44, shorter than the open's 52); GET_INFO read again 250 ms later
+  ret r1 = MTPE_STOPPED flags=SESSION_LOST   (the first good reading shows no reason)
+  the device's endpoints stay 81h in, 02h out (a later reading never replaces them)
+  after the gate reads open: wire d0 = [... , OpenSession tid=0]
+end
+
+IF-006
+  GET_INFO calls of d0, in order: open (before CLAIM), open (after CLAIM), j1's start, j2's start (gate open), after j2's command write failed 21, then one every 250 ms until one reads the gate open
+  never GET_INFO counted as a slot call (simdev answers it with the gate closed)
+  ret j2's GetObjectInfo = MTPE_POWER flags=STANDBY|SESSION_LOST
+  after the gate opened: OpenSession tid=0, then EVENTS start
+end
+
+IF-007
+  every row: read#3 ended 995 at the closing; ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  wire d0 between the stop and the gate's opening = []
+  then: wire d0 = [... , OpenSession tid=0]; ctl d0 ends [EVSTART]; notice d0 has SESSION_LOST
+end
+
+IF-008
+  ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  readings every 250 ms; the first reading at or after 30,000 ms from the acceptance shows the gate open (simdev's lapse in GET_INFO)
+  then OpenSession tid=0 with no resume broadcast and no button
+end
+
+IF-009
+  every row: ret r1 = MTPE_POWER flags=SESSION_LOST (no MTPF_STANDBY)
+  no call while the reason stands; a new session after it clears
+end
+
+IF-010
+  ret r1 = MTPE_POWER flags=SESSION_LOST
+  notice d0 = [DRAINING_BEGAN, DRAINING_ENDED, SESSION_LOST] in that order, each once
+  GET_INFO every 1,000 ms while draining (not every 250 ms)
+  wire d0 between the stop and DRAINING_ENDED = []
+  drop j2 = MTPE_SESSION on io, at its dequeue after j1's stop (the session count raised there: 7.3), before DRAINING_ENDED; run j2 = 0
+  after DRAINING_ENDED: OpenSession tid=0, then EVENTS start
+end
+
+IF-011
+  ret r1 = MTPE_POWER flags=SESSION_LOST
+  notice d0 = [DRAINING_BEGAN] once; never DRAINING_ENDED
+  wire d0 after the stop = []
+  GET_INFO once a second to the end; state d0 = OPEN (not GIVENUP, not removed)
+end
+
+IF-012
+  rows a, b: the quarantine: notice d0 has DRAINING_BEGAN then DRAINING_ENDED; readings every 1,000 ms
+  rows c, d: waiting: no draining notice; readings every 250 ms
+  rows a, b, c, d: ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST (the reading showed 4 or 1)
+end
+
+IF-013
+  rows a, b, f, g: ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  rows c, d, e, h, i, j: ret r1 = MTPE_POWER flags=SESSION_LOST
+  rows a to e: read#3 ended 995; rows f to j: read#3, made after the closing, failed 21
+  every row: GET_INFO read right after the stop; trace has the mask at the last refusal
+end
+
+IF-014
+  ret r1 = MTPE_STOPPED flags=POWER_SEEN|SESSION_LOST
+  never MTPE_POWER for this stop
+end
+
+IF-015
+  ret r1 = MTPE_STOPPED flags=POWER_SEEN|SESSION_LOST
+end
+
+IF-016
+  row a: ret r1 = MTPE_STOPPED flags=SESSION_LOST
+  row b: ret r1 = MTPE_GONE flags=SESSION_LOST; notice d0 has GONE
+end
+
+IF-017
+  ret r1 = MTPE_STOPPED flags=SESSION_LOST (from the evidence at the stop, CQ29); then the next read or write fails 5 and notice d0 has GONE
+  info handle opened and GET_INFO read after the 5, showing the removal flag
+  order: run j1 returns < the call failing 5 < notice GONE
+end
+
+IF-018
+  ret r1 = MTPE_STOPPED flags=SESSION_LOST (no POWER_SEEN)
+end
+
+IF-019
+  rows a, b: ret r1 = MTPE_STOPPED flags=SESSION_LOST
+  row c: ret r1 = MTPE_STOPPED flags=SESSION_LOST (always, without the fields, the removal flag notwithstanding: CQ7)
+end
+
+IF-020
+  ret r2 = MTPE_STOPPED flags=SESSION_LOST (no POWER_SEEN: j2's baseline consumed the change)
+end
+
+IF-021
+  rows a, b: ret r1 = MTPE_STOPPED flags=POWER_SEEN|SESSION_LOST (65535 to 0 is a change)
+  row c: ret r1 = MTPE_STOPPED flags=SESSION_LOST
+end
+
+IF-022
+  every row: the recovery stopped at the failing step; ctl d0 has no RESET; GET_INFO read right after that step
+  row a: ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  row b: ret r1 = MTPE_CANCELLED flags=SESSION_LOST (the cancel precedes MTPE_STOPPED in the order)
+  every row: ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1920, STATUS (failing <stop>)]
+  row c: ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  row d: ret r1 = MTPE_CANCELLED flags=SESSION_LOST
+  after the gate opened: OpenSession tid=0 (with 7.3's own failure handling)
+end
+
+IF-023
+  row a: ret r1 = MTPE_GONE flags=UNCERTAIN|SESSION_LOST
+  row b: ret r1 = MTPE_CLOSING flags=UNCERTAIN|SESSION_LOST (CLOSING before POWER; no STANDBY without MTPE_POWER)
+  row c: ret r1 = MTPE_POWER flags=STANDBY|UNCERTAIN|SESSION_LOST (the cancel's CANCEL failed 21: recovery stopped; POWER before CANCELLED)
+  row d: ret r1 = MTPE_GIVENUP flags=UNCERTAIN (GIVENUP within [close+20000, close+20500]; GIVENUP before POWER)
+  row e: ret r1 = MTPE_CANCELLED flags=UNCERTAIN|SESSION_LOST (the response lost after the cancel: CANCELLED before TIMEOUT, CQ26)
+  every row: MTPF_STANDBY only with MTPE_POWER; one code
+end
+
+IF-024
+  read#3 ended 995; ret r1 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  ctl d0 at the close = [EVENTS stop -> 1, ABORT in|out -> 0] answered while the gate was closed
+  wire d0 after the stop = []   (the session was taken as lost: no CloseSession)
+  notice d0 last = CLOSED
+end
+
+IF-025
+  list = [d0, d1, d4] in n order; d2 and d3 left out
+  d0: its fields as returned (42 bytes), the missing ones 0, bytes = 42, "cannot be opened" set
+  d1: the endpoint addresses from offsets 40 to 42, no power fields, bytes = 44, openable
+  d4: every field, power fields included, bytes = 52, openable
+  ret r0 = MTPE_DEVICE resp=0 win32=0 (40 to 43 bytes refused at the open); never CLAIM
+end

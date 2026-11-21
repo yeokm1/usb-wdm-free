@@ -55,6 +55,10 @@ set _LINK_=
 
 if /I "%PROFILE%"=="wdmx86" call :env_wdmx86 || goto fail
 if /I "%PROFILE%"=="wdm64" call :env_wdm64 || goto fail
+rem Design 28.15: the playback level engine is uaclevel.c; UAC_LEVEL=retained in
+rem the environment builds the shipped implementation instead: uaclevel.obj is still
+rem linked, one Wave path is preprocessed, /OPT:REF removes the unreferenced engine.
+if /I "%UAC_LEVEL%"=="retained" set CBASE=%CBASE% /DUAC_LEVEL_RETAINED=1
 
 if /I "%FLAVOUR%"=="free" (
     set CFLAV=%CFREE%
@@ -80,12 +84,14 @@ cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacusb.obj" "%SRC%..\common\uacus
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uactopo.obj" "%SRC%..\common\uactopo.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacplan.obj" "%SRC%..\common\uacplan.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacvol.obj" "%SRC%..\common\uacvol.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uaclevel.obj" "%SRC%..\common\uaclevel.c" >> "%LOG%" 2>&1 || goto fail
 cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uacctl.obj" "%SRC%..\common\uacctl.c" >> "%LOG%" 2>&1 || goto fail
+cl /nologo /c %CBASE% %CFLAV% %CINC% /Fo"%OUT%\uaccap.obj" "%SRC%..\common\uaccap.c" >> "%LOG%" 2>&1 || goto fail
 
 "%RC%" /fo"%OUT%\uac2wdm.res" "%SRC%uac2wdm.rc" >> "%LOG%" 2>&1 || goto fail
 
 echo === link >> "%LOG%"
-set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uacvol.obj" "%OUT%\uacctl.obj" "%OUT%\uac2wdm.res" %LLIBS%
+set CMDL=link /nologo %LBASE% %LFLAV% /MAP:"%OUT%\%PKG%.map" /OUT:"%OUT%\%PKG%.sys" "%OUT%\%PKG%.obj" "%OUT%\uacdesc.obj" "%OUT%\uacrate.obj" "%OUT%\uacusb.obj" "%OUT%\uactopo.obj" "%OUT%\uacplan.obj" "%OUT%\uacvol.obj" "%OUT%\uaclevel.obj" "%OUT%\uacctl.obj" "%OUT%\uaccap.obj" "%OUT%\uac2wdm.res" %LLIBS%
 echo %CMDL% >> "%LOG%"
 %CMDL% >> "%LOG%" 2>&1 || goto fail
 

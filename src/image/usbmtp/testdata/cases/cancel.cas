@@ -1,0 +1,565 @@
+# Cancel: the latch, the submission handshake, 7.5's procedure and the
+# Android edit's cleanup. docs/design/mtp.md 7.5; 7.9, "Jobs and cancel",
+# "Submitting a call, and cancelling it", "Errors from the driver",
+# "Android's writing operations"; 11.4; 12. Format: ../README.md.
+# Every case opens the default device first (dev d0; open d0).
+
+case CAN-001
+  title  a cancel in IDLE between two files of one job: the next operation refused without submitting
+  from   7.9/Jobs and cancel (the flag stops new work); 12/interleavings/cancel (between files)
+  queue d0 j1 { GetObject h=2 sink=s -> r1; GetObject h=3 sink=s -> r2; post }
+  at io.op.begin#2 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-002
+  title  a cancel between two transactions of one operation: no partial list published
+  from   7.9/Jobs and cancel; 7.9/Nothing partly validated is published; 12/interleavings/cancel
+  dev d0 ops=-GetObjectPropList
+  open d0
+  queue d0 j1 { Children storage=00010001h parent=1 -> r; post }
+  at io.phase.IDLE#1 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-003
+  title  a cancel between the phase check and the call (in call set, the call not yet made)
+  from   7.9/Submitting a call step 1 and 4; 7.9/The host test, the engine (cancel before submission)
+  sim d0 stuck read#2 until-abort           # the call, once made, stays in the driver until an ABORT
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.call#2 : cancel d0 j1               # in call set, the read not yet made
+  wait job j1 done
+end
+
+case CAN-004
+  title  a cancel in COMMAND of a reading operation, its write held in the driver
+  from   7.5 step 1; 7.9/Submitting a call
+  sim d0 stuck write#1 until-abort
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#1                            # the command write pends; the I/O thread is blocked in it
+  cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-005
+  title  a cancel in DATA-IN at every published read of a 5 MiB GetObject
+  from   7.5 steps 1 to 5; 11.4 (every phase); 11.5 (20 byte offsets)
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObject h=2 sink=s -> r2; post }
+  sweep io.submit.post.in#2 .. io.phase.RESPONSE#1 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-006
+  title  a cancel in DATA-OUT of SendObject: cancelled and uncertain, never replayed, not deleted
+  from   7.9/Uncertainty; 7.9/Uploads (uncertain completion, readback); 7.5
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="up.bin" size=300000 src=src -> r; post }
+  sweep io.phase.DATA-OUT#2 .. io.phase.RESPONSE#2 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-007
+  title  a cancel in RESPONSE: the response read whole, the operation's outcome kept, the next refused
+  from   7.9/Jobs and cancel; 7.5 step 1; 12/interleavings/cancel (a cancel in RESPONSE)
+  queue d0 j1 { GetObject h=2 sink=s -> r1; GetObject h=3 sink=s -> r2; post }
+  at io.phase.RESPONSE#1 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-008
+  title  a cancel when every byte had moved: the settlement finds RESPONSE, no class cancel
+  from   7.5 step 2; 7.9/Submitting a call step 6; 12/interleavings/cancel
+  queue d0 j1 { GetObject h=3 sink=s -> r1; GetObject h=2 sink=s -> r2; post }
+  at io.ret#last-data : cancel d0 j1        # the last read returned, not yet published: still DATA-IN
+  wait job j1 done
+end
+
+case CAN-009
+  title  a cancel during the final zero-length packet read
+  from   7.9/Framing (the read after a data phase); 7.9/The host test, the engine
+  dev d0 store+=h=30:"z500.bin":parent=root:size=500
+  open d0
+  queue d0 j1 { GetObject h=30 sink=s -> r1; GetObject h=2 sink=s -> r2; post }
+  at io.call#zlp : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-010
+  title  completion winning the race: SendObject's last write and WRITE_ZLP succeed as the cancel comes
+  from   7.5 step 2; 11.4 (completion winning the race)
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="w.bin" size=1012 src=src -> r; post }
+  at io.submit.post.in#zlpwrite : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-011
+  title  a cancelled write contributes nothing to the byte count, whatever length it asked for
+  from   7.9/Submitting a call step 6; 7.9/Uploads (byte accounting)
+  sim d0 write#sendobject.data.2 returns=995 count=65536
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="c.bin" size=3000000 src=src -> r; post }
+  at io.call#sendobject.data.2 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-012
+  title  a cancel aimed at job N never reaches job N+1
+  from   7.9/Jobs and cancel (the cancel latch); 12/host (the cancel latch against completion and the next dequeue)
+  queue d0 j1 { GetObject h=2 sink=s -> r1; post }
+  queue d0 j2 { GetObject h=3 sink=s -> r2; post }
+  sweep io.phase.RESPONSE#1 .. io.submit.pre.in#j2.1 : cancel d0 j1
+  wait job j2 done
+end
+
+case CAN-013
+  title  job N's cancel work still out when job N+1 is queued: no dequeue until published; no ABORT after
+  from   7.9/The cancel work carries its identity; 12/interleavings/cancel
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  hold cx.abort#1
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait cx.abort
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  clock +900
+  go cx.abort
+  wait job j2 done
+end
+
+case CAN-014
+  title  a settled cancel's deadline is retired with it: no deadline action later
+  from   7.9/The cancel work carries its identity; 7.9/The deadline observer
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+  clock +25000
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  wait job j2 done
+end
+
+case CAN-015
+  title  a repeated cancel does nothing more
+  from   7.9/Submitting a call step 3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1; cancel d0 j1; cancel d0 0
+  wait job j1 done
+end
+
+case CAN-016
+  title  a cancel while RECOVERING is left alone
+  from   7.9/Submitting a call step 3
+  sim d0 fault busy n=3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  at io.recover.4#1 : cancel d0 j1          # RECOVERING: left alone
+  wait job j1 done
+end
+
+case CAN-017
+  title  ABORT reporting a pipe still busy: given up, no class cancel or reset sent
+  from   7.5 step 2 and 7; 7.9/ABORT and EVENTS succeed with an output
+  sim d0 abort-mask=1 always
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  clock +3000
+  check alloc retained d0
+  sim d0 abort-mask=0
+  clock +1000
+  close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-018
+  title  in call not cleared by the deadline: ABORT repeated every 100 ms, then given up
+  from   7.9/Submitting a call step 4 and 5; 7.5 step 7
+  sim d0 stuck read#3 abort-proof
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.call#3 : cancel d0 j1
+  clock +21000
+  wait state d0 GIVENUP
+  sim d0 unstick
+  close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-019
+  title  Cancel Request failing: Device Reset (step 6)
+  from   7.5 step 3
+  sim d0 fail CLASS.CANCEL 31
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-020
+  title  status 4 bytes OK: ready
+  from   7.5 step 4 table row 1
+  sim d0 status 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-021
+  title  status 4 bytes Device Busy three times, then OK: queried every 50 ms
+  from   7.5 step 4 table row 2
+  sim d0 fault busy n=3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-022
+  title  status 4 bytes Transaction Cancelled without parameters, then OK: queried again after 50 ms
+  from   7.5 step 4 table row 3
+  sim d0 status 0400 1f20 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-023
+  title  status 8 bytes Transaction Cancelled naming 81h: bulk IN reset, then OK
+  from   7.5 step 4 table row 4; matching an endpoint parameter
+  sim d0 status 0800 1f20 81000000 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-024
+  title  status 12 bytes naming 81h and 02h: both reset, then OK
+  from   7.5 step 4 table row 4
+  sim d0 status 0c00 1f20 81000000 02000000 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-025
+  title  an endpoint parameter naming the bulk OUT address 02h; and the bare number 1 (bulk IN is 81h)
+  from   7.5 step 4, matching (a full address; a bare number)
+  table  ep
+    a  02000000
+    b  01000000
+  end
+  sim d0 status 0800 1f20 <ep> ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-026
+  title  a bare number shared by bulk IN and OUT: both pipes reset
+  from   7.5 step 4, matching (ambiguous bare number)
+  dev d0 ep.in=81h ep.out=01h
+  open d0
+  sim d0 status 0800 1f20 01000000 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-027
+  title  each malformed status: Device Reset without touching a pipe
+  from   7.5 step 4 (anything else goes to step 6); 11.4 (each malformed status)
+  table  status
+    a  0800 0120                    # wLength 8, 4 bytes returned: wLength differs from the bytes
+    b  0600 0120 0000               # length 6
+    c  0400 0220                    # code 2002h
+    d  0800 1f20 83000000           # the interrupt endpoint, not one of the two
+    e  0800 1f20 05000000           # an endpoint not this interface's
+    f  0c00 1f20 81000000 81000000  # repeated
+    g  0800 0120 81000000           # OK with parameters
+    h  1000 1f20 81000000 02000000 83000000  # 16 bytes
+    i  0800 1f20 81010000           # bits 8 to 31 not zero
+    j  0800 1f20 00000000           # the bare number 0
+    k  0800 1f20 11000000           # bit 4 set with bit 7 clear
+    l  0c00 1f20 81000000 01000000  # 81h and the bare 1 both name bulk IN: repeated after resolution
+    m  0800 1f20 82000000           # bit 7 set, not bulk IN's address
+  end
+  sim d0 status <status>
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-028
+  title  step 6 in full: its parts in order, the session lost, a new one opened
+  from   7.5 step 6.1 to 6.8; 7.3
+  sim d0 status 0400 0220 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  queue d0 j2 { GetObjectInfo h=3 -> r3; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait idle d0
+end
+
+case CAN-029
+  title  step 6 with EVENTS stop not quiet: no reset, given up
+  from   7.5 step 6.3; 7.9/ABORT and EVENTS succeed with an output
+  sim d0 status 0400 0220
+  sim d0 events-stop-out=0 always
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  clock +2000
+  check alloc retained d0
+  sim d0 events-stop-out=1
+  close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-030
+  title  step 6 with ABORT's mask not 0: no reset, given up
+  from   7.5 step 6.3
+  sim d0 status 0400 0220
+  at io.recover.6.2 : sim d0 abort-mask=2 always
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  sim d0 abort-mask=0
+  close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-031
+  title  the procedure's deadline: a step about to start after 10 s goes to step 6
+  from   7.5 (one deadline); 11.4 (both deadlines)
+  sim d0 fault busy n=1000000
+  sim d0 clock-per-status=50
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  at io.recover.6.4 : sim d0 fault busy n=0
+  wait job j1 done
+end
+
+case CAN-032
+  title  step 6's own deadline: 10 s after it began, given up
+  from   7.5 (step 6's second deadline); 11.4 (both deadlines)
+  sim d0 fault busy n=1000000
+  sim d0 clock-per-status=50
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+end
+
+case CAN-033
+  title  a stale response with the cancelled id, first thing read: accepted and dropped once
+  from   7.5 step 5; 7.9/Framing (the stale response read whole)
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  at io.submit.post.in#3 : sim d0 fault stale_response; async cancel d0 j1
+  wait job j2 done
+end
+
+case CAN-034
+  title  a second container with the cancelled id: a protocol error
+  from   7.5 step 5 (once); 7.2 (a wrong transaction id)
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  at io.submit.post.in#3 : sim d0 queue-response tid=cancelled count=2; async cancel d0 j1
+  wait job j2 done
+end
+
+case CAN-035
+  title  device-initiated: a stalled read, status 201Fh with both endpoints; the transaction cancelled, the job goes on
+  from   7.5 device-initiated; 7.9/A bulk failure that is none of these; 11.2 stall_data
+  sim d0 fault stall_data
+  queue d0 j1 { GetObject h=4 sink=s -> r1; GetObjectInfo h=2 -> r2; post }
+  wait job j1 done
+end
+
+case CAN-036
+  title  a bulk failure with status OK or Busy: the host-initiated case from step 3
+  from   7.9/A bulk failure that is none of these
+  table  st
+    a  0400 0120
+    b  0400 1920 ; then 0400 0120
+  end
+  sim d0 fail read#3 31
+  sim d0 status <st> ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait job j1 done
+end
+
+case CAN-037
+  title  a bulk failure with any other status: Device Reset
+  from   7.9/A bulk failure that is none of these
+  sim d0 fail read#3 31
+  sim d0 status 0400 0220 ; then 0400 0120
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait job j1 done
+end
+
+case CAN-038
+  title  CancelTransaction with the transaction's id while a transfer blocks: the device-initiated case
+  from   7.9/Events (routed to the engine); 7.4; 11.4
+  sim d0 stuck read#3 until-abort
+  queue d0 j1 { GetObject h=4 sink=s -> r1; GetObjectInfo h=2 -> r2; post }
+  wait io.call#3
+  sim d0 event CancelTransaction tid=current
+  sim d0 status 0c00 1f20 81000000 02000000 ; then 0400 0120
+  wait job j1 done
+end
+
+case CAN-039
+  title  CancelTransaction with another id: logged and dropped
+  from   7.4; 7.9/Events
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : sim d0 event CancelTransaction tid=current-1 ; wait ev.got   # routed as the hold is left, during j1's transfer
+  wait job j1 done
+end
+
+case CAN-040
+  title  a cancel in RESPONSE whose response never comes: the stuck device goes to step 6
+  from   7.5 step 1 (IDLE or RESPONSE: the response does not come)
+  sim d0 fault no_response
+  queue d0 j1 { GetObject h=2 sink=s -> r1; GetObjectInfo h=3 -> r2; post }
+  at io.phase.RESPONSE#1 : cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-041
+  title  a mutating operation cancelled in COMMAND with its write submitted: uncertain
+  from   7.9/Uncertainty covers every mutating operation
+  sim d0 stuck write#1 until-abort
+  queue d0 j1 { Delete h=5 -> r; post }
+  wait io.call#1
+  cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-042
+  title  an Android edit cancelled: EndEditObject sent once when every admission condition holds
+  from   7.9/Android's writing operations (edit lifetime); 12/interleavings/an Android edit cancelled
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1   # after the first 1 MiB data write; more to come
+  wait job j1 done
+end
+
+case CAN-043
+  title  an edit cancelled and recovery resetting the device: EndEditObject not sent
+  from   7.9/Edit lifetime (no Device Reset ran); 12/interleavings
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  sim d0 status 0400 0220 ; then 0400 0120
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1
+  wait job j1 done
+end
+
+case CAN-044
+  title  an edit cancelled and the session changing (a DeviceReset event): not sent
+  from   7.9/Edit lifetime (the session the edit began in); 12/interleavings
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1
+  at io.recover.5 : sim d0 event DeviceReset; wait ev.route.in   # the I/O thread stopped holding nothing: the event routed before the cleanup's admission
+  wait job j1 done
+end
+
+case CAN-045
+  title  an edit stopped by the gate with a power reason seen: not sent
+  from   7.9/Edit lifetime (no power reason since the cancel); 12/interleavings
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : sim d0 gate=4; sim d0 gateclose at=now code=995   # no call pending: the next write fails 21
+  wait job j1 done
+end
+
+case CAN-046
+  title  an edit cancelled while an unasked suspend has set HELD: not sent
+  from   7.9/Edit lifetime (not HELD); 7.9/Entering the hold; 12/interleavings
+  rule   A
+  power P
+  dev d0
+  open d0
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1
+  at io.recover.5 : bcast PBT_APMSUSPEND    # the unasked suspend sets HELD before the cleanup's admission
+  wait job j1 done
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case CAN-047
+  title  an edit cancelled and the device given up: not sent
+  from   7.9/Edit lifetime (not GIVENUP); 12/interleavings
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  sim d0 abort-mask=2 always
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  sim d0 abort-mask=0
+  close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-048
+  title  an edit ended by MtpClose: EndEditObject sent once in CLOSING, then CloseSession
+  from   7.9/Edit lifetime (CLOSING allowed); 12/interleavings (sent during a close)
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : async close d0
+  wait notice d0 CLOSED
+end
+
+case CAN-049
+  title  the cleanup EndEditObject's own response lost: uncertain, not sent again
+  from   7.9/Edit lifetime (EndEditObject is itself mutating); 12/interleavings
+  queue d0 j1 { AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=1000 len=3000000 src=src -> rs; AndroidEndEdit h=4 -> re; post }
+  at io.submit.post.in#sendpartial.3 : async cancel d0 j1
+  at io.submit.pre.in#endedit : sim d0 fault no_response
+  wait job j1 done
+end
+
+case CAN-050
+  title  a cancel after the job's last operation changes nothing that was done
+  from   7.9/Jobs and cancel
+  queue d0 j1 { GetObject h=2 sink=s -> r1; cancel d0 0; post }
+  wait job j1 done
+end
+
+case CAN-051
+  title  MtpCancel makes no driver call on its caller's thread and returns while the cancel thread waits
+  from   7.9/Threads per device; 7.9/Jobs and cancel
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  hold cx.abort#1
+  at io.submit.post.in#3 : async cancel d0 j1 -> rc1
+  wait cx.abort
+  cancel d0 j1 -> rc2
+  go cx.abort
+  wait job j1 done
+end
+
+case CAN-052
+  title  the deadline observer for automatic recovery: a class request that never returns
+  from   7.9/The deadline observer; 12/host (the deadline observer for recovery)
+  sim d0 fail read#3 31
+  sim d0 fault ep0_hang                     # every class request from now on pends until unstick
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  queue d0 j2 { post }
+  clock +25000
+  wait state d0 GIVENUP
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case CAN-053
+  title  recovery's Device Reset Request failing: step 7, given up, nothing more sent
+  from   7.5 step 6 (a step of 6 that fails)
+  sim d0 status 0400 0220
+  sim d0 reset-ok 0
+  queue d0 j1 { GetObject h=4 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  queue d0 j2 { post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  wait notice d0 CLOSED
+end
+
+case CAN-054
+  title  recovery's RESET_PIPE failing, for each pipe: step 7, given up
+  from   7.5 step 6.5 (a step of 6 that fails)
+  table  pipe
+    a  1
+    b  2
+    c  3
+  end
+  sim d0 status 0400 0220
+  sim d0 fail CLASS.RESET_PIPE#<pipe> 31    # the first, second or third RESET_PIPE of step 6.5 (bulk IN, bulk OUT, interrupt)
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  wait state d0 GIVENUP
+  wait notice d0 CLOSED
+end

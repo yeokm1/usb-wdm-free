@@ -1,0 +1,17 @@
+# Expected decoding of str255.hex, written by hand from MTP 1.1, 3.2.3 and 5.2.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = StorageInfo
+result = MTPE_OK
+StorageType = 0003h (FixedRAM)
+FilesystemType = 0002h (GenericHierarchical)
+AccessCapability = 0001h (read-only)
+MaxCapacity = 16185140887 (00000003C4B5A697h)
+FreeSpaceInBytes = 9113058636 (000000021F2E3D4Ch)
+FreeSpaceInObjects = 304566 (0004A5B6h)
+StorageDescription = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRST" (254 units, "A" to "Z" repeating from "A", nine whole alphabets and "A" to "T"; terminated)
+VolumeIdentifier = ""
+counts
+  at 26 1 elem 2 cap 255
+  at 537 1 elem 2 cap 255
+end

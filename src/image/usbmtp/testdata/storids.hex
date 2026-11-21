@@ -1,0 +1,5 @@
+# StorageID array: the second id absent (low 16 bits 0: 7.4).
+# Written by hand from MTP 1.1, 3.2.2; 5.2.1.
+# @0 StorageIDs AUINT32 = 00020001h, 00030000h, 00050003h (16 bytes)
+03 00 00 00 01 00 02 00 00 00 03 00 03 00 05 00
+# total 16 bytes

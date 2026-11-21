@@ -1,0 +1,11 @@
+# Expected decoding of gdstat.hex, written by hand from the still image class specification, 5.2.4.2; 7.5 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = Get Device Status, 12 bytes returned, bulk IN 81h, bulk OUT 02h
+result = MTPE_OK
+wLength = 12
+code = 201Fh
+parameters[] = 00000081h, 00000002h
+endpoints = 81h (bulk IN), 02h (bulk OUT)
+action = RESET_PIPE in, RESET_PIPE out, then query again (7.5 step 4)
+end

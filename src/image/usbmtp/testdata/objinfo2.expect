@@ -1,0 +1,30 @@
+# Expected decoding of objinfo2.hex, written by hand from MTP 1.1, 5.3.1 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectInfo
+result = MTPE_OK
+StorageID = 00020001h
+ObjectFormat = 3001h (association)
+ProtectionStatus = 8002h
+ObjectCompressedSize = 69632 (00011000h)
+ThumbFormat = 3801h
+ThumbCompressedSize = 0012A3B4h
+ThumbPixWidth = 00130100h
+ThumbPixHeight = 001400C0h
+ImagePixWidth = 00150A00h
+ImagePixHeight = 00160780h
+ImageBitDepth = 00170020h
+ParentObject = 00000000h (the storage's root)
+AssociationType = 0001h (GenericFolder)
+AssociationDesc = 0018B5C6h
+SequenceNumber = 0019D7E8h
+Filename = "DCIM"
+DateCreated = ""
+DateModified = ""
+Keywords = ""
+counts
+  at 52 1 elem 2 cap 255
+  at 63 1 elem 2 cap 255
+  at 64 1 elem 2 cap 255
+  at 65 1 elem 2 cap 255
+end

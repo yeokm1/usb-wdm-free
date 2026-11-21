@@ -1,0 +1,31 @@
+# Expected decoding of devinfo1.hex, written by hand from MTP 1.1, 5.1.1 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = DeviceInfo
+result = MTPE_OK
+StandardVersion = 100
+VendorExtensionID = 00000006h
+VendorExtensionVersion = 100
+MTPVendorExtensions = "microsoft.com: 1.0;"
+FunctionalMode = C002h
+OperationsSupported[] = 1001h, 1002h, 1003h, 1004h, 1005h, 1007h, 1008h, 1009h, 100Bh, 100Ch, 100Dh, 101Bh, 9803h, 9805h, 95C1h, 95C2h, 95C3h, 95C4h, 95C5h
+EventsSupported[] = 4002h, 4003h, 4004h, 4005h, 400Ch
+DevicePropertiesSupported[] = D402h, 5001h
+CaptureFormats[] = 3801h
+PlaybackFormats[] = 3000h, 3001h, 3801h
+Manufacturer = "SIMULATED"
+Model = "MTP fixture"
+DeviceVersion = "1.0"
+SerialNumber = "0123456789ABCDEF"
+counts
+  at 8 1 elem 2 cap 255
+  at 51 4 elem 2 cap fit
+  at 93 4 elem 2 cap fit
+  at 107 4 elem 2 cap fit
+  at 115 4 elem 2 cap fit
+  at 121 4 elem 2 cap fit
+  at 131 1 elem 2 cap 255
+  at 152 1 elem 2 cap 255
+  at 177 1 elem 2 cap 255
+  at 186 1 elem 2 cap 255
+end

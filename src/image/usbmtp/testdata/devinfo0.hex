@@ -1,0 +1,31 @@
+# DeviceInfo dataset, the smallest: every string and array empty.
+# Written by hand from MTP 1.1, 5.1.1.
+# @0 StandardVersion UINT16 = 100 (2 bytes)
+64 00
+# @2 VendorExtensionID UINT32 = 7A6B5C4Dh (4 bytes)
+4d 5c 6b 7a
+# @6 VendorExtensionVersion UINT16 = 310 (2 bytes)
+36 01
+# @8 MTPVendorExtensions String = "" (1 bytes)
+00
+# @9 FunctionalMode UINT16 = C001h (2 bytes)
+01 c0
+# @11 OperationsSupported AUINT16 = none (4 bytes)
+00 00 00 00
+# @15 EventsSupported AUINT16 = none (4 bytes)
+00 00 00 00
+# @19 DevicePropertiesSupported AUINT16 = none (4 bytes)
+00 00 00 00
+# @23 CaptureFormats AUINT16 = none (4 bytes)
+00 00 00 00
+# @27 PlaybackFormats AUINT16 = none (4 bytes)
+00 00 00 00
+# @31 Manufacturer String = "" (1 bytes)
+00
+# @32 Model String = "" (1 bytes)
+00
+# @33 DeviceVersion String = "" (1 bytes)
+00
+# @34 SerialNumber String = "" (1 bytes)
+00
+# total 35 bytes

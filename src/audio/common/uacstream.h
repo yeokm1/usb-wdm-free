@@ -16,6 +16,16 @@
 #ifndef UAC_TRACE
 #define UAC_TRACE(x)
 #endif
+/* The driver's stream accounting (docs/design/uac2.md 30); none by
+ * default. BORN: called with the device when Create publishes a stream;
+ * GONE: once the destroy of a published stream has finished. A creation
+ * that fails is neither (its destroy may still run, with the device). */
+#ifndef UAC_STREAM_BORN
+#define UAC_STREAM_BORN(device)
+#endif
+#ifndef UAC_STREAM_GONE
+#define UAC_STREAM_GONE(device)
+#endif
 
 class UacStream;
 struct UAC_STREAM_HOOKS {
@@ -106,9 +116,13 @@ private:
         ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
         PIO_WORKITEM work = cleanupWork;
         PDEVICE_OBJECT device = cleanupDevice;
+        BOOLEAN counted = published;    /* only a published stream was counted */
         this->~UacStream(); ExFreePool(this);
         if (work) IoFreeWorkItem(work);
-        if (device) ObDereferenceObject(device);
+        if (device) {
+            if (counted) UAC_STREAM_GONE(device);
+            ObDereferenceObject(device);
+        }
     }
     static VOID Cleanup(PDEVICE_OBJECT device, PVOID context) {
         UNREFERENCED_PARAMETER(device);
@@ -201,6 +215,7 @@ public:
          * only now, avoiding recursive owner-lock acquisition in cleanup. */
         if (callbacks) s->hooks = *callbacks;
         s->published = TRUE;
+        UAC_STREAM_BORN(s->cleanupDevice);
         *stream = (PMINIPORTWAVECYCLICSTREAM)s; /* construction reference */
         s->AddRef();
         *dma = (PDMACHANNEL)s;
@@ -214,8 +229,9 @@ public:
      * takes, while the gate reads GateClosing, up to ms milliseconds.
      * TRUE when the gate was closing at entry; *waited gets the
      * milliseconds spent. A gate held by an open stream returns at once:
-     * a second stream is refused as before. */
-    static BOOLEAN WaitClosing(LONG *gate, ULONG ms, ULONG *waited) {
+     * a second stream is refused as before. abort (docs/design/uac2.md
+     * 29.5.7; NULL: none) ends the wait early once it reads nonzero. */
+    static BOOLEAN WaitClosing(LONG *gate, ULONG ms, ULONG *waited, LONG *abort = NULL) {
         ULONG spent = 0;
         BOOLEAN closing = FALSE;
         if (waited) *waited = 0;
@@ -223,6 +239,7 @@ public:
         ULONGLONG start = KeQueryInterruptTime();
         while (InterlockedCompareExchange(gate, GateClosing, GateClosing) == GateClosing) {
             closing = TRUE;
+            if (abort && InterlockedCompareExchange(abort, 0, 0)) break;
             ULONGLONG now = KeQueryInterruptTime();
             spent = (ULONG)((now - start) >> 4) / 625; /* 100 ns -> ms, no 64-bit divide */
             if (spent >= ms) break;

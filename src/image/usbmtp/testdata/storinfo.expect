@@ -1,0 +1,17 @@
+# Expected decoding of storinfo.hex, written by hand from MTP 1.1, 5.2.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = StorageInfo
+result = MTPE_OK
+StorageType = 0003h (FixedRAM)
+FilesystemType = 0002h (GenericHierarchical)
+AccessCapability = 0000h (read-write)
+MaxCapacity = 9468016794 (000000023456789Ah)
+FreeSpaceInBytes = 4886735821 (000000012345ABCDh)
+FreeSpaceInObjects = 123603 (0001E2D3h)
+StorageDescription = "Internal shared storage"
+VolumeIdentifier = ""
+counts
+  at 26 1 elem 2 cap 255
+  at 75 1 elem 2 cap 255
+end

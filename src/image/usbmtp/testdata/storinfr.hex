@@ -1,0 +1,19 @@
+# StorageInfo dataset, read-only with delete, the largest capacity.
+# Written by hand from MTP 1.1, 5.2.2.
+# @0 StorageType UINT16 = 0004h RemovableRAM (2 bytes)
+04 00
+# @2 FilesystemType UINT16 = 0003h DCF (2 bytes)
+03 00
+# @4 AccessCapability UINT16 = 0002h ReadOnlyWithObjectDeletion (2 bytes)
+02 00
+# @6 MaxCapacity UINT64 = FFFFFFFFFFFFFFFFh (8 bytes)
+ff ff ff ff ff ff ff ff
+# @14 FreeSpaceInBytes UINT64 = 0000000FEDCBA987h (8 bytes)
+87 a9 cb ed 0f 00 00 00
+# @22 FreeSpaceInObjects UINT32 = 0003F2E1h (4 bytes)
+e1 f2 03 00
+# @26 StorageDescription String = "SD" (7 bytes)
+03 53 00 44 00 00 00
+# @33 VolumeIdentifier String = "V1" (7 bytes)
+03 56 00 31 00 00 00
+# total 40 bytes

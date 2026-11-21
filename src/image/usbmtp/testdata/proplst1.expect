@@ -1,0 +1,70 @@
+# Expected decoding of proplst1.hex, written by hand from MTP 1.1, 5.4 and E.2.1; 7.4 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectPropList for folder 0001A2B3h (depth 1)
+result = MTPE_OK
+NumberOfElements = 13
+element 1 ObjectHandle = 0001A2B3h (the folder itself)
+element 1 PropertyCode = DC07h (ObjectFileName)
+element 1 Datatype = FFFFh (STR)
+element 1 Value = "DCIM"
+element 2 ObjectHandle = 0002C3D4h
+element 2 PropertyCode = DC01h (StorageID)
+element 2 Datatype = 0006h (UINT32)
+element 2 Value = 00020001h
+element 3 ObjectHandle = 0002C3D4h
+element 3 PropertyCode = DC02h (ObjectFormat)
+element 3 Datatype = 0004h (UINT16)
+element 3 Value = 3801h
+element 4 ObjectHandle = 0002C3D4h
+element 4 PropertyCode = DC04h (ObjectSize)
+element 4 Datatype = 0008h (UINT64)
+element 4 Value = 9468016794 (000000023456789Ah)
+element 5 ObjectHandle = 0002C3D4h
+element 5 PropertyCode = DC07h (ObjectFileName)
+element 5 Datatype = FFFFh (STR)
+element 5 Value = "a.jpg"
+element 6 ObjectHandle = 0002C3D4h
+element 6 PropertyCode = DC09h (DateModified)
+element 6 Datatype = FFFFh (STR)
+element 6 Value = "20261117T083015"
+element 7 ObjectHandle = 0002C3D4h
+element 7 PropertyCode = DC0Bh (ParentObject)
+element 7 Datatype = 0006h (UINT32)
+element 7 Value = 0001A2B3h
+element 8 ObjectHandle = 0003E4F5h
+element 8 PropertyCode = DC01h (StorageID)
+element 8 Datatype = 0006h (UINT32)
+element 8 Value = 00020001h
+element 9 ObjectHandle = 0003E4F5h
+element 9 PropertyCode = DC02h (ObjectFormat)
+element 9 Datatype = 0004h (UINT16)
+element 9 Value = 3808h
+element 10 ObjectHandle = 0003E4F5h
+element 10 PropertyCode = DC04h (ObjectSize)
+element 10 Datatype = 0008h (UINT64)
+element 10 Value = 6604705263 (0000000189ABCDEFh)
+element 11 ObjectHandle = 0003E4F5h
+element 11 PropertyCode = DC07h (ObjectFileName)
+element 11 Datatype = FFFFh (STR)
+element 11 Value = "b.jpg"
+element 12 ObjectHandle = 0003E4F5h
+element 12 PropertyCode = DC09h (DateModified)
+element 12 Datatype = FFFFh (STR)
+element 12 Value = ""
+element 13 ObjectHandle = 0003E4F5h
+element 13 PropertyCode = DC0Bh (ParentObject)
+element 13 Datatype = 0006h (UINT32)
+element 13 Value = 0001A2B3h
+object 0001A2B3h = dropped (the folder's own element)
+object 0002C3D4h: StorageID = 00020001h, ObjectFormat = 3801h, ObjectSize = 9468016794, ObjectFileName = "a.jpg", DateModified = "20261117T083015", ParentObject = 0001A2B3h
+object 0003E4F5h: StorageID = 00020001h, ObjectFormat = 3808h, ObjectSize = 6604705263, ObjectFileName = "b.jpg", DateModified = "" (none), ParentObject = 0001A2B3h
+children[] = 0002C3D4h, 0003E4F5h
+counts
+  at 0 4 elem 9 cap 4194304
+  at 12 1 elem 2 cap 255
+  at 69 1 elem 2 cap 255
+  at 90 1 elem 2 cap 255
+  at 181 1 elem 2 cap 255
+  at 202 1 elem 2 cap 255
+end

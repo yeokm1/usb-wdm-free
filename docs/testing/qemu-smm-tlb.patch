@@ -1,0 +1,51 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: QEMU 11.1.0 flushes the TCG TLB on SMM entry and after RSM.
+The same change as the usb4-emu QEMU fork's commit 5748fdd ("target/i386:
+flush the TLB on SMM entry and RSM"), without that commit's qtest. The
+softmmu TLB has no SMM index, so an entry filled outside SMM survives into
+SMM; SeaBIOS puts its SMI entry at SMBASE 0xa0000 + 0x8000, under the VGA
+window that the Windows 98 boot logo fills, and the first fetch after an
+SMI then reads the frame buffer: 98 SE on q35 loops at SMM=1, EIP=0x8000,
+CS=a000 at its logo (read for the MTP task on 2026-11-16 with upstream
+11.1.0, both this repository's build and a packaged one). After
+qemu-mtp-win32.patch and qemu-nosymlink.patch.
+
+diff --git a/target/i386/tcg/system/smm_helper.c b/target/i386/tcg/system/smm_helper.c
+index 4bbe18a..75d7d99 100644
+--- a/target/i386/tcg/system/smm_helper.c
++++ b/target/i386/tcg/system/smm_helper.c
+@@ -20,6 +20,7 @@
+ #include "qemu/osdep.h"
+ #include "cpu.h"
+ #include "exec/helper-proto.h"
++#include "exec/cputlb.h"
+ #include "exec/log.h"
+ #include "tcg/helper-tcg.h"
+ 
+@@ -156,6 +157,16 @@ void do_smm_enter(X86CPU *cpu)
+ 
+     env->msr_smi_count++;
+     env->hflags |= HF_SMM_MASK;
++    /*
++     * The softmmu TLB has no SMM index: each entry keeps the address space
++     * (SMRAM or normal memory, chosen by MemTxAttrs.secure) that was in
++     * effect when it was filled. An SMI taken in real mode leaves CR0.PE
++     * and CR0.PG clear, so cpu_x86_update_cr0() below does not flush, and
++     * a stale entry sends the first fetch at SMBASE + 0x8000 to whatever
++     * normal memory decodes there (the VGA window for SMBASE 0xa0000)
++     * instead of SMRAM. Flush on every SMM transition.
++     */
++    tlb_flush(CPU(cpu));
+     if (env->hflags2 & HF2_NMI_MASK) {
+         env->hflags2 |= HF2_SMM_INSIDE_NMI_MASK;
+     } else {
+@@ -347,6 +358,8 @@ void helper_rsm(CPUX86State *env)
+     }
+     env->hflags2 &= ~HF2_SMM_INSIDE_NMI_MASK;
+     env->hflags &= ~HF_SMM_MASK;
++    /* Likewise, no TLB entry filled in SMM may survive RSM. */
++    tlb_flush(CPU(cpu));
+ 
+     qemu_log_mask(CPU_LOG_INT, "SMM: after RSM\n");
+     log_cpu_state_mask(CPU_LOG_INT, CPU(cpu), CPU_DUMP_CCOP);

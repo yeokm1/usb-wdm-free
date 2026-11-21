@@ -1,0 +1,195 @@
+# ObjectPropList for folder 0001A2B3h: each scalar datatype of MTP 1.1, 3.2 in an unknown property, skipped by its size.
+# Written by hand from MTP 1.1, 5.4 and 3.2 (datatypes INT8 0001h to UINT128 000Ah and their sizes); 7.4 here.
+# @0 NumberOfElements UINT32 = 21 (4 bytes)
+15 00 00 00
+# element 1: an unknown property, skipped by its datatype's size
+# @4 element 1 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @8 element 1 PropertyCode UINT16 = D811h (2 bytes)
+11 d8
+# @10 element 1 Datatype UINT16 = 0001h INT8 (2 bytes)
+01 00
+# @12 element 1 Value INT8 = -91 (1 bytes)
+a5
+# element 2: song.mp3
+# @13 element 2 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @17 element 2 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @19 element 2 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @21 element 2 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# element 3: an unknown property, skipped by its datatype's size
+# @25 element 3 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @29 element 3 PropertyCode UINT16 = D812h (2 bytes)
+12 d8
+# @31 element 3 Datatype UINT16 = 0002h UINT8 (2 bytes)
+02 00
+# @33 element 3 Value UINT8 = C3h (1 bytes)
+c3
+# element 4: song.mp3
+# @34 element 4 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @38 element 4 PropertyCode UINT16 = DC02h ObjectFormat (2 bytes)
+02 dc
+# @40 element 4 Datatype UINT16 = 0004h UINT16 (2 bytes)
+04 00
+# @42 element 4 Value UINT16 = 3009h (2 bytes)
+09 30
+# element 5: an unknown property, skipped by its datatype's size
+# @44 element 5 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @48 element 5 PropertyCode UINT16 = D813h (2 bytes)
+13 d8
+# @50 element 5 Datatype UINT16 = 0003h INT16 (2 bytes)
+03 00
+# @52 element 5 Value INT16 = -12345 (2 bytes)
+c7 cf
+# element 6: song.mp3
+# @54 element 6 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @58 element 6 PropertyCode UINT16 = DC04h ObjectSize (2 bytes)
+04 dc
+# @60 element 6 Datatype UINT16 = 0008h UINT64 (2 bytes)
+08 00
+# @62 element 6 Value UINT64 = 000000031A2B3C4Dh (8 bytes)
+4d 3c 2b 1a 03 00 00 00
+# element 7: an unknown property, skipped by its datatype's size
+# @70 element 7 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @74 element 7 PropertyCode UINT16 = D814h (2 bytes)
+14 d8
+# @76 element 7 Datatype UINT16 = 0004h UINT16 (2 bytes)
+04 00
+# @78 element 7 Value UINT16 = B2A1h (2 bytes)
+a1 b2
+# element 8: song.mp3
+# @80 element 8 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @84 element 8 PropertyCode UINT16 = DC07h ObjectFileName (2 bytes)
+07 dc
+# @86 element 8 Datatype UINT16 = FFFFh STR (2 bytes)
+ff ff
+# @88 element 8 Value STR = "song.mp3" (19 bytes)
+09 73 00 6f 00 6e 00 67 00 2e 00 6d 00 70 00 33 00 00 00
+# element 9: an unknown property, skipped by its datatype's size
+# @107 element 9 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @111 element 9 PropertyCode UINT16 = D815h (2 bytes)
+15 d8
+# @113 element 9 Datatype UINT16 = 0005h INT32 (2 bytes)
+05 00
+# @115 element 9 Value INT32 = -305419896 (4 bytes)
+88 a9 cb ed
+# element 10: song.mp3
+# @119 element 10 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @123 element 10 PropertyCode UINT16 = DC09h DateModified (2 bytes)
+09 dc
+# @125 element 10 Datatype UINT16 = FFFFh STR (2 bytes)
+ff ff
+# @127 element 10 Value STR = "20251231T235958" (33 bytes)
+10 32 00 30 00 32 00 35 00 31 00 32 00 33 00 31 00 54 00 32 00 33 00 35 00 39 00 35 00 38 00 00
+00
+# element 11: an unknown property, skipped by its datatype's size
+# @160 element 11 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @164 element 11 PropertyCode UINT16 = D816h (2 bytes)
+16 d8
+# @166 element 11 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @168 element 11 Value UINT32 = F4E3D2C1h (4 bytes)
+c1 d2 e3 f4
+# element 12: song.mp3
+# @172 element 12 ObjectHandle UINT32 = 000A1B2Ch (4 bytes)
+2c 1b 0a 00
+# @176 element 12 PropertyCode UINT16 = DC0Bh ParentObject (2 bytes)
+0b dc
+# @178 element 12 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @180 element 12 Value UINT32 = 0001A2B3h (4 bytes)
+b3 a2 01 00
+# element 13: an unknown property, skipped by its datatype's size
+# @184 element 13 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @188 element 13 PropertyCode UINT16 = D817h (2 bytes)
+17 d8
+# @190 element 13 Datatype UINT16 = 0007h INT64 (2 bytes)
+07 00
+# @192 element 13 Value INT64 = -81985529216486895 (8 bytes)
+11 32 54 76 98 ba dc fe
+# element 14: clip.wav
+# @200 element 14 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @204 element 14 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @206 element 14 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @208 element 14 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# element 15: an unknown property, skipped by its datatype's size
+# @212 element 15 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @216 element 15 PropertyCode UINT16 = D818h (2 bytes)
+18 d8
+# @218 element 15 Datatype UINT16 = 0008h UINT64 (2 bytes)
+08 00
+# @220 element 15 Value UINT64 = 8796A5B4C3D2E1F0h (8 bytes)
+f0 e1 d2 c3 b4 a5 96 87
+# element 16: clip.wav
+# @228 element 16 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @232 element 16 PropertyCode UINT16 = DC02h ObjectFormat (2 bytes)
+02 dc
+# @234 element 16 Datatype UINT16 = 0004h UINT16 (2 bytes)
+04 00
+# @236 element 16 Value UINT16 = 3008h (2 bytes)
+08 30
+# element 17: an unknown property, skipped by its datatype's size
+# @238 element 17 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @242 element 17 PropertyCode UINT16 = D819h (2 bytes)
+19 d8
+# @244 element 17 Datatype UINT16 = 0009h INT128 (2 bytes)
+09 00
+# @246 element 17 Value INT128 = -20095106327972375235668719608427373041 (16 bytes)
+0f 1e 2d 3c 4b 5a 69 78 87 96 a5 b4 c3 d2 e1 f0
+# element 18: clip.wav
+# @262 element 18 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @266 element 18 PropertyCode UINT16 = DC04h ObjectSize (2 bytes)
+04 dc
+# @268 element 18 Datatype UINT16 = 0008h UINT64 (2 bytes)
+08 00
+# @270 element 18 Value UINT64 = 000000045D6E7F80h (8 bytes)
+80 7f 6e 5d 04 00 00 00
+# element 19: an unknown property, skipped by its datatype's size
+# @278 element 19 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @282 element 19 PropertyCode UINT16 = D81Ah (2 bytes)
+1a d8
+# @284 element 19 Datatype UINT16 = 000Ah UINT128 (2 bytes)
+0a 00
+# @286 element 19 Value UINT128 = 8F9EADBCCBDAE9F80716253443526170h (16 bytes)
+70 61 52 43 34 25 16 07 f8 e9 da cb bc ad 9e 8f
+# element 20: clip.wav
+# @302 element 20 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @306 element 20 PropertyCode UINT16 = DC07h ObjectFileName (2 bytes)
+07 dc
+# @308 element 20 Datatype UINT16 = FFFFh STR (2 bytes)
+ff ff
+# @310 element 20 Value STR = "clip.wav" (19 bytes)
+09 63 00 6c 00 69 00 70 00 2e 00 77 00 61 00 76 00 00 00
+# element 21: clip.wav
+# @329 element 21 ObjectHandle UINT32 = 000B2C3Dh (4 bytes)
+3d 2c 0b 00
+# @333 element 21 PropertyCode UINT16 = DC0Bh ParentObject (2 bytes)
+0b dc
+# @335 element 21 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @337 element 21 Value UINT32 = 0001A2B3h (4 bytes)
+b3 a2 01 00
+# total 341 bytes

@@ -1,0 +1,30 @@
+# Expected decoding of strnul.hex, written by hand from MTP 1.1, 5.3.1 and 3.2.3; 7.9 here (Strings) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectInfo
+result = MTPE_OK
+StorageID = 00020001h
+ObjectFormat = 3004h
+ProtectionStatus = 8002h
+ObjectCompressedSize = 77116 (00012D3Ch)
+ThumbFormat = 3808h
+ThumbCompressedSize = 0031A1B1h
+ThumbPixWidth = 00320150h
+ThumbPixHeight = 003300E0h
+ImagePixWidth = 00340C80h
+ImagePixHeight = 00350960h
+ImageBitDepth = 00360010h
+ParentObject = 0001A2B3h
+AssociationType = 0000h (not an association)
+AssociationDesc = 0037C2D2h
+SequenceNumber = 0038E3F3h
+Filename = "ab" (the whole count of 6 units consumed: the next field at 65)
+DateCreated = "2"
+DateModified = ""
+Keywords = "kw"
+counts
+  at 52 1 elem 2 cap 255
+  at 65 1 elem 2 cap 255
+  at 70 1 elem 2 cap 255
+  at 71 1 elem 2 cap 255
+end

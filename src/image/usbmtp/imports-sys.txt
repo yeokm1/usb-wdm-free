@@ -1,0 +1,47 @@
+# Imports USBMTP.SYS may use (MODULE!name). Being listed here is the package's
+# declaration; the gate also requires every name to be declared in the
+# Windows 98 DDK's WDM.H (USBD.SYS's in its USBDLIB.H). Whether 98 SE's and
+# ME's NTKERN export it is shown only by the guest load test (build.md 5.1).
+HAL.DLL!KeGetCurrentIrql
+HAL.DLL!KfAcquireSpinLock
+HAL.DLL!KfReleaseSpinLock
+NTOSKRNL.EXE!ExAllocatePoolWithTag
+NTOSKRNL.EXE!ExFreePool
+NTOSKRNL.EXE!ExQueueWorkItem
+NTOSKRNL.EXE!InterlockedDecrement
+NTOSKRNL.EXE!InterlockedExchange
+NTOSKRNL.EXE!InterlockedIncrement
+NTOSKRNL.EXE!IoAllocateIrp
+NTOSKRNL.EXE!IoAttachDeviceToDeviceStack
+NTOSKRNL.EXE!IoBuildDeviceIoControlRequest
+NTOSKRNL.EXE!IoCancelIrp
+NTOSKRNL.EXE!IoCreateDevice
+NTOSKRNL.EXE!IoCreateSymbolicLink
+NTOSKRNL.EXE!IoDeleteDevice
+NTOSKRNL.EXE!IoDeleteSymbolicLink
+NTOSKRNL.EXE!IoDetachDevice
+NTOSKRNL.EXE!IoFreeIrp
+NTOSKRNL.EXE!IoGetDeviceProperty
+NTOSKRNL.EXE!IoInitializeIrp
+NTOSKRNL.EXE!IoReleaseCancelSpinLock
+NTOSKRNL.EXE!IofCallDriver
+NTOSKRNL.EXE!IofCompleteRequest
+NTOSKRNL.EXE!KeCancelTimer
+NTOSKRNL.EXE!KeDelayExecutionThread
+NTOSKRNL.EXE!KeGetCurrentThread
+NTOSKRNL.EXE!KeInitializeDpc
+NTOSKRNL.EXE!KeInitializeEvent
+NTOSKRNL.EXE!KeInitializeSpinLock
+NTOSKRNL.EXE!KeInitializeTimer
+NTOSKRNL.EXE!KeQueryTimeIncrement
+NTOSKRNL.EXE!KeSetEvent
+NTOSKRNL.EXE!KeSetTimer
+NTOSKRNL.EXE!KeTickCount
+NTOSKRNL.EXE!KeWaitForSingleObject
+NTOSKRNL.EXE!KefAcquireSpinLockAtDpcLevel
+NTOSKRNL.EXE!KefReleaseSpinLockFromDpcLevel
+NTOSKRNL.EXE!MmMapLockedPages
+NTOSKRNL.EXE!PoCallDriver
+NTOSKRNL.EXE!PoStartNextPowerIrp
+NTOSKRNL.EXE!RtlInitUnicodeString
+USBD.SYS!_USBD_CreateConfigurationRequestEx@8

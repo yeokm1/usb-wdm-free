@@ -1,0 +1,11 @@
+# A Get Device Status reply: 12 bytes, Transaction Cancelled, endpoints 81h and 02h.
+# Written by hand from the still image class specification, 5.2.4.2, Table 5.2-7; 4-byte parameters (7.5 here).
+# @0 wLength UINT16 = 12 (2 bytes)
+0c 00
+# @2 code UINT16 = 201Fh (2 bytes)
+1f 20
+# @4 parameter 1 UINT32 = 00000081h endpoint address, bulk IN (4 bytes)
+81 00 00 00
+# @8 parameter 2 UINT32 = 00000002h endpoint address, bulk OUT (4 bytes)
+02 00 00 00
+# total 12 bytes

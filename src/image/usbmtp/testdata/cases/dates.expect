@@ -1,0 +1,26 @@
+# Expected results of dates.cas, written by hand from docs/design/mtp.md
+# 7.7 and MTP 1.1, 3.2.5. Format: ../README.md.
+
+DTE-001
+  row a: 2026-11-17 08:30:15 local = 2026-11-17 00:30:15 UTC
+  row b: as row a, with 5 tenths (500 ms)
+  row c: 2026-11-17 00:30:15 UTC
+  row d: 2026-11-17 00:30:15 UTC
+  row e: 2026-11-17 08:30:15 UTC
+  row f: 1980-01-01 00:00:00 local, used
+  row g: not used (before 1980)
+  row h: 2107-12-31 23:59:58 local, used
+  row i: not used (after 2107)
+  rows j, k, l, m, n, o, p: not used (unreadable)
+end
+
+DTE-002
+  row a: the file's modification time 2026-11-17 08:30:14 or 08:30:16 local as FAT rounds the odd second; read back in 2 s steps
+  row b: 2026-11-17 08:30:16 local
+  row c: the file keeps the time of the copy
+end
+
+DTE-003
+  row a: "20261117T083015" (no zone, no tenths)
+  row b: "19991231T235958"
+end

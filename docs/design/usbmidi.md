@@ -407,7 +407,9 @@ Per IN endpoint, three URBs outstanding (Linux keeps seven), each of
 `wMaxPacketSize` (64 at Full Speed, 512 at High Speed), with
 `USBD_SHORT_TRANSFER_OK`. The completion routine (DISPATCH_LEVEL) decodes
 the packets (6.5) into the per-port input rings, notifies the port drivers
-and resubmits. Overflow of a ring drops whole messages and counts them.
+and resubmits. Overflow of a ring drops whole events (a USB-MIDI Event
+Packet's one to three bytes, so a SysEx that overflows loses a piece) and
+counts them (`Overruns`).
 
 ### 6.5 USB-MIDI Event Packets
 
@@ -440,7 +442,9 @@ Output (bytes from the port driver to packets), per port:
   special cases). A status byte inside a SysEx ends it implicitly; the
   parser emits no end packet for an unterminated SysEx (the receiver sees
   the new status), as Linux does.
-- F4, F5 (undefined) are dropped; F7 outside SysEx is dropped.
+- F4, F5 (undefined) are dropped and end the running status, as a
+  system common status does; F7 outside SysEx goes out alone as CIN 5
+  (`umtest`).
 - **Fairness**: each OUT URB is filled round-robin across the endpoint's
   ports, a packet at a time (Linux rotates its start port per URB), so one
   port's long SysEx does not starve the others.

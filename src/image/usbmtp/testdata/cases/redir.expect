@@ -1,0 +1,44 @@
+# Expected results of redir.cas, written by hand from docs/design/mtp.md
+# 7.9 and 11.2. Format: ../README.md. I1 to I10 hold where hostredir.c
+# can check them (I1, I2, I3, I4, I7, I9 by the library's own checks; the
+# allocation hook counts as in the other cases). Real time and real threads:
+# the execution contract (X1 to X11) does not apply here, so these cases
+# judge outcomes, never an interleaving or an exact time.
+
+RDR-001
+  every row: open OK; every listing complete; every CRC-32 equal; every put read back equal
+  rows h, i: put refused with MTPE_DEVICE (StoreReadOnly, 200Eh) or not attempted because the storage is read-only; GetObjectHandles' parent filter refused and the tree built from a whole read (7.4)
+  rows j, k: the split form learned from GetDeviceInfo and every data phase sent split
+  rows l, m: before the unlock no storage listed; after it the StoreAdded refresh, then as row c
+  row e: GET_INFO's speed 3
+  every row: close sends CloseSession and ends with CLOSED; the allocations balance
+end
+
+RDR-002
+  row a: the transfer MTPE_DEVICE resp=201Fh (device-initiated: 7.5), the next get equal
+  row b: MTPE_PROTOCOL reason=MTPR_CLEN, the next get equal
+  row c: MTPE_TIMEOUT flags=SESSION_LOST (7.5 step 6: CQ35), a new session, the next get equal
+  row d: MTPE_CANCELLED; the stale response with the cancelled id dropped once (7.5 step 5); the next get equal
+  row e: the response in place of the zero-length packet kept; the get MTPE_OK and equal
+  row f: the cancel's status Busy 3 times, then OK; MTPE_CANCELLED flags=none
+  rows g to j: Device Reset (RESET6, then EVSTART after the new OpenSession); MTPE_CANCELLED flags=SESSION_LOST; the next get equal
+  row k: Device Reset after 7.5's 10 s deadline or the status failing; MTPE_CANCELLED flags=SESSION_LOST; a new session; the next get equal
+  row l: the class request never answered: GIVENUP by the deadline observer at most 20 s (and its 500 ms period) after the Cancel (7.5's outer bound, CQ19), the GIVENUP notice; after the simulator was served again, the open and the 1 KB get MTPE_OK and equal
+  row m: the bulk OUT never answered: the cancel's ABORT ends it; MTPE_CANCELLED flags=UNCERTAIN; no DeleteObject; the next get equal
+  row n: MTPE_CANCELLED flags=SESSION_LOST (CQ5); a new session opened; the event callback told; the next get equal
+  row o: the device-initiated case on the event; the transaction MTPE_DEVICE resp=201Fh, the job going on; the next get equal
+  row p: every get equal (races with delayed answers)
+end
+
+RDR-003
+  the event callback's refreshes coalesced; never more than 64 refresh jobs queued; a full refresh when the lost flag came
+end
+
+RDR-004
+  every row: the CLOSED notice within CLOSE_DEADLINE_MS; the latched cancel settled the transfer; the next open and get equal
+  row b: the upload uncertain; not replayed; not deleted
+end
+
+RDR-005
+  the transfer MTPE_GONE (or MTPE_GIVENUP if a call stayed out past the deadline); the CLOSED notice after every call returned; no access to freed memory
+end

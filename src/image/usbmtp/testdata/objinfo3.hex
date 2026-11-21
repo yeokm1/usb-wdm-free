@@ -1,0 +1,43 @@
+# ObjectInfo dataset: size in the 64-bit property; a name outside ASCII with a surrogate pair.
+# Written by hand from MTP 1.1, 5.3.1; 7.2 (ObjectCompressedSize FFFFFFFFh).
+# @0 StorageID UINT32 = 00050003h (4 bytes)
+03 00 05 00
+# @4 ObjectFormat UINT16 = 3000h (2 bytes)
+00 30
+# @6 ProtectionStatus UINT16 = 8003h (2 bytes)
+03 80
+# @8 ObjectCompressedSize UINT32 = FFFFFFFFh (4 bytes)
+ff ff ff ff
+# @12 ThumbFormat UINT16 = 380Bh (2 bytes)
+0b 38
+# @14 ThumbCompressedSize UINT32 = 0021C4D5h (4 bytes)
+d5 c4 21 00
+# @18 ThumbPixWidth UINT32 = 00220140h (4 bytes)
+40 01 22 00
+# @22 ThumbPixHeight UINT32 = 002300F0h (4 bytes)
+f0 00 23 00
+# @26 ImagePixWidth UINT32 = 00241E00h (4 bytes)
+00 1e 24 00
+# @30 ImagePixHeight UINT32 = 00251680h (4 bytes)
+80 16 25 00
+# @34 ImageBitDepth UINT32 = 00260030h (4 bytes)
+30 00 26 00
+# @38 ParentObject UINT32 = 0006A7B8h (4 bytes)
+b8 a7 06 00
+# @42 AssociationType UINT16 = 0000h (2 bytes)
+00 00
+# @44 AssociationDesc UINT32 = 0027E6F7h (4 bytes)
+f7 e6 27 00
+# @48 SequenceNumber UINT32 = 00280918h (4 bytes)
+18 09 28 00
+# @52 Filename String = "\u03A9\u03BC\u03AD\u03B3\u03B1\uD83D\uDE00.bin" (25 bytes)
+0c a9 03 bc 03 ad 03 b3 03 b1 03 3d d8 00 de 2e 00 62 00 69 00 6e 00 00 00
+# @77 DateCreated String = "20991231T235959Z" (35 bytes)
+11 32 00 30 00 39 00 39 00 31 00 32 00 33 00 31 00 54 00 32 00 33 00 35 00 39 00 35 00 39 00 5a
+00 00 00
+# @112 DateModified String = "20000229T000000+0800" (43 bytes)
+15 32 00 30 00 30 00 30 00 30 00 32 00 32 00 39 00 54 00 30 00 30 00 30 00 30 00 30 00 30 00 2b
+00 30 00 38 00 30 00 30 00 00 00
+# @155 Keywords String = "k" (5 bytes)
+02 6b 00 00 00
+# total 160 bytes

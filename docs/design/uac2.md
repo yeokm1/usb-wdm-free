@@ -1839,9 +1839,8 @@ that range (MMCSS).
   a small client ring holds to 8 or 12 ms; build 23 measured in
   interrupt time, whose 10 to 15.6 ms ticks before Windows 8 can miss a
   loop's time inside waits that return at once, and let a later RUN turn
-  the rule off under a real-time worker; Codex's reviews of builds 21 to
-  23). A stack that completes URBs inline again and again with nothing
-  delivered (capture with zero-length packets, no `Fail`) leaves `Wake`
+  the rule off under a real-time worker). A stack that completes URBs
+  inline again and again with nothing delivered (capture with zero-length packets, no `Fail`) leaves `Wake`
   signalled, so a real-time worker would hold a single processor, the
   thread that asks Stop included. So the worker:
   - keeps its own copy of `Uac2Realtime` from its start: a later RUN's
@@ -2034,6 +2033,12 @@ a pass-through node (section 4.1). Its one control on this device
   1/256 dB, signed. `VolStartCur` is the CUR as read, before any
   lowering. So the next report from a device shows its RANGE and its
   level at plug-in.
+
+Readings since: a "CX31993+MAX97220 PRO" (2026-11-17, `uac2` 0.1.11.0;
+Feature Unit 2, no Extension Unit, so not the layout of 20.1) reads
+-74.0 to 0.0 dB in 0.5 dB steps on both channels: no gain above 0 dB, so
+the cap and `Uac2VolAboveZero` change nothing on it; the range of the
+unit of 20.1 is still unread ([status](../status.md)).
 
 ### 20.6 Tests
 
@@ -3194,7 +3199,7 @@ Risks:
   option d (the devices read, by hardware id) and nothing by class.
 - **U4: the stream ends at `uacwatch.h`'s deadline** when feedback stops,
   as for UAC 2.0.
-- **MIDI-only functions** (coordinator for the owner, 2026-11-07): 98 SE's
+- **MIDI-only functions** (owner, 2026-11-07): 98 SE's
   `usbaudio` has no USB MIDI ("Support for MIDI devices was added in
   Windows Me", Microsoft Learn, "USB Audio Class System Driver
   (Usbaudio.sys)"; `usbmidi.md` 3.1), so a MIDI-only (AC + MS) function
@@ -3761,6 +3766,20 @@ profiles and `uac2`'s `fs`, several rounds of playback and recording,
 before and after, with the stream counters read after every failed step
 ([uac-uhci-stalls](../testing/2026-11-09-uac-uhci-stalls.md)).
 
+### 26.14 Recording level, other playback units and the input chooser (2026-11-17)
+
+Section 28 applies to `uac1` as to `uac2`: the capture walk, the
+recording volume and mute, the first-arrival pass, the playback units
+beyond the one controlled, and the input chooser all live in the shared
+core (`uacvol.c`, `uactopo.c`, `uacwdm.cpp`). What differs for USB Audio
+1.0 is listed in 28.13: the Selector Unit's layout and requests, the
+Feature Unit's MIN/MAX/RES, the INF lines, and the systems (98 SE only,
+26.10). The `uac1` layouts read so far: the Logi headset (capture Input
+Terminal 1, Feature Unit 2, Output Terminal 3; no selector), the Play! 2
+(Input Terminal 1, Feature Unit 6, a one-input Selector Unit 10, Output
+Terminal 3: no chooser), and `uac1test`'s two-input capture selector
+fixture (`selcfg`).
+
 ## 27. A pin opened while the one before is still being destroyed (xHCI98 task 49.8, 2026-11-11)
 
 Status: design and code, 2026-11-11; build stamps `uac2` 29, `uac1` 5.
@@ -3808,3 +3827,4721 @@ destroy that never runs ends the wait at the bound and the open is refused
 busy; no wait above PASSIVE. Legs: ME's own UHCI, 18 or more recordings at
 44.1 kHz with the counters and `Uac2Waits` read, a regression round at
 48 kHz and on 98 SE.
+
+## 28. Recording level, the other playback units, and the input chooser (2026-11-17)
+
+Status: design, 2026-11-17, revised five times, with the owner's
+answers; the playback engine is moved (28.15) without a change of
+behaviour, and no new device-facing behaviour exists yet: stage 1 of the
+wiring (28.18) builds the capture graph at start and writes its route
+diagnostics, and makes no request to the device; stage 2 (the route
+table's open and close reservations) is designed in 28.19 to 28.25 and
+not wired. Applies to `uac2`
+and `uac1` alike (the shared core; `uac1`'s differences and scope are
+28.13). The owner's decisions are D1 to D3, his answers A1 to A6 to the
+first draft and B1 to B6 to the second (28.2); every other choice here
+is provisional and marked so. 28.17 lists what is still open, and 28.25
+stage 2's questions.
+
+### 28.1 What was found
+
+Read in the sources (`uacvol.c`, `uactopo.c`, `uacwdm.cpp`) and shown by
+host checks against the code as it is (the X4 and Logi fixtures):
+
+1. **Nothing reads or writes a Feature Unit on the capture path.**
+   `LevelSetup` runs for the render direction only (`dir[0]`), and
+   `UacVolFind` walks from an Output Terminal that is *not* USB
+   streaming back to a USB streaming Input Terminal, so a capture path
+   (ending at a USB streaming Output Terminal) is never walked: for the
+   Logi's capture Output Terminal 3 it finds nothing, and for the X4's
+   microphone Input Terminal 4 it finds the monitoring path to the
+   speaker (Output Terminal 5 through Feature Unit 13 and Mixer Unit 7),
+   not the capture path. The topology's capture line is a bridge pin, a
+   SUM node and the line out (`uactopo.c`): no VOLUME, MUTE or MUX node.
+   A device whose capture unit powers up muted, or at the bottom of its
+   range, records silence, and Windows shows no recording control.
+2. **On playback only one Feature Unit is controlled.** `UacVolFind`
+   takes the first path to an Output Terminal and on it the unit nearest
+   the Output Terminal with the control (`Pick`); the extra channels of
+   that one unit are normalised once the driver owns the master
+   (`VolumeExtra`, `MuteExtra`). Any other Feature Unit on the path keeps
+   its power-up state, so a second unit that powers up muted or at its
+   minimum keeps playback silent or quiet whatever the user sets.
+3. **No Selector Unit is read or set.** The X4's capture Output Terminal
+   6 is fed by Selector Unit 26 with four inputs (Feature Units 2, 23, 25
+   and 8, behind Input Terminals 4 microphone `0x0201`, 18 digital audio
+   interface `0x0602`, 24 line connector `0x0603` and 19 S/PDIF
+   `0x0605`); the driver never asks its position and offers no choice,
+   and the capture bridge's category comes from `UacVolJack`, which
+   returns the first Input Terminal by id that the walk reaches through
+   any input of the selector, whatever its position.
+
+Also found while reading, for correction with this work:
+
+- Section 5.3 says per-channel controls take precedence over the
+  master; `Pick` does the opposite (a read/write master on any unit of
+  the path wins, and the same unit's channel controls are normalised to
+  0 dB as extras), which is what the playback legs ran. 5.3 is
+  corrected to the code.
+- `Drain` fills the render level's volume words (`VolumeStats`) into
+  `Uac2UsbStatsIn` too, the capture stream's record; 28.12 gives the
+  capture record its own.
+- `Walk` keeps one visited set for the whole search from an Output
+  Terminal, so a unit reached a second time by another route is not
+  entered again: two routes that converge (a diamond) yield one. That
+  is harmless for "the first path" playback takes today, wrong for the
+  coverage rule of 28.4; the new walk keeps a per-route stack (28.3).
+
+### 28.2 The owner's decisions (2026-11-17)
+
+His decisions, recorded as given:
+
+- **D1. Capture level.** Recording volume and mute controls that
+  Windows shows, from a capture walk from the USB streaming Output
+  Terminal back to the selected Input Terminal, the level saved per
+  endpoint; and on a device's first arrival only (no saved level yet)
+  the capture path unmuted (master and per channel) and a volume found
+  at its minimum or at silence raised to the top step at or below 0 dB.
+  After that the saved level rules.
+- **D2. Playback.** Once the driver owns the level, every other Feature
+  Unit on the playback path normalised to unmuted and 0 dB (or the top
+  step at or below 0 dB), as extra channels are today. (Bounded by
+  B4; 28.9.)
+- **D3. Capture source.** An input chooser now: a MUX node with one
+  source per selector input, named by terminal type.
+
+His answers to the first draft's questions:
+
+- **A1. Names.** Windows' own localised names where a standard one
+  exists; the driver's own strings (drafts for him) only for kinds
+  Windows has no name for, and for "Stereo Mix" (28.10).
+- **A2. No cap on recording.** The whole capture range is offered;
+  `Uac2VolAboveZero` stays playback-only; only the automatic
+  first-arrival adjustment stops at 0 dB.
+- **A3. Per input.** Each input gets the first-arrival pass the first
+  time it is chosen. This extends D1's "device's first arrival" wording,
+  with the owner's agreement.
+- **A4. An opt-out.** A visible, documented setting the INF writes
+  without overwriting, `Uac2CapFirst` (draft name), default 1.
+- **A5. Numbering.** Inputs of the same kind are numbered, in the form
+  he chose: the first unnumbered, then 2, 3 ("Line In", "Line In 2").
+  Numbering every one ("Line In 1", "Line In 2") was put back to him;
+  his form stands (B5).
+- **A6. The recording control's unit.** The unit nearest the Output
+  Terminal, as playback does; it must be the nearest *eligible* unit
+  (whole-signal coverage, channel compatibility, ownership; 28.4), a
+  soundness condition, not a change of the decision.
+
+His decision on the third revision (2026-11-17):
+
+- **C1. A live change of the recording input is refused** while a
+  recording that depends on the route is open, on every system,
+  accepted as provisional: to be confirmed or changed after the mixer
+  legs on each system (28.7, 28.16).
+
+His answers to the second draft's questions:
+
+- **B1. The saved input is restored at start**, as the levels are,
+  after the saved route is validated and the selectors confirmed (28.7).
+- **B2. The reduced forms only where a leg shows the need**: no chooser
+  on 98 SE and ME, and a single endpoint without a MUX on Vista and
+  later, each accepted only where a guest leg shows it is needed, with
+  the limitation recorded (28.10).
+- **B3. More than eight sources: no chooser** (28.7).
+- **B4. Playback normalisation is bounded**: 0 dB only before the
+  controlled volume and before any join, elsewhere mutes released only;
+  the existing behaviour for extra channels kept (28.9).
+- **B5. His numbering form stands** ("Line In", "Line In 2"; 28.10).
+- **B6. Eventual discovery** of a device-side switch is accepted with
+  the stated recording limitation; no polling during recording; the
+  interrupt endpoint is later work of its own (28.8).
+
+### 28.3 The capture walk as a graph
+
+Entities and layouts are ADC-2 4.7.2 (UAC 2.0) and ADC-1 4.3.2 (UAC
+1.0); the walk checks every entity it reaches in full ("Well-formed
+entities", below) and reads the Selector Unit's control bitmap (28.7).
+
+**The graph.** For each capture endpoint (its USB streaming Output
+Terminal, `wTerminalType` `0x0101`; one per pair, section 15.3) the walk
+builds the upstream graph by `bSourceID`/`baSourceID`, never by
+`bCSourceID`: Clock Sources, Clock Selectors and Clock Multipliers (UAC
+2.0 `0x0A` to `0x0C`) are not on the audio path and never a source or a
+MUX; a Clock Selector stays section 4.2's. Each entity is classified:
+
+| Class | Entities | What the walk does |
+|---|---|---|
+| Pass | Feature Unit; Sampling Rate Converter and Effect Unit (UAC 2.0); a one-input Selector Unit (no request) | one source; the channel cluster unchanged |
+| Opaque | a Processing or Extension Unit with one input | one source; what it does to level and channels is unknown (28.4) |
+| Join | a Mixer Unit; a Processing or Extension Unit with two or more inputs | every input entered in `baSourceID` order; a Mixer Unit is taken to sum its inputs (ADC-2 4.7.2.6), a multi-input Processing or Extension Unit is not assumed to sum: it is a join and opaque |
+| Choice | a Selector Unit with two or more inputs | each input a branch; 28.7 makes the branches sources or fixes them |
+| End | an Input Terminal | a non-streaming terminal ends a route; a USB streaming one too (the playback signal fed back: 28.10's "Stereo Mix") |
+
+**Routes, not one path.** A route is one sequence of entities from the
+Output Terminal to an End. The walk enumerates every route with a
+per-route stack, so two routes that converge on one unit are both kept;
+the unit is listed once in the graph's entity set. An entity already on
+the current route is a loop: that route is cut there (it reaches no
+End), the walk goes on with the other routes so that the diagnostics
+list them, and the graph is incomplete (below): a unit fed through its
+own output has no signal the walk can account for, so what the looping
+route carries into the recording is unknown. Bounds: depth 32 per route, at
+most 64 routes per endpoint, and the layout checks below.
+
+**Well-formed entities.** An entity is malformed unless its descriptor
+lies inside the configuration and holds every field its subtype
+defines through its last string index, each variable part sized from
+what determines it (the ADC-1 size in parentheses, n its
+`bControlSize`), with the one tolerated exception named below (a
+master-only Feature Unit):
+
+- Input Terminal 17 (12); Output Terminal 12 (9); Selector Unit 7 + p
+  (6 + p); SRC 8; Extension Unit 15 + p (13 + p + n).
+- Mixer Unit 13 + p + N (10 + p + N): N the bytes of `bmMixerControls`,
+  one bit per input channel of all input pins together and output
+  channel (`bNrChannels`), rounded up (ADC-2 Table 4-11, ADC-1 4.3.2.3).
+- Feature Unit 6 + (ch + 1) * 4 (7 + (ch + 1) * n) and Effect Unit
+  16 + 4 * ch, ch the channel count of the cluster actually entering the
+  unit, not any count the length allows: a stereo cluster needs the
+  master's and both channels' entries.
+- The Effect Unit's length: ADC-2's tables contradict themselves. Tables
+  4-15 to 4-19 state `bLength` 16 + 4 * ch (`iEffects` at 15 + 4 * ch),
+  while their fields laid out contiguously (`bmaControls(0)` at 7,
+  `bmaControls(1)` at 11, four bytes each) end with `iEffects` at
+  11 + 4 * ch, implying 12 + 4 * ch. The larger is required here, as the
+  conservative choice: a device built to the shorter reading gets an
+  incomplete graph and so no write eligibility. That is a compatibility
+  limitation of this driver, not a finding that such a device is
+  invalid; accepting the shorter layout would take an explicit
+  compatibility decision.
+- A Feature Unit with the master's entry alone (ch 0) on a cluster of one
+  or more channels is a **tolerated nonconforming layout**, not a well
+  formed one: both specifications require the master's entry and one
+  entry per logical channel (a channel without controls has a zero
+  entry). It is accepted because recorded devices have it (the Logi
+  headset and the Brio 100, on mono and stereo clusters), and accepting
+  it is bounded: the master bitmap lies whole at its fixed offset for
+  any cluster, and no channel's controls are read from the unit (it
+  offers none). A partial channel array (some channels' entries, not
+  all) stays malformed.
+- Processing Unit: the common part (16 + p; 13 + p + n) and the
+  process-specific part its process type defines, on the one input pin
+  every defined type has: Up/Down-mix and Dolby Prologic `bNrModes` and
+  that many modes (18 + 4 * m; 15 + n + 2 * m); the UAC 2.0 Stereo
+  Extender and the UAC 1.0 3D-Stereo Extender, Reverberation, Chorus and
+  Dynamic Range Compressor nothing more. A process type neither
+  specification defines (`PROCESS_UNDEFINED` included) has no tail that
+  can be checked, so that unit is malformed, as is a Processing Unit with
+  two or more inputs: in practice the multi-input opaque join of the table
+  above is an Extension Unit.
+
+A cluster's channel count is established upstream: an Input Terminal,
+Mixer, Processing or Extension Unit states its own `bNrChannels`; a
+Feature Unit, SRC or Effect Unit passes its input's; a Selector Unit its
+inputs' where they agree (ADC-2 4.7.2.7 and ADC-1 4.3.2.4 require it).
+Where none is defined (a Selector whose inputs differ, a count of 0) a
+layout that depends on it is malformed. A check that meets a route the
+walk cuts for its own reason (a loop, a missing or unlisted entity)
+leaves the reason to the walk.
+
+**An incomplete graph writes nothing.** The graph is incomplete when
+any route was cut: more than 64 routes, a route deeper than 32, a loop
+(an entity met again on its own route), an entity whose descriptor is
+short, malformed or out of the configuration, a source id naming no
+entity, or an entity class the table above does not list. One cut route
+is enough: a graph with one valid branch and one loop is incomplete as a
+whole, since the cut branch may join the signal the valid branch
+carries. Coverage (28.4) and the pass's target set
+(28.6) cannot be known from an incomplete graph, so for that endpoint:
+no chooser, no first-arrival pass, no hardware write of any capture
+control (level, pass or selector), and the level in software only
+(28.11); the selectors and controls may still be read for the
+diagnostics. The reason is recorded (`GraphFlags`, 28.12). The same
+holds for D2 on the playback side: a playback route the new walk finds
+incomplete gets no normalisation write (28.9); the playback level
+control `UacVolFind` picks today is kept as shipped (28.15).
+
+**The selected graph** of an endpoint is the union of the routes the
+selected source has (28.7: through the chooser at that source's input,
+inner selectors at the source's route, selectors behind a join at their
+read position). A source's own graph is the same with that source
+chosen. Every rule below names which graph it uses.
+
+### 28.4 Which control carries the level: eligibility
+
+On a source's graph, a Feature Unit control (unit, control, channel) is
+**eligible** to carry that source's recording level only when:
+
+1. **Whole-signal coverage.** The unit lies on every route of the
+   source's graph (it dominates every End). A unit on one input of a
+   Mixer Unit controls one part of the recording only and is never the
+   level's control; a unit after the join is.
+2. **No opaque entity between it and the Output Terminal** for a
+   per-channel control, and none that is a join: across a multi-input
+   Processing or Extension Unit nothing upstream is eligible (the
+   output need not depend on any one input linearly). Across a
+   one-input opaque unit a master control upstream stays eligible (it
+   still sets the level going in), a per-channel control does not.
+3. **Channel compatibility** for a per-channel control: the unit's
+   logical channels are the cluster the Output Terminal receives, with
+   only Pass entities between (a Mixer Unit, a Processing up/down-mix,
+   an Extension Unit or a Selector whose inputs differ change the
+   cluster; ADC-1 and ADC-2 both define channel-changing processing).
+   Correspondence must be proved, not inferred from equal channel
+   counts: so per-channel eligibility is given only across one-input
+   Pass entities (Feature, SRC, Effect, a one-input Selector), and
+   refused across any multi-input Selector even where its inputs'
+   counts agree (provisional: a cluster-identity check could later
+   admit a selector whose inputs carry the same cluster). A master
+   control needs no channel correspondence.
+4. **Ownership** (28.5): the control is not owned by another endpoint
+   or by playback.
+
+Among the eligible controls, as on playback and as A6 decides: **volume**
+on the eligible unit nearest the Output Terminal with a read/write
+master volume; failing that, the nearest eligible unit with volume
+read/write on every logical channel (at least the node's channels, at
+most `UAC_VOL_CHANNELS`). **Mute** likewise, on its own (it may be
+another unit). A master wins over channels (`Pick`; 5.3 corrected).
+Nothing eligible: software volume and mute on the captured samples
+(28.11), with `UacVolSoftRange` (-96 to 0 dB, 0.5 dB steps).
+
+Examples: X4: no unit after Selector Unit 26, so each source's control
+is its own unit (microphone Feature Unit 2, digital 23, line 25, S/PDIF
+8; master mute and volume each). Logi: Feature Unit 2. Play! 2: Feature
+Unit 6 through the one-input Selector Unit 10.
+
+**Other controls of the controlled unit** (its channel volumes and
+mutes beside a controlled master): on capture they are *not* normalised
+to 0 dB once the level is owned, unlike playback's extras: D1 keeps a
+volume between minimum and top as the device has it, and normalising
+the extras would undo that. They get the first-arrival pass (28.6) and
+otherwise keep the device's setting; the software gain accounts for
+them as read.
+
+**No cap on capture (A2).** The capture nodes offer the device's whole
+range (`KsMax` = `KsTop`); `Uac2VolAboveZero` stays playback-only (its
+INF comment and the user documentation say so). Only the first-arrival
+pass stops at 0 dB. A range that claims large gain is offered as read.
+
+**Accounting.** The software gain on a source accounts the selected
+graph's controls it knows: on the level's own route the controlled and
+the other controls (CUR as read; unknown as the range's top), and an
+opaque unit as unity, an assumption stated in the diagnostics; branch
+controls behind a join are not accounted (they set a part's level, not
+the whole). So "never louder than asked" holds for what the driver
+controls and knows, across Pass entities only.
+
+### 28.5 Ownership per hardware control, adapter-wide
+
+A **hardware control** is (entity, control selector, channel): a
+Feature Unit's mute or volume on its master or one logical channel, or
+a Selector Unit's selector control. The adapter (pair 0, which owns
+the function) keeps one table of claims for every hardware control, so
+two endpoints never write one control.
+
+**Built once, before any write.** The pairs are known before any of
+them starts: `Pairs()` reads them from the descriptor, and PnP start
+creates and prepares the pairs one after another in one thread (pair 0
+first, `Start` and `StartPair`). Pair 0 builds the whole table in its
+`Prepare`, after the descriptor model and before its own first control
+request that writes (its `LevelSetup` reads ranges and CURs, writes
+nothing before the table exists), for every endpoint of every pair
+(`UacPlanEndpoints` for each direction and index), in this fixed order,
+each entry only on a control nobody holds yet:
+
+1. Each playback pair's level controls (volume and mute, master and
+   extras: today's `UnitTaken` made per control), pair by pair.
+2. Each capture pair's chooser and inner selectors (28.7), then its
+   sources' level controls (28.4), pair by pair, source by source.
+3. Each playback pair's normalised controls (28.9), pair by pair.
+4. **Reservations** for the first-arrival pass: each capture pair's
+   pass targets (28.6) still unheld, reserved for the first pair (and
+   within it the first source) whose graph holds them. A reservation
+   lets only its holder's pass write the control; it is not a level.
+
+The table is read-only after that until the next start (a stop and
+start, a removal and arrival build it again from scratch): later pairs
+only look up, so no two endpoints can race to claim. A control held by
+another endpoint (claim or reservation) is never written by this one,
+by level, normalisation or first-arrival pass alike. It is per control,
+not per unit: a unit whose mute is pair A's level control may have its
+channel volumes normalised by pair A, claimed by another endpoint for
+its own use, or left; each control has at most one holder.
+
+**Invariants this rests on, to keep if preparation is refactored.**
+The order above is this driver's own control flow, not a Plug and Play
+guarantee (Windows may run starts and restarts asynchronously on Vista
+and later; the PnP start contract promises no order between one
+device's internal objects, which are this driver's): `Start` creates
+pair 0, calls its `Prepare`, registers pair 0's subdevices
+(`StartPair`), and only then creates, prepares and registers each later
+pair, one after another in the same call. So:
+
+1. **Pair 0 builds the whole table inside its `Prepare`, before
+   `StartPair(0)`**: once pair 0's subdevices are registered, KS
+   requests (a level SET, a MUX SET) can reach pair 0 while the later
+   pairs are still being prepared, and the table they consult is
+   already complete and immutable.
+2. **A later pair's `Prepare` only looks up**; it never adds a claim, so
+   its running beside pair 0's KS traffic cannot change a holder.
+3. **A return to D0 does not prepare again**: `PowerChangeState` calls
+   `PowerLocal`, which marks the device state unknown and leaves the
+   table, the claims and the route table as they are; the state is read
+   again at the next apply (28.8).
+4. **A stop and start creates new objects**: `Start` runs
+   `ShutdownPairs` (every old pair drained, its level work and pended
+   requests run down, 28.7) and then constructs new `Wave` objects, so a
+   table is never rebuilt under live objects; it dies with pair 0.
+
+A refactoring that prepares pairs concurrently, re-prepares at D0, or
+reuses objects across a stop must rebuild this guarantee first (a table
+built once before any pair registers), and the claims tests (28.16)
+cover the order.
+
+**What software cannot do.** Where a source's level control is claimed
+elsewhere, or a selected-graph control another endpoint holds muted or
+attenuated, this endpoint's software gain can only attenuate further:
+it cannot restore gain or unmute hardware another endpoint attenuated
+or muted. The diagnostics record such a control (28.12); the user
+documentation says that on a device whose recording and playback share
+a unit, the playback control also affects the recording.
+
+### 28.6 The first arrival (D1, A3, A4)
+
+**How "first" is known.** Per source, by the endpoint's saved capture
+value (28.12): no value, or a value with that source's "pass done" flag
+clear, means that source has never had its pass. The value belongs to
+the devnode's driver key: the same device replugged into the same port
+(or any port, for a device with a serial number) is not a first arrival;
+the same model on a new port without a serial number is a new devnode
+and gets the pass again, as it gets a new driver key. A device installed
+before this change has no value, so its next start is a first arrival.
+A malformed or stale value is treated as absent (28.12). Deleting the
+value runs every source's pass again at the next start (documented as
+the reset).
+
+**When.** The pass runs on the selected source at start, and on any
+other source the first time it becomes the confirmed selected source
+(A3; 28.7). Never on a source whose route is unknown: an unknown
+selector position (28.7) never triggers a pass on an assumed input; the
+pass waits until a read confirms which source is selected.
+`Uac2CapFirst` = 0 (A4) skips the pass for good: the capture controls
+stay as the device has them until the user sets one.
+
+**What is written**, on the source's graph (every route, so every
+branch of a join too), each control only where 28.5 allows it:
+
+1. Every read/write mute, master and each logical channel: set to 0.
+2. Every read/write volume, master and each logical channel, whose CUR
+   reads the silence value (`0x8000`) or at or below the first level of
+   its RANGE (a CUR below MIN counts): set to the top step at or below
+   0 dB of that control's own RANGE (`UacVolRange`'s `KsMax`, whatever
+   `Uac2VolAboveZero` says). Where no step is at or below 0 dB the
+   control is left. A RANGE is read as `UacVolRange` reads it today: a
+   RES of 0 on a subrange wider than one value reads as 1 (1/256 dB);
+   a one-value subrange keeps RES 0; a MIN of silence reads as its next
+   step; a malformed answer (MIN above MAX, subranges out of order, a
+   short answer) means no range, and that volume is left.
+3. Order: volumes raised first, then mutes cleared, from the Input
+   Terminal side to the Output Terminal side.
+4. **Readback** after every write: GET CUR of the control. A write the
+   device stalls is a failure; a write that succeeds but whose readback
+   still shows the old value (an ignored SET) is a failure too, counted
+   apart (`Ignored`); a readback that cannot be read leaves the control
+   unknown.
+
+**What the pass never writes**: a volume between its minimum and its
+top; a volume above 0 dB (left, not lowered: A2); a volume whose CUR or
+RANGE could not be read; any control other than mute and volume (AGC,
+bass, the rest); any Selector Unit (the pass never chooses an input);
+any Mixer crosspoint; any control outside the source's graph (the
+monitoring branches into a playback Mixer Unit, other sources' units,
+the playback path); any control 28.5 gives to another endpoint.
+
+**One transaction, and the user wins.** The pass runs under the
+operation mutex, which the level work item, RUN and start also take; a
+KS SET is not under it (SETs land in the cached state under the level
+spin lock and set `Pending`). So the pass works on a generation: it
+reads the endpoint's change counter (`Change`, incremented by every
+SET) when it begins; at its end, under the spin lock, it makes its
+results the source's saved level only if the counter has not moved. If
+a SET came during the pass, the SET's values stand: the pass's writes
+to that control are superseded by the apply that `Pending` runs next,
+and the saved value is written from that apply's state, never from the
+pass's. The same check guards the registry save of the pass.
+
+**After the pass**, three things are kept apart in the state and in the
+saved value:
+
+- **Pass done** (per source, saved): set once the pass ran with the
+  device ready, whatever each write's outcome, so a control that stalls
+  is not asked again at every start.
+- **Owned** (per level control): the source's volume and mute controls
+  (28.4) become owned with the readback value as their level where the
+  readback confirms a value (written or left), and are saved; a level
+  control whose write failed or whose state is unknown is not owned
+  (the device's own state stands, read again at the next apply). From
+  then on an owned control is written at every start, after D3 and when
+  stale, as a restored playback level is.
+- **Pending retry** (per owned control, not saved): an owned control
+  whose later write fails stays dirty and is retried at the next apply
+  (a RUN, a SET, a return to D0), as on playback today. Controls the
+  pass wrote that are not level controls are never retried (one shot).
+
+### 28.7 The input chooser (D3)
+
+**The chooser.** The first Choice entity (a Selector Unit with two or
+more inputs) the walk meets from the capture Output Terminal without
+crossing a Join. It becomes the topology's MUX node (28.10). A selector
+behind a Join is not a chooser: it is followed at its read position,
+never set, and its branch is part of one source. A chooser left with
+one source (the other inputs reach nothing) is none.
+
+**Selectors in series.** A further Choice inside a chooser branch, met
+before any Join, is flattened into the chooser: each source is then a
+route of (selector, input) pairs. The inner selector may be shared by
+several routes (input 1 of the chooser reaching inner selector X, whose
+inputs are two sources). Sources are numbered in route order: the
+chooser's inputs in order, and within one input the inner selectors'
+inputs in order; that order is stable for a given descriptor and is the
+one the names (28.10) and the saved value (28.12) use.
+
+**Limit (B3).** At most 8 sources: a device with more gets no MUX node and keeps one line at the selectors' read
+positions (software level if nothing eligible covers every source),
+recorded. A chooser shared by two capture endpoints belongs to the first
+(28.5); the second records at its read position with no MUX, and the
+route lock below keeps the first's MUX from moving it while the second
+records.
+
+**KS property.** `KSPROPERTY_AUDIO_MUX_SOURCE` (`KSPROPSETID_Audio`,
+`KSNODEPROPERTY`, a `ULONG`), GET and SET on the MUX node; the value is
+the MUX node's logical input pin, 1 to N in source order (published kit
+documentation: "the pin ID of the selected input pin on the MUX node";
+a node's logical pins as in `PCCONNECTION_DESCRIPTOR`, output 0, inputs
+from 1; distinct from the mixer API's line indexes). A pin outside 1..N
+is refused (`STATUS_INVALID_PARAMETER`). `KSPROPERTY_AUDIO_CPU_RESOURCES`
+answers `KSAUDIO_CPU_RESOURCES_NOT_HOST_CPU` on the MUX node.
+
+**The requests.** UAC 2.0: Selector Unit Selector Control
+(`SU_SELECTOR_CONTROL` 0x01; ADC-2 5.2.5.6.1, A.17.6), CUR request,
+`wValue` 0x0100, `wIndex` unit << 8 | AudioControl interface, one byte,
+one-based; writable only where `bmControls` D1..0 read 11 (01: read
+only, a SET is refused with `STATUS_INVALID_DEVICE_REQUEST`; 00: no
+request, the position unknown unless the selector is on no other route).
+UAC 1.0: 28.13.
+
+**Three route states.** Kept apart in the state and the diagnostics:
+
+- **Requested**: the source of the SET being applied, or the saved
+  source being restored at start (B1); none otherwise.
+- **Switching**: a requested switch not yet confirmed or failed.
+- **Confirmed**: the source whose every selector read back at its input
+  at the last read.
+- **Unknown**: no source matches the positions read (a selector stalled,
+  answered outside 1..`bNrInPins`, has no readable control, or an inner
+  selector shared by routes reads an input of no offered route).
+
+GET answers the confirmed source, also while a switch is in progress
+(it reports what the device was last read to hold, never a request);
+when unknown, it answers 1 and the diagnostics say the route is
+unknown. While unknown, no
+first-arrival pass runs, no per-source unit is written, shared controls
+keep what they hold, and the software gain takes the quietest of the
+sources' states, so an unknown route is never louder than any source
+asked.
+
+**Synchronisation contract: a SET completes when the switch is
+known.** No MUX SET is answered `STATUS_SUCCESS` before the readback
+confirms the new source.
+
+- At PASSIVE the switch runs synchronously and the SET returns its
+  outcome: `STATUS_SUCCESS` when the readback confirms the new source,
+  `STATUS_DEVICE_DATA_ERROR` when a selector write failed or the
+  readback does not confirm.
+- At raised IRQL (PortCls may call there; today's level SETs allow for
+  it) the handler cannot wait. **Decision for now: no asynchronous
+  path.** Such a SET is refused at once with `STATUS_INVALID_DEVICE_STATE`
+  (counted, `MuxRefusedIrql`; the IRQL recorded, `MuxIrql`), nothing
+  written, the confirmed source kept; see "Cancellation" below for why,
+  and for what would let the pended path below be enabled. Microsoft's
+  published PortCls documentation does describe pending property
+  completion for Windows 98/ME and for Windows 2000 and later
+  (`PcCompletePendingPropertyRequest`; `PCPROPERTY_ITEM`: "The Handler
+  routine can also return STATUS_PENDING, in which case the miniport
+  driver is obliged to call PcCompletePendingPropertyRequest at a later
+  time"), and says the miniport must not touch the request after that
+  call; so the lifetime of a pended request is covered on every target
+  system, and only its cancellation is not.
+
+**The pended path, specified for when it is enabled: one protocol for
+admission, rundown and publication.** Each endpoint has one switch
+record, every field of which is read and written only under the
+endpoint's switch spin lock (`SwitchLock`, non-paged, never held across
+a wait, a USB request or a completion call):
+`State` (Idle, Sync, Pended, Running), `Request`, `Source`, `Irql`,
+`Epoch`, and the rundown count `Work` and flag `Closed` of the level
+work (28.15's work item, shared with the level SETs).
+
+**Lock order.** `SwitchLock` is taken either with no driver lock held
+(admission, the taking of the work, completion, rundown) or with the
+endpoint's operation mutex held (the epoch check of "Running" below and
+`PowerLocal`'s change of the epoch), never with another spin lock held;
+the route lock (below) may be taken inside it, never the other way. So
+the one order is: the operation mutex, then `SwitchLock`, then
+`RouteLock`. Nothing waits for the operation mutex while holding either
+spin lock (a wait at DISPATCH is not allowed anyway), and the level spin
+lock is never held together with either of them. (An earlier wording,
+"taken under nothing", did not allow the epoch check under the
+operation mutex that the power rule needs; this order replaces it.)
+
+- **Admission** (the handler, at any IRQL up to DISPATCH), in one hold
+  of `SwitchLock`: if `Closed`, answer `STATUS_DEVICE_NOT_READY` (not
+  pended, nothing published); if `State` is not Idle, answer
+  `STATUS_DEVICE_BUSY`; otherwise write `Request`, `Source`, `Irql` and
+  `Epoch` (the endpoint's power epoch, below), then `State` = Pended,
+  then take one `Work` reference and, if the work item is not queued,
+  mark it queued. Release the lock; queue the work item if this hold
+  marked it; return `STATUS_PENDING`. A request is never visible in the
+  record without its `Work` reference, and never counted without being
+  fully published, because both happen in the hold that checked
+  `Closed`.
+- **Taking the work** (the work item, at PASSIVE): in one hold of
+  `SwitchLock`, if `State` is Pended, copy `Request`, `Source`, `Irql`
+  and `Epoch` into the work item's own locals and set `State` = Running
+  (the completion's diagnostics take `MuxIrql` from those locals, never
+  from the record, which a new SET may have filled by then). A worker
+  that is already running and loops (the coalescing of level SETs)
+  takes the switch the same way, so it sees Idle or a fully published
+  Pended record, never a half-written one. The worker's exit test
+  (nothing Pended, no level SET pending) and its clearing of the
+  queued mark are in one hold of the same lock, so an admission either
+  finds the item still queued and running (and is taken by its loop) or
+  finds it not queued and queues it.
+- **The worker's own reference.** The hold that marks the work item
+  queued (an admission's, or a level SET's in `Changed`) takes, besides
+  any request's reference, one `Work` reference for the worker's
+  execution, and the endpoint and device object are referenced before
+  `IoQueueWorkItem` as `Changed` does today. A request's reference is
+  dropped after that request's completion (below); the execution's is
+  kept through the whole final loop (the exit test, the clearing of the
+  queued mark and every access to the endpoint after them) and dropped
+  as the worker's last access to the endpoint, after which it touches
+  only its locals (the release of the endpoint and device object
+  references, as `LevelWork` does). So `Work` reaching 0 when a
+  request completes cannot let `Shutdown` finish while the worker is
+  still looping over the endpoint's state.
+- **Running** (the worker, at PASSIVE): the worker first waits for the
+  operation mutex (the time-out of "What bounds the wait": then
+  `STATUS_DEVICE_BUSY`, nothing written). Then, **holding it and before
+  any hardware work**, in one hold of `SwitchLock` it reads `Closed` and
+  the current power epoch: if `Closed` is set, the copied `Epoch` is not
+  the current one, or the device is not ready (`DeviceReady` false), no
+  hardware work is done and the outcome is `STATUS_DEVICE_REMOVED`
+  (removal), `STATUS_CANCELLED` (stop) or `STATUS_DEVICE_NOT_READY` (a
+  power cycle came between, or the device is down); otherwise the
+  switch runs (28.7, "What a switch does") in that same hold of the
+  operation mutex and its outcome is its readback's. `PowerLocal`
+  changes the epoch only while it holds the operation mutex (below), so
+  the check holds for as long as the worker holds the mutex: no power
+  transition comes between the check and the end of the hardware work.
+  A check made before the wait would not do: the worker can wait for
+  the mutex across a whole D3 and D0, after which the device is ready
+  again.
+- **Completion**: in one hold of `SwitchLock`, the diagnostics
+  (`MuxStatus`, `MuxIrql`, counters) are written from the worker's
+  locals, `Request` is cleared and `State` = Idle; the lock is released;
+  then `PcCompletePendingPropertyRequest(local request, local status)`
+  is called with no driver lock held; then, after that call has
+  returned, the worker drops the request's `Work` reference. So the
+  record can take a new SET as soon as it is Idle, while the old
+  completion uses only the worker's locals and never the record; and
+  `Work` reaching 0 means every completion has finished, not only been
+  claimed. The worker is the only completer.
+- **Rundown** (`Shutdown`, at PASSIVE, stop and removal): in one hold of
+  `SwitchLock` set `Closed`; release; wait for `Work` to reach 0. No
+  admission can follow (it sees `Closed`), every admitted request holds
+  a reference, and the worker completes each one (with the outcomes
+  above); `Shutdown` never completes a request itself. The wait has the
+  bounds and the limits of "What bounds the wait" below, as today's
+  wait for a level work item has.
+- **Power**: `PowerLocal` increments the endpoint's power epoch at
+  every transition it makes, leaving D0 and returning to D0, while it
+  holds the endpoint's operation mutex (as it does today for the rest of
+  its work), in one hold of `SwitchLock`. A switch admitted before a
+  power-down, or while the device is down, therefore never matches the
+  epoch after the return to D0 and runs no hardware work, whenever the
+  worker reaches it: it completes `STATUS_DEVICE_NOT_READY`, the
+  requested source dropped, the confirmed one kept and read again at D0
+  (28.8). A switch that passed its check holds the operation mutex, so
+  `PowerLocal` waits for that switch to end before it changes the epoch
+  and `powerBlocked`.
+- **PASSIVE switches** use the same record: `State` = Sync from
+  admission to the end, under the same lock rules, with no `Request`.
+  Admission copies the epoch as a pended one does; the check is the
+  same as "Running"'s, made after the operation mutex is acquired and
+  before any hardware work, in one hold of `SwitchLock`: a power cycle
+  while the caller waited for the mutex fails the SET
+  `STATUS_DEVICE_NOT_READY` with nothing written.
+
+**Cancellation.** PortCls documents no cancel callback for a property
+request a miniport has pended, and **no adequate supported cancellation
+protocol has been established** for one. That is not shown to be
+impossible: the request exposes its IRP (`PCPROPERTY_REQUEST`'s `Irp`
+member, in both the 2000 DDK's and the WDK 7.1's `portcls.h`), and an
+IRP's `Cancel` flag is documented cancellation state, so a worker could
+observe that a cancellation was asked. But that gives no callback
+(nothing runs when the cancellation is asked), it does not authorise the
+miniport to set or replace the cancel routine of an IRP the port owns,
+and it does not make a worker that is not yet scheduled, or that is
+blocked in a transfer, respond. Microsoft's cancellation guidance
+("Canceling IRPs") asks a driver that holds a request for an indefinite
+time to make it cancelable for that time; a check of the flag once when
+the worker starts does not do that. A pended switch can wait for an
+indefinite time before its hardware work starts (the system's work
+queue, a lower stack that does not complete a cancelled transfer:
+below). So the pended path stays disabled (raised-IRQL MUX SETs
+refused, above) until an adequate arrangement is established from
+Microsoft's documentation; finishing a hardware transaction already
+started would remain acceptable then. The synchronous PASSIVE path
+holds the caller's own thread, with the waits below; it queues
+nothing (and is no more responsive to a stuck lower transfer than the
+bounds below say).
+
+The refusal at raised IRQL is **provisional and accepted (owner,
+2026-11-17)**; it changes what a user can see: on a system whose mixer or audio
+engine sets the MUX at raised IRQL, the source cannot be changed there
+at all until a supported completion arrangement exists. **Which systems
+send the MUX SET at raised IRQL is unknown until measured**: neither
+the level handlers' present allowance for raised IRQL nor
+`PcCompletePendingPropertyRequest`'s `<= DISPATCH_LEVEL` says at which
+IRQL any system's mixer sets a MUX, and no system (98 SE, ME, 2000, XP,
+Vista, 7) is labelled either way before its handler has been observed
+there (`MuxIrql`, `MuxRefusedIrql`). The recommendation recorded for
+the owner's decision: accept the refusal provisionally for development,
+with explicit failure and no deferred write (`STATUS_INVALID_DEVICE_STATE`,
+nothing written and nothing kept to be written later); measure the
+MUX SET's IRQL early, on every target system, in the first legs that
+expose the MUX; and where a normal system panel consistently sends it at
+raised IRQL, treat input selection as unsupported on that system and
+claim no readiness there until a supported completion arrangement
+exists. If every system calls at PASSIVE, the refusal is never seen.
+
+**What bounds the wait, and what does not.** Two different bounds are
+kept apart: a **count** of transfers (fixed by the code), and **time**
+(bounded only where every transfer ends).
+
+- **One transfer**: `CallAndDrain` waits 5 s, then cancels the IRP and
+  waits without limit for the lower stack to complete it. So one
+  transfer is bounded in time only on a lower stack that completes a
+  cancelled IRP; on one that does not, it is not bounded at all.
+- **The device lock** (`UacUsbClassRequest`'s mutex, shared by every
+  pair) is not held for one transfer only: `UacUsbRates` holds it
+  across the whole rate walk of a start (each clock entity's RANGE, two
+  passes for stepped ranges), and `SetClock` across a stream start's
+  clock requests (clock selector reads and writes, SAM_FREQ SET and
+  readback, CLOCK_VALID). A switch waiting for it waits for that whole
+  sequence: a count of transfers the walk and the clock path fix, and
+  in time that count times one transfer's bound.
+- **The operation mutex and the switch record**: taken with a time-out
+  (provisional: 2 s), then `STATUS_DEVICE_BUSY`, nothing written,
+  counted (`MuxTimeouts`).
+- **A level apply** holding the operation mutex before the switch:
+  `ReadState` reads every controlled slot not known before it writes
+  (up to 9 volume and 9 mute GET CURs), then up to 9 volume and 9 mute
+  SET CURs, so up to 36 transfers, plus at a start the RANGE reads (up to
+  9, each tried twice) and the start's lowering writes.
+- **The switch itself**: at most 8 selector writes and 8 readbacks, the
+  new source's level reads, writes and readbacks, and a first-arrival
+  pass (28.6: a read, a write and a readback per control of the
+  source's graph): a fixed count.
+- **The system's delayed work queue** (the pended path only): no bound
+  from the driver.
+
+So the synchronous path's time is bounded by a fixed transfer count only
+on a lower stack that completes cancelled transfers, and its lock waits
+by the 2 s time-outs; nothing else is claimed.
+
+**The route lock: every open recording is protected, adapter-wide,
+on every system.** A recording depends on every hardware control
+(28.5: a Feature Unit's mute or volume on one channel, a selector) of
+its endpoint's selected graph (28.3): its own chooser and inner
+selectors, selectors behind a join at their read position, a selector
+another endpoint holds (a chooser shared by two capture endpoints
+belongs to the first, 28.5, and the second records through it at its
+read position), and every Feature Unit control on its routes, also on a
+route with no selector at all. Claims (28.5) keep two endpoints from
+writing one control; they do not protect a reader. So the adapter
+(pair 0) keeps, beside the claims, a **route table** with one entry per
+hardware control of every capture graph:
+
+- `Readers`: the open capture streams, of any pair, whose locked graph
+  holds the control (a count, and the endpoints, at most 8);
+- `Writer`: the endpoint whose own write of the control is in progress,
+  or none, with its **kind**: `Switch` (a selector switch's
+  reservation: the selectors it moves and the level writes it makes as
+  part of the switch, held from its check until the switch has ended)
+  or `Level` (an automatic level write of the endpoint's own, below,
+  which moves no selector);
+- for a selector, `Position` (the last confirmed one, 0 unknown) and the
+  table's `Version`, increased by every change of any `Position`.
+
+One spin lock guards the table (`RouteLock`, pair 0's, non-paged); it is
+held only to check and change the table, never across a wait or a USB
+request, and it is the innermost lock (taken under the operation mutex,
+under `SwitchLock`, or under none; never the other way).
+
+- **Selector state is the adapter's, not an endpoint's.** Every read or
+  readback of a selector, by any pair, publishes its `Position` in the
+  table under `RouteLock` (and increases `Version` when it changed);
+  every endpoint computes its selected graph from the table's positions,
+  never from a copy of its own. So when pair A moves a shared selector,
+  pair B's next look at its route is the route A left, inner selectors
+  included.
+- **A capture stream's open** (`NewStream` for the capture pin, before
+  the operation mutex and before `UacStream::Create`): in one hold of
+  `RouteLock` it computes its selected graph from the table (every
+  route of its graph when a position is unknown) and checks it. It
+  must wait if any control of that graph has a `Switch` writer, **of
+  any endpoint, its own included**, or a `Level` writer of another
+  endpoint; then it releases the lock and waits (PASSIVE; an event every
+  `Writer` clearing sets) up to the time-out above, then fails
+  `STATUS_DEVICE_BUSY`. Otherwise, in the same hold, it adds itself to
+  `Readers` of every control of that graph and keeps that set, with the
+  `Version` it was computed at, as the stream's locked graph. The
+  computation, the check and the registration are always one hold: a
+  wait ends by starting again with a new hold that computes the graph
+  from the table as the switch left it, so the open never registers a
+  set computed before it waited, and locks the route the switch actually
+  left (the new source's, or every route where the switch ended
+  unknown). The endpoint's own `Level` writes (a restored level, a pass
+  or a D0 rewrite on its confirmed source) are the one permitted
+  activity an open does not wait for: they move no selector, so the
+  graph it computes stays the graph it records from. Its own `Switch`
+  reservation is not permitted: without that wait, an open that came
+  while its own endpoint's switch was moving selectors would register
+  `Readers` on the old graph, the switch (whose check came before those
+  `Readers`) would finish, and the stream would record the new route
+  while its locked set protected the old one. Every switch that changes
+  an endpoint's selected graph reserves at least one selector of that
+  graph as it stands (the chooser, or an inner selector on the
+  chooser's present input) before its first write, so this check on the
+  computed graph sees every such switch. A create that then fails gives
+  the set back at once; a stream's close (`Close`, after `Drain`) gives
+  it back. A pause keeps it.
+- **A switch** (a MUX SET, the restore at start, any selector write): in
+  one hold of `RouteLock`, for every selector it would set to a position
+  other than the table's, if another endpoint is in its `Readers` (or
+  this endpoint is: its own stream open, or opening, since an open
+  registers before its create) or another `Writer` is set, the switch is
+  refused `STATUS_DEVICE_BUSY` at once (counted, `MuxRefusedLocked`),
+  nothing written; otherwise it sets itself as `Writer` of kind `Switch`
+  on each of them in the same hold, releases the lock, does its
+  hardware work under the operation mutex, and in one hold publishes
+  every position it read back and clears its `Writer` marks (setting the
+  event) when the switch has ended, confirmed or not. A SET to the
+  confirmed source moves nothing and succeeds at once.
+- **Automatic writes** (writes the driver makes on its own, not a
+  user's SET of that very control: a switch's level writes, the restore
+  of a saved level at start, a first-arrival pass, a playback
+  normalisation; 28.6, 28.9): before each such write, in one hold of
+  `RouteLock`, the writer checks that no other endpoint is in the
+  control's `Readers` and no other `Writer` is set, and sets itself as
+  its `Writer`, of kind `Level` (of kind `Switch` for a switch's own
+  level writes, which belong to its reservation); it releases the lock,
+  writes and reads back, and clears
+  `Writer` in one hold. A control another endpoint reads is skipped: a
+  level control stays dirty and is written at the first apply after
+  that reader closes, the software gain meanwhile taking the device's
+  state as read; a pass leaves that control for later with its source's
+  "pass done" clear, so the pass runs again when nothing reads it. An
+  open of another endpoint that meets such a `Writer` waits for it, as
+  for a switch; an open of the writer's own endpoint does not (above). This
+  holds on routes with no selector too, since the table holds every
+  control. A user's SET of a control another endpoint's recording also
+  passes through is applied: that is the shared-unit case of 28.5's
+  "What software cannot do", documented.
+- So stream open, selection and automatic writes are arbitrated
+  atomically across every pair and within one endpoint: either the open
+  sees the writer (and waits for its end, then locks the graph the writer
+  left; a switch of its own endpoint included), or the
+  writer sees the open (and is refused or skips); neither can slip
+  between the other's check and its mark, and a graph is always
+  computed and locked in one hold of the lock that publishes positions.
+
+- **On every system.** On 98 SE to XP as on Vista and later, while any
+  recording that depends on a selector is open, no MUX SET moves that
+  selector: several capture pairs can record at once (several waveIn
+  devices, section 15.3), several programs can drive one mixer, and a
+  system may give one recording device to more than one client, so a
+  SET while recording is not assumed to come from the person who is
+  recording. A user who picks another source in a recording panel while
+  any program records from that device's route is refused (the panel's
+  call returns an error; what each panel then shows is read in the legs,
+  28.16), and picks again once the recording is closed: the SET returns
+  failure and the device keeps, and GET reports, the actual source.
+  **Decided as provisional by the owner, 2026-11-17** (C1, 28.2): to be
+  confirmed or changed after the mixer legs on each system (28.16,
+  "Rapid and concurrent selection" and "Cross-pair route lock"), which
+  settle it; the user documentation says so.
+- On Vista and later this also covers the per-source endpoints of one
+  pair: if the audio system sets the MUX for endpoint B before it opens
+  B's pin while A records, that SET is refused, so A's route is never
+  switched by an open that then fails busy; in shared mode, where the
+  engine keeps A's pin open and B's client would need another pin
+  (refused, the one-instance pin and the gate), B's MUX change is
+  refused first.
+- A device-side change found while a route is locked (28.8) is taken as
+  found: the device moved its own selector; the locked set is not
+  changed by it (the stream keeps its readers' counts until it closes).
+
+**Integration contracts of the route table** (the host modules
+`uaccap.c` and `uacroute.c` state them too):
+
+- **Exhaustion disables, never weakens.** The table and each endpoint's
+  routes are bounded (`uacroute.h`). When a control cannot be entered
+  (`UacRouteControl` answers -1) or an endpoint's routes do not fit
+  (`UacRouteFromGraph` answers 0, leaving that endpoint with no route),
+  the result is never ignored: an endpoint with no route would register
+  an empty set at its open and record unprotected. So any such failure,
+  for any endpoint, disables every selector switch and every automatic
+  capture write on the adapter until the next start (refused or skipped,
+  counted, recorded in the diagnostics); recording and the user's own
+  level SETs go on.
+- **One registered stream per endpoint.** `Readers` keeps one bit per
+  endpoint, so a close clears that endpoint's bit whatever else it
+  holds: correct while the capture pin is one-instance (today's rule). A
+  second simultaneous stream of one endpoint needs a per-endpoint count
+  before it is allowed.
+- **Storage and locking.** The route table (about 64 KiB at the default
+  bounds) and each capture graph are allocated once from nonpaged pool
+  at PnP start, at PASSIVE, before any spin lock is taken, and are never
+  kernel-stack locals. Everything `RouteLock` guards (the table, each
+  stream's locked set) and every function called under it is nonpaged.
+  Discovery and the claims build run at PASSIVE, in `Prepare`.
+
+**What a switch does**, in order, under the operation mutex:
+
+1. The software gain for the quieter of the old and new state, per
+   channel, published.
+2. The new source's per-source controls and the shared controls
+   lowered where its level is lower than they hold (a per-source unit
+   not yet selected is inaudible, so writing it first is safe).
+3. The new route's selectors, the innermost first and the chooser last,
+   each read back.
+4. If every selector confirmed: the raisings and mute releases of the
+   new source's level; its first-arrival pass if not done (28.6); the
+   software gain for the new state; the saved value.
+
+**Partial failure** (selectors in series): at the first selector write
+that fails or does not read back, the switch stops; no later selector
+is written and nothing is retried on its own. Every selector of the old
+and the new route is read again: if the old route still reads whole
+(the failed or changed selector is not on it), the old source stays
+confirmed and the requested source is dropped; if a shared inner
+selector moved (the old route went through it) or a read fails, the
+state is unknown as above. The user's next SET tries again.
+
+**Restoring the saved input at start (B1).** At start, after the
+selectors are read: if the saved value is valid and current (28.12: its
+descriptor hash and the saved source's route and end terminal match the
+descriptors) and names a source the user chose (`Selected` not 0), and
+every selector on that route is writable, the driver switches to it as
+a switch above (requested, the writes innermost first, readback). A
+confirmed restore leaves that source selected; a failed one follows the
+partial-failure rule, the device's position read is what stands, and
+the failure is recorded. An invalid or stale value restores nothing.
+The restore at start is the one time the driver moves a selector on its
+own, and only to a source the user chose; otherwise selectors move only
+on a SET.
+
+### 28.8 What is refreshed, and what is not
+
+**Reads** of every selector on every route: at start; at each capture
+RUN, before the stream starts; after a return to D0; after a failed
+selector write; and on a MUX GET at PASSIVE, at most once a second
+(provisional: a bounded refresh, so an opening or refreshing mixer panel
+sees the device; a GET at raised IRQL, or within the second, answers
+the cached state). A device-side change found by a read is taken like a
+user's switch: the MUX reports the new source and its level applies
+(28.7 steps 1 to 4, without step 3's writes).
+
+**What this gives: eventual discovery, not tracking.** The AudioControl
+interrupt endpoint that would report a change (ADC-2 6.1; the X4 has
+one, `0x84`) is not served (section 5.3; the feature ledger's "M"), and
+the driver does not poll during a recording. So, accepted as a
+limitation (B6):
+
+- A device-side switch **during a recording** (a button, a jack): the
+  recording goes on with the new input's audio at the old source's
+  software gain and with the new source's units as the device holds
+  them, until the next RUN or the next MUX GET at PASSIVE.
+- An open mixer panel shows the old source until it reads again, and no
+  `KSEVENT_CONTROL_CHANGE` tells it to (not supported, 5.3); a panel
+  that never reads again stays stale.
+- Serving the interrupt endpoint is the proper fix; it is not in this
+  work.
+
+### 28.9 The other playback units (D2) and its bounds
+
+**When "owns the level" begins**: as today for the extra channels,
+separately for volume and mute: the volume from the first KS SET of the
+render VOLUME node or the restore of a saved `Uac2Level`/`Uac2LevelPnn`
+with its volume owned; the mute likewise.
+
+**Which controls.** Every hardware control (28.5) on the playback path
+`UacVolFind` takes (the USB streaming Input Terminal to the first
+non-streaming Output Terminal) that is not a level control and not one
+of the level unit's extras: other units whole, and a level unit's
+controls of the other kind (a mute-carrying level unit's channel
+volumes, say). The extras (`VolumeExtra`, `MuteExtra`: the same unit's
+channel controls beside a controlled master) keep their shipped rule
+unchanged (B4): set to `UacVolFromKs(0, range)` and unmuted once the
+master is owned, lowered at start when above the top offered (section
+20.3), `NoRange` extras read and not written. Never: a control on a branch that
+joins the path from a non-streaming Input Terminal (a sidetone or
+monitoring branch: the Logi's Feature Unit 11, the X4's 11, 12 and 13,
+the Play! 2's microphone branch through Selector Unit 12); a control on
+another Output Terminal's path after a split; a control another
+endpoint claims (28.5); a capture-walk control.
+
+**The bounded scope (B4).** One zone gets volumes set; everywhere else
+mutes are released only:
+
+- **Z1** exists only when the playback route has a controlled hardware
+  volume (`VolumeMode` not software) and the route's segment from the
+  USB streaming Input Terminal to the controlled volume unit contains no
+  Join and no opaque entity (28.3) at all. Then Z1 is every unit on that
+  segment other than the controlled one. If the segment contains a Join
+  or an opaque entity, wherever on it, Z1 is empty. So no mix and no
+  unknown processing lies between a Z1 unit and the control that takes
+  over its attenuation, and a Z1 unit carries only the playback stream
+  (a unit after a join is on a segment with a Join, so never Z1).
+- **Everything else on the route** (after a join, between a join and
+  the controlled volume, behind or across an opaque entity, nearer the
+  Output Terminal than the controlled volume, or any unit when the
+  volume is in software): mutes released only; volumes left as the
+  device holds them, one at silence or at its minimum reported in the
+  diagnostics, not raised.
+- **Precedence**: the rule that writes less wins. The playback walk
+  (28.3's, from the Output Terminal `UacVolFind` picks back to the USB
+  streaming Input Terminal) may find a unit on more than one route (a
+  diamond): it is Z1 only if it passes Z1's test on every route that
+  holds it; a control held by another endpoint gets nothing; and a
+  control on a monitoring branch (below) gets **no write at all**,
+  neither a volume nor a mute release, whatever zone or rule the
+  playback route alone would give it, on any route of a diamond: the
+  exclusion in "Which controls" is absolute, and here "the rule that
+  writes less" means no write. Releasing such a mute would unmute the
+  sidetone, which is not the playback's to change. The control is listed
+  in the diagnostics (`OtherCount`, with neither `OtherZ1` nor
+  `OtherDone` set) and left as the device holds it.
+- **Monitoring branch**, exactly: the playback walk's routes that end
+  at a non-streaming Input Terminal are monitoring routes, those that
+  end at the USB streaming Input Terminal playback routes. A unit on a
+  monitoring route upstream of the join where that route meets a
+  playback route (so a unit that carries the monitoring signal without
+  the playback: the Logi's Feature Unit 11, the X4's 11, 12 and 13) is on
+  a monitoring branch. A unit after such a join, on both kinds of route,
+  carries the playback and is a playback-route unit "after a join"
+  (mutes released only, as above); the walk gives it that rule only
+  when it is on no route as a branch unit, so a descriptor in which one
+  unit is both (through a diamond) gets no write on it.
+
+**Why bounded** (the owner's B4; the reasons recorded):
+
+- Raising a unit after a join raises the sidetone with the playback,
+  and the playback's software gain cannot compensate a signal it does
+  not carry.
+- Raising a unit while the controlled unit takes its attenuation puts
+  unity into any mix between them: a full-scale playback plus a sidetone
+  can clip in the device's mixer. Z1's segment rule excludes any mix
+  between.
+- A unit nearer the Output Terminal than the controlled volume may be
+  an amplifier's output stage: 0 dB is not acoustically safe
+  everywhere, and the user's slider would then start from the loudest
+  baseline.
+
+**Targets** where a Z1 volume is set: the top step at or below 0 dB of
+its own RANGE (0 dB where the range has it), whatever `Uac2VolAboveZero`
+says; a range wholly above 0 dB: its minimum (the least gain). This is a
+new rule for new controls and differs from the shipped ones in section
+20 in two places, both kept as shipped: the *controlled* volume offers a
+positive-only range whole (`KsMax` stays `KsTop`, 20.3), and the extras
+are set to `UacVolFromKs(0, range)`, which gives the minimum in a
+positive-only range too but, with `Uac2VolAboveZero` = 1, the step
+nearest 0 dB, which may lie just above it (20.3, "Every level is
+clamped to `KsMax`"). A volume without a usable RANGE is not set
+(counted, as `NoRange` extras are).
+
+**Order and loudness**, in `ApplyLocked`'s four passes as the extras:
+volume lowerings with the main lowerings, raisings after the main
+control holds its level, mute releases last; every write read back
+(28.6's readback rule). The guarantee, bounded: **the playback signal at
+the Output Terminal is never louder than asked, for the controls the
+driver knows**, on the playback route through Pass entities; the
+software gain takes each other control on that route as part of what
+the device does (CUR as read; unknown as its RANGE's top). Not covered:
+a monitoring signal after a join (its unit's mute released only, its
+level the device's), clipping inside the device's mixer from the
+device's own levels, opaque units (taken as unity), and a control the
+driver can neither read nor range.
+
+**No silencing by accounting.** Today an extra channel volume with no
+RANGE and an unknown CUR silences its channel until read (`Gains`,
++128 dB assumed). For the other units that would silence playback for
+good on a device that never answers: so an other-unit volume with no
+RANGE and no readable CUR is taken as 0 dB (not counted against the
+level, an exception to the guarantee, recorded in `Uac2VolMap`'s
+appended words), and its CUR is tried again at each apply; when it is
+read, it counts. The existing extra-channel rule is unchanged.
+
+**Units shared by two paths**: two playback pairs per 28.5 (the first
+claims; `Pairs()` still refuses several pairs when two paths meet in a
+level control); playback and monitoring per the zones above; playback
+and capture: a control on both is claimed in 28.5's order (playback's
+level first, then capture's chooser and level, then playback's
+normalisation), never written by both.
+
+### 28.10 The topology, names and identifiers
+
+**The capture line**, built at start by a builder in `uactopo.c`
+(host-tested) instead of the fixed tables:
+
+- No chooser: the capture bridge pin -> VOLUME -> MUTE -> SUM -> the
+  capture line out to the wave filter.
+- Chooser with N sources (2 to 8): source pins, each -> its VOLUME ->
+  its MUTE -> the MUX node's logical input k -> the capture line out.
+  The MUX node keeps a node between the pins (the 98 SE rule of
+  `uactopo.h`).
+- `UacLinksCheck` admits a node input pin above 1 only on a MUX node
+  (logical inputs 1..N), with exactly one link into each.
+
+WDMAud's documented parsing supports this graph: a source line runs
+from its pin downstream to a SUM or MUX node, and "A MUX node generates
+a MUX control in the destination line that contains references to each
+of the source lines controlled by the MUX" (published kit
+documentation, "WDMAud Topology Parsing"). It does not say how each
+system's panels present every control; the legs establish that (28.16).
+
+**Identifiers kept.** The reference strings ("Wave", "Topology",
+"Wave2" ...) and the wave filter's pins are unchanged. The topology
+filter keeps its pin numbers where they exist today: 0 render in,
+1 speaker, 2 the capture bridge, 3 the capture line out; with a chooser
+source 1 is pin 2, and sources 2 to N are pins 4 to N + 2. So the pin an
+existing endpoint was built on stays, with the first source on it.
+Node numbers change (new nodes); nothing outside the driver keeps them.
+
+**Names (A1, A5).** A pin's name is `KSPROPERTY_PIN_NAME`, which WDMAud
+uses for the line and Vista and later for the endpoint ("based on the
+friendly names of the bridge pins", "Audio Endpoint Builder
+Algorithm"). The pin's category and its `Name` GUID are distinct: the
+category is the terminal type's `KSNODETYPE_*` (section 15.3 item 4:
+`_MICROPHONE`, `_LINE_CONNECTOR`, `_ANALOG_CONNECTOR`,
+`_DIGITAL_AUDIO_INTERFACE`, `_SPDIF_INTERFACE`); the `Name` is either
+none (Windows names the pin from its category) or a GUID:
+
+| Kind (Terminal Types 2.0 / 1.0) | First of its kind | 2nd to 8th |
+|---|---|---|
+| Microphone: `0x0201` to `0x0206`; `0x0401` to `0x0405` (a handset's, headset's or speakerphone's input) | no `Name`: Windows' name for `KSNODETYPE_MICROPHONE` | the driver's "Microphone 2" ... "Microphone 8" |
+| Line In: `0x0601` analog connector, `0x0603` line connector, `0x0604` legacy audio connector | `KSAUDFNAME_LINE_IN`: Windows' name | "Line In 2" ... "Line In 8" |
+| Digital In: `0x0602` digital audio interface, `0x0606` and `0x0607` (1394), `0x0608` to `0x060A` (ADAT, TDIF, MADI) | the driver's "Digital In" | "Digital In 2" ... |
+| S/PDIF In: `0x0605` | the driver's "S/PDIF In" | "S/PDIF In 2" ... |
+| Input: any other type (`0x05xx` telephony, `0x07xx` embedded functions, unknown) | the driver's "Input" | "Input 2" ... |
+| Stereo Mix: a branch reaching only the USB streaming input | the driver's "Stereo Mix" (A1) | "Stereo Mix 2" ... |
+
+A source behind a join that reaches several terminals takes the kind of
+the first non-streaming one in route order. Numbers follow route order
+(28.7). Whether each system has a name for `KSNODETYPE_MICROPHONE` and
+`KSAUDFNAME_LINE_IN` (MediaCategories) is read in the legs; a system
+that has none shows what it shows, and the record says so. The driver's
+strings are drafts for the owner: "Digital In", "S/PDIF In", "Input",
+"Stereo Mix", and each kind with " 2" to " 8" appended (all six kinds,
+the two Windows-named ones included): 4 + 42 strings, each with its own
+GUID. The MUX node is named `KSAUDFNAME_RECORDING_SOURCE`; VOLUME and
+MUTE carry no name.
+
+**What each system is given, and what the legs must show.** The table
+says the topology; the panels' presentation (sliders, balance, mute and
+Select boxes, dB readouts) is a hypothesis each leg confirms or
+corrects:
+
+| System | Given | To be read |
+|---|---|---|
+| 98 SE, ME (WDMAud; Volume Control, Options, Properties, Recording) | one source line per source with VOLUME and MUTE; a MUX control on the recording destination | which controls the panel shows per line; that Select picks the source; that WDMAud is stable at arrival, replug and removal |
+| 2000, XP (`sndvol32 /r`; Sounds and Audio Devices, Audio, Sound recording, Volume) | the same | the same |
+| Vista, 7, 8 (Recording tab) | one bridge pin per source, each with its VOLUME and MUTE; the endpoint builder enumerates the pins ("Multiplexed (MUX) and de-multiplexed (DEMUX) pins are managed automatically and enumerated by the AudioEndpointBuilder service") | the endpoints and their names; Levels against the node's range; whether the audio engine uses the node or its own software volume ("Software Volume Control Support"); whether and when the audio system sets the MUX for an endpoint (enumeration does not say); two endpoints opened at once |
+
+**Endpoint compatibility on Vista and later.** The sources share one
+wave capture pin, which admits one stream a direction (the gate of
+section 27, and one pin instance): two source endpoints are mutually
+exclusive ("streaming to one of them makes it impossible to stream to
+the other at the same time", "Audio Endpoint Builder Algorithm"), and
+opening a second while the first records is refused (by the pin's
+instance count, or by the gate with `STATUS_DEVICE_BUSY`); the route
+lock (28.7) keeps the second endpoint's MUX change from reaching the
+first's recording. What Windows tells the second program, and how
+shared mode behaves, are read in the 7 leg. If that leg shows the audio
+system does not set the MUX when an endpoint opens, the per-source
+endpoints would record whatever the device has selected; then, and only
+then (B2), the reduced form is one endpoint (no MUX node on WDM 6.00
+and later), the choice left to the device, which loses D3 there; the
+limitation is recorded with the leg.
+
+**What an existing user sees after the update.** On 98 SE to XP the
+waveIn devices are unchanged (one wave filter); the recording panel
+gains lines. On Vista and later a device with a chooser gains recording
+endpoints (one per source past the first); the first source keeps the
+pin, so the existing endpoint is expected to keep its identity and stay
+the default (read in the upgrade leg); applications that saved a waveIn
+index rather than an endpoint may find another device at that index,
+and a device without a chooser whose capture category changes (the
+selected path's terminal instead of the first by id) may get a new
+endpoint name. The release notes say so.
+
+**Fallback on 98 SE and ME.** 98 SE's WDMAud faulted on capture
+topologies twice before (`uactopo.c`'s notes, builds 14 and 15). The
+98 SE leg runs first; if, and only if (B2), WDMAud faults on the MUX
+topology there, the reduced form is no MUX node on WDM 1.0 systems
+(98 SE and ME, `IoIsWdmVersionAvailable(1, 0x10)` false): the selected
+source's line only, which loses D3 there; the limitation is recorded
+with the leg.
+
+### 28.11 Software level on capture
+
+Where a source has no eligible writable volume or mute (or a control
+fails), the level is applied to the captured samples on the USB worker
+(`Captured`, before `WriteBytes`; for `uac1`'s converted formats on the
+16-bit frames after `UacConvIn`), with `UacVolGains` and `UacVolScale`
+as on playback: never above unity, the known state accounted (28.4),
+and a mute the device does not hold zeroes the samples.
+
+### 28.12 Registry values: the complete contract
+
+Every value this work adds, in the device's driver key unless said:
+
+| Value | Written by | Type | Meaning, and what the driver does with it |
+|---|---|---|---|
+| `Uac2CapFirst` | the INF, no-clobber, `1` | REG_DWORD (9x: 4-byte REG_BINARY, as `Uac2QueueMs`) | read at start: 1 runs the first-arrival pass (28.6), anything else skips it; a user's 0 survives an update |
+| `Uac2LevelC` (pair 0), `Uac2LevelCnn` (pair nn, two hex digits) | the driver | REG_BINARY, layout below | the saved recording level and source of that capture endpoint; absent, malformed or stale: treated as absent |
+| `Uac2VolMapC` (pair 0), `Uac2VolMapCnn` (pair nn) | the driver, written, never read | REG_BINARY, layout below | diagnostics of the capture level |
+| `Uac2VolMap` (existing) | the driver | REG_BINARY | grows from 232 to 272 bytes, append-only (layout below) |
+| `Uac2UsbStats`, `Uac2UsbStatsIn` (existing) | the driver | REG_BINARY | grow from 94 to 100 words, append-only (layout below); in `Uac2UsbStatsIn` words 65 to 93 carry the capture level and `VolLayout` reads 28 |
+| `MediaCategories\{GUID}` `Name`, 46 keys under HKLM (9x: `System\CurrentControlSet\Control\MediaCategories`) | the INF | REG_SZ, from `[Strings]` | the driver's source names of 28.10 |
+
+**`Uac2LevelC` layout**, little-endian DWORDs unless said:
+
+| Offset | Field |
+|---|---|
+| 0 | `Version` = 1 |
+| 4 | `Size` (the whole value's bytes) |
+| 8 | `DescHash`: CRC-32 of the AudioControl interface's class-specific descriptors as parsed |
+| 12 | `Channels` (node channels, 1 or 2) |
+| 16 | `Sources` (0 = no chooser, else 2..8) |
+| 20 | `Selected` (source 1..N the user last chose; 0 none) |
+| 24 | `PassDone` (bit k-1: source k had its pass) |
+| 28 | per source k = 1..max(1, N), 64 bytes each: `RouteLen` (1 byte, selectors on the route, 0..7), `Route` (7 x 2 bytes: selector id, input), `EndTerminal` (1 byte), 1 pad byte, then `Owned` (DWORD: 1 volume, 2 mute), `Mute` (DWORD), `Level[8]` (LONGs, KS units), and 0 to pad to 64 |
+
+**Malformed** (wrong `Version` or `Size`, `Channels` or `Sources` out of
+range, a route naming an entity that is not a selector, an input out of
+range, a level outside the node's range): the value is ignored as
+absent (every source's pass runs again; the driver writes a fresh value
+at its first save). **Stale** (`DescHash` differs: new firmware, another
+configuration; or a source's route or end terminal no longer matches the
+descriptors): ignored as absent the same way. **A failed write**
+(`PutValue` failing: a full or locked registry, a removed devnode): the
+in-memory state goes on, the failure is counted in `Uac2VolMapC`, and
+the next change tries again; if no save ever succeeds, the next start
+is a first arrival again (the pass runs again: defined, not harmful).
+
+**Saving under the generation.** A save takes, under the level spin
+lock, the change counter and a copy of the state to save; it writes the
+copy outside the lock; then, under the lock again, if the counter moved
+in between (a SET landed after the copy was taken, even after the check
+and before the registry write), it marks `Pending` so the work item
+saves again from the newer state. So the value in the registry always
+ends as the latest state, and a pass's result is never written over a
+user's SET (28.6).
+
+**Diagnostic layouts.** All little-endian, 4 bytes a field (DWORD or
+LONG; NTSTATUS as DWORD), byte offsets, no padding; every array bounded
+as given, unused entries 0. Readers take a value's length as its
+layout: a shorter value is an older build's.
+
+`Uac2VolMap` (playback; offsets 0 to 228 are build 25's
+`UAC_LEVEL_DIAG`, unchanged):
+
+| Offset | Field | Bounds |
+|---|---|---|
+| 0 to 48 | `Channels`, `Output`, `VolumeUnit`, `VolumeMode`, `VolumeChannels`, `VolumeExtra`, `MuteUnit`, `MuteMode`, `MuteChannels`, `MuteExtra`, `Owned`, `Known`, `MuteKnown` | as shipped |
+| 52, 56, 60 | `KsMin`, `KsMax`, `KsStep` | KS units |
+| 64, 68, 72, 76 | `Change`, `Writes`, `Failures`, `LastStatus` | |
+| 80 | `Mute` | 0, 1 |
+| 84 to 112 | `Level[8]` | KS units |
+| 116 to 144 | `Gain[8]` | Q16 |
+| 148 to 180 | `Actual[9]` | 1/256 dB, slot 0 master |
+| 184 to 216 | `ActualMute[9]` | |
+| 220, 224, 228 | `KsTop`, `AboveZero`, `Lowered` | |
+| 232 | `OtherCount`: other controls on the route (28.9) | 0..255; the masks below cover the first 32 in route order |
+| 236 | `OtherZ1`: bit i, other control i is in Z1 | 32 bits |
+| 240 | `OtherDone`: bit i, its normalisation write confirmed by readback | |
+| 244 | `OtherAssumed`: bit i, unreadable with no RANGE, taken as 0 dB | |
+| 248 | `OtherLow`: bit i, a volume outside Z1 at silence or minimum, left | |
+| 252, 256, 260 | `NormWrites`, `NormFailures`, `NormIgnored` | counters |
+| 264 | `NormStatus`: last failing write's status | |
+| 268 | `GraphFlags` of the playback walk (as `Uac2VolMapC`'s) | |
+
+`Uac2VolMapC` (capture, per pair: pair 0 `Uac2VolMapC`, pair nn
+`Uac2VolMapCnn`; the selected source's level in `Uac2VolMap`'s first 232
+bytes, then):
+
+| Offset | Field | Bounds |
+|---|---|---|
+| 232 | `Sources` | 0 (no chooser), 2..8 |
+| 236 | `Confirmed` | 0 unknown, 1..8 |
+| 240 | `Requested` | 0 none, 1..8 |
+| 244 | `RouteState` | 0 confirmed, 1 unknown, 2 switching, 3 incomplete graph (no hardware writes, 28.3) |
+| 248 | `PassDone` | bit k-1, source k |
+| 252 | `GraphFlags` | bit 0 more than 64 routes, 1 deeper than 32, 2 a malformed or missing entity, 3 an unlisted entity class, 4 more than 8 sources, 5 chooser held by another pair, 6 a loop (a route cut where an entity repeats), 7 no graph (its storage could not be allocated at start, 28.18); bits 0 to 3, 6 and 7 make the graph incomplete (28.3) |
+| 256 to 351 | `Selector[8]`, 12 bytes each at 256 + 12i: `Id`, `Position` (0 unknown), `Status` (last request's) | the selectors of every route, first 8 in route order |
+| 352, 356, 360 | `PassWrites`, `PassFailures`, `PassIgnored` | counters |
+| 364 | `HeldElsewhere`: controls on the source's graph another endpoint holds (28.5) | count |
+| 368 | `MuxIrql`: the IRQL of the last MUX SET | 0..31 |
+| 372 | `MuxStatus`: its completion status | |
+| 376 | `MuxRefusedLocked`: SETs refused by the route lock | counter |
+| 380 | `SaveFailures`: failed registry writes of `Uac2LevelC` | counter |
+| 384 | `Generation`: the change counter at the last save | |
+| 388 | `MuxTimeouts`: switches that did not get the operation mutex or the switch slot in time (28.7) | counter |
+| 392 | `MuxPended`: raised-IRQL SETs pended (0 while the pended path is disabled, 28.7) | counter |
+| 396 | `MuxCompleted`: pended SETs completed (equal to `MuxPended` when none is outstanding) | counter |
+| 400 | `RouteReaders`: open capture streams, of any pair, whose locked graph holds a control of this endpoint's graph | 0..8 |
+| 404 | `MuxRefusedIrql`: MUX SETs refused at raised IRQL (no asynchronous path, 28.7) | counter |
+| 408 | `AutoSkipped`: automatic writes skipped for another endpoint's reader (28.7) | counter |
+| 412 to 439 | the route table's fields of stage 2 (28.23): `RouteControls`, `RouteRoutes`, `RouteLocked`, `RouteOpens`, `RouteCloses`, `RouteAnomalies`, `RouteFlags` | as 28.23 |
+
+Size 412 bytes (stage 1), 440 from stage 2 (28.23; provisional, as
+stage 2 is).
+
+`Uac2UsbStats` and `Uac2UsbStatsIn`, words after build 25's 94 (word =
+4 bytes, word n at byte 4n):
+
+| Word | Field | Render record | Capture record |
+|---|---|---|---|
+| 65 | `VolLayout` | 25 | 28 |
+| 66 to 93 | the level fields of 20.5 | the render level | the selected source's capture level |
+| 94 | `CapSources` | 0 | 0, 2..8 |
+| 95 | `CapConfirmed` | 0 | 0..8 |
+| 96 | `CapRequested` | 0 | 0..8 |
+| 97 | `CapRouteState` | 0 | as `RouteState` |
+| 98 | `CapPassDone` | 0 | bits |
+| 99 | `GraphFlags` | the playback walk's | the capture walk's |
+
+**The INF.** `uac2wdm.inf` writes `Uac2CapFirst` in `[Queue9x]` and
+`[QueueNT]`, `uac1wdm.inf` in its `[Queue9x]`, beside
+`Uac2VolAboveZero`, with a comment line each; `Uac2VolAboveZero`'s
+comment says playback only. Both write the 46 names (an `AddReg` of
+HKLM lines; `uac1wdm.inf` includes no Microsoft INF, 26.11, and writes
+them itself); whether 98 SE's KS answers `KSPROPERTY_PIN_NAME` from
+there is read in the 98 SE leg. The saved levels are state: the INF
+writes none of them, as it writes no `Uac2Level` today. `infchk` checks
+every line.
+
+**Reset** (user documentation, README's settings list and
+`docs/release-notes.md`): delete `Uac2LevelC` (and `Uac2LevelCnn`) in the
+device's driver key and restart the device: every source's pass runs
+again and the device's own levels are read; set `Uac2CapFirst` to 0
+first to keep the device's levels instead. The names and every value
+above are listed there.
+
+### 28.13 USB Audio 1.0 (`uac1`), and its scope
+
+- **Selector Unit** (ADC-1 4.3.2.4): `bLength` 6 + p, `bNrInPins` at 4,
+  `baSourceID` from 5, `iSelector` last; no `bmControls`: the selector
+  control is taken as read/write. Requests (ADC-1 5.2.2.3): `SET_CUR`
+  0x01 / `GET_CUR` 0x81, `bmRequestType` 0x21 / 0xA1, `wValue` 0,
+  `wIndex` unit << 8 | interface, one byte, one-based. A stall as 28.7
+  (the Play! 2 stalls `GET_CUR` on its Selector Unit 12, a sidetone
+  branch the capture walk never meets).
+- **Feature Unit**: `bControlSize` bitmaps (D0 mute, D1 volume), MIN,
+  MAX and RES as today (26.11).
+- **Processing Unit** (ADC-1 4.3.2.6): up/down-mix and the other
+  processes change or may change the cluster (28.4's channel rule).
+- **Scope**: `uac1` is a 98 SE package (26.10; `STAGE.TXT`, the
+  `w98se` folder). Its INF's undecorated `[Models]` is also read by ME
+  and 2000, where nothing stages it and Update Driver to it is not
+  supported (the INF's own comment); XP and later never match it. So
+  this work's `uac1` legs are 98 SE only, ME and 2000 are not served,
+  and the 98 SE fallback of 28.10 applies to it.
+
+### 28.14 Failure handling
+
+- **A SET that stalls, or succeeds and is ignored** (readback shows the
+  old value): an owned control is kept dirty and retried at the next
+  apply (a RUN, a SET, a return to D0); a pass or normalisation write is
+  not retried (28.6, 28.9); both are counted (`Failures`, `Ignored`,
+  `LastStatus`). The software gain takes the readback, or the range's
+  top where unknown; a failed capture mute zeroes the samples.
+- **A GET that stalls**: unknown; no pass raise on that volume (a mute
+  is still cleared); the software gain takes the range's top.
+- **A RANGE that lies**: malformed is no range (28.6's reading,
+  `UacVolRange` as today: software for a level control, untouched for a
+  pass or normalisation target). A CUR outside the range is snapped for
+  the node; below MIN counts as minimum for the pass; above the top is
+  left. Steps the device then refuses are the stalled or ignored SET.
+- **A selector**: 28.7's states and partial-failure rule.
+- **A failed registry write**: 28.12.
+
+### 28.15 Code shape (so the rules can be executed on the host)
+
+The level engine leaves `uacwdm.cpp` for a portable module (`uaclevel.c`,
+no Windows types, compiled into both drivers and the host tests): the
+cached levels and generations, the claims table, the source routes and
+their states, the first-arrival transaction, the switch with its
+partial-failure rule, the D2 zones and targets, the gain accounting,
+and the saved-value encode, check and decode. It talks to the device
+and the registry through a small table of callbacks (control GET/SET,
+value read/write). `uacwdm.cpp` keeps the KS properties, the locking,
+the work item and the USB requests. So the host tests drive the real
+rules with a fake device. The engine's apply (`UacLevelApply`, the
+Wave's `ApplyLocked`) runs at PASSIVE with the Wave's operation mutex
+held (`Apply` takes it through `TakeOperation`), with one exception, the
+exclusive startup: `Prepare` applies the levels without the operation
+mutex before the pair is published, when no other caller can reach it.
+
+**The playback engine moves without changing behaviour.** The shipped
+playback level code (`LevelSetup`, `ReadState`, `ApplyLocked`, `Gains`,
+`Assumed`, the slot helpers, `LevelProperty`'s SET path, the save and
+`RecordLevel`) moves into `uaclevel.c` first, alone, in a commit that
+changes no behaviour; the new rules come in later commits.
+
+**The build switch, as the build does it.** The default build's Wave
+calls the engine; `UAC_LEVEL=retained` in the environment makes
+`build.cmd` (`uac2` and `uac1`) define `UAC_LEVEL_RETAINED`, and the
+Wave then keeps the shipped methods. Both objects are linker inputs in
+every build: `uaclevel.c` is compiled and `uaclevel.obj` given to the
+linker in a retained build too. Preprocessing selects one Wave path in
+`uacwdm.cpp`, the retained methods or the calls into the engine, so
+exactly one of the two is referenced; in a retained image the engine's
+functions are unreferenced and the linker removes them (`/Gy` with
+`/OPT:REF`). No setting selects neither path.
+
+What must stay identical, the preservation contract:
+
+1. The saved value `Uac2Level`/`Uac2LevelPnn`: its version 2 layout,
+   read only when `Version` is 2 and `Channels` match, the `Owned` bits
+   and what each restores; written when `Change` differs from `Saved`.
+2. Range handling: `UacVolRange` (a RES of 0 on a span read as 1, a MIN
+   of silence read as its next step, `KsTop`, `KsMax` at or below 0 dB,
+   `Uac2VolAboveZero` = 1 setting `KsMax` = `KsTop`), the one-subrange
+   retry of `ReadRangeOnce`, and the software range where none is read.
+3. The start-time lowering of section 20.3: only a written control whose
+   CUR reads above `KsMax`, that control alone, a failed write leaving it
+   unknown.
+4. The extras: `VolumeExtra`/`MuteExtra` set to `UacVolFromKs(0, range)`
+   and 0 once owned, `NoRange` extras read and never written, the
+   `VolumeNormal`/`MuteNormal` flags and their reset at D3.
+5. The gains: `UacVolGains` with unknown volumes as `Assumed` (`KsTop`, or
+   +128 dB for a `NoRange` extra), an unowned volume leaving the device's
+   setting (no software volume), the silencing of a `NoRange` extra with
+   an unknown CUR, and the lower of before and after when writes follow.
+6. Order and retry: the four passes (volume lowerings, mutes on, volume
+   raisings, mutes off), the 40 ms wait before a louder write while
+   running, a failed write holding every later pass and leaving the
+   control unknown and dirty, `LevelStale` and its use at RUN.
+7. The KS answers: basic support ranges and steps per channel, GET of
+   the loudest channel for channel -1, a SET snapping to the range and
+   owning the control, `KSPROPERTY_AUDIO_CPU_RESOURCES`.
+8. The diagnostics: `Uac2VolMap`'s first 232 bytes and the stats words
+   65 to 93 of a render record, field for field.
+
+**Preservation tests pass before and after.** Two kinds:
+
+- Host: the pure functions already portable (`UacVolRange`,
+  `UacVolFromKs`, `UacVolTargets`, `UacVolGains`, `UacVolScale`,
+  `UacVolFind`) get vectors for every item above they cover; they pass
+  on the code as it is and after every commit.
+- Traces: before the move, scripted level sequences (a start with each
+  device state, SETs of volume and mute, a restore, a refused write, a
+  D3 and RUN, `Uac2VolAboveZero` 0 and 1) are run against the shipped
+  build in a guest with the simulator, and the simulator's log of every
+  Feature Unit request (order, unit, channel, value) is kept as the
+  baseline (`cx31993m`, `hs24` with `--fu full`, `master`, `channels`,
+  `x4full`). After the move, `leveltest` replays the same scripts through
+  `uaclevel.c` with a fake device answering as the simulator did and
+  must produce the same request sequence and the same saved values and
+  `Uac2VolMap` bytes; and the guest run of the moved build must log the
+  same sequence as the baseline. Any difference stops the move.
+
+### 28.16 Tests
+
+**Host tests**: the preservation tests above pass before and after each
+commit; the behaviour tests below are written to fail on the code before
+the change they test and pass after it:
+
+- `voltest` (uac2) and `uac1test` (uac1), the walk: the X4 capture graph
+  per source (controls 2, 23, 25, 8; four sources typed `0x0201`,
+  `0x0602`, `0x0603`, `0x0605` in that order); the X4 playback other
+  controls (none on Input Terminal 3's path besides Feature Unit 1's
+  own; 11, 12, 13 never listed); the Logi (Feature Unit 2; playback's
+  Feature Unit 11 never listed), the Play! 2 (Feature Unit 6 through the
+  one-input Selector Unit 10; Selector Unit 12's branch never listed),
+  `selcfg`'s two sources; built graphs: a diamond (both routes kept, the
+  unit once), a loop on one route (the other routes listed for the
+  diagnostics, the graph incomplete, `GraphFlags` bit 6), a unit on one mixer
+  input (not eligible, software level), a unit after the mixer
+  (eligible), a multi-input Extension Unit (nothing upstream eligible),
+  a multi-input Processing Unit (malformed, 28.3),
+  a one-input Extension Unit (master upstream eligible, per-channel not),
+  a channel-changing mixer (per-channel upstream not eligible), a common
+  unit after a chooser, two selectors in series with a shared inner
+  selector, a selector behind a join (fixed), 8 and 9 sources, 65 routes,
+  a "Stereo Mix" branch, a clock selector never a source; and for each
+  variable layout of 28.3's well-formed entities, in both families, valid
+  vectors and their truncations (the tail, part of an entry, whole
+  entries) making the graph incomplete with nothing eligible and nothing
+  claimed (`captest`, built by `uac2` and, with `UAC_V1`, by `uac1`).
+- `leveltest` (new, both families), the engine of 28.15 against a fake
+  device that can stall, ignore a SET, answer outside a range, report a
+  malformed RANGE, change a selector itself, and run a callback between
+  any two requests: a KS SET arriving between the pass's writes (the
+  user's value is applied and saved, the pass's is not); the pass's
+  "pass done", owned and pending states after each failure kind; an
+  ignored SET on a pass target and on an owned control (counted, not
+  looping); readback values becoming the owned level; a switch failing
+  at the inner and at the outer selector, with and without a shared
+  inner selector on the old route (confirmed, unknown); an unknown route
+  never passing an assumed input; a device-side change found at RUN; D0
+  (state unknown, re-read, owned controls rewritten); two endpoints
+  claiming one unit's controls (first wins, the other never writes);
+  the D2 zones and targets (mute-only, volume-only, positive-only range,
+  no RANGE, an other unit unreadable taken as 0 dB and later counted);
+  the full-route gain accounting across Pass, opaque and join entities;
+  the saved value's encode, decode, malformed and stale cases and a
+  failing registry write; a SET landing after the save's generation
+  check and before its registry write (the value ends as the SET's);
+  the claims table built for two playback and two capture pairs before
+  any write (reservations, a unit whose controls go to different
+  holders, the later pair never writing a held control; KS traffic to
+  pair 0 between its registration and a later pair's preparation
+  finding the table complete); an incomplete
+  graph (65 routes, depth 33, a malformed entity, and **one valid branch
+  beside one loop**) making no hardware write: no selector, level, pass
+  or normalisation request at all in the fake device's log, the level in
+  software, `RouteState` 3; a MUX SET at raised IRQL refused
+  `STATUS_INVALID_DEVICE_STATE` with nothing written while the pended path
+  is disabled; and, for the pended path when it is enabled, the switch
+  record's protocol (28.7) at every interleaving the fake's callback can
+  make: admission against `Shutdown` (never `Work` 0 with a published
+  request), admission against a running coalesced worker (never a
+  half-published record taken), a new SET admitted while the old
+  completion runs (the old one's status and diagnostics its own), a
+  power cycle between admission and the worker (no hardware work after
+  D0, `STATUS_DEVICE_NOT_READY`); a SET at
+  raised IRQL pended and completed with the readback's outcome; every
+  pended request completed exactly once (the fake PortCls counts
+  completions per request and poisons a request once completed, so any
+  later access fails the test); a second SET answered busy at raised
+  IRQL, and at PASSIVE served after the first within the time-out or
+  answered busy after it; `Shutdown` at removal and at stop with the
+  switch queued and not started (completed `STATUS_DEVICE_REMOVED` /
+  `STATUS_CANCELLED`, nothing written) and with the switch mid-way
+  (finished, completed with its outcome, completed once); power down with
+  a switch queued (`STATUS_DEVICE_NOT_READY`, nothing written); the
+  caller's cancellation at each step (queued, between selector writes,
+  after the last readback: the switch runs to its end, one completion,
+  the state as confirmed); the operation mutex held past the time-out
+  (busy, nothing written, `MuxTimeouts`); the route lock across pairs:
+  endpoint B recording through A's chooser at its read position, A's SET
+  to another source refused busy while B is open and admitted after B
+  closes, A's SET to the confirmed source admitted; an open of B while A
+  switches (waits, then locks the route A left; or busy after the
+  time-out); the open and the switch interleaved at every step through
+  the fake's callback (never a moved selector under an open stream);
+**the same endpoint's open during its own switch**, in exactly this
+order: A's switch passes its check and reserves its selectors (`Switch`
+writer), A's capture open then runs its hold (it must wait, not register
+`Readers` on the old graph), the switch moves the selectors and ends,
+and the open then registers on the graph the switch left (the new
+source's; every route where the switch ended unknown), the stream's
+locked set and `Version` being those of that graph; the same with A's
+own `Level` write (a restored level on its confirmed source) in progress
+instead, which the open does not wait for; and the reverse order (the
+open registers first, then A's switch is refused busy); the worker
+waiting for the operation mutex across a whole D3 and D0 (the epoch
+checked after the mutex: `STATUS_DEVICE_NOT_READY`, nothing written), a
+switch admitted while the device is down, and a PASSIVE switch whose
+caller waits across a power cycle (the same); `MuxIrql` taken from the
+worker's locals while a new SET at another IRQL is admitted; the
+worker's own `Work` reference: a request completed and its reference
+dropped while the worker still loops over a level SET, `Shutdown` not
+finishing before the worker's last access; a
+  pass and a restored level skipping a control on B's locked route and
+  writing it after B closes; a failed create giving its route back; the
+  same on WDM 1.x and on WDM 6.00 (one rule); two per-source endpoints of
+  one pair on WDM 6.00 with the SET before a pin open that then fails
+  busy; the restore of the saved input at start (valid, stale, a
+  selector that refuses); the Z1 rule (a mixer between a unit and the
+  controlled volume: Z1 empty; an opaque unit on the segment; software
+  volume: no Z1; a diamond); a monitoring-branch unit that a playback
+  rule would unmute (built through a diamond: no write at all, listed,
+  neither `OtherZ1` nor `OtherDone`).
+- `topotest`: the built capture lines for 0, 1, 2 and 8 sources with and
+  without render, the kept pin numbers, `UacLinksCheck` with MUX inputs
+  (refused on other nodes), and a parse as the WDMAud page describes
+  (each source line holds its VOLUME and MUTE, the destination its MUX).
+- `infchk`: `Uac2CapFirst` once, no-clobber, at 1, in every install
+  section of both INFs; the 46 names; mutations refused.
+- `uacsimtest.py` / `uac1simtest.py`: the simulators below.
+
+**Simulators** (`uacemu.py`, `uac1emu.py`). Capture today streams a
+1 kHz tone whatever the units hold. Changed: each capture IN endpoint's
+signal is computed through its graph: each Input Terminal its own tone
+(a frequency per terminal, logged), selectors at their positions, a
+Mixer Unit summing, Feature Unit mute and volume per channel, silence on
+mute or the silence value, gain above 0 dB clipped and counted. Playback
+rendering gains the monitoring branches (each Input Terminal's tone
+through its branch units into the mixer), so the log carries per window
+the rendered playback peak and the sidetone peak apart, and the tests
+assert that no window during a level apply, a normalisation or a switch
+peaks above both its ends, and that a sidetone peak moves only where a
+rule allows it. New options: power-up state of any unit and channel
+(`--unit-mute ID[:CH]`, `--unit-vol ID[:CH]=V`), per-unit ranges
+(`--unit-range ID=MIN:MAX:RES`), a selector's position (`--sel ID=N`),
+a selector whose GET stalls (`--sel-stall ID`), a selector that ignores
+SET (`--sel-ignore ID`), a device-side move (`--sel-move ID=N@S`), an
+ignored volume SET (`--unit-ignore ID`). Built profiles: `levels` (a
+playback path with Z1, Z2 and Z3 units and a sidetone branch; a capture
+chooser with a common unit after it, two selectors in series with a
+shared inner selector, a one-input selector); `many` (a chooser of
+`--sources N`, 2 to 9); `twocap` (two capture endpoints sharing a unit);
+`twosel` (two capture endpoints, each with its own clock so that they
+make two pairs, the second's route passing through the first's
+chooser: the cross-pair route lock); `loop` (one valid capture branch
+and one looping branch: no request to any capture unit or selector).
+`uac1emu.py`: a two-input capture selector variant of `headset`. Every
+Selector Unit `SET_CUR` and every write to a unit a rule keeps untouched
+is logged, the latter as an error the tests fail on.
+
+**Guest legs** (QEMU, at most two guests at once, fresh overlays of the
+installed bases; `UACWAV` gains the recording lines, the MUX and the
+endpoint opens):
+
+- **98 SE under xHCI98** (`uac2`: `x4full`, `levels`, `many` with 8 and
+  9; `uac1`: `logi`, `play2`, the selector variant) and **98 SE under
+  NUSB's EHCI** (`uac2` `x4full`): first arrival with the capture unit
+  muted and at minimum; the panel's lines, names and Select; each source
+  recorded with its tone; series selectors; a level set, replug, the
+  level and source restored and no second pass; `Uac2CapFirst` 0; a
+  device-side switch during a recording and the next RUN; playback with
+  Z1, Z2 and Z3 units powered up muted or low; the sidetone never
+  written; WDMAud stable at arrival, replug and removal; `twosel`'s
+  cross-pair lock (below); `loop` writing nothing.
+- **XP SP3 x86** (Windows' EHCI and xHCI98): the same through
+  `sndvol32 /r` and the mixer API, and `twocap`.
+- **Rapid and concurrent selection** (98 SE and XP, through the mixer
+  API, `x4full` and `levels`): one program setting the MUX many times in
+  quick succession, and two programs (or two threads) setting it at
+  once; for every call its return value, then the final
+  `mixerGetControlDetails`, the simulator's log of the selector's last
+  `SET_CUR` and its position (the hardware), and the recording panel
+  reopened, compared: they must agree on one source. A call refused busy
+  is acceptable; that a mixer retries is not assumed, and what the open
+  panel shows after a refused call is recorded per system. Each run
+  records the IRQL of the SETs (`MuxIrql`) and `MuxPended` =
+  `MuxCompleted` at the end.
+- **Cross-pair route lock** (98 SE and XP: two waveIn devices; 7: two
+  endpoints of the two pairs; `twosel`): pair 1 recording through pair
+  0's chooser; pair 0's MUX set to another source from its panel: refused,
+  and pair 1's recorded tone unchanged throughout (the simulator's
+  per-endpoint tone log); the same SET after pair 1 closes: applied; pair
+  1 opened while pair 0's switch runs (scripted): the recording carries
+  the source the switch left. On XP and 7 also two programs on one
+  recording device where the system admits a second client.
+- **7** (x86 or x64): one endpoint per source and their names; Levels
+  and mute against the node; recording from each endpoint (whether the
+  MUX follows); shared and exclusive mode opens; two endpoints opened at
+  once by two programs (the second refused busy); the upgrade from
+  0.1.11.0 with a chooser device installed (the default recording device
+  and its identity kept or not).
+- **Owed, not run in this work**: ME, 2000 and Vista (their behaviour
+  is expected to follow 98 SE, XP and 7 respectively; not shown), 8, and
+  the x64 systems other than the 7 leg.
+- Regression: section 20's legs (`cx31993m`, `hs24`), the ALC4080
+  capture's three inputs (no chooser), the host gates.
+
+### 28.17 What is still open
+
+The owner's questions of both drafts are answered (A1 to A6, B1 to B6).
+The refusal of a live source change while a recording depends on the
+route, on every system, is decided as provisional by the owner (C1,
+2026-11-17), to be confirmed or changed after the mixer legs on each
+system. **Accepted (owner, 2026-11-17)**: the refusal of a MUX SET made
+at raised IRQL, provisional, until an adequate supported cancellation protocol
+for a pended property is established (28.7, "Cancellation"); it changes
+what a user sees on a system that sets the MUX at raised IRQL. The
+recommendation recorded with it (28.7): accept it provisionally for
+development, with explicit failure and no deferred write; measure the
+MUX SET's IRQL early on every target system; where a normal system
+panel consistently sends it at raised IRQL, input selection is
+unsupported on that system and no readiness is claimed there until a
+supported completion arrangement exists.
+Open, and settled by the legs, not by a choice: whether 98 SE's WDMAud
+takes the MUX topology (B2's 98 SE and ME form only if not); whether
+the audio system on Vista and later sets the MUX for an endpoint (B2's
+single endpoint only if not); at which IRQL each system sets the MUX,
+unknown on every system until measured there (28.7: a raised-IRQL SET
+is refused while no adequate supported cancellation protocol exists);
+which system names exist for `KSNODETYPE_MICROPHONE` and
+`KSAUDFNAME_LINE_IN`; what each panel shows (28.10), also after a MUX
+SET refused busy or by the route lock (28.7); and the 2 s time-outs of
+28.7, provisional until the legs show what mixers do with them; and the
+automatic-write and route-publication rules of 28.7's route table, in the
+cross-pair legs. Each answer is
+recorded with its leg, and a reduced form, where one is taken, as a
+limitation in the user documentation. Stage 2's own questions (S1 to
+S4) are in 28.25; 28.23 records that 28.12's stats words 94 to 99
+collide with words already in use.
+
+### 28.18 Wiring in stages, and stage 1: discovery and diagnostics
+
+The host modules (`uaccap.c`, `uacroute.c`) go into the driver in
+stages, each with its own gate before the next: **1** discovery and
+diagnostics; **2** the route table's open and close reservations (28.7);
+**3** recording levels and automatic writes, with the claims (28.4 to
+28.6, 28.5, 28.9); **4** the synchronous MUX and the topology (28.7,
+28.10). Stage 1 is wired (2026-11-17); stages 2 to 4 are not, and
+nothing in this subsection is a part of them. Stage 2 is designed in
+28.19 to 28.25; it moves the building of every endpoint's graph into
+pair 0's `Prepare` (28.20), which this subsection gives to stage 3.
+
+**Where discovery runs.** `Wave::Discover`, called once by each pair's
+`Prepare` as its last step, only when `Prepare` has otherwise succeeded:
+at PASSIVE, in the PnP start thread, after the descriptor model was
+parsed (`ParseDevice`) and the pair's terminals learned (`Learn`), after
+the render level's setup and first apply, with no driver lock held. A
+pair with no capture line (no capture format) does nothing. Discovery is
+`UacCapStart`: the graph of the pair's capture endpoint (the USB
+streaming Output Terminal of its capture formats) built from the
+descriptors by `UacCapBuild` (28.3), and the `Uac2VolMapC` record filled
+from it.
+
+**Storage.** The graph (`UAC_CAP_GRAPH`, 7424 bytes) comes from
+nonpaged pool (`ExAllocatePoolWithTag`, tag `'g2aU'`) at PASSIVE with no
+spin lock held, never from a kernel stack; it is kept for the pair's life
+(the later stages read it) and freed with the pair (`~Wave`). A stop and
+start, or a removal and arrival, makes new pairs and so a new graph
+(28.5's invariants). The record (412 bytes) is a member of the pair
+object, itself in nonpaged pool; the two members come last in the object,
+so every earlier member keeps its offset. There is no claims table
+(2572 bytes) and no route table (65068 bytes at the default bounds) in
+stage 1: the claims build makes the first-arrival reservations (28.5,
+step 4) and exists to arbitrate writes, which stage 1 does not make, and
+the route diagnostics need neither. Each pair builds its own graph in its
+own `Prepare`, touching only its own object and the descriptor model,
+which nothing writes after the parse; stage 3's claims build moves the
+building of every endpoint's graph into pair 0's `Prepare` (28.5).
+
+**Stack.** The walk recurses per entity on a route (`Enter`) and per
+channel-count lookup (`Width`), each bounded by the depth of 32 (28.3).
+From the compiler's listings with the drivers' own flags: on x86 about
+40 bytes a level of each and 424 bytes for `UacCapBuild`'s frame, so
+about 3.2 KB at the bounds (a route 32 deep whose deepest unit looks up a
+chain 32 deep), and under 1 KB on the recorded devices' routes (3 to 5
+entities); on x64 about 96 bytes a level and about 6.9 KB at the bounds.
+Those figures are the walk's own frames, measured from the listings and
+added on top of whatever the PnP start's call chain already holds when
+`Prepare` calls `Discover`; that chain's own depth, and so the room left
+on 98 SE's and ME's kernel stack, is not measured here and stays open
+([open-items](../testing/open-items.md), "kernel stack room for the
+capture discovery on 98 SE and ME").
+
+**Failure.** An allocation failure leaves the pair without a graph and
+the record says so (`RouteState` 3, `GraphFlags` bit 7). An incomplete
+graph (28.3) is recorded with its flags and `RouteState` 3. Neither
+changes anything else: nothing reads `UacCapStart`'s answer or the graph,
+`Prepare` returns what it returned before, and the pair starts as it did.
+A failed registry write is not retried (the record is diagnostics only).
+
+**The diagnostics exported.** `Uac2VolMapC` (pair 0) and `Uac2VolMapCnn`
+(pair nn, two upper-case hex digits), REG_BINARY in the device's driver
+key, written once per start through the driver's existing `PutValue`,
+exactly 412 bytes (28.12's layout). Stage 1 fills:
+
+- `Channels` (offset 0): 1 or 2, from the capture formats as the render
+  level counts its own; `Output` (4): the capture Output Terminal's id.
+- `Gain[8]` (116 to 144): 65536 (unity): the driver does not scale
+  captured samples.
+- `Sources` (232), `RouteState` (244: 0 with no chooser; 1 with a
+  chooser, its position not read; 3 incomplete or not built),
+  `GraphFlags` (252), and `Selector[i].Id` (256 + 12i) for the first 8
+  selectors on any route, as `UacCapDiag` gives them.
+- Every other field 0, and `Confirmed`, `Position` and `Status` 0 in
+  particular: no selector is read. The level fields at 0 (`Owned`,
+  `VolumeMode`, `MuteMode` and the rest) mean that nothing is controlled:
+  the device keeps its own settings, as it does today.
+
+No selector position is read in stage 1, provisionally: a GET CUR to a
+Selector Unit at start would be a new request on the device's control
+pipe (and a stall a new event at start), so stage 1 makes no request at
+all; the reads of 28.8 come with the stage that acts on them.
+
+**What stage 1 does not change.** No control is written or read, and no
+other request is made. No property handler changes its answers (the KS
+property tables and handlers are untouched). No topology node or pin
+appears or disappears (`uactopo.c` and the filter descriptors are
+untouched). No captured sample is scaled. No existing registry value
+changes: `Uac2VolMap`, `Uac2UsbStats` and `Uac2UsbStatsIn` keep their
+sizes and contents (the words 94 to 99 of 28.12 are not added yet);
+`Uac2LevelC`, `Uac2LevelCnn` and `Uac2CapFirst` are neither written nor
+read; the INFs are unchanged. The code is in the shared `uacwdm.cpp` and
+`uaccap.c`, so `uac2wdm.sys` and `uac1wdm.sys` both change (`uac1` with
+the USB Audio 1.0 layouts), in default and retained builds alike: the
+level switch (28.15) selects the playback level engine only. What shows
+it, on the host and in one XP leg with the simulator, and what is not
+shown yet: `docs/testing/2026-11-17-uac2-cap-stage1.md`.
+
+**Choices in stage 1, provisional:** no selector read at start (above);
+the record written even without a graph, with `GraphFlags` bit 7; the
+level fields at 0 with the gains at unity; the graph built per pair until
+stage 3; the stack depth of the walk at the bounds of 28.3 (whether 98 SE's
+kernel stack at a PnP start has room for the 3.2 KB worst case is not
+established here; the recorded devices need under 1 KB).
+
+### 28.19 Stage 2: the route table's open and close reservations
+
+Status: design, 2026-11-17, revised 2026-11-18 (the reservation's
+ownership, incomplete discovery, the work under the lock, the
+diagnostics, the tests and legs), and again the same day (the
+reservation's exact boundary, the lifecycle schedules, the failed-state
+leg's evidence); not wired. Stage 2 of 28.18's plan
+puts the route table of 28.7 ("The route lock") into the drivers with
+its first users only: a capture stream takes a **reservation** (it
+registers as a reader of every hardware control of its endpoint's graph)
+for its whole life and gives it back when it is destroyed. Nothing yet
+writes a control, so nothing yet consults a reservation; stage 2 exists
+so that the table, its lock, its storage and the reservations' lifetime
+are in the drivers, shown on the host and in guests, before stage 3's
+first automatic write and stage 4's first switch depend on them. 28.19
+to 28.25 are stage 2; where 28.7 already decides a point they follow it
+and say so, 28.21 says where they depart from it and why, and the
+choices still open are the owner's questions of 28.25.
+
+**What is reserved.** A reservation is 28.7's registration: the
+endpoint's bit in `ReaderMask` and one count in `Readers` on every
+entry of its locked graph. Stage 2 reads no selector (below), so every
+position is 0 (unknown), every route is admitted (28.7: "every route of
+its graph when a position is unknown"), and the locked graph is the same
+at every open: **every hardware control on every stored route of the
+endpoint's capture graph**, as `UacRouteFromGraph` enters them: each
+Feature Unit's mute and volume present on its master and on each logical
+channel up to `UAC_VOL_CHANNELS` (8), and each Choice's selector, cut
+routes included. Where that is not every control the endpoint's signal
+can pass (a graph incomplete by 28.3, or a unit with a control on a
+channel above 8), the endpoint's protection is **incomplete** and the
+adapter's arbitration is latched off (28.22). So the set is fixed at
+start: it is computed once into the table (28.20), and an open or a
+close only applies or removes it.
+
+**By whom.** One reservation per capture endpoint, owned by the one
+capture stream a pair can have (the direction's one-stream gate, section
+27, and the one-instance capture pin). The endpoint number in the table
+is the pair's index (pair k's capture endpoint is endpoint k,
+k < `UAC_PAIRS`); the numbering of playback writers is stage 3's and is
+not fixed here. A render stream takes nothing.
+
+**When taken and given back.** Taken inside `NewStream`, under the
+pair's operation mutex, right after `UacStream::Create` has succeeded,
+and owned from then by the stream `Create` returned; given back by that
+stream's `Close` hook, under the operation mutex after `Drain`, when the
+stream's queued destroy runs (section 27), and by nothing else. A pause,
+a stop, a D3 drain and a PnP stop's `Shutdown` keep it (28.7: "A pause
+keeps it"). 28.21 gives the protocol.
+
+**What stage 2 does not do.** No request to the device: no selector is
+read (positions stay 0, as in stage 1; 28.8's reads come with the stage
+that acts on them, 28.18) and no control is written. No claims table
+(28.5), no `Writer` mark of either kind, no switch record and no
+`SwitchLock`, no MUX node, no topology or pin change, no KS property
+change, no level or first-arrival pass, no software gain on capture.
+`Uac2LevelC`, `Uac2LevelCnn` and `Uac2CapFirst` are neither read nor
+written, the INFs are unchanged, and no `Uac2UsbStats` word is added
+(words 94 to 97 keep their present meaning; 28.23). **No `NewStream`
+outcome changes**: the reservation is taken only after `Create` has
+succeeded, cannot fail in a way that fails the open, and no new refusal
+or wait is added (28.21). No captured sample changes. What changes
+besides the table is the diagnostics record (28.23), the start's work
+and the memory the table and graphs take (28.20; 28.25, S3).
+
+### 28.20 Stage 2: building the table at start
+
+**Every capture graph in pair 0's `Prepare`.** 28.5's invariants put the
+adapter-wide tables in pair 0's `Prepare`, complete before
+`StartPair(0)` publishes pair 0, with later pairs only looking up; and
+28.18 said stage 3's claims build would move every endpoint's graph
+there. The route table needs every capture endpoint's graph for the
+same reason (a later pair's controls may be pair 0's too), so stage 2
+makes that move now rather than in stage 3:
+
+1. Pair 0's `Discover` (still the last step of a `Prepare` that has
+   otherwise succeeded, at PASSIVE, no driver lock held, in the PnP start
+   thread) lists the capture endpoints as `Learn` does:
+   `UacPlanEndpoints(descriptor, 1, UacUsbHighSpeed(dev), ends,
+   UAC_PAIRS)`, the first `min(count, Pairs())` of them, endpoint k at
+   terminal `ends[k]` (the terminal pair k's `Learn` takes; `uac1`'s
+   `Pairs()` is 1). This is done **whether or not pair 0 itself has
+   capture formats**: a pair 0 with none (its rates failed, or a device
+   whose first capture terminal belongs to no format pair 0 can run) still
+   builds every capture endpoint's graph and the table, because a later
+   pair may capture; pair 0 then writes no record of its own (stage 1's
+   rule). For each endpoint it allocates a graph (`UAC_CAP_GRAPH`,
+   nonpaged, tag `'g2aU'`, as stage 1) and builds it (`UacCapBuild`).
+   Graphs are built also for endpoints whose pair will later fail its
+   own `Prepare` or is never created; they are walked, entered and
+   freed with pair 0 like the others.
+2. With `count` 0 (a render-only adapter, or one whose capture terminals
+   `UacPlanEndpoints` does not list) **nothing is allocated**: no graph,
+   no table, no record; that is not a failure and sets no latch
+   (nothing can record, so nothing needs arbitrating). Otherwise it
+   allocates the route table (nonpaged, new tag `'r2aU'`) and builds it
+   with one new call, `UacRouteBuild` (28.24): `UacRouteInit` (the whole
+   table zeroed: entries, counters, flags, owners, sets), then for each
+   endpoint in order `UacRouteFromGraph` on its graph (complete or not:
+   what is stored is entered), the endpoint's **protection status**
+   (complete; incomplete, and why: 28.22), and its **reservation set**,
+   `Set[e]`: the union of its stored routes' controls, computed once
+   here, sorted, at most 128 table indexes (the `UacRouteGraph` result
+   with every position 0). No `RouteLock` is held: this is the exclusive
+   startup of 28.15, before any other caller can reach pair 0.
+3. It fills its own record (28.23), when it has capture formats, and
+   writes it.
+
+A later pair's `Discover` builds nothing: its `capGraph` points at pair
+0's graph for its endpoint, and it fills and writes its own record from
+that graph and its own capture formats' channel count (stage 1's
+fields, through `UacCapRecord`, below) and the table's route fields,
+which it reads under pair 0's `RouteLock`, since pair 0 is already
+published and its capture opens may run. A pair whose capture formats
+are empty writes no record, as in stage 1; its endpoint's routes stay in
+the table, never reserved.
+
+`UacCapStart` is split so a record can be filled from a graph built
+elsewhere: `UacCapRecord(graph, output, channels, record)` writes
+exactly the first 412 bytes stage 1 writes (no graph: `RouteState` 3,
+`GraphFlags` bit 7) and nothing past them; `UacCapStart` becomes
+`UacCapBuild` then `UacCapRecord`, its answers and its 412 bytes
+unchanged (stage 1's `captest` vectors pass as they are).
+
+**Ownership and lifetime.** Pair 0 owns the graphs (`capGraphs[k]` for
+every k it built, whether or not pair k was ever created or published)
+and the table, initialises every such pointer to NULL in its
+constructor, and frees every non-NULL one in its destructor; a later
+pair's `capGraph` is borrowed and its destructor frees nothing of it
+(stage 1's `~Wave` frees `capGraph` for every pair: that line becomes
+pair 0's, over the whole array). A later pair holds a reference to pair
+0 (its constructor's `AddRef`), and every stream holds its own pair, so
+the table outlives every stream holding a reservation in it, also
+through a failed start's cleanup and a removal with streams retained. A
+stop and start, or a removal and arrival, builds new pairs and a new
+table from nothing (28.5, invariant 4); a stream of the old pairs gives
+its reservation back to the old table.
+
+**Storage.** The table at 28.7's default bounds is 65,068 bytes
+(28.18); stage 2 adds, per endpoint, `Set[e]` (`UAC_ROUTE_SET`, 136
+bytes), the owner token, the protection status and the counters of
+28.23: about 66 KiB at the default bounds, and each capture graph 7424
+bytes; all of it nonpaged, allocated at PASSIVE with no spin lock held,
+never a kernel stack local. How large the table is made, and whether it
+is made on every device that captures, is question S3 (28.25).
+
+**The work under the lock.** Because `Set[e]` is computed at start,
+nothing done under `RouteLock` scans routes or sorts. `Set[e]` holds at
+most 128 distinct entries; the visits a hold makes are counted apart
+from that: a reservation makes two passes over `Set[e]` (the anomaly
+preflight that looks for a `Writer`, then the registration: a count
+incremented and a bit set), so at most 256 entry visits; a give-back
+one pass, at most 128; the record's route fields a copy of a few
+counters and one pass for `RouteReaders` (the OR of the entries'
+masks), at most 128. So at most 256 entry visits a hold, independent of
+the routes' number and depth; host tests count every visit of every
+pass at the worst size (28.24). That bound is stated, not measured on
+the target systems; at a few hundred simple updates it is not expected
+to matter for 98 SE's interrupt latency, and the testing record states
+the visits actually made on each leg's device.
+
+**Stack and startup.** The walk's own frames are stage 1's (28.18):
+the up to four walks run one after another, not nested, so the walk's
+depth is unchanged, but the start does up to three more walks, a
+`UacRouteBuild`, and up to three more graph allocations than stage 1,
+and the frames of `Discover`, `UacRouteBuild` and `UacRouteFromGraph`
+are new or larger. So neither the start path's total stack nor its
+time is claimed unchanged: the code worker reads the new functions'
+frames from the compiler listings (x86 and x64, the drivers' flags) into
+the stage's testing record; whether 98 SE's and ME's kernel stack at a
+PnP start has room stays open (open-items), and the X4 and ALC4080 legs
+do not close it.
+
+**The lock.** `RouteLock`, a `KSPIN_LOCK` in pair 0, initialised in the
+constructor of every pair (only pair 0's is used). It is the innermost
+lock (28.7): taken under the pair's operation mutex or with no driver
+lock held, never across a wait, a registry write, a trace output or a
+device request (each of those comes after the hold). It is never held
+together with the level spin lock, the gate lock (`g->Lock`, 29.5.2),
+a stream's `s->Lock`, the claim lock (`d->ClaimLock`, 29.5.2 as built)
+or the device mutex, and nothing takes any of them inside it. Every
+function called under it (the whole of `uacroute.c`) and the driver code
+that holds it are nonpaged: neither is moved into the `PAGE` section.
+28.7's event that every `Writer` clearing sets is not added in stage 2
+(no writer exists; 28.21).
+
+### 28.21 Stage 2: the ownership protocol
+
+**The serialisation already there.** The driver already admits at most
+one stream per capture endpoint at a time: `UacStream::Create` takes the
+direction's one-stream gate (`d->Active`, `GateFree` to `GateOpen`)
+before it allocates anything, and the gate becomes free again only at
+the end of that stream's destroy, after its `Close` hook has returned
+(`~UacStream`: the hook, then `GateFree`); every failure inside `Create`
+after it has acquired the gate frees that invocation's gate itself and
+publishes no hook, and a gate-busy failure leaves the other stream's
+gate alone. And `NewStream` calls
+`Create` with the pair's operation mutex held, the mutex `Close` also
+holds. Stage 2 takes the reservation **inside that serialisation**
+instead of adding a guard of its own:
+
+- **Who owns the endpoint's reservation at each instant.** Nobody, until
+  a `NewStream` invocation's `Create` succeeds. From that success to the
+  end of the same operation-mutex hold, the invocation, which then holds
+  the gate; it reserves (`UacRouteOpenEp`, one hold) and, in the same
+  hold, records the new stream as the owner (the table's `Owner[e]`, the
+  `UacStream` pointer `Create` returned, which is the pointer its `Close`
+  hook later receives). From `NewStream`'s return, that stream, until its
+  `Close` gives the reservation back in one hold under the operation
+  mutex. Then nobody, before the gate is freed. **The boundary, exactly:**
+  the reservation is registered before the successful open releases the
+  operation mutex (between `Create`'s success and that release the
+  stream exists unregistered, which is harmless: `Run` takes the same
+  mutex, so nothing records in that interval, and no writer exists in
+  stage 2); it is kept through every pause, stop, drain and `Shutdown`;
+  and it is released in `Close`, after `Drain`, before the destroy frees
+  the gate. While registered, its owner is the stream that holds the
+  gate. The exceptions are stated, not hidden: with no table nothing is
+  registered, and after an anomaly (below) a stream may run unregistered
+  or a stale owner token may remain, both under the latch. The token is
+  compared, never dereferenced.
+- **A second opener** of the same endpoint meets the gate, never the
+  reservation: while a stream exists (open, paused, or closing with its
+  destroy queued), its `Create` fails as it does today
+  (`STATUS_DEVICE_BUSY`, after `NewStream`'s `WaitClosing` of section 27)
+  and it reserves nothing and gives nothing back; once the old `Close`
+  has given back and the gate is free, its `Create` can succeed and it
+  reserves as the first did. An opener that fails before or inside
+  `Create` (the failed check, `WaitClosing`, `TakeOperation`, the
+  readiness check, any `Create` failure) never reserved anything. There
+  is no pending opener holding a reservation, so no ownership transfer
+  between openers and no retry is needed.
+- **Give-back is authorised per invocation.** `UacRouteCloseEp(t, e,
+  owner)` releases the reservation only when `Owner[e]` is that owner, and
+  then clears it; any other call changes nothing (counted as an anomaly,
+  28.22). Only `Close` calls it, with its own stream; `NewStream` never
+  gives back, since nothing can fail after it reserves.
+- **`UacRouteOpenEp(t, e, owner)`** reserves `Set[e]` and sets
+  `Owner[e]` in one hold; it answers `UAC_ROUTE_OK`. It reserves nothing
+  and answers an anomaly (`UAC_ROUTE_ANOMALY`, new) when `Owner[e]` is
+  already set or a `Writer` is set on an entry of `Set[e]`: the first is
+  impossible while the gate holds (one stream per endpoint), the second
+  while no writer exists (stage 2); either sets the latch (28.22).
+
+**`NewStream`, capture pin**, in this order; every step but 6 is
+today's, unchanged:
+
+1. The failed device refuses at once (`STATUS_DEVICE_NOT_READY`, 29.9).
+2. `WaitClosing` for the previous stream's destroy.
+3. The operation mutex (`TakeOperation`).
+4. The readiness check (`removed`, `pnpBlocked`, `powerBlocked`, the
+   failed flag).
+5. `UacStream::Create`.
+6. **New:** if step 5 succeeded and a table exists, one hold of pair 0's
+   `RouteLock`: `UacRouteOpenEp(t, k, stream)`. Its answer never changes
+   the status `NewStream` returns: on `UAC_ROUTE_ANOMALY` the stream goes
+   on unreserved, the anomaly counted and the latch set. With no table,
+   nothing. Then, outside the hold and still under the operation mutex,
+   the record (28.23) is filled and written beside the records step 5's
+   end already writes (`Record`, `RecordStreams`), only while not
+   `removed`; on a failed step 5 the record is written as well, as those
+   are, so its counters are current.
+7. The operation mutex released; the status of steps 1 to 5 returned.
+
+**Status precedence** is therefore today's: the failed check, then
+`WaitClosing`'s gate-aware end, then `TakeOperation`, then readiness,
+then `Create`; the reservation adds no status.
+
+**`Close` (the stream's destroy, PASSIVE)**, capture direction, under
+the operation mutex: `Drain(d, TRUE)` and `d->Closed++` as today; then
+one hold of `RouteLock`: `UacRouteCloseEp(t, k, stream)`; then the
+record, while not `removed`. The table reached is always the stream's
+own pair's pair 0 (`primary`, or the pair itself when it is pair 0),
+never looked up afresh through the device extension, so a stream of an
+old start gives back to the table it took from. `Close` succeeds on a
+failed device (29.9's table) and gives back there too.
+
+**Where this departs from 28.7, and what stage 3 inherits.** 28.7 put
+the open's registration before the operation mutex and before `Create`,
+so that an open could wait for a writer without holding the mutex the
+writer needs; a registration there is outside the gate's serialisation,
+and its pending state then needs ownership rules of its own (an opener
+that reserved, then lost the gate to another, or failed after it). Stage
+2 has no writer, so it takes the reservation after `Create`, where the
+gate already gives one owner. Consequences, binding on stages 3 and 4:
+
+- An open never waits for a writer in stage 2 (none exists), and 28.7's
+  wait (the event, the 2 s) is not built. Stage 3, which adds the first
+  writer, must specify where an open of endpoint k meets one: if under
+  pair k's operation mutex, then every `Writer` mark must be set and
+  cleared only while its writer holds its own pair's operation mutex,
+  so that no mark of pair k's own exists while an open of pair k holds
+  that mutex, and a writer of another pair must never wait for pair k's
+  mutex while marked; or another placement with its own ownership
+  protocol. Stage 3 decides it and its tests show it.
+- 28.7's switch rule "this endpoint is: its own stream open, or
+  opening, since an open registers before its create" then reads "its
+  own stream open": an own switch and an own open cannot interleave,
+  both running under pair k's operation mutex, provided stage 4 takes
+  its switch reservation (`UacRouteSwitchBegin`) under that mutex.
+  `routetest`'s existing model of 28.7's order stays as a model; stage 4
+  reconciles it.
+- 28.7's "A create that then fails gives the set back at once" has no
+  case left: nothing is reserved before `Create` succeeds.
+
+**Against the rest of the driver.**
+
+- **The gate and the failed state (29.5.5, 29.9).** A failed device is
+  refused at step 1, 3 or 4 and reserves nothing. A stream open at the
+  failure keeps its reservation until its `Close`, which gives it back.
+  Stage 2 sends nothing, so the gate's admission has nothing of it to
+  refuse. On 98 SE and ME the gate is inactive (29.17); nothing of the
+  protocol depends on it.
+- **The level engine.** Untouched: stage 2 does not call `uaclevel.c`,
+  `Prepare`'s first apply (28.15's exclusive startup) comes before
+  `Discover` as today, and the level work item and level SETs take no
+  route lock; the level spin lock and `RouteLock` are never held
+  together (28.7).
+- **Power.** `PowerChangeState` and `PowerLocal` do not touch the
+  table: a stream drained below D0 keeps its reservation, as a pause
+  does; an open below D0 is refused at step 4 and reserves nothing.
+- **PnP.** `Shutdown` does not touch the table: it drains and destroys
+  the transports, and each stream's `Close` gives its reservation back
+  later, when PortCls releases the stream, sending nothing. The next
+  start's table is new and empty; a stream of the old pairs is neither
+  registered in it nor able to record (its transport is gone).
+
+### 28.22 Stage 2: incomplete protection, exhaustion and failures
+
+28.7's integration contract decides the principle: **exhaustion
+disables, never weakens**; recording goes on. Stage 2 extends it to
+discovery that cannot list every control, because a control missing
+from one endpoint's set is unprotected against another endpoint's
+automatic write even when that endpoint's own writes are off (28.3).
+In stage 2 nothing is yet disabled; the table carries the **latch**
+that stages 3 and 4 obey (scope: question S4, 28.25), and no open
+changes its outcome.
+
+**An endpoint's protection is incomplete** when any of:
+
+- its graph could not be allocated (`GraphFlags` bit 7);
+- its graph is incomplete by 28.3 (`UAC_CAP_INCOMPLETE`: more than 64
+  routes, of which only 64 are stored; a route deeper than 32; a loop; a
+  malformed, missing or unlisted entity): the stored routes are entered,
+  but a cut or omitted route may hold controls the set lacks;
+- a Feature Unit on a stored route has a mute or volume control on a
+  logical channel above `UAC_VOL_CHANNELS`, which `UacRouteFromGraph`
+  does not enter (it reports such an omission, new);
+- its routes do not fit (`UacRouteFromGraph` 0: the table's 128 controls,
+  a route's 48, or the endpoint's routes), and it is then left with no
+  route at all.
+
+`GraphFlags` bits 4 (more than 8 sources) and 5 (chooser held by another
+pair) do not make protection incomplete: every route is still stored.
+**A complete graph with no control** (no Feature Unit control and no
+Choice on any route) is complete protection with an empty set: its
+reservation is empty and correct, and sets no latch.
+
+**The latch** is set, once and until the next start, when any capture
+endpoint built at start has incomplete protection, when the table could
+not be allocated, or when an anomaly occurs (28.21). It is the table's
+(`Latched`), read under `RouteLock`; with no table it is implied.
+
+| Case | When | What stage 2 does | Recorded (28.23) |
+|---|---|---|---|
+| A graph's allocation fails | pair 0's `Discover` | that endpoint: no graph (stage 1's record: `RouteState` 3, `GraphFlags` bit 7), no route, empty set; latch | `RouteFlags` bits 1 and 2 on that endpoint, bits 4 and 2 on the others |
+| A graph incomplete, or a channel above 8 omitted | pair 0's `Discover` | stored routes entered, set as computed; latch | the same |
+| An endpoint's routes do not fit | pair 0's `Discover` | that endpoint: no route, empty set; endpoints entered before it keep theirs; latch | the same |
+| The table's allocation fails | pair 0's `Discover` | no table: no stream reserves, every open as today; latch implied | bits 0 and 2 |
+| An anomaly: `Owner[e]` already set, or a writer found, at a reservation; or a give-back by a stream that is not the owner | `NewStream` step 6; `Close` | nothing reserved or released; the stream records; latch | `RouteAnomalies`, bits 3 and 2 |
+| A render-only adapter | pair 0's `Discover` | nothing allocated; no latch (nothing captures) | no record (no capture line) |
+
+None of them fails the PnP start or changes what `Prepare` returns
+(stage 1's rule); nothing is allocated at an open or a close. A failed
+registry write of the record is not retried (diagnostics only, as in
+stage 1).
+
+### 28.23 Stage 2: diagnostics and registry values
+
+**Two contracts, kept apart.** `UacCapRecord` (and `UacCapStart`)
+write exactly 412 bytes, stage 1's layout, into a buffer at least that
+long and touch nothing past it. `UacRouteDiag(t, e, record)` writes
+exactly offsets 400 to 403 and 412 to 439 of a buffer at least 440 bytes
+long and touches nothing else. The driver's buffer (`capDiag`) grows to
+440 bytes, zeroed in the constructor, filled by both, and written as
+**`Uac2VolMapC` / `Uac2VolMapCnn` of 440 bytes**, append-only (28.12:
+"a shorter value is an older build's"); every stage 1 field keeps its
+offset and meaning. No reader in this tree requires exactly 412 bytes
+(the tests encode the size and change with it); a reader elsewhere that
+does is not known and not established either way.
+
+| Offset | Field | Bounds |
+|---|---|---|
+| 400 | `RouteReaders` (28.12): endpoints, of any pair, holding a reservation that includes a control of this endpoint's set, this one included | 0..`UAC_ROUTE_ENDPOINTS` |
+| 412 | `RouteControls`: entries in the adapter's table | 0..128 |
+| 416 | `RouteRoutes`: this endpoint's stored routes in the table | 0..64 |
+| 420 | `RouteLocked`: entries in this endpoint's set while it holds its reservation, else 0 | 0..128 |
+| 424 | `RouteOpens`: reservations taken | counter |
+| 428 | `RouteCloses`: reservations given back | counter |
+| 432 | `RouteAnomalies`: reservations refused or give-backs ignored as anomalies (28.21); 0 expected | counter |
+| 436 | `RouteFlags`: bit 0 no table; bit 1 this endpoint's protection incomplete; bit 2 the latch; bit 3 an anomaly on this endpoint; bit 4 another endpoint's protection incomplete; bits 5 to 31 zero | bits |
+
+With no table, `UacRouteDiag(NULL, e, record)` writes 0 at 400 and at
+412 to 435 and `RouteFlags` 5 (bits 0 and 2). `UacRouteInit` zeroes
+every counter, flag, owner and set; `UacRouteBuild` sets the protection
+bits and `RouteRoutes`, `RouteControls` and the latch, and nothing else.
+The record's route fields are copied in one hold, so a reservation is
+never half counted in it. **Written** at start (each pair's `Discover`,
+when that pair has capture formats), at each capture `NewStream` that
+reaches step 5 (28.21, step 6) and at each capture `Close`, by that pair,
+under its operation mutex, outside `RouteLock`, and only while not
+`removed`. Another pair's record is not rewritten when this pair opens:
+its `RouteReaders` is as of its own last write.
+
+**Trace builds** gain three events, `rtopen` (pair, answer, set size)
+and `rtclose` (pair, answer, `RouteReaders` after), sent after the hold,
+and `rtrefuse` (pair, the step of 28.21 that refused, the status), sent
+by a capture `NewStream` that returns a failure at its step 1, 3 or 4
+(the failed check, `TakeOperation`, the readiness check), holding no
+lock; each as
+`lvset` is traced today; they reach QEMU's debug console (port `0xE9`)
+whether or not the device is still present, so they show a give-back
+that no record can after a removal.
+
+**Registry values involved in stage 2:**
+
+| Value | Written by | Read by | Stage 2 |
+|---|---|---|---|
+| `Uac2VolMapC`, `Uac2VolMapCnn` | the driver | nothing (diagnostics) | 440 bytes; written as above |
+| `Uac2FailOnTimeout` (29.17) | a test only; no INF | the driver at PnP start | unchanged; its gate decides steps 1 to 4 of 28.21 as today |
+| `Uac2Streams`, `Uac2Waits` (section 27) | the driver | nothing | unchanged |
+| `Uac2CapFirst`, `Uac2LevelC`, `Uac2LevelCnn`, the 46 `MediaCategories` names (28.12) | - | - | not written, not read, not in the INFs (stages 3 and 4) |
+| `Uac2VolMap`, `Uac2UsbStats`, `Uac2UsbStatsIn` | the driver | nothing | unchanged in size and content |
+
+**No new option.** Stage 2 supports no setting a user could choose: the
+reservation has no effect a user can see until a later stage writes, and
+its bounds are constants, not options; the standing rule (every option
+configurable in Device Manager, written by the INF, documented) does not
+make an internal mechanism or a capacity a setting. So `uac2wdm.inf` and
+`uac1wdm.inf` are unchanged and `infchk` needs no new case. Whether
+stage 2 should nonetheless be behind a setting is question S2 (28.25).
+Stage 2 adds no user-visible string.
+
+**The stats words, for the first stage that adds any.** 28.12 gives
+section 28 `Uac2UsbStats` words 94 to 99 and says the stats "grow from
+94 to 100 words"; words 94 to 97 are already in use (`uacusb.h`,
+`UAC_USB_STATS`: 25.7's `FeedbackOff`, 26.13's `Resyncs`, `ResyncFrame`
+and `ResyncBehind`). Stage 2 adds no word and keeps 94 to 97 as they
+are; the layout is settled before the first stage that adds words
+(29.11, O12).
+
+### 28.24 Stage 2: tests and legs before merge
+
+**Host modules.** In `uacroute.c` / `uacroute.h`: in `UAC_ROUTE_TABLE`,
+per endpoint `Set[e]`, `Owner[e]` (an opaque pointer-sized token), the
+protection status, the counters of 28.23, and the table's `Latched`;
+`UacRouteBuild`, `UacRouteOpenEp`, `UacRouteCloseEp`, `UacRouteReaders`,
+`UacRouteDiag`; `UAC_ROUTE_ANOMALY`; `UacRouteFromGraph`'s report of
+controls above `UAC_VOL_CHANNELS`. In `uaccap.c`: `UacCapRecord`. The
+headers' notes that no driver file calls them yet (`uacroute.h`;
+`uaccap.h`'s "the driver calls `UacCapStart` only") are updated.
+`uacroute.c` joins both drivers' builds (`build.cmd` of `uac2` and
+`uac1`, compiled and linked as `uaccap.c` is) and `uac1`'s `test.cmd`
+(`routetest` built with `UAC_V1`).
+
+**Host tests**, each written to fail on the code before the change it
+tests:
+
+- **Family fixtures.** Descriptor-dependent vectors use each family's
+  own descriptors: `uac2` the recorded X4 (`testdata/sbx4`) and ALC4080
+  (`testdata/alc4080`) and built UAC 2.0 descriptors; `uac1` the recorded
+  Logi headset, Play! 2 and Brio 100 (`uac1/testdata`) and built UAC 1.0
+  descriptors, including a UAC 1.0 pair of capture paths sharing a unit.
+  The table-only schedules below use tables built directly, so they run
+  unchanged in both builds.
+- **The lifecycle model** (`routetest`, both families): a model of the
+  driver's order in 28.21, with the direction's gate (`GateFree`,
+  `GateOpen`, `GateClosing`) and the operation mutex as actors' steps,
+  and the reservation calls. Deterministic schedules, each checked after
+  every step against 28.21's boundary: the reservation's entries carry
+  the endpoint's bit and count exactly from the registering hold (before
+  the successful open releases the operation mutex) to the give-back
+  hold in `Close` (before the gate is freed), and the owner in that span
+  is the stream holding the gate; between `Create`'s success and that
+  hold the stream is unregistered and no `Run` step can occur; nothing is
+  released by a non-owner; returned statuses are the exact ones 28.21
+  lists for each step; and at the end every count, mask and owner is
+  clear:
+  - two openers of one endpoint at once, each order through the gate
+    (one creates and owns; the other fails busy and reserves and releases
+    nothing);
+  - an opener while the previous stream closes: before its `Close`, between
+    its give-back and the gate's freeing (the opener fails busy), and
+    after (it creates and owns);
+  - the two interleavings that defeated the first draft of this design:
+    an opener reserving before the operation mutex while a second gets
+    the mutex first and creates; and an opener meeting an old reservation
+    that is then given back before its `Create`. Run against the order of
+    28.21 they cannot leave a stream unreserved or a reservation
+    released under it; run against that draft's order (counted apart) they
+    do, so the vector shows the order matters;
+  - every failure an opener can meet (the failed check, `WaitClosing`'s
+    gate-aware end, `TakeOperation` refused, each readiness refusal, each
+    `Create` failure: format, gate busy, stream, work item, buffer and
+    service-group allocation) followed by a second opener that succeeds:
+    no reservation taken by the failed one, the second owns;
+  - a `Close` by a stream that does not own (anomaly, nothing released,
+    latch), and `UacRouteOpenEp` with the owner set or a writer marked
+    (anomaly, nothing reserved, latch);
+  - two endpoints sharing a control: reservations and give-backs in
+    every order, the shared entry's count and both bits right throughout;
+    `RouteReaders` 2 on each while both hold, 1 after either gives back;
+  - **a retained owner across a PnP stop and start**: a stream owns its
+    reservation; `Shutdown` drains it (the reservation kept, the old table
+    and its pair 0 kept alive by the stream's references); a new start
+    builds a new pair 0 and a new table while the old owner survives; an
+    opener on the new start creates and owns in the new table; the old
+    stream's `Close` then gives back in the old table only (the new
+    table's counts, masks and owner unchanged), after which the old table
+    has no reference left and is freed exactly once; the same with the
+    new opener's close coming first;
+  - **a failed device and its recovery**: with the failure latched, an
+    opener is refused at each place 28.21 refuses it (step 1;
+    `TakeOperation`, including after `WaitClosing` ended early on the
+    failure; the readiness check), with exactly `STATUS_DEVICE_NOT_READY`, reserving nothing; a
+    second opener is refused the same while the failure stays latched,
+    whatever the gate's state; an open stream's `Close` still gives back
+    (owner matched); and an opener succeeds again only after a new PnP
+    start (`Start`'s `UacGateReset` clears the failure; new pairs and a
+    new table), owning in the new table, while a stream of the failed
+    start, if retained, gives back to the old one;
+  - **partial construction and failed-start cleanup**: the graph
+    allocation failing for endpoint 0, 1 or 2 of three; the table
+    allocation failing after the graphs were built; the table filling at
+    each endpoint; a later pair's own `Prepare` failing after pair 0
+    built its graph; a latched start torn down after pair 0, and after a
+    later pair (29.17's startup latch); each with the model counting the
+    allocations of graphs and table: every allocation freed exactly once,
+    when pair 0's last reference goes, none freed by a later pair, and
+    the latch and flags as 28.22 gives them for what was built.
+- **The build** (`routetest`, both families, each family's fixtures):
+  every endpoint's set from the recorded devices, compared with constants
+  fixed from the fixtures when the test is written; a NULL graph; a
+  table too small (smaller `UAC_ROUTE_CONTROLS`): the overflowing
+  endpoint empty, those before it kept, the latch; an incomplete graph
+  of each kind (more than 64 routes stored as 64; a route deeper than 32;
+  a loop beside a valid branch; a malformed and an unlisted entity),
+  latch set; **omitted shared controls**: two endpoints sharing a Feature
+  Unit control that one endpoint's graph omits (it lies beyond that
+  graph's 64th route, beyond its depth bound, behind its malformed entity,
+  or on a channel above 8), checked to be missing from that endpoint's
+  set and the latch set; a unit with controls on a ninth channel; a
+  complete graph with no control (empty set, no latch); an adapter with
+  no capture endpoint (nothing built, no latch); a pair 0 without
+  capture formats whose later pair captures (the table built, pair 0 no
+  record).
+- **The work under the lock**: a table at the worst size (128 controls,
+  one endpoint's set of 128) reserved, read for its record and released,
+  the instrumentation counting every entry visit of every pass in each
+  hold: at most 256 for a reservation, 128 for a give-back or a record,
+  and no route scanned.
+  Also built at the drivers' own sizes (`UAC_ROUTE_*` as the drivers
+  compile them) besides the small model sizes.
+- **The records** (`captest` and `routetest`, both families): each
+  written into a buffer filled with a canary byte beyond and around the
+  bytes it owns: `UacCapRecord` changes only bytes 0 to 411 and equals
+  `UacCapStart`'s 412 bytes for every stage 1 fixture and for graphs built
+  for a later pair's terminal (the ALC4080's second and third capture
+  terminals); `UacRouteDiag` changes only 400 to 403 and 412 to 439, with
+  the expected bytes written out literally in the test (not computed by
+  the code under test), for no table, each fixture after start, while
+  reserved, after give-back, after an anomaly, and with each flag.
+- **Mutations**, each to fail a test in both families: the owner check of
+  `UacRouteCloseEp` dropped; `UacRouteOpenEp` reserving with an owner
+  already set; a give-back counted twice; `UacRouteReaders` counting its
+  own endpoint twice or missing a shared control; `UacRouteBuild`
+  ignoring an incomplete graph, a channel omission or a
+  `UacRouteFromGraph` 0 (no latch); the set computed from one route only;
+  each `UacRouteDiag` field shifted by 4 bytes; `UacCapRecord` writing a
+  byte past 411.
+- **Gates**, as stage 1's: `uac2`'s and `uac1`'s `test.cmd`, `streamtest`,
+  `uacsimtest.py`, `uac1simtest.py`, `testgate.ps1`; the 16 builds
+  (`uac2` `wdmx86` and `wdm64` free, checked and trace; `uac1` `wdmx86`
+  free and checked; each with the default level engine and with
+  `UAC_LEVEL=retained`), every import list unchanged; and the object
+  comparison of stage 1's record: every object but the drivers' own,
+  `uaccap.obj` and the new `uacroute.obj` byte for byte the same.
+
+What the host cannot show: the driver's own code in `NewStream`,
+`Close`, `Discover` and `~Wave` (`uacwdm.cpp`) is not run by any host
+test; the model shows the protocol, and the code is shown to follow it by
+reading and by the legs below.
+
+**Guest legs before merge** (QEMU, at most two guests at once, fresh
+overlays of the installed bases; each recorded with its result in a
+dated record `docs/testing/<date>-uac2-cap-stage2.md`, a failure or a leg
+not run named as such, together with the frames and the hold sizes of
+28.20). Image A: main's at the branch point; image B: stage 2's; image
+B': stage 2's trace build. Unless said, `uac2` with `uacemu.py
+--profile x4full`, `UACWAV rec` and `play` as stage 1's leg:
+
+1. **XP SP3 x86, Windows' EHCI, A against B**: the simulator's control
+   log the same request for request (stage 2 sends nothing); playback
+   and recording pass with the same figures; `Uac2VolMapC` 440 bytes:
+   after the plug, stage 1's fields as before and the route fields as
+   the X4 vector; read during a 10 s recording: `RouteOpens` 1,
+   `RouteLocked` as the vector, `RouteReaders` 1; after it: `RouteCloses`
+   1, `RouteLocked` 0, `RouteReaders` 0, `RouteAnomalies` 0.
+2. **XP SP3 x86 under xHCI98**: leg 1 with image B.
+3. **98 SE under NUSB's EHCI, and under xHCI98**: leg 1 with image B for
+   `uac2`; `uac1` with `uac1emu.py --profile hs` (High Speed: the EHCI
+   or xHCI path itself), and with `logi` and `play2` (Full Speed:
+   under NUSB's EHCI these run through the companion controller, and the
+   record says so; they are not an EHCI leg); with them, stage 1's owed
+   checks on these binaries (the record written by 98 SE's registry, no
+   fault at arrival, replug and removal).
+4. **Two capture pairs at once** (XP, Windows' EHCI, `alc4080cap`, whose
+   three capture inputs are three pairs, as recorded in 15.3a's XP runs):
+   two inputs recording at once from two `UACWAV` processes; each pair's
+   record against the ALC4080 vectors; closes balanced. A shared control
+   across pairs is shown on the host only; `twosel` (28.16) belongs to
+   stage 4's cross-pair legs.
+5. **Removal while recording** (XP, Windows' EHCI; and 98 SE under
+   NUSB's EHCI; image B'): the simulator stopped mid-recording; no fault;
+   the give-back seen as `rtclose` on the debug console; after a replug
+   the new record starts at `RouteOpens` 0 and a recording passes.
+6. **The failed state** (XP, Windows' EHCI, image B', `Uac2FailOnTimeout`
+   1, `--stop-after-s` with a recording running): after the stop, a
+   device request is made while the recording stays open (`UACWAV ramp`
+   on the playback line, whose volume SETs are class requests), and the
+   expiry is confirmed (`Uac2Failed` written) before anything else.
+   Then a new capture open is attempted and what `UACWAV` reports is
+   recorded; after the failure Windows may already be taking the device
+   down (29.9), so the attempt need not reach `NewStream`, and neither its
+   result nor the absence of an `rtopen` shows `NewStream`'s status. It
+   counts as reaching the driver only if an `rtrefuse` event (28.23)
+   shows it, and then that event's status is the evidence. The running
+   stream's close shows its `rtclose` (answer OK, owner matched). The
+   record cannot be relied on here; the debug console is the evidence, and
+   without it the leg does not show the give-back and says so. The exact
+   refusal status at each step is the host model's to show (the failed
+   device schedule above), not this leg's.
+7. **7 x64, Windows' EHCI**: leg 1's recording with the x64 image B.
+8. **Opportunistic**, not a gate: 200 cycles of a short recording in a
+   loop (XP, Windows' EHCI): no fault, `RouteOpens` equal to
+   `RouteCloses` and `RouteAnomalies` 0 at the end. It does not force
+   either ordering of 28.21; the host model does.
+
+**Not shown, and why.** A PnP stop and start with a capture stream
+retained (the old stream's give-back into the old table after the new
+start): no leg here can force a PnP stop while a recording is open (a
+disable or restart goes through a query that may be vetoed), so the
+driver's integration of it is left unverified in guests; the protocol is
+shown by the host model's retained-owner schedule (above) and the code by
+reading. A power
+transition while recording (no standby rig for these guests is recorded
+here; the reservation's keeping across D3 rests on reading 28.21).
+Discovery at the depth and route bounds in a guest (no profile reaches
+them; host only), and so the 98 SE and ME stack-room item (open-items).
+ME, 2000 and Vista (expected to follow 98 SE, XP and 7; not shown). The
+retained images in a guest.
+
+### 28.25 Stage 2: questions for the owner
+
+The rest of 28.19 to 28.24 follows 28.3, 28.5, 28.7, 28.15 and 28.18,
+departs from 28.7 where 28.21 says why, or is the code's own detail.
+Four choices are open; each user-visible consequence is stated, and none
+is decided here.
+
+- **S1. Stage 2's gate and stage 1's owed legs.** Stage 1 is on main as
+  a development step with its 98 SE legs owed (its record, "After the
+  merge with main"); 28.18 says each stage has its own gate before the
+  next. AGENTS.md distinguishes a development merge from readiness: no
+  option below makes either stage ready, which needs actual 98 SE passes
+  under both NUSB's EHCI and xHCI98.
+  1. Stage 2 is merged only after stage 1's owed legs have run and
+     passed on main's binaries, and then after 28.24's legs on its own.
+     The user meets nothing of either stage before a release; the cost is
+     one more round of guest sessions before stage 2 lands.
+  2. Stage 2's legs (28.24) carry stage 1's owed checks on stage 2's
+     binaries, and stage 1 counts as shown only through them. The user
+     meets the same; one round of sessions; a failure there leaves both
+     stages unshown until it is found.
+  3. Stage 2 is merged as stage 1 was, as a development step: host-tested
+     and 28.24's leg 1 only. This **replaces 28.24's guest gate**: legs 2
+     to 7 and stage 1's owed checks become owed for both stages. The user
+     meets nothing in a release, but main then holds two unshown steps on
+     the start and open paths on 98 SE, which a release from main would
+     carry until those legs pass.
+
+  Recommended: 2.
+  **Decided (owner, 2026-11-18): 2.**
+- **S2. A setting for stage 2.**
+  1. None: always on, as stage 1. The user meets nothing new and no new
+     entry in Device Manager.
+  2. A Device Manager setting the INFs write without overwriting (draft
+     name `Uac2CapRoute`, default 1), documented in the README's settings
+     list. At 0 no reservation is taken and the table is treated as
+     latched, so its disabled behaviour is the latch's, in the scope S4
+     chooses (with S4's option 1, also no D2 normalisation): stages 3
+     and 4 make no automatic capture write and no switch on that device:
+     no first-arrival pass, no restored recording level or source, and no
+     input chooser that moves a selector; only the user's own level SETs
+     reach the device. The user meets one more
+     advanced setting, useful to rule the mechanism out when a fault is
+     diagnosed, which at 0 turns off those later features with it.
+  3. A test-only value with no INF line, off unless a test writes it,
+     until stage 4 ships. The user meets nothing until then. It sets the
+     standing rule on options aside for the staging period, which needs a
+     fresh, explicit exception from the owner: the one given for the
+     failed state's staging (29.17) does not extend to this.
+
+  Recommended: 1.
+  **Decided (owner, 2026-11-18): 1, none.**
+- **S3. The table's storage.** 28.7 states about 64 KiB at the default
+  bounds, from nonpaged pool, on every device with a capture line. A
+  device with no capture endpoint allocates nothing in any option
+  (28.20, decided by the design: nothing can record there). The choices
+  below are not exclusive: 3 can be combined with 1 or 2.
+  1. As stated: 8 endpoints, 128 controls, 64 routes each: about 66 KiB
+     with stage 2's additions, plus 7424 bytes per capture graph, on every
+     device with a capture line.
+  2. The same table with its endpoints bounded by the drivers' four
+     pairs (`UAC_ROUTE_ENDPOINTS` 4 in the drivers' builds, and a host
+     build at that size): about 35 KiB plus the graphs; nothing is lost
+     today, since a driver has at most four capture endpoints;
+     `RouteReaders` then reads 0 to 4.
+  3. No table where nothing can be arbitrated (one capture endpoint with
+     complete protection, no Choice on its graph, no capture control on
+     a playback path): no table on a device such as the recorded Logi
+     headset (28.4's examples); stages 3 and 4 must then tell "no table,
+     nothing to arbitrate" from "no table, allocation failed" (the latter
+     latched), a second state to carry and test.
+
+  The user meets the nonpaged memory the device takes while it is
+  present (about 74 KiB with 1, about 42 KiB with 2, and on a simple
+  device about 7 KiB with 3).
+
+  Recommended: 2, without 3.
+  **Decided (owner, 2026-11-18): 2, without 3.**
+- **S4. What the latch turns off (28.22).** Stage 2 only records it;
+  stages 3 and 4 obey it. It is set when any capture endpoint's
+  protection is incomplete (a malformed or very large descriptor, a unit
+  with more than 8 channels), when the table could not be allocated, or
+  on an anomaly.
+  1. Every automatic write the table arbitrates, on the whole adapter:
+     switches, a switch's level writes, restored recording levels,
+     first-arrival passes, and playback normalisation (D2, 28.9). The
+     user meets, on such a device only, no automatic recording level,
+     source or pass and no D2 normalisation of other playback units:
+     levels as the device keeps them, as before section 28; the user's
+     own level SETs still apply.
+  2. Every automatic capture write and every switch on the adapter, but
+     playback normalisation continues on controls on no stored capture
+     route. The user meets D2 kept on such a device; but a normalisation
+     write may then reach a control a recording passes through that
+     discovery could not list.
+  3. Only the incomplete endpoint's own writes, as 28.3 already rules
+     for it, and no adapter-wide latch. The user meets the most features
+     kept; another endpoint's automatic write may reach an unlisted
+     control under a recording, the case 28.7's contract exists to
+     exclude.
+
+  Recommended: 1.
+  **Decided (owner, 2026-11-18): 1.**
+
+## 29. The alternate kept after a stop, the hold, and a device that stops answering (2026-11-17)
+
+Status: design, 2026-11-17; revised the same day (the lifetime of the
+deferred work, the locking of the failure, the restart of a kept pipe,
+power and PnP, the settings, the evidence wording), and again (the
+threads' rundown, which is open on 98 SE and ME, O14; a notifier of its own; conflict discovery in
+the clock walk; admission across waits and the start's commit). The
+pure state machine of 29.12 is written and host-tested on its own; of
+the driver code only the failed state is integrated so far, as 29.17
+says: **default off, on Windows 2000 and later only, and not complete**
+(the owner-selected event log entry and README text are not implemented,
+so the feature is not to be enabled or called finished until they are;
+on 98 SE and ME nothing of it is active). The section is numbered 29 because 28,
+the recording-controls work, was written beside it; both are on main
+now (of 28, the level engine's move and stage 1, 28.15 and 28.18; of
+this section, what 29.17 says). This
+section does not change 28 and lists where the two meet (29.11). Applies to `uac2` and
+`uac1` alike: the stream start and stop (`UacUsbStart`, `StopLocked`,
+`SelectAlt` in `uacusb.c`) and the pin hooks (`Run`, `Halt`, `Close`,
+the power and PnP paths in `uacwdm.cpp`) are the shared core; `uac1`'s
+only difference on this path is its endpoint rate request after the
+alternate (`EndpointRate`, 26.4), which a kept alternate skips too
+(29.4.9).
+
+The owner's decisions (2026-11-17):
+
+- **D1, the linger, about 2 s:** after a stream stops or its pin closes,
+  the alternate setting (and the clock claim) stays selected for about
+  2 s and the switch to alternate 0 is deferred, so that a start of the
+  same format inside that time sends nothing.
+- **D2, a minimum hold, about 200 ms:** never switch an interface back
+  to alternate 0 sooner than about 200 ms after an alternate was
+  selected. Whether the hold also spaces a selection after alternate 0
+  (both directions) is not decided (O2).
+- **D3, a clean failed state:** when the device stops answering (a
+  control request is not answered in time), stop sending to it, fail
+  opens at once, tell Windows the device has failed, record it in the
+  driver key, and tell the user to unplug and replug it.
+
+Not decided, and written here with a provisional choice each (29.16
+puts them to the owner, recommendation first): the hold in both
+directions (O2); the probe off by default and on only in a test build
+(O8); a stream running at the failure stopped (O5); the message to the
+user as drafted in 29.9 (O7); the reporting user's test build staged as
+in 29.15 (O13); no new thread on 98 SE and ME (O14). Everything else
+marked "proposed" is open too (29.16).
+
+Each mechanism has a documented setting (29.8); with all four at 0 a
+device that answers gets the request sequence of before this section.
+
+What this does and does not claim: it removes the rapid alternate
+switching `uac2` itself adds when programs start and stop streams
+quickly, and the slow failures after a device stops answering. Whether
+the field devices then stop failing is not established; the device's
+fault is not known (29.1, 29.2), and only the real devices can show it
+(29.15).
+
+### 29.1 The field reports
+
+The first reports and what `uac2` sends are in
+[uac2-device-stops-answering](../testing/2026-11-17-uac2-device-stops-answering.md):
+a USB-C headphone adapter (USB Audio 2.0, High Speed, CX31993 with a
+headphone amplifier, a synchronous OUT endpoint), Windows 7 x64, xHCI98
+as host controller driver. Three times a SET_INTERFACE to alternate 0
+got no completion at all; the device then never completed Address
+Device again, through the host driver's port resets; only unplugging it
+brought it back. In a fourth save the device answered no control request
+while its isochronous stream went on being sent (the quiet form: the
+user heard silence and `uac2` saw no failure). Every fatal request ended
+a short stream session; `uac2` had nothing else outstanding and its
+request order is correct (record, sections 1 and 2).
+
+**The newest report (saved 2026-11-16 22:23 local).** The same reporter
+reproduced it on purpose with a second adapter of theirs, by playing
+Windows' system sounds as fast as they could: about one start in twenty
+"sounded all weird", and then the device stopped answering. The second
+adapter is gone from the save's device list (it had stopped answering),
+so its chip is not read; it is taken here as another of the same chip
+family, not established. Read from the Intel controller's note ring with
+the scratch timeline parser of the record (text only):
+
+- 61 stream sessions from 06:22:39 to 06:22:52 UTC, about 9 alternate
+  changes a second: first 43 sessions, all but one of 37 to 50
+  publications (about 120 to 170 ms of streaming each), closes 0.15 to
+  0.20 s apart; then 18 sessions of 67 to 97 publications (about 240 to
+  360 ms), closes 0.27 to 0.39 s apart.
+- **Each session began within a few milliseconds of the previous
+  session's alternate 0.** The close notes are written when the switch
+  to alternate 0 has ended; in a normal session the longest gap between
+  publications (about 4 ms, the first refill after the 8 transfers of the
+  start) ends 3 to 10 ms after the previous session's close notes. So the
+  device saw: SET_INTERFACE(0), then within a few ms `uac2`'s next start
+  (by the code, not seen on the bus: the clock walk's two RANGE reads of
+  the frequency, `uacusb.c`, `SourceRanges`: its RANGE request for the
+  subrange count and then the one for the whole; GET_CUR of the
+  rate and of its validity; GET_CUR of the mute: five requests; then
+  SET_INTERFACE(1)) and the stream at once; about 0.3 s of stream;
+  SET_INTERFACE(0) again.
+- The fatal session had 75 publications (about 270 ms of streaming).
+  Its longest gap, an ordinary 4 ms one, ended 0.289 s after the
+  previous close, at the end of its stream rather than at its start;
+  its close notes came 5.011 s after that, `uac2`'s 5 s request
+  time-out, as in the first reports (5.012 and 5.047 s). So it most
+  likely also began right after the previous close, streamed about
+  0.27 s, and its SET_INTERFACE(0) at about 06:22:52.41 was the
+  unanswered request (`cfg.select.end` `05010407`: slot 5, interface 1,
+  not established). The host driver's three recoveries, the device's
+  Address Device time-outs and the latched controller followed, as in
+  the first reports.
+
+So the patterns before the four failures were: closes 0.68 s apart in a
+cluster; one session after 329 s of quiet; five 36 ms cycles (about 28
+sessions a second, so about 55 alternate changes a second; the record's
+"about 27 alternate changes per second" counts sessions); and now
+sessions of about 0.3 s back to back for 13 s. What they share is an
+alternate change close to another one: alternate 0 some 5 to 40 ms
+after alternate N in the first reports, and alternate N a few ms after
+alternate 0 in the newest.
+
+### 29.2 Hypotheses, widened
+
+Two adapters now show it, both the same reporter's, on the same host and
+under the same host controller driver, and the second one's chip is not
+read (29.1). So one unit's defect is less likely; neither a common chip
+nor a fault independent of that host is established.
+
+1. **The chip family's firmware** wedges its control endpoint, and then
+   ignores even a bus reset, after alternate changes in quick
+   succession. For: every fatal request was a SET_INTERFACE during
+   rapid changes; Linux lists the maker's other adapter (3302:17c2)
+   with `QUIRK_FLAG_FORCE_IFACE_RESET | QUIRK_FLAG_IFACE_DELAY` (50 ms
+   after every SET_INTERFACE), and a dozen other USB-C headset adapters
+   with the same pair (record, section 3). Against: dozens of identical
+   changes passed each time; one failure came after 329 s of quiet.
+   Confidence medium that alternate changes are the trigger, low on the
+   rule.
+2. **`uac2`'s own pace.** At a stop it cancels every transfer and selects
+   alternate 0 at once; at a start it sends three GET_CURs and
+   SET_INTERFACE(N) within a few ms of that, and the stream starts on
+   the next frame. None of it breaks the USB or USB Audio rules, but it
+   is a pace Linux never produces: Linux selects alternates only at
+   prepare and at close, never at a trigger start or stop
+   (`snd_usb_endpoint_stop`, `snd_usb_endpoint_close`,
+   `endpoint_set_interface`), and its desktop sound servers keep the
+   device open across system sounds. Windows' own UAC 2.0 driver
+   (`usbaudio2.sys`, Windows 10 and later) is not read; what it sends
+   per stream start is not known here.
+3. **The host controller driver's part.** xHCI98's switch
+   (`hcdCfgSelectInterface`, `src/hcd_cfg.c`, read 2026-11-17): the
+   interface's pipes are aborted and detached, the new setting's pipes
+   made, one Configure Endpoint drops the old endpoints and adds the
+   new, then SET_INTERFACE goes out on the control pipe. Linux's
+   `usb_set_interface` (`drivers/usb/core/message.c`) has the same order:
+   `usb_disable_interface`, `usb_hcd_alloc_bandwidth` (which on xHCI
+   issues the Configure Endpoint), then the SET_INTERFACE with a 5000 ms
+   time-out. A Configure Endpoint is a command to the controller and
+   nothing of it reaches a High Speed device on the bus; Windows' EHCI
+   stack has no such command and only unlinks the endpoint from its
+   schedule. What the device sees is the same under all three: its
+   isochronous packets end (`uac2` has already cancelled them), then the
+   SETUP of SET_INTERFACE. The only difference is the time between the
+   two, the abort and the command under xHCI98, a frame boundary under
+   EHCI, around a millisecond either way. After the wedge the device did
+   not complete Address Device after port resets. Address Device is a
+   command to the controller, and its failure is what the host driver
+   observed; a device must come out of a bus reset in its Default state
+   (USB 2.0 9.1.1, 7.1.7.5), so a failure that persists through resets
+   supports a fault in the device, but does not on its own exclude a
+   controller or host driver recovery problem without the EHCI
+   comparison or bus evidence. The host side's order and timing may be a
+   trigger; the test on Windows' own EHCI driver (29.15, U1) helps tell
+   these apart, though no one observation separates every hypothesis.
+4. **Power.** On a bus-powered adapter each alternate change may switch
+   the codec and the headphone amplifier on or off; rapid cycling loads
+   its supply, and a hang that only removing power clears fits a
+   brown-out as well as a firmware fault. Low confidence; nothing in the
+   saves can separate it. A kept alternate cycles them less.
+
+**The rough playback (about one start in twenty).** With the alternate
+kept, sounds inside the linger restart nothing on the device but the
+packets: no SET_INTERFACE, no clock request; between two sounds it sees
+only a pause in the isochronous packets at an unchanged alternate. So:
+
+- if the roughness is the device's own start-up after an alternate
+  change (codec, amplifier, its clock or data path starting out of
+  step), the linger removes it for sounds inside it (hypothesis);
+- if it is the device recovering from the pause in packets, the linger
+  does not remove it;
+- `uac2`'s side, by reading: every start computes the packet cadence
+  afresh (`UacRateInitialize`; a synchronous endpoint has no feedback to
+  settle), every packet carries whole frames (measured in the record's
+  guest runs from the first packet), the first 32 ms are taken from the
+  ring at once (17.4 item 5) and the ring is zeroed at STOP and when
+  allocated (`uacstream.h`), so a start sends silence, never an earlier
+  session's samples, where the client has not written yet; the data of
+  cancelled transfers is dropped, never sent again. What the simulator
+  can test of this side is in 29.14 (the cadence check and the received
+  samples, with and without the linger); it cannot show the device's.
+
+### 29.3 What the device hears while the alternate is kept
+
+- **Isochronous OUT with no packets.** Isochronous transfers have no
+  handshake and no retry (USB 2.0 5.6); a (micro)frame in which the host
+  sends nothing to an endpoint is the same, to the device, as a lost
+  packet or an underrun. No requirement to keep sending while an
+  alternate is selected was found in USB 2.0 or the USB Audio 2.0
+  documents. The device already hears it today, for the few ms between
+  `uac2`'s cancel and its SET_INTERFACE(0), and at every underrun.
+- **Per synchronisation type** (the ones `uac2` drives, 4.4 and 4.5):
+  synchronous and adaptive sinks run out of data and play silence, or
+  hold or repeat their last samples, as at any underrun; an asynchronous
+  sink does the same and its feedback IN endpoint is not polled (an IN
+  endpoint with no token sends nothing). An asynchronous source on the
+  capture side is not read during the linger either: `uac2` stops the
+  IN transfers as today.
+- **What Linux does.** Between a trigger stop and the close or the next
+  prepare, Linux leaves the interface at its alternate with no
+  transfers (record, section 3: trigger start and stop only submit or
+  kill URBs); `QUIRK_FLAG_IFACE_SKIP_CLOSE` leaves it there even at
+  close for the devices listed. So "alternate N, no packets" for seconds
+  is a state every device on Linux meets when a program stops and starts
+  a stream without closing it.
+- **Clicks.** A device may click when its data stops, but it hears that
+  stop today too; what the linger removes is the SET_INTERFACE pair that
+  follows.
+- **Not a guarantee.** Keeping an alternate selected with no transfers
+  is defensible for the endpoint types `uac2` drives; it does not
+  guarantee a clean restart on every device. A sink that underruns plays
+  silence, repeats or clicks as that device does; an unpolled capture or
+  feedback endpoint sends nothing while the device's own clock and
+  buffers go on; an adaptive sink may need to reacquire its rate after
+  the gap, and a synchronous one is not thereby click-free. Linux's
+  practice shows that devices commonly meet this state, not that every
+  device handles it well. On the host side every start begins afresh
+  (29.4.8).
+- **Taken further.** The same idea can select the alternate only when a
+  stream is opened with a format and return to alternate 0 only at its
+  close, never at a start or a stop. `uac2` selects at RUN, and on 7 the
+  engine closes the pin after each burst of sound (record, section 4),
+  so a rule tied to the close alone would still switch at every sound;
+  the linger covers the pause and the close alike.
+
+### 29.4 One state machine for the linger and the hold
+
+**29.4.1 The record.** Kept per streaming interface of the function, in
+the transport's device record (`UAC_DEV`), not in the stream: a stream
+(`UAC_USB`) is destroyed at its pin's close (section 27), and the
+alternate must outlive it. The record, not the stream, owns the
+selection: the alternate and rate selected, the terminal, the pipe
+handles the selection returned with what it returned for each pipe
+(endpoint, `MaximumPacketSize`, `Interval`) and the
+`MaximumTransferSize` it asked, the clock path it claims, and:
+
+- `AttemptAt`: the interrupt time (`KeQueryInterruptTime`: monotonic,
+  100 ns units, 64 bits) at which the interface's last selection
+  attempt completed: the last SELECT_INTERFACE actually submitted to the
+  stack, successful or not (29.4.6). A selection refused before
+  submission (an allocation failure, the gate's refusal) is no device
+  interaction and does not move it. Set at `UacUsbOpen` to the
+  completion of SELECT_CONFIGURATION, which puts every interface at
+  alternate 0. Differences are taken in 64 bits and turned into
+  milliseconds without a 64-bit divide, as `WaitClosing` does
+  (`uacstream.h`, `UacStream::WaitClosing`: its milliseconds from the
+  interrupt time). The machine's clock is a non-wrapping 64-bit
+  millisecond count derived from the full 64-bit interrupt time, never
+  truncated to 32 bits (a 32-bit millisecond clock wraps after 49.7
+  days); 2^64 ms is about 584 million years, so wrap is not handled.
+  Deadline arithmetic saturates at "never": a time near the top of the
+  range would give a deadline that never comes, the stated and tested
+  limit, chosen over modular arithmetic with a horizon contract because
+  no real clock reaches it;
+- `StopAt` and `Deadline` (29.4.3), set once at a hand-back and never
+  recomputed;
+- `Adoptable` (29.4.4), and `Epoch`, the device's power epoch at the
+  selection (29.5.5, 29.6);
+- `RetryAt` and `RetryMs`: a hold-back after an alternate 0 that could
+  not be submitted (29.4.6);
+- `Gen`, a count of changes of state, owner and retry time: bookkeeping
+  for the counters and tests only. No action is validated by it;
+  correctness rests on the actor owning the record (29.5.3) from its
+  decision, across its wait and its request, to the completion it
+  applies;
+- `Owner`: the actor that owns the record's next transition (29.5.3);
+- the settings snapshot of the RUN that made or adopted the selection
+  (`L`, `H`; 29.8).
+
+A stream holds a link to its record only while the record is `Active`
+for it.
+
+**29.4.2 States.**
+
+| State | The interface | Clock claim | Pipes |
+|---|---|---|---|
+| `Idle` | alternate 0, by a selection that succeeded | none | none |
+| `Active` | alternate N, a stream running on it | held by the record | the record's, lent to the stream |
+| `Lingering` | alternate N, no stream, no transfer; adoptable or not (29.4.4) | held by the record | held by the record |
+| `Unknown` | uncertain: a SET_INTERFACE failed without a time-out (29.4.6) | none | none: the stack's handles are not used again |
+
+The failed state (29.9) is the device's, not a record's: a device-wide
+flag; once it is set no record makes a transition that sends.
+
+**29.4.3 The deadline and the hold.** At a hand-back (29.4.5), with the
+snapshot's `L` (`Uac2LingerMs`) and `H` (`Uac2HoldMs`), `StopAt` is now
+and:
+
+    Deadline = max(StopAt + L, AttemptAt + H)    the record adoptable
+    Deadline = AttemptAt + H                     not adoptable
+
+If the deadline has passed (both 0, or the hold long over and `L` 0),
+the stopping caller selects alternate 0 at once, as before this
+section. Otherwise the record becomes `Lingering` and the device's alt
+thread (29.5.4) switches it at the deadline. So alternate 0 never comes
+sooner than `L` after the stop of an adoptable stream nor sooner than
+`H` after the interface's last alternate change.
+
+The hold (D2): no SET_INTERFACE(0) before `AttemptAt + H`. Provisionally
+(O2) also no SET_INTERFACE(N) from `Idle` or `Unknown` before
+`AttemptAt + H`, so that no two alternate changes of one interface are
+closer than `H`, in either order; the newest report's changes were
+alternate N a few ms after alternate 0. An event that needs alternate 0
+before the deadline (a format change, a clock conflict, a power change,
+a PnP stop) waits only for the hold, at PASSIVE, holding neither the
+device mutex nor a spin lock (29.5.3), then switches. The hold spaces alternate changes only:
+a start's clock and mute requests and the level writes go out between
+them as before (with the symmetric hold a start's clock requests come
+after its wait, so at least `H` after the alternate 0).
+
+**29.4.4 Adoption.** A start adopts a `Lingering` record, sending
+nothing to the device (29.4.9), only when all of these hold, read with
+the record owned by the start:
+
+- the same alternate and rate, on the same terminal;
+- `Adoptable`: the last stream on it ended clean: stopped by its client
+  or drained by a power or PnP path, its `LastStatus` success, feedback
+  not turned off for it (25.7: a pipe that refused start frames in a
+  row is halted at the stack), no resync pending or bounded out (26.13),
+  every transfer back;
+- the geometry fits, pipe by pipe: for the data pipe, the new stream's
+  transfer size (`SlotBytes`) at most the `MaximumTransferSize` the
+  selection asked for that pipe, and its packet size (`Capacity`) at
+  most the returned `MaximumPacketSize`; for the feedback pipe, or
+  `uac1`'s synch OUT pipe (26.12), the same with that pipe's own
+  transfer size (its packets times `FeedbackBytes`) and packet size
+  (`FeedbackBytes`). `SelectAlt` asks the stream's `SlotBytes` for every
+  pipe (`uacusb.c`, `SelectAlt`: each pipe's `MaximumTransferSize` set
+  to `SlotBytes`), and a later stream can differ by `Uac2QueueMs`
+  or its ring (19.4);
+- the same power epoch, the admission gate open, the device not failed
+  (29.5.5).
+
+Otherwise the record is ended (wait for the hold, SET_INTERFACE(0), the
+claim released) and the start goes on as from `Idle`.
+
+**29.4.5 Transitions.**
+
+| From | Event | Who acts | What is sent | To |
+|---|---|---|---|---|
+| `Idle` or `Unknown` | a start | the starting caller | (symmetric hold: wait to `AttemptAt + H`); the clock (`SetClock`, with its walk's reads), the diagnostic reads (`ReadFeature`), SET_INTERFACE(N); `uac1`: its endpoint rate | `Active` |
+| `Active` | the stream stops (PAUSE or STOP from RUN), its pin closes, or a power or PnP path drains it: the hand-back | the stopping caller | the transfers cancelled and drained (as today); alternate 0 only if the deadline has passed | `Lingering`, or `Idle` |
+| `Lingering` | a start that meets 29.4.4 (the pin reopened, or a paused pin run again) | the starting caller | nothing to the device; the first batch at explicit frames (29.4.8) | `Active` |
+| `Lingering` | the deadline | the alt thread | SET_INTERFACE(0); the claim released | `Idle` |
+| `Lingering` | a start that does not meet 29.4.4 (a format or rate change: exclusive mode, a new engine format; or not adoptable) | the starting caller | wait for the hold; SET_INTERFACE(0); the claim released; then as from `Idle` | `Active` |
+| `Lingering` | another interface's start needs a clock value this record's claim holds otherwise (the capture and playback pair on one clock at another rate, a selector at another input) | that starting caller (29.4.7) | wait for the hold; SET_INTERFACE(0); the claim released | `Idle` |
+| `Lingering` | a power change below D0, system sleep included | the power caller (29.6) | wait for the hold; SET_INTERFACE(0) | `Idle` |
+| `Active` | a power change below D0 | the power caller | the stop as today, then as the row above | `Idle` |
+| `Lingering` or `Active` | PnP stop | the PnP caller (29.6) | the stop if `Active`; wait for the hold; SET_INTERFACE(0) | `Idle`, then discarded with the device record |
+| any | surprise removal, or a remove on any system (on 98 SE and ME a remove with no surprise removal before it, 29.6) | the PnP caller | the transfers cancelled and drained; nothing sent | discarded |
+| any | a device request's deadline expires (29.9) | the expiry hook, in the requesting thread | nothing, from then on | the device failed |
+| `Active` | a start while running | the starting caller | nothing (as today), after the gate (29.5.5) | `Active` |
+
+Only the hand-back of a record that is `Active` for the stopping stream
+sets `StopAt` and the deadline, and it clears the stream's link
+(29.4.1). Every later stop of the same stream finds no link and does
+nothing to the record: `Halt` then `Close` (`uacwdm.cpp`, `Wave::Halt`
+and `Wave::Close`, each draining its direction under the operation mutex),
+the `UacUsbStop` inside `UacUsbDestroy` (`uacusb.c`, `UacUsbDestroy`:
+its `UacUsbStop` before the stream count is lowered and the stream
+freed), the `StopLocked` that begins every `UacUsbStart` (`uacusb.c`,
+`UacUsbStart`: its `StopLocked` right after the "already running"
+shortcut), a power drain
+followed by the client's own STOP (`uacwdm.cpp`, `Wave::PowerLocal`:
+the drain of both directions below D0), and `Shutdown`'s drain
+(`uacwdm.cpp`, `Wave::Shutdown`: its drain of both directions under the
+operation mutex). So closing a pin already paused
+does not restart its linger, and repeated stops never read the settings
+again.
+
+**29.4.6 Steps that fail.** Without a time-out; a time-out of a device
+request is the failed state (29.9) when `Uac2FailOnTimeout` is on, and
+the same step's failure below when it is off.
+
+| Step | Fails how | The record after | Claim and pipes | The caller | Next |
+|---|---|---|---|---|---|
+| `SetClock` (its walk, a selector, the rate, the validity) | any status | as before the start | claim released (as today, `uacusb.c`, `SetClock`: its `ReleasePath` on failure when `ClockHeld`); no pipes | the start fails with that status | a later start tries again |
+| SET_INTERFACE(N) | refused by the stack or the device | `Unknown`, `AttemptAt` set | released; none | the start fails | a later start selects N afresh |
+| SET_INTERFACE(N) | succeeds, but the pipes returned do not fit (`uacusb.c`, `SelectAlt`'s checks after a successful SELECT_INTERFACE: every pipe isochronous, the data pipe and any feedback pipe found) | `Lingering`, not adoptable, deadline `AttemptAt + H` | held until the switch | the start fails at once | the alt thread selects alternate 0 at the deadline |
+| after a fresh selection: `uac1`'s endpoint rate, a slot or worker allocation, the worker's creation | any | as the row above | as above | the start fails | as above |
+| the same, after an adoption | any | `Lingering` again, with its earlier deadline (no transfer was sent) | kept | the start fails | adoptable as before |
+| the stream ends on its own (`Fail`: a transfer error, a feedback loss, the resync bound) | any | at its hand-back: not adoptable | held until the switch | | alternate 0 at `AttemptAt + H` |
+| SET_INTERFACE(0) | refused by the stack or the device | `Unknown`, `AttemptAt` set, counted | released; the handles not used again | goes on (a power change cannot fail, 29.6) | no retry; the next start selects N afresh; a teardown sends nothing for it |
+| ABORT_PIPE (only where a leg keeps it, 29.4.8) | any, or its time-out | not adopted: ended as a record not adoptable | held until the switch | | host-local: never the failed state |
+
+`Unknown` is not `Idle`: the device may still be at alternate N, so the
+symmetric hold counts from the failed request, nothing is adopted, and
+the counters show it (`Uac2Alts`, 29.9). Its claim is released because
+no stream depends on it; a later stream may set the clock to another
+value, which the device, at worst still at alternate N with no
+transfers, receives as at any rate change. A refused SET_INTERFACE(0)
+may leave the stack's bandwidth for alternate N reserved until the
+configuration is torn down; the record cannot tell.
+
+`AttemptAt` moves after a failed selection too, not only after a
+successful one: a SET_INTERFACE refused after submission may still have
+reached the device (a STALL is its answer to the SETUP), so counting
+from it errs toward more spacing, never less. That says nothing about
+whether the alternate changed, which is why the record goes `Unknown`.
+A selection never submitted (refused by the gate, or no memory for the
+URB) leaves `AttemptAt` and the record's state unchanged.
+
+**An alternate 0 that could not be submitted.** A due record whose
+SET_INTERFACE(0) was never submitted (no memory for the URB or IRP)
+stays `Lingering` with its deadline and `AttemptAt`, since nothing
+reached the device; but it is held back until `RetryAt`, 100 ms after
+the failure, the interval doubling at each further failure to a ceiling
+of 1 s, and cleared by the next submission. So the alt thread, which
+works until nothing is runnable (29.5.4), never loops on a record that
+keeps failing to submit; and the delay is not made by moving
+`AttemptAt`, which would misstate when the device last saw a selection.
+The same holds when the stopping caller's own immediate alternate 0
+could not be submitted: the record is left to the thread at `RetryAt`.
+
+**The gate is the authority for the failure.** A record's failed state
+is kept against a late completion (a request that completes, even
+successfully, after its deadline expired changes nothing), but every
+action that sends, the thread's claim and the start's commit refuse on
+the gate's failed flag alone: a late success never authorises another
+request or a successful start.
+
+**29.4.7 A clock conflict with a lingering record.** Today `SetClock`
+walks the clock path under the device mutex (`uacusb.c`, `SetClock`:
+its `LockDev`, then `Walk`, then `ClaimPath`), and the walk itself
+rejects a path another claim holds at another value: `WalkEntity` calls
+`PathFree` at the source and tries the next path, so a walk that finds
+only such paths fails and `SetClock` returns `STATUS_NOT_SUPPORTED`
+(its answer when `Walk` fails) before `ClaimPath` (with
+`ClaimPathClaims`, which checks every entity before it takes any) ever
+sees a conflicting path. Conflict discovery therefore lives in the walk:
+
+1. `PathFree` returns one of three answers, read under the gate lock
+   (29.5.2): free; in conflict only with claims held by `Lingering` records
+   (with the set of those records); in conflict with an `Active` record.
+2. The walk treats the second answer as a candidate: it keeps the first
+   such path and its record set in the walk's state and goes on
+   searching, so a free path anywhere in the walk still wins, as today.
+   A path in conflict with an `Active` record is rejected as today.
+3. A walk that ends with a free path claims it (`ClaimPath`, which
+   checks again atomically under the spin lock) and goes on as today. A
+   walk that ends with only a candidate returns the candidate's record
+   set: `SetClock` releases the device mutex and frees its walk storage
+   (no claim was taken) and returns that set to `UacUsbStart`.
+4. `UacUsbStart`, holding its stream's operation mutex (and its pair's
+   Wave mutex) but neither the device mutex nor a spin lock, gives up
+   the ownership of its own record (still `Idle` or `Unknown`: nothing
+   to undo); takes the ownership of each record of the set in index
+   order (29.5.3: waiting, if another actor owns it, re-checking the
+   failed flag and the gate at each sleep); checks each again under the
+   spin lock (still `Lingering`, its claim still in conflict); waits for
+   its hold, selects alternate 0, releases its claim and gives up its
+   ownership.
+5. It then takes its own record again and runs the whole of `SetClock`
+   once more: a fresh walk, whose requests go out again, and an atomic
+   claim. A second walk that again ends with only a candidate, or any
+   conflict with an `Active` record, ends the start with
+   `STATUS_DEVICE_BUSY`, as two running streams in conflict do today:
+   one eviction round per start, no loop.
+
+The simplest case is the one to test first: a playback and a capture
+interface on one clock source, the playback lingering at 48 kHz and a
+capture starting at 44.1 kHz (29.14). The device mutex is never held
+while an ownership is awaited, and no lock is taken against the order
+of 29.5.2. `UacUsbRates`' walk (rates at PnP start, `w->Rate` 0) takes
+no claim and is unchanged.
+
+**29.4.8 The restart of an adopted pipe.**
+
+- **The old transfers are back first.** The stream worker exits only
+  when no transfer and no frame request of it is with the stack
+  (`uacusb.c`, `Worker`: its exit test, `UacPlanWorkerExit`), and the
+  stop waits for that exit (`StopLocked`: its wait for `Exited`) before
+  the hand-back: a record is adopted
+  with nothing outstanding on its pipes.
+- **The first batch at explicit frames.** The isochronous how-to of
+  Microsoft Learn (4.4) says the stack resets its ASAP tracking only
+  after 1024 idle frames and offers an explicit start frame instead,
+  counted in 1 ms frames at every speed; URB_FUNCTION_ABORT_PIPE is
+  documented as cancellation, leaving the pipe's and the endpoint's
+  state unchanged, so it is no basis for scheduling. On an adopted
+  record the stream's worker places its first batch as 26.13's resync
+  does: it reads the bus frame (sent and not waited for, 26.13 item 8;
+  read afresh when older than `UAC_FRAME_FRESH_MS`,
+  `UacPlanResyncAhead`), then submits every slot of each pipe, data and
+  feedback, in slot order without `USBD_START_ISO_TRANSFER_ASAP`, slot k
+  of a pipe at `current + 8 + k * F` (`UacPlanResyncFrame`), contiguous
+  within the pipe, with 26.13's frame arithmetic across the counter's
+  wrap; later submissions are ASAP again, after the explicit ones. That
+  first placement does not count toward `UAC_RESYNC_LIMIT`. A fresh
+  selection keeps today's ASAP start: the selection opens the pipes
+  afresh.
+- **Late packets of the first batch.** A first-batch transfer refused
+  whole for its start frame, or back with packets the stack did not send
+  in their frame (`USBD_STATUS_ISO_NOT_ACCESSED_BY_HW`, or a stack's own
+  late status), is counted (`FirstLate`, 29.9) and handled by 26.13's
+  rules (a resync). The start of a short sound can be lost then; the
+  count lets the legs see whether any stack does it.
+- **ABORT_PIPE** is not sent by default. A build for the legs may send
+  it before the first batch, to compare; it is kept for a stack only if
+  a leg there shows it needed and harmless, and then only as a
+  precaution behind the explicit frames.
+- **Nothing of the previous stream is reused but the pipes.** Every
+  start computes its cadence afresh and starts its feedback filter and
+  the feedback watchdog from nothing (`uacusb.c`, `UacUsbStart`: the
+  render cadence's `UacRateInitialize`, the slots, and the feedback and
+  watchdog state reset before the worker is created): no feedback value
+  measured before the pause is used, whatever
+  the pipe handle.
+- Whether each stack accepts explicit frames on an adopted pipe at once
+  (Windows' EHCI on 2000, XP and 7; NUSB's on 98 SE; xHCI98; the UHCI
+  and OHCI drivers of 98 SE, ME and 2000; other xHCI drivers) is not
+  established for any of them: each is a compatibility leg (29.14), and
+  a stack not run there stays unverified.
+
+**29.4.9 What a start inside the linger sends.** None of: the clock
+walk's RANGE reads (`uacusb.c`, `SourceRanges`: the count, then the
+whole) and its
+GET_CURs, any selector GET_CUR or SET_CUR, the source's SET_CUR, the
+validity read, the diagnostic GET_CUR of mute and volume
+(`ReadFeature`: its last values carried into the new stream's stats,
+marked as carried), SET_INTERFACE, and for `uac1` the endpoint's
+SAMPLING_FREQ SET_CUR and GET_CUR. It still does what is not traffic to
+the device or is needed on its own account: the host-local
+GET_CURRENT_FRAME_NUMBER of the stats and of the first batch (29.4.8);
+a level write when a level is stale (`LevelStale`, after a D3:
+unchanged); section 28's reads at a capture RUN, as 29.11 says; then
+the isochronous stream. The clock is not read again because the
+record's claim was held throughout: no stream of this driver can have
+moved it, and nothing else of the driver writes the clock. A device
+whose clock fails on its own during the linger (an external clock
+source lost) is found by the same means as one whose clock fails while
+streaming today, which is to say not; accepted.
+
+**29.4.10 The device's other streams.** Each streaming interface has
+its own record: a playback interface lingering does not stop a capture
+start on another interface unless their clock values conflict
+(29.4.7); several endpoint pairs (15.3) each linger on their own. A
+start at the same rate on the same clock shares a lingering record's
+claim as two running streams share one today.
+
+**29.4.11 When `L` and `H` are both 0** every hand-back finds its
+deadline passed and selects alternate 0 at once; no record lingers,
+nothing is adopted, every start sends everything: today's sequence,
+which the host tests check request for request (29.14). The exact
+baseline needs the other two settings at 0 too (29.8).
+
+### 29.5 Actors, locks and lifetime
+
+**29.5.1 Who runs what.**
+
+| Actor | Runs at | Does | Never |
+|---|---|---|---|
+| The alt thread, one per device record (29.5.4) | PASSIVE, a system thread | deadlines, a lingering record's end, the probe (29.10) | takes a Wave or stream operation mutex; notifies the failure |
+| The notifier, one per device record (29.9) | PASSIVE, a system thread | the failure's notification only: the record, the event log entry, `IoInvalidateDeviceState` | sends any USB request; takes a transport, Wave or stream mutex |
+| `NewStream`, `SetState` and the `Run`, `Halt`, `Close` hooks | PASSIVE (the miniport's contract) | starts, hand-backs, adoptions, the forced switches of 29.4 | |
+| A stream's final COM `Release` | up to DISPATCH | queues the destroy, as today (section 27) | runs a stop or a join inline |
+| USB completion routines (`SlotDone`, `FrameDone`, `SyncDone`) | up to DISPATCH, possibly inline | as today; nothing new | a teardown, a join, a wait |
+| The expiry hook (29.9) | PASSIVE, in the thread whose request's deadline expired, with whatever that thread holds | sets the failed flag, marks every registered stream to stop, wakes the notifier and the alt thread | takes a mutex, waits, sends |
+| `PowerChangeState` | PASSIVE | 29.6 | |
+| `DispatchPnp` (stop, surprise removal, remove, the state query) | PASSIVE | 29.6, 29.9 | |
+| A stream's worker | PASSIVE, real time (19.6) | as today; it sees the stop mark | |
+
+The 9x WDM path has the same actors: a uniprocessor 98 SE still
+preempts a thread with DPCs and completion routines, so nothing here
+relies on one processor.
+
+**29.5.2 Lock order.** From first taken to last:
+
+1. a Wave filter's operation mutex (pair 0's before a later pair's, as
+   `PowerChangeState` takes them, `uacwdm.cpp`, `Wave::PowerChangeState`:
+   pair 0's held while each later pair's `PowerLocal` takes its own);
+2. a stream's operation mutex (`s->Operation`);
+3. a record's ownership (29.5.3);
+4. the device mutex (`d->Lock`: control requests and the configuration);
+5. the gate lock (`g->Lock`, new: a spin lock in the gate's own
+   storage in the FDO's extension, initialised at AddDevice, 29.5.5;
+   it protects the gate's state, the failed flag, and, while a device
+   record exists, that record's records, clock claims and registered
+   streams; "the spin lock" in this section means this one);
+6. a stream's spin lock (`s->Lock`, a leaf as today).
+
+The expiry hook takes only 5 and 6, whatever its thread holds. The alt
+thread takes 3 to 6 and never 1 or 2; the notifier takes 5 only. An ownership is awaited only with
+nothing of 4 to 6 held and never while owning another record, so no
+actor waits for an ownership while holding something its owner needs.
+The clock claims move from the device mutex to a spin lock (designed as
+this one; as built, a claim lock of their own, `d->ClaimLock`, taken
+alone and never with the gate lock, while the gate is active): the walk
+checks them under it (`PathFree`), the claim re-checks and takes them
+atomically under it (`ClaimPath`, still called inside the device mutex,
+so starts walk one at a time as today), and a release takes the spin
+lock alone (today `ReleasePath` takes the device mutex: `uacusb.c`,
+`ReleasePath`, which as built does so while the gate is inactive and
+takes the claim spin lock `d->ClaimLock` while it is active, 29.17);
+the stream count (`UacUsbCreate`'s raise and `UacUsbDestroy`'s lowering
+of `d->Streams`, under the device mutex while the gate is inactive)
+becomes interlocked. So neither a
+stop nor a destroy waits behind a hung request for them. The code these
+run in under the spin lock is nonpaged.
+
+**29.5.3 Ownership of a record's transition.** A record's `Owner`,
+set and cleared under the spin lock, says which actor may change the
+record next: none, the stream it is `Active` for, the alt thread, a
+starting caller (for its own record or one it evicts, 29.4.7), the power
+path or the PnP path. An actor that wants a record owned by another:
+
+- the alt thread skips it, and is woken when it is released;
+- any other actor waits at PASSIVE in 10 ms sleeps (as `WaitClosing`
+  does, `uacstream.h`, `UacStream::WaitClosing`: its loop of 10 ms
+  delays), holding nothing of 4 to 6 and owning
+  no other record (a starting caller gives its own up first, 29.4.7).
+  A starting caller re-checks the failed flag and the gate at each
+  sleep, either of which ends its wait with `STATUS_DEVICE_NOT_READY`.
+  The power and PnP paths, which closed the gate themselves, wait for
+  the release: the alt thread finishes its one action, and a start,
+  refused by the closed gate, gives up. So a power change or a teardown
+  never waits behind a start that waits for a record; it waits behind a
+  request in flight, and behind a hung one until the lower driver
+  completes it (29.9).
+
+The owner sleeps for a hold, and sends its SET_INTERFACE, holding its
+ownership and, for a starting caller, the mutexes it came with; the spin
+lock is never held across a wait or a request. A hold on one interface
+therefore delays no transition of another; requests still go one at a
+time under the device mutex, as today. A pair's own start waits for its
+own hold holding that pair's Wave mutex, so that pair's opens and runs
+wait with it, by design. There is no device-wide transition mutex.
+
+**29.5.4 The alt thread.** One system thread per device record on 2000
+and later (on 98 SE and ME, 29.5.6 and O14). `UacUsbOpen` creates it
+directly in the PnP start: the PnP manager sends IRP_MN_START_DEVICE at
+PASSIVE_LEVEL in the context of a system thread (Microsoft Learn,
+IRP_MN_START_DEVICE), so `PsCreateSystemThread` is called there and its
+handle closed there; no executive work item stands between. As the
+stream worker does (`uacusb.c`, `Worker`: `PsGetCurrentThread` and,
+where `WaitThread`, `ObReferenceObject` of it), the thread references its
+own thread object for the join (29.5.6) before it sets its ready event,
+and `UacUsbOpen` waits for that event. (The stream worker is created through an executive work item,
+`CreateWorker`, because `SetState` runs in the client's process; that
+callback's return path is an existing residual, 29.5.6.)
+
+It loops:
+
+1. clear its wake event;
+2. under the gate lock, look for runnable work. A record is runnable
+   only when it is `Lingering`, unowned (`Owner` none), its deadline
+   has passed, its `RetryAt` (29.4.6) has passed, its epoch is the
+   gate's, and the gate allows it (open,
+   not failed; not quiescing, closed or below D0). For the first
+   runnable record it claims the ownership and reads state, deadline,
+   gate and epoch again in the same critical section: what the scan saw
+   is not authority to send. The probe is runnable on the same terms
+   (29.10);
+3. release the lock and carry the work out (SET_INTERFACE(0), the claim
+   released, the ownership given up; or one GET_STATUS); go back to 2
+   until nothing is runnable;
+4. compute the next wake only from records that are `Lingering`,
+   unowned and not held back by the gate, and from the probe's due time
+   when the probe is admitted; an owned record contributes no time (its
+   release sets the wake event), and with nothing pending the thread
+   waits without a time-out. So an expired deadline that cannot run now
+   never turns into a loop of zero-length waits;
+5. wait on the wake event with that time-out, as the stream worker
+   waits (`uacusb.c`, `Worker`: the wake event cleared at the top of
+   each pass, then waited on with the pass's time-out).
+
+Posters (a hand-back, a released ownership, the expiry hook, the gate,
+a reopened gate at D0) change state under the gate lock and then set
+the wake event. A post made before step 1 is already in the state step
+2 reads; one made after it leaves the event set, so the wait returns at
+once: no wake is lost. Since the thread reads every record each time,
+wakes coalesce by construction: there is no per-event context to
+overwrite, and an obsolete wake finds nothing runnable. The deadline's
+precision is the system clock's tick (about 10 to 16 ms), immaterial
+against 200 ms and 2 s.
+
+Why a thread and not a kernel timer, its DPC and an executive work item
+per expiry: a DPC can already be queued or running when `KeCancelTimer`
+returns (Microsoft Learn, KeCancelTimer: the caller must synchronize
+with a DPC that is running), and the x86 build's executive work item
+holds neither the device object nor the image while its routine returns
+(`uacwdm.cpp`, the x86 work item behind `IoQueueWorkItem`: `UacAllocItem`,
+`UacQueueItem` and `UacExItem`, and the comment above them); each would need a reference and rundown
+protocol of its own. A thread joined through its thread object has a
+documented end, on 2000 and later. It needs no new import:
+`KeInitializeTimer`, `KeSetTimer`, `KeCancelTimer` and `KeInitializeDpc`
+are not used. Its cost, with the notifier (29.9), is two
+sleeping threads per audio device. Failing to create either fails the
+PnP start (`STATUS_INSUFFICIENT_RESOURCES`), as a level work item that
+cannot be allocated does (`uacwdm.cpp`, `Wave::Prepare`: the level work
+item's `IoAllocateWorkItem`); a thread
+already created is stopped and joined first.
+
+**29.5.5 The admission gate.** Kept with the failed flag in a small
+structure (`UAC_GATE`) in the FDO's extension, with its own spin lock
+(`g->Lock`), both initialised at AddDevice: so the gate and its lock
+exist before any device record (the start's own descriptor reads use
+them, 29.9) and after one is retired, as long as the device object. A
+device record points at the gate and uses its lock for its own records,
+claims and stream list (29.5.2). It holds:
+
+- `Admit`: open; quiescing (a PnP stop: starts, adoptions, probes and
+  alt thread actions refused, while the PnP caller ends the records);
+  closed (surprise removal or remove: nothing sent at all); below D0
+  (29.6);
+- `Failed`, with the expiry's record (29.9);
+- `Life`: starting, started, tearing down, surprised (29.6, 29.9);
+- `Epoch`, incremented at each power change below D0.
+
+Every entry checks the gate before it waits on anything: `NewStream`
+before its wait for a closing stream (`uacwdm.cpp`, `Wave::NewStream`:
+its `UacStream::WaitClosing` call; today the readiness check of
+`removed`, `pnpBlocked` and `powerBlocked` comes after it, before
+`UacStream::Create`) and again under the Wave mutex; `Run` before the
+Wave mutex (`uacwdm.cpp`, `Wave::Run`: its take of the operation mutex,
+`TakeOperation`) and again under it; `UacUsbStart`
+before its "already running" shortcut (`uacusb.c`, `UacUsbStart`: the
+`already` test under `s->Lock` and the early return); each
+adoption, alt thread action, probe and failure notification. The early
+reads are interlocked reads that can only refuse; the read under the
+lock decides. Every teardown and power-down closes the gate first,
+before it drains anything (29.6), and the gate is the device's, not a
+Wave pair's: the gaps between one pair's `PowerLocal` and the next
+(`uacwdm.cpp`, `Wave::PowerChangeState`: its loop over the later pairs'
+`PowerLocal`, then pair 0's own after the mutex is released) are covered. The waits themselves, and the
+start's last step, are in 29.5.7 and 29.5.8.
+
+**29.5.6 Lifetime and rundown.** At every PnP teardown (stop, surprise
+removal, remove, a failed start; 29.6), in order: close the gate; drain
+each pair's streams (as `Shutdown` does today: each worker has exited
+and its transfers are back before its slots are freed, `uacusb.c`,
+`FreeSlots`, called by `StopLocked` after the worker's exit); stop the alt thread and the notifier (exit
+flag, wake event, then the join below); end the records as 29.6 says,
+in the PnP caller's own thread. A power change stops neither thread;
+the gate keeps them from sending below D0 (29.6). Only after a teardown
+may `UacUsbClose` free the device record, asserting no stream, no owned
+record and no thread. The threads are stopped outside every Wave and
+stream mutex, as `Shutdown` already waits for the level work item before
+it takes the Wave mutex (`uacwdm.cpp`, `Wave::Shutdown`: `level.Closed`
+set and `level.Work` waited out before the operation mutex). All of it happens
+in `DispatchPnp` before the IRP goes on to PortCls; the expiry hook adds
+no deferred callback.
+
+**The join on 2000 and later** (x86 and x64) waits for the thread
+object, which is signalled when the thread has terminated, as
+`StopLocked` waits for the stream worker there (`uacusb.c`,
+`StopLocked`: where `WaitThread`, its wait on the thread object after
+`Exited`, then the object's dereference): after it, no code of the thread is left to run in the image,
+whatever it was preempted at. Neither thread is created through an
+executive callback (29.5.4), so no callback's return path is added. An
+alt thread blocked in its own expired request is joined only when the
+lower driver completes that request (29.9): the teardown waits with it,
+under the blocked-caller contract; the notification does not (29.9).
+
+**On 98 SE and ME no rundown contract can be shown.** A system thread's
+object is not waited on there (a wait faulted: `uacusb.c`, `Worker`,
+the comment before its `PsGetCurrentThread`), and the stream worker
+signals `Exited` (`Worker`'s last access to the stream) before it calls
+`PsTerminateSystemThread` (its next statement): a thread preempted
+between the two still has instructions of the driver to run when a
+teardown that waited for `Exited` completes, and a delay of any length
+(today 10 ms: `StopLocked`'s `KeDelayExecutionThread` where it does not
+wait on the thread object) narrows that window without closing it. A reference the thread
+drops itself before it ends recreates the same last-instruction window.
+Microsoft requires a driver's threads to have terminated before it
+unloads (Microsoft Learn, "Releasing Driver-Allocated Resources"). No
+mechanism documented as available on 98 SE and ME has been found here
+that observes a system thread's termination, or that keeps a WDM
+driver's image resident until such a thread has ended; none is
+asserted, and a leg can only fail to show a fault, not prove its
+absence. The same window exists today: on 98 SE and ME for the stream
+worker, and on every x86 system for the executive work items that
+create stream workers (`uacusb.c`, `CreateWorker` signals `Done`, its
+last statement, before it
+returns, and on a creation failure no thread exists to keep a teardown
+waiting while the callback returns) and that run the level work and the
+stream destroy (`uacwdm.cpp`, the x86 work item behind `IoQueueWorkItem`:
+`UacAllocItem`, `UacQueueItem` and `UacExItem`). This section must not widen it.
+The options (O14, OPEN FOR THE OWNER):
+
+1. **Recommended: no new thread on 98 SE and ME** (below WDM 1.10, the
+   test `StopLocked` already makes). The linger has no timer there: a
+   record handed back with its deadline ahead stays `Lingering` until an
+   event needs alternate 0 (a start of another format, a clock conflict,
+   a power change below D0, a PnP stop; at a remove nothing is sent), so
+   an idle device stays at alternate N, with no transfers and its
+   bandwidth held, until then. A start of the same format adopts it as
+   on NT; the hold applies, in the caller. The probe is not available.
+   The failure is published by the hook and noticed by the next passive
+   entry (29.9). No thread tail is added.
+2. Both threads on 98 SE and ME too, joined by `Exited` and the 10 ms
+   delay of the stream worker, stated as an unproven residual equal to
+   that worker's, with a leg that removes and reinstalls the driver
+   while sounds play.
+3. Linger and probe off on 98 SE and ME (their settings read as 0
+   there), the failed state kept as in option 1.
+
+The existing residuals (the stream worker on 98 SE and ME, `CreateWorker`
+and the executive work items on x86) are outside this section and stay
+as they are; whether to address them is part of O14.
+
+**29.5.7 Admission across waits, and the start's commit.**
+
+- **Gate-aware waits.** `NewStream`'s wait for a closing stream
+  (`WaitClosing`, 10 ms sleeps) reads the gate at each sleep: failed or
+  closed ends it, and `NewStream` refuses. The Wave mutex in `NewStream`
+  and `Run`, and the stream's operation mutex in `UacUsbStart`, are taken
+  by timed waits that read the gate between tries; the device mutex is
+  taken the same way (29.5.8). Only `STATUS_SUCCESS` from
+  `KeWaitForSingleObject` means the mutex was acquired: `STATUS_TIMEOUT`
+  is also a success status (Microsoft Learn, KeWaitForSingleObject), so
+  `NT_SUCCESS` cannot decide it. The interval (100 ms) is a polling
+  interval, not a scheduling guarantee. `Halt`, `Close`, the power path
+  and the PnP path take the Wave and stream mutexes untimed: they must
+  run to release what they release, and may stay blocked behind a hung
+  request (29.9).
+- **The start's commit.** Today `UacUsbStart` clears `s->Stop` while it
+  initialises the stream (`uacusb.c`, `UacUsbStart`: `s->Stop` cleared
+  and `Stats.Running` set after the slots are built; as built, still so
+  while the gate is inactive, and through the commit below while it is
+  active, 29.17), so an expiry's mark made just before that statement
+  would be undone. Instead, `s->Stop` is cleared
+  only in a commit made under the gate lock and then `s->Lock`, which
+  first checks the gate (not failed, admission open, the epoch
+  unchanged). The expiry hook marks streams under the same two locks, so
+  either the commit sees the failure (the start fails with
+  `STATUS_DEVICE_NOT_READY`, and its stop sends nothing, the gate
+  refusing SET_INTERFACE(0)) or the mark comes after the commit and the
+  worker drains. After the worker reports ready, `UacUsbStart` reads the
+  gate once more under the lock: a failure published meanwhile makes it
+  stop the stream and return `STATUS_DEVICE_NOT_READY`. `Run` checks the
+  gate again after `UacUsbStart` returns success, before it returns; an
+  adoption is decided under the lock (29.4.4). So a request that
+  completes successfully after its deadline, whose raw status is
+  returned as 29.9 says, never lets a RUN succeed on a failed device:
+  these commits override it.
+
+**29.5.8 Admission at each device mutex site.** Every device request
+also checks admission under the gate lock immediately before it is
+submitted, so a refusal never submits anything.
+
+**The admission rule, as built (2026-11-17).** A request is admitted at
+one point only. For a synchronous request (`UsbRequest`, every class,
+standard and select request and the start's frame number) that point is
+`GateAdmit`, the last step of `CallAndDrain` before `IoCallDriver`: under
+the gate lock, with the IRP and URB built and nothing between it and the
+call that waits or blocks; the lock is released before the call, and the
+gate lock is never held across anything that blocks. For the stream
+worker's own submissions (`SubmitSlot`, and `FrameSend`'s
+GET_CURRENT_FRAME_NUMBER) the point is the stream lock, where the slot
+or request is published as the stack's only when `s->Stop` is clear; the
+expiry hook sets `s->Stop` of every registered stream under the gate
+lock and then the stream lock, a stream registered after the failure
+starts stopped, and the start's commit never clears it on a failed gate,
+so a clear `s->Stop` there is the gate's "not failed". Admitted means
+the device had not failed at that point; a failure published after it is
+ordered after the request and does not recall it (it is that request's
+own expiry if it does not complete). The earlier checks (`UsbRequest`
+before its allocation, `LockDev` between its tries, `UacGateAcquire`)
+can only refuse. `FrameSend` used to publish its request from the
+worker's earlier read of `s->Stop` and could send after a failure; it now
+admits at the stream lock as `SubmitSlot` does, while the gate is
+active. With the gate inactive (98 SE and ME always) nothing of this
+applies: no admission check, and `FrameSend` as before (a frame request
+sent at a stop is cancelled by the stop's drain). Outside the rule: the
+bus interface query (`BusSpeed`), a PnP request to the stack, not a
+request to the device, and never gated.
+
+The acquisitions of the device mutex before this section (`uacusb.c`; as
+built, the timed ones go through `LockDev`, which waits untimed while the
+gate is inactive, 29.17) become:
+
+| Site | Treatment |
+|---|---|
+| `UacUsbRates`, before its walk | timed acquisition; on a refusal it frees its walk storage and returns `STATUS_DEVICE_NOT_READY`, never partial rates as a successful discovery |
+| `UacUsbClassRequest`, around its one request | timed acquisition; releases only a mutex it acquired; on a refusal the returned length is 0 |
+| `ReleasePath`, around the claims' release | with the gate active, the claim lock `d->ClaimLock` taken alone (as built; this table first named the gate lock, 29.5.2), never the device mutex; with the gate inactive, the device mutex as before this section (29.17); never refused, gate or not: cleanup cannot fail |
+| `EndpointRate` (`uac1`), around its SET and advisory GET | timed acquisition; admission checked again before the advisory GET that follows the SET |
+| `SetClock`, before its walk, through the claim and the clock requests | timed acquisition; on a refusal it frees the walk storage and releases any claim taken; every request of the walk and of the sequence after it is admitted on its own |
+| `SelectAlt`, around its SELECT_INTERFACE | timed acquisition; a refusal before submission leaves the record and `AttemptAt` unchanged. The power and PnP paths' SET_INTERFACE(0) carries a teardown permission: admitted while that caller has the gate quiescing or going below D0, never when failed or closed |
+| the stream count (`UacUsbCreate`'s raise, `UacUsbDestroy`'s lowering) | interlocked, with the stream list under the gate lock; no device mutex |
+
+### 29.6 Power and PnP
+
+**Power, as it is.** `uac2` submits no USB idle request, and the INFs
+set no PortCls idle times (no `ConservationIdleTime` or
+`PerformanceIdleTime` in `uac2wdm.inf` or `uac1wdm.inf`); without them
+PortCls's inactivity timer stays disabled (Microsoft Learn, "Audio
+Device Class Inactivity Timer Implementation"). So PortCls takes the
+adapter below D0 with the system. A lingering record holds no D0
+reference and keeps nothing awake. If selective suspend or a PortCls
+idle time is ever enabled, the linger must count as activity or be ended
+before the suspend: a selected alternate does not by itself prevent one.
+
+**Leaving D0** (`PowerChangeState` to D1, D2 or D3, system standby and
+hibernation included). The miniport may still reach the hardware in this
+callback, and the callback cannot fail (Microsoft Learn,
+IAdapterPowerManagement::PowerChangeState). Pair 0's callback:
+
+1. closes the gate to "below D0" (no start, adoption, probe or alt
+   thread action) and increments the epoch, before it visits any pair;
+2. visits the pairs as today (`uacwdm.cpp`, `Wave::PowerLocal`: each
+   pair's streams drained); each running stream's hand-back finds
+   the gate closed and leaves its record `Lingering` for the next step;
+3. ends every `Lingering` record in its own thread: takes its ownership
+   (waiting for an alt thread action in progress), waits for its hold,
+   selects alternate 0; a refusal leaves `Unknown`, an expiry fails the
+   device (29.9); either way the power change goes on, since it cannot
+   fail;
+4. from then on, until D0, the alt thread and the probe send nothing.
+   Level writes keep their present rules (unchanged here).
+
+The delay this adds to a power change is not only `H`: it adds the
+selection's own time, any transition in progress and, behind a hung
+request, the cancellation drain, which is unbounded on a lower driver
+that never completes the request (29.9).
+
+**Back to D0.** The gate reopens unless the device has failed. No record
+survives the sleep: each is `Idle` or `Unknown` (and the epoch would
+refuse a record from before it), so the next start sends everything,
+selects afresh and gets new pipe handles; no pipe handle is kept across
+a configuration the stack may have lost. The failed state survives sleep
+and wake.
+
+**PnP stop** (2000 and later; the device is present). `DispatchPnp`
+sets `Life` to tearing down and the gate to quiescing before
+`ShutdownPairs`; the pairs drain as today; the alt thread is stopped;
+the PnP caller ends each `Lingering` record (hold, alternate 0) as for a
+power change. A later start builds a new device record (`uacwdm.cpp`,
+`Start`: `StartSteps` builds new pairs, and pair 0's `Wave::Prepare`
+opens the record with `UacUsbOpen`) whose records begin `Idle`.
+
+**Surprise removal and remove, on every system.** `DispatchPnp` sets
+`Life` (surprised, or tearing down) and closes the gate to "nothing
+sent" before `ShutdownPairs`: the drains cancel the transfers and wait
+for them, the hand-backs send nothing (today's stop sends
+SET_INTERFACE(0) here: `uacusb.c`, `StopLocked`, its `SelectAlt(s, FALSE)`
+while `ActiveAlt`, so the
+shared stop path changes, not only the records' cleanup), the threads
+are stopped, the records are discarded. 98 SE and ME never send a
+surprise removal (Microsoft Learn, "Handling an IRP_MN_SURPRISE_REMOVAL
+Request"): an unplug reaches the driver as a remove alone, so a remove
+with no surprise removal before it does not mean the device is present,
+and nothing is sent at any remove (on 98 SE and ME the driver then delays PortCls's own remove,
+a bounded mitigation, section 30). The cost
+is on 98 SE and ME: a remove
+with the device still plugged in (Device Manager's remove, a driver
+update) leaves its interface at alternate N with nothing streaming until
+the next configuration, the state 29.3 describes; the next start
+configures afresh (SELECT_CONFIGURATION, every interface at alternate
+0).
+
+On 2000 and later `Shutdown` runs twice (surprise removal, then remove:
+`uacwdm.cpp`, `DispatchPnp`: its `ShutdownPairs` for a stop, a surprise
+removal and a remove); every step above is idempotent. A start that
+fails is torn down through `ShutdownPairs` as today (`uacwdm.cpp`:
+`Start`'s `ShutdownPairs` after a failed outcome, and `StartSteps`' own
+for `uac1`'s null function), the gate's teardown handling a
+device record whose thread never started.
+
+### 29.7 Costs: power, bandwidth, Windows' audio stack, latency
+
+- **Power.** A configuration's `bMaxPower` covers every alternate of
+  it (USB 2.0 9.6.3), so a kept alternate never takes a device over the
+  budget it declared; it keeps its streaming path powered for up to `L`
+  longer (a few mA to tens of mA on a headphone adapter, for 2 s). The
+  device never sleeps with a record lingering, and a lingering record
+  holds no D0 reference (29.6).
+- **Bandwidth.** The kept alternate's isochronous bandwidth stays
+  reserved while its pipes stay configured: under EHCI from the pipe's
+  opening, under xHCI98 from the Configure Endpoint that added it.
+  Another device's selection that needs periodic bandwidth meanwhile can
+  be refused by its stack (USBD_STATUS_NO_BANDWIDTH), as while `uac2`
+  streams today; ending the linger does not make Windows retry that
+  other device's failed selection, which its driver or its user must
+  try again. At High Speed the adapter's largest alternate is 384 bytes
+  a microframe, about 5 % of a microframe's periodic share (80 %, USB
+  2.0 5.6.4): a payload estimate, without the transactions' overhead or
+  the host's own scheduling cost. A two-device leg reads it (29.14).
+- **The audio engine and KMixer.** The pin's states, its position
+  (17.4) and its notifications are as before; a start inside the linger
+  is only faster (no control requests). On 7 the engine opens a new pin
+  for each burst of sound (record, section 4), so the linger covers pin
+  close and reopen; a paused pin run again (KMixer, 98 SE to XP) is
+  covered by the same row.
+- **Exclusive mode and format changes.** A start at another format or
+  rate ends the linger, waiting for the hold, then sets the clock and
+  selects the new alternate as today. With the hold in one direction
+  that costs up to `H` more. With the symmetric hold (provisional, O2) a
+  change made less than `H` after the last selection waits the rest of
+  that hold, selects alternate 0, then waits a full `H` again before the
+  new alternate: up to `2H` (400 ms at the defaults) more than today,
+  plus the requests' own time. Never `L`.
+- **The playback level engine** (section 20 and the level work item):
+  unchanged. Volume and mute writes go out when set, inside or outside a
+  linger; a level marked stale is written at the next RUN, a start inside
+  the linger included.
+
+### 29.8 The settings
+
+In the device's driver key, read with `GetDwordRaw` (a `REG_DWORD`, or
+the 4-byte `REG_BINARY` a 9x INF writes; `uacwdm.cpp`, `GetDwordRaw`).
+`GetDwordRaw` returns `0xFFFFFFFF` for a value missing or unusable, so a
+stored `0xFFFFFFFF` cannot be told from none: it means the default,
+never the top of the range, as for `Uac2QueueMs` (`uacplan.c`,
+`UacPlanQueueMs`: `UAC_QUEUE_NONE` read as the default). Any other value outside a range is clamped. Each
+INF install section writes each value at its default without
+overwriting (`0x00010003` in `[QueueNT]`, the binary form `0x00000003`
+in `[Queue9x]`, beside `Uac2QueueMs`; `uac1wdm.inf`'s `[Queue9x]` too),
+each with a comment line, and README's settings list and the release
+notes name them: the project's rule that no setting is hidden.
+
+| Value | Default | Range | 0 | Read |
+|---|---|---|---|---|
+| `Uac2LingerMs` | 2000 (D1) | 0 to 10000 ms | no linger | at each RUN, with the hold, as one snapshot (below) |
+| `Uac2HoldMs` | 200 (D2) | 0 to 1000 ms | no hold | with the linger |
+| `Uac2FailOnTimeout` | 1 | 0 off, 1 on; any other value, `0xFFFFFFFF` included, the default | a time-out is that one request's failure, as before (29.9 does not apply) | at PnP start, for the device's life |
+| `Uac2ProbeMs` | 0 (provisional, O8; the reporting user's test build writes 10000) | 0, or 2000 to 60000 ms; 1 to 1999 read as 2000 | no probe | at PnP start, for the device's life |
+
+**One snapshot per RUN.** `Run` reads the linger and the hold once,
+beside `Uac2Realtime` (19.6), and hands them to the transport with the
+stream: the start uses them, the record takes them on, and its
+hand-back computes the deadline from them once (29.4.3). An edit in the
+registry applies from the next RUN: it never moves a deadline already
+set, and repeated stops never read the settings (29.4.5). A forced
+switch of a lingering record uses that record's snapshot.
+
+**The exact baseline needs all four at 0.** `Uac2LingerMs` 0 alone still
+leaves the hold, which defers alternate 0 when a stream stops sooner
+than `H` after its selection; the linger and the hold at 0 restore the
+stop's and the start's sequence; `Uac2FailOnTimeout` 0 restores the
+requests after a time-out; `Uac2ProbeMs` 0 sends no GET_STATUS. With all
+four at 0 the request sequence of a device that answers is today's,
+request for request (29.14); the alt thread runs and sends nothing. With
+`Uac2FailOnTimeout` 0 the start's configuration descriptor reads
+(`uacwdm.cpp`, `Descriptor`, which `ConfigDescriptor` calls while the
+gate is inactive) keep today's wait without a
+time-out; with 1 they get the 5 s deadline of every other request
+(29.9).
+
+The 9x lines: `HKR,,Uac2LingerMs,0x00000003,D0,07,00,00`,
+`HKR,,Uac2HoldMs,0x00000003,C8,00,00,00`,
+`HKR,,Uac2FailOnTimeout,0x00000003,01,00,00,00`,
+`HKR,,Uac2ProbeMs,0x00000003,00,00,00,00` (the test build:
+`10,27,00,00`, 10 s); the NT lines `HKR,,Uac2LingerMs,0x00010003,2000`
+and so on. `infchk.ps1` checks each line, its no-clobber flag, its
+default against the driver's, once per section, with mutations as for
+`Uac2QueueMs`.
+
+On 98 SE and ME and on 2000 and later the values, the mechanism and the
+binary are the same, except as O14 decides for 98 SE and ME (29.5.6).
+The threads add no import (29.5.4); 29.9 adds `IoInvalidateDeviceState`
+and the error log pair.
+
+### 29.9 The failed state
+
+**What counts as "stopped answering".** A request to the device whose
+5 s deadline expires (`uacusb.c`, `CallAndDrain`: its 5 s wait, then the
+cancellation and the untimed wait for the completion): a
+class request (to an interface or an endpoint), a standard request (a
+descriptor; the probe's GET_STATUS), a SELECT_INTERFACE or a
+SELECT_CONFIGURATION. One is enough (D3; O4). Host-local requests are
+not requests to the device and never count; their expiries are only
+recorded (`HostTimeouts`): GET_CURRENT_FRAME_NUMBER (`uacusb.c`,
+`UacUsbStart`: its frame number read before the slots are built; the
+worker's own, 26.13), the bus interface query (`uacusb.c`, `BusSpeed`),
+and ABORT_PIPE where a leg keeps it (29.4.8).
+Not counted either: a STALL (the device answered), a request the stack
+refuses at once (a parameter, no bandwidth), a failure because the
+device is gone (removal follows), and transaction errors
+(USBD_STATUS_DEV_NOT_RESPONDING, USBD_STATUS_XACT_ERROR: no handshake),
+which come fast and are what a dead device can also give under EHCI;
+counting them is option O4, not proposed by default because a removal
+in progress and a poor cable give them too.
+
+**A policy, with a known cost.** USB 2.0's limits concern the device's
+handling of a request once it has it: 50 ms for a standard request
+without a data stage, 500 ms a data packet to the host, 5 s with data to
+the device (9.2.6.4), applied to class requests unless the class exempts
+them (9.2.6.5), with the host's own delays added. They give no bound
+from a Windows URB's submission to its completion, least of all for
+SELECT_INTERFACE and SELECT_CONFIGURATION, which carry host-side work
+(the stack's endpoint changes; under xHCI98 a controller command). A
+slow host, a controller recovery, a scheduling delay or a cancellation
+race can therefore expire a healthy device's request; that device is
+then failed and needs a replug. The cost is accepted (fail closed); the
+record and the messages say that a request was not answered in time,
+not that the device's firmware died.
+
+**The expiry, apart from the final status.** Today `CallAndDrain` waits
+5 s, requests cancellation, waits without bound for the completion and
+maps `STATUS_CANCELLED` to `STATUS_IO_TIMEOUT`, but returns any other
+final status as it comes, a success included, so a request that
+completes just after the cancellation escapes. The change: the expiry
+is recorded when the 5 s wait ends, before `IoCancelIrp`, and acts there
+(the expiry hook, below); the final status after the drain is recorded
+beside it (`Status`, `UrbStatus`, `LateMs`: expiry to completion) and
+returned to the caller as today. A request that completes successfully
+after its deadline still fails the device. The decision is made at the
+expiry, so the translations above it (`uacusb.c`, `UsbRequest`'s
+`STATUS_DEVICE_DATA_ERROR` for a success whose URB status failed;
+`SetClock`'s `STATUS_DEVICE_CONFIGURATION_ERROR` for each of its four
+reads that fails or answers wrongly: a clock selector's position, the
+rate, the rate read back after its SET, the validity) change
+nothing, and the record keeps the original statuses.
+
+**Who stays blocked: the chosen contract.** The caller whose request
+expired stays blocked until the lower driver completes the cancelled
+request; the request's ownership is not redesigned. Its IRP, URB,
+buffers and event live in that caller's frame (`UsbRequest`,
+`EntityRequest`), and `CallAndDrain` frees nothing before the completion
+is seen (`uacusb.c`, the comment above `CallAndDrain`). Letting the caller return earlier
+would need request objects of their own, with references, on every
+request path, and the device record kept past the remove until the
+lower driver completes, to gain only an earlier return into a device
+being failed anyway. The failure does not wait for that return: it is
+published at the expiry, and notified by a thread that sends no
+request (below), so it is notified even when the blocked thread is the
+alt thread itself, in its own probe or lingering alternate 0. What does
+wait, until the lower driver completes the cancellation: the blocked
+thread; `Halt`, `Close`, a power change, a PnP stop or remove of a pair
+whose Wave or stream mutex that thread holds; the drain of its record
+(anything else waiting for that record gives up, 29.5.3); the join of a
+blocked alt thread at a teardown (29.5.6); and a `NewStream` or `Run`
+already past its gate checks into a wait it cannot leave (29.5.7 makes
+their waits gate-aware; one already inside the lower driver's call
+cannot be). On a stack that completes a cancelled IRP, as the IRP rules
+require, that is soon after the 5 s; on one that never does, they wait
+forever, as today. This section promises no bounded stop, removal or
+power change, and no other timing.
+
+**The hand-off at the expiry.** The expiry hook runs in the requesting
+thread, which may hold a Wave mutex, a stream's operation mutex, a
+record's ownership and the device mutex; so it takes only spin locks
+and never waits (29.5.1). With `Uac2FailOnTimeout` off it only records
+the expiry. With it on, under the gate lock, it sets `Failed` with the
+expiry's record and marks every registered stream to stop with the
+bounded part of the worker's own `Fail` (`uacusb.c`, `Fail`:
+`LastStatus` if still success, `s->Stop`, the wake event, under
+`s->Lock`; not its trace dump, `TR_DUMP`); the worker then cancels and
+drains its transfers and exits, through the same synchronization that
+guards every submission (`SubmitSlot`: `s->Stop` read under `s->Lock`
+just before the IRP is passed on). Then it sets the notifier's and
+the alt thread's wake events. Streams join a list in the device record at
+`UacUsbCreate` and leave it at `UacUsbDestroy`, under the spin lock, so
+none is freed under the mark. No peer stream is stopped synchronously
+from the hook; no mutex is taken; nothing is sent. The workers' threads
+are joined later by the ordinary stops (`Halt`, `Close`, the drains),
+whose SET_INTERFACE(0) the gate then refuses.
+
+**Afterwards: nothing is sent.** Every device request path checks the
+failed flag before it waits for the device mutex, and every request is
+admitted under the gate lock just before it is submitted (29.5.8): the
+class requests, the clock walk and `SetClock`, `SelectAlt`, `uac1`'s
+`EndpointRate`, `UacUsbRates`, the probe and the descriptor reads. Each
+waits for the device mutex by timed waits that check the flag between
+tries, so a request queued behind the hung one is refused
+(`STATUS_DEVICE_NOT_READY`, counted) at the next try after the expiry
+(100 ms apart, a polling interval, not a guarantee) rather than when
+the lower driver completes. No record makes a transition that sends: no
+SET_INTERFACE(0), now or at a stop, power change or removal; clock
+claims and pipes are released in the driver only.
+
+**The start's own reads, and its latch.** With `Uac2FailOnTimeout` on
+(29.8), the reads before a device record exists go through the same
+gate, which exists from AddDevice (29.5.5): `ParseDevice`'s
+configuration descriptor reads and `ReadName`'s descriptor reads
+(`uacwdm.cpp`, `ReadName`'s `UacUsbDescriptor` calls). `ParseDevice`'s reads
+then use the shared owned-IRP path (`UsbRequest`: an IRP from
+`IoAllocateIrp`, completed back to the driver and freed by it after
+`CallAndDrain`), not a cancellation grafted onto today's `Descriptor`
+(`uacwdm.cpp`, `Descriptor`, called by `ParseDevice` for the
+configuration's header and then for the whole, as built through
+`ConfigDescriptor` while the gate is inactive), whose
+`IoBuildDeviceIoControlRequest` IRP the I/O manager completes and frees
+(Microsoft Learn, IoBuildDeviceIoControlRequest). With the setting off
+`Descriptor` stays as it is, without a time-out. An expiry during the
+start sets the gate's failure as at any time (the startup latch), and
+`Start` tests it after each step that may tolerate a failure: after
+`ParseDevice`; after `ReadName`, which never fails a start (`uacwdm.cpp`, the comment above
+`ReadName`) and falls back to the INF's name; after `Prepare` (the transport's
+open, the rates of `Learn`, which skips a format whose rates fail, the
+level setup); after each pair's start; and last, before it returns
+success. A latched expiry wins over a fallback name, partial formats,
+`uac1`'s null-function success (`uacwdm.cpp`, `StartSteps`: its
+success returns recorded as stages `0x40` and `0x41`) and any
+late successful completion: `Start` tears down what it built and
+returns `STATUS_IO_TIMEOUT` (Device Manager shows Code 10). It never
+calls `IoInvalidateDeviceState`.
+
+**What each entry point returns.**
+
+| Entry | In the failed state |
+|---|---|
+| `NewStream` (a pin opened) | `STATUS_DEVICE_NOT_READY`, before its wait for a closing stream and before the Wave mutex |
+| `Run` (RUN of a pin already open) | `STATUS_DEVICE_NOT_READY`, before the Wave mutex |
+| `UacUsbStart` | the same, before its "already running" shortcut |
+| `Halt`, `Close` | succeed; nothing sent; they wait for the Wave mutex like any stop (above) |
+| A volume or mute SET (KS property) | accepted into the cached level, nothing written, counted; the saved level is still written, so the next plug restores it. A GET answers the cache. A failed SET would make mixers show errors for a device that is going away |
+| `PowerChangeState` | nothing sent, either way |
+| PnP stop, surprise removal, remove | nothing sent |
+| Section 28's selector and level requests | refused by the same gate; 28's failure rules apply with no traffic |
+
+**A stream running at the failure** (provisional: stopped, O5). Its
+worker cancels and drains its transfers (above). Its client then sees:
+the pin still in RUN for PortCls; `GetPosition` succeeding with a
+position that no longer moves (render: the bytes fetched; capture: the
+bytes written; `uacstream.h`, `UacStream::GetPosition`); no
+notification, since notifications come only from completed transfers
+(`uacstream.h`, `WriteBytes` and `CompleteBytes`). On 2000 and later the PnP failure path
+follows (below) and PortCls's surprise-removal handling takes the
+stream down; what an application gets then is that system's. On 98 SE
+and ME nothing follows: a program waiting for its buffers to complete
+may wait until it gives up or is closed. Not proposed: a position kept
+moving with nothing sent, which hides the failure from the program and
+is no clean indication of it. The client contract on each system is
+read on the legs before the code is called ready (29.14), and the
+choice stays open (O5).
+
+**What is released, what stays pending.**
+
+- Released in the driver at once: the streams' submissions (stopped),
+  the records' clock claims and pipe handles, the probe's schedule.
+- Pending until the lower driver completes: the expired request (its
+  IRP, URB, buffers and event, and its caller's frame), and each
+  worker's transfers until they are back; their slots are freed only
+  then, as today.
+- Released only by the bus or PnP teardown: the host stack's
+  configuration of the device and the bandwidth of any alternate left
+  selected, since no SET_INTERFACE(0) is sent; and on 98 SE and ME
+  everything a client still references (the Wave, its streams, the
+  device record), kept until the client closes and the device is
+  removed.
+
+**How Windows is told.**
+
+- **The notifier.** The notification has its own actor, independent of
+  every thread that may be blocked in an expired request, the alt thread
+  included: a second system thread per device record on 2000 and later
+  (29.5.1), created and joined as the alt thread is (29.5.4, 29.5.6). It
+  sends no USB request and takes no transport, Wave or stream mutex, so
+  nothing it does can wait on the lower driver. Woken by the hook, it
+  calls the adapter layer's failure callback once (a callback given at
+  open, holding references on nothing it does not own): the record
+  (below), the event log entry (O7), and `IoInvalidateDeviceState`. On
+  98 SE and ME, without threads (O14, option 1), the same callback is
+  made once by the next passive entry that meets the failed gate while
+  holding no transport or Wave mutex (`NewStream` and `Run` before the
+  Wave mutex, `Close` before it, `PowerChangeState` before it, and
+  `DispatchPnp`); there it may come late or, with no further entry, not
+  at all before the remove, which that system's contract accepts.
+- **The admission point.** The callback calls `IoInvalidateDeviceState`
+  only after it has marked its call in progress under the gate lock
+  while `Life` reads started: that mark is the call's admission point.
+  `DispatchPnp` sets `Life` (tearing down, or surprised) under the same
+  lock before anything else, so no call is admitted after `Life` has
+  changed, and never before a start has succeeded; a call admitted
+  before the change may still be executing when `DispatchPnp` changes
+  it, and the teardown waits for it to finish (the notifier's join, or
+  on 98 SE and ME the in-progress mark cleared) before the IRP goes on,
+  so the PDO is still attached while it runs.
+- **2000, XP, Vista, 7 and later.** The PnP manager then sends
+  IRP_MN_QUERY_PNP_DEVICE_STATE, which the top of the stack handles first
+  and passes down (Microsoft Learn, "IRP_MN_QUERY_PNP_DEVICE_STATE": a
+  driver modifies the flags, it does not overwrite the bitmask).
+  `DispatchPnp` ORs `PNP_DEVICE_FAILED` into `IoStatus.Information`,
+  keeping the flags already there, sets the status to success, and hands
+  the IRP to PortCls as before; while the device is not failed the IRP
+  passes untouched. Whether PortCls passes the flags down unchanged is
+  read on the legs (Device Manager's code). The PnP manager answers a
+  function driver's `PNP_DEVICE_FAILED` with its surprise-removal
+  handling (Microsoft Learn, "Handling an IRP_MN_SURPRISE_REMOVAL
+  Request"); the final remove can wait indefinitely while a handle stays
+  open. The documented resulting problem is Code 43, "Windows has
+  stopped this device because it has reported problems"
+  (`CM_PROB_FAILED_POST_START`). The mixer's and the Sound panel's
+  behaviour, the default endpoint's reassignment and what applications
+  get are version-specific, and each system's leg reads them.
+- **98 SE and ME.** `IoInvalidateDeviceState` exists in NTKERN by name
+  (stock 98 SE `usbhub.sys` imports it: xHCI98 design record 13, the
+  import table's row 21, "evidenced"), so the one x86 binary loads. Those
+  systems never send a surprise removal (the same Microsoft page), and
+  whether NTKERN and the configuration manager query the state and show
+  anything for `PNP_DEVICE_FAILED` is not established: the 98 SE and ME
+  legs read Device Manager. Nothing here depends on a later surprise
+  removal or query there: the failure itself stops the streams and the
+  probe, drains what can drain, and keeps what clients reference (above).
+  What the user meets: opens failing at once, the mixer still listing
+  the device (its SETs cached), and the record in the driver key.
+
+**How the state ends.** With the device record: an unplug (the PDO
+removed), on 2000 and later a disable and enable in Device Manager, or
+any new PnP start, each of which builds a new device record with the
+flag clear. A device still wedged then fails its start (Code 10) at its
+first expired request (above).
+
+**The record in the driver key** (written, never read for behaviour;
+`PutValue`, best effort, by the notifier, the alt thread or a passive
+entry, never by the hook):
+
+- `Uac2Failed` (REG_BINARY, little-endian DWORDs), written at the
+  notification and again once the expired request has completed:
+  `Version` (1); `Count` (failures recorded in this key: the previous
+  value's count plus one, read with `GetValue`); `TimeLow`, `TimeHigh`
+  (`KeQuerySystemTime`, UTC, for the report only: a new import, whose
+  export on 98 SE and ME is not established here, so the import lists
+  decide it, else 0); `Kind` (1 class
+  request, 2 standard request, 3 SELECT_INTERFACE, 4
+  SELECT_CONFIGURATION, 5 the probe of 29.10);
+  `Setup0` (`bmRequestType` | `bRequest` << 8 | `wValue` << 16; for a
+  select, interface << 8 | alternate); `Setup1` (`wIndex` | `wLength`
+  << 16); `Status` and
+  `UrbStatus` (the final ones, after the drain; 0 until then; `Status`
+  is the lower stack's own completion status, `STATUS_CANCELLED` when the
+  cancellation took the request, not the `STATUS_IO_TIMEOUT` its caller
+  is given); `LateMs`
+  (expiry to completion, the full-width interval divided before it is
+  narrowed and saturated at `0xFFFFFFFE`; `0xFFFFFFFF` until it completes);
+  `MsSinceAltChange`; `AltChanges10s` (alternate changes in the 10 s
+  before); `Streams` (bit 0 playback running, bit 1 capture running,
+  bit 2 a record lingering); `Build`. 14 DWORDs, 56 bytes.
+- `Uac2Alts` (REG_BINARY, written when a record leaves `Lingering`, at a
+  failure and at a stop): `Version` (1); `AltSelects`; `AltZeros`;
+  `LingerHits` (starts that sent nothing); the ends of a linger by cause
+  (`ByTimer`, `ByFormat`, `ByClock`, `ByPower`, `ByPnp`, `ByRemove`,
+  `ByFailure`); `NotAdopted` (starts that found a lingering record they
+  could not adopt: the geometry, an unclean end, the epoch); `Unknowns`
+  (SET_INTERFACE failures that left `Unknown`); `HoldWaits`,
+  `HoldWaitMsMax`; `SpacingWaits` (the symmetric hold's, 0 otherwise);
+  `FirstLate` (29.4.8); `LingerRead`, `LingerMs`, `HoldRead`, `HoldMs`,
+  `ProbeRead`, `ProbeMs`, `FailRead`, `FailOn` (each raw value read,
+  `0xFFFFFFFF` when none was usable, and the value in force); `Probes`,
+  `ProbeFails`; `Refused` (requests the gate refused); `OpensRefused`;
+  `HostTimeouts` (host-local requests that expired: not failures).
+- `Uac2UsbStats` and `Uac2UsbStatsIn` gain `LingerHit` (this start sent
+  nothing) and `StartRequests` (control requests this start sent),
+  appended after the last word in force when this merges (29.11, O12).
+
+**What the user is told: drafts for the owner** (O7). Every string this
+adds:
+
+1. Event log entry, 2000 and later (a message table in the driver,
+   registered as `EventMessageFile` by the INF's service install
+   section; `IoAllocateErrorLogEntry` and `IoWriteErrorLogEntry`, which
+   stock 98 SE drivers also import, xHCI98 record 13 rows 41 and 42, so
+   the binary loads there; 9x has no event log), error, `%2` the device's
+   name: "%2 did not answer a request in time and has been stopped.
+   Unplug it and plug it in again."
+2. The same, when the probe found it while playing (29.10): "%2 did not
+   answer a request in time while it was playing, so its sound stopped.
+   Unplug it and plug it in again."
+3. README, troubleshooting: "If a USB audio device goes silent, or
+   Windows says it has stopped it (Code 43 in Device Manager), and it
+   comes back only after you unplug it and plug it in again, the device
+   did not answer the computer in time. The driver then stops sending to
+   it and records it in the device's driver key (`Uac2Failed`). Unplug
+   it and plug it in again. If it keeps happening, send that key and the
+   settings `Uac2LingerMs` and `Uac2HoldMs` with your report."
+4. README, settings list: one line each for `Uac2LingerMs`,
+   `Uac2HoldMs`, `Uac2FailOnTimeout` and `Uac2ProbeMs`: name, default,
+   range, what 0 does, when it is read (29.8), and that all four at 0
+   give the behaviour before this change.
+5. Release notes (worded for the provisional symmetric hold, O2): "uac2
+   and uac1 keep a stream's alternate setting selected for 2 s after it
+   stops (`Uac2LingerMs`), so programs that start and stop sounds
+   quickly no longer switch the device's interface at each one, and
+   keep at least 200 ms between two switches of one interface
+   (`Uac2HoldMs`). A device that does not answer a request within 5 s
+   is now stopped at once, instead of every later open waiting 10 to
+   15 s (`Uac2FailOnTimeout`)."
+6. The INF comment lines for the four values.
+
+Device Manager's own text (Code 43) is Windows'. Not used: a
+problem description of the driver's own (`IoSetDevicePropertyData`
+exists from Vista only, 21.2), and renaming the device at run time (7
+caches an endpoint's name until it arrives again, 21.4).
+
+### 29.10 The quiet form: a device that stops answering while its stream runs
+
+In the silence report `uac2` went on submitting the isochronous stream
+(an OUT packet has no handshake: nothing fails on the host side) while
+the device answered no control request, and `uac2` sent none for over a
+minute. The save shows the host's submissions; whether the device took
+the packets is not known. Without control traffic the condition cannot
+be seen; for an asynchronous device the feedback watch of section 25
+sees a feedback endpoint that stops, but the field adapter is
+synchronous.
+
+- **The probe** (provisional: off by default, `Uac2ProbeMs` 0, and on
+  only in the reporting user's test build, O8). One schedule per device,
+  run by the alt thread, only while at least one stream of the device is
+  `Active`: GET_STATUS to the device (USB 2.0 9.4.5), one at a time, the
+  next due an interval after the previous one completed, so none
+  overlaps and none is made up after a delay. Just before each, under
+  the spin lock: a stream still `Active`, the gate open (D0, started,
+  no teardown), not failed. It stops at the last stream's hand-back and
+  at every teardown, and the thread's stop drains it. An expiry is the
+  failed state with `Kind` 5 and event log string 2; the alt thread
+  then stays in that request until the lower driver completes it, and
+  the notifier reports the failure meanwhile (29.9). Without an alt
+  thread (98 SE and ME, O14 option 1) there is no probe.
+- **What it shows.** That the control endpoint answers a standard
+  request; nothing about the audio path, and a device's standard and
+  class requests may be handled by the same firmware. GET_STATUS is
+  answered in the Address and Configured states; in the Default state
+  its behaviour is not specified (9.4.5), and a streaming device is not
+  in it.
+- **Detection time.** The interval, plus the wait for the device mutex
+  behind other requests, plus the 5 s deadline; the failure is published
+  at the expiry (29.9). Not a guaranteed bound.
+- **Does it risk provoking the device?** Not known either way. In the
+  silence report the control endpoint stopped with no request of
+  `uac2`'s for about 70 s before: traffic was not needed that time. That
+  does not show added requests cannot trigger a failure, and their rate
+  against a volume slider's is no evidence that a device tolerates them.
+  Hence off by default.
+- **Options (O8):** off by default and on in the test build
+  (provisional); on for every device at 10 s; or a class GET_CUR (the
+  clock's validity) instead of GET_STATUS, which tests the audio path
+  but involves it.
+
+### 29.11 Where this meets section 28 (the recording controls)
+
+Section 28 is not changed here. Both sections are on main, each only in
+part (28.15's engine move and 28.18's stage 1; 29.17's failed state).
+The points of contact, for
+the owner and for whichever of the two next adds what is listed here:
+
+- 28.8 reads every selector "at each capture RUN, before the stream
+  starts". A capture start inside a linger would still send those
+  reads; proposed (O11): skip them on a start that adopts a lingering
+  record only while that record's clock and selector claim has stayed
+  valid since its selection. Any selector write the driver allows in the
+  meantime (28's own, or another stream's start) ends that, and the
+  reads go out. A device-side switch is found at the next MUX GET, as
+  28.8 already accepts.
+- 28's requests go through the same request paths and the same device
+  mutex, so the failed state's gate refuses them at once (29.9); its
+  retry rules then cost no traffic.
+- The stats words: 28 takes `Uac2UsbStats` words 94 to 99 (28.12); this
+  section appends after them (29.9). Neither has added its words yet
+  (28.18, 29.17), and words 94 to 97 are already in use (`uacusb.h`,
+  `UAC_USB_STATS`: 25.7's `FeedbackOff`, 26.13's `Resyncs`, `ResyncFrame`
+  and `ResyncBehind`), so 28.12's numbers no longer hold as written.
+  Whichever adds its words second renumbers, keeps the word indices in
+  one header, and tests every reader of the stats against it (O12).
+- `uacemu.py` gained a control log with each request's data stage with
+  section 28's work, now on main; the device models of 29.14 are added on
+  top of whichever `uacemu.py` is current when the code is written.
+
+### 29.12 Code shape
+
+- `uacalt.c` / `uacalt.h` (common, new; compiled into both packages):
+  the record's state machine as plain C with no kernel calls, so the
+  host tests run it: given a record, an event, the time, the gate and
+  the settings snapshot, it returns the actions (switch to 0 now, select
+  N, wait until T, wake the thread at T, adopt, end and select, nothing)
+  and the new state; the deadline, the adoption conditions (29.4.4), the
+  table of failed steps (29.4.6), the clamping of the settings; the alt
+  thread's scan (what is runnable, the next wake, 29.5.4) and the
+  ownership rules, as pure functions. The hold's direction is a
+  parameter. Written and host-tested (`alttest.c`, 246 checks of
+  decisions, not of kernel lifetime or locking); no driver file includes
+  or calls it yet. Its header states the adapter's contracts, which the
+  wiring must keep: the non-wrapping 64-bit millisecond clock from the
+  full interrupt time (29.4.1); the gate, not the record, as the
+  authority for the failure, a late success never authorising a request
+  or a start (29.4.6); `Gen` as bookkeeping, with ownership held across
+  each decision, wait, request and completion (29.4.1, 29.5.3); the
+  geometry passed at a successful selection being what the pipes retain
+  (the `MaximumTransferSize` asked, the `MaximumPacketSize` returned,
+  per pipe; 29.4.4); the start's commit as a predicate whose locked
+  steps are the adapter's (29.5.7); the conflict mask's limit of 32
+  records, its discovery, candidate, eviction round and second walk
+  being the adapter's (29.4.7).
+- `uacusb.c`: in `UAC_DEV` the records, the list of streams, the gate's
+  pointer, the alt thread and the notifier; a stream borrows a record's
+  pipes and claim instead of owning them; the claims under the gate lock
+  and the stream count interlocked (29.5.2); the walk's three-way
+  `PathFree` and its kept candidate (29.4.7); `CallAndDrain` with the
+  expiry hook and each request's kind (device or host-local); the timed
+  acquisitions and per-request admission of 29.5.8; the start's commit
+  (29.5.7); GET_STATUS for the probe; the first batch at explicit frames
+  on an adopted record (29.4.8); `StopLocked` without SET_INTERFACE(0)
+  when the gate says so (29.6). `UacUsbOpen` takes the gate and starts
+  the threads (on 2000 and later, O14); new `UacUsbQuiesce` (the gate's
+  steps of 29.6) and `UacUsbEndRecords`.
+- `uacwdm.cpp`: `UAC_GATE` and its lock in the extension, set up at
+  AddDevice; `Start` reads `Uac2FailOnTimeout` and `Uac2ProbeMs` before
+  `ParseDevice`, reads the configuration descriptor through the
+  owned-IRP path when the setting is on, and tests the startup latch
+  after each step (29.9); `NewStream`'s gate-aware `WaitClosing` and
+  timed Wave mutex (29.5.7); `Run` reads the
+  linger and the hold beside `Uac2Realtime` and passes them down;
+  `NewStream` and `Run` check the gate first; `PowerChangeState` calls
+  the transport before and after it visits the pairs; `DispatchPnp` sets
+  `Life` and the gate before `ShutdownPairs`, ends the records after
+  it, and handles QUERY_PNP_DEVICE_STATE while failed; the failure
+  callback (the record, `IoInvalidateDeviceState`, the event log entry).
+- INFs: the four values; on the NT service sections the event log
+  registration (O7). `infchk.ps1`; both import lists
+  (`IoInvalidateDeviceState`, `IoAllocateErrorLogEntry`,
+  `IoWriteErrorLogEntry`).
+
+### 29.13 What this does for the four failures, by the notes
+
+Reading each save's timeline against the deadline rule (`L` 2 s, `H`
+200 ms). The saves did not record every session's alternate and rate,
+so each line below assumes that the format, the rate and the terminal
+stayed the same and that no power change or clock conflict came between;
+each is conditional on that.
+
+- **The newest (system sounds, 0.15 to 0.39 s apart for 13 s):** each
+  start came within a few ms of the previous stop, inside the linger, so
+  one SET_INTERFACE(1) at the first sound and one SET_INTERFACE(0) 2 s
+  after the last: 2 alternate changes instead of 122, and none of the
+  starts' clock and mute requests after the first (five a start by the
+  code, 29.1: about 300). The fatal SET_INTERFACE(0), 0.27 s after its
+  alternate, would not have been sent then. The hold alone (linger off)
+  would not have changed it: its alternate had been selected for longer
+  than 200 ms; the symmetric hold alone would have spaced every restart
+  200 ms after the alternate 0 before it.
+- **The first (closes 0.58 to 2.2 s apart in clusters, the fatal one
+  0.68 s after the previous):** inside the linger; no alternate change
+  at the fatal point.
+- **The second (after 329 s of quiet, a session of about 40 ms):** not
+  inside any linger; its alternate 0 is deferred, not avoided: 2 s after
+  the stop instead of about 40 ms after the alternate.
+- **The third (five 36 ms cycles behind a hub):** inside the linger; no
+  alternate change.
+
+In each, the request that went unanswered would not have been sent when
+it was. Whether the device would then have kept working is not
+established.
+
+### 29.14 Tests
+
+**Host tests of the state machine** (`alttest.c`, in `test.cmd`;
+`uacalt.c` with an injected clock and a recorded action list). They
+check decisions, not kernel lifetime, IRQL or cancellation, which the
+interleavings and the legs below cover.
+
+- every row of 29.4.5 and 29.4.6; the deadline at its boundaries (a
+  stop at `AttemptAt + H - 1`, `+ H`, `+ H + 1`; `L` 0 with `H` running;
+  `H` 0 with `L`); adoption refused for each condition of 29.4.4; the
+  clamping and normalisation of each setting (0, 1, 1999 and 2000 for
+  the probe, the top, the top + 1, `0xFFFFFFFF`, nothing read);
+- all four settings at 0: the action list equals today's sequence
+  request for request, for the rapid open and close pattern and for a
+  pause and run;
+- idempotent stops: `Halt` then `Close`; `Close` of a paused pin (its
+  deadline unchanged); a power drain, then the client's STOP; the
+  start's own leading stop;
+- one snapshot: a setting changed between RUN and stop, and while a
+  deadline is set (the deadline unchanged);
+- the symmetric hold: a format change with a hold running (the wait,
+  alternate 0, the second wait, N: up to `2H`); a start after an
+  alternate 0 (the spacing wait);
+- clock conflicts with a lingering claimant (the eviction of 29.4.7)
+  and with an active one (`STATUS_DEVICE_BUSY`); two pairs lingering at
+  once;
+- the failed state: an expiry in each state; afterwards no action that
+  sends; every entry point's result (29.9); the record's fields; the
+  probe's schedule while streaming, its absence while not, no overlap
+  and no burst after a slow GET_STATUS.
+
+**Deterministic interleavings** (a host harness that runs the
+transport's ownership, gate and alt thread logic over injected
+primitives, each step forced in a chosen order; in `test.cmd`):
+
+- a hand-back racing the thread's scan; the thread waking while a start
+  owns the record; a start waiting while the thread owns it; repeated
+  re-arming; an adoption, a stop and a re-arm in turn; a teardown in
+  every interval of each of these;
+- an expiry while each lock of 29.5.2 is held: by a level write, a
+  selector request, the probe, the alt thread's SET_INTERFACE(0),
+  another pair's start; every waiter in a gate-aware wait (29.5.7, 29.5.8)
+  then ends with `STATUS_DEVICE_NOT_READY` while the expired request
+  stays blocked, the waiters 29.9 lists stay blocked with it, and the
+  blocked caller returns only when its request completes;
+- an expiry during the PnP start, a power-down, a PnP stop and a
+  remove; a start failing at each step of 29.4.6; repeated `Halt` and
+  `Close`;
+- a power change and a PnP stop racing starts on several pairs (the
+  gate closed before the first pair is visited);
+- an allocation failure, a thread that cannot be created, a thread slow
+  to run, and a teardown's stop right after the thread's last action;
+- the alt thread's probe, and its lingering alternate 0, expiring with a
+  cancellation that never completes: the notifier still writes the
+  record and calls the failure callback, and the teardown's join waits
+  for the lower driver;
+- a thread preempted after its ready or `Exited` event and before it
+  ends, and a creation callback preempted after its `Done` and before it
+  returns, each followed at once by a teardown: on 2000 and later the
+  join holds the teardown until the thread object is signalled; on 98
+  SE and ME the case records the window O14 describes, not a pass;
+- a failure between a start's early gate check and its taking of the
+  Wave or stream mutex, and between an expiry's stop mark and the
+  start's commit: the start fails, the mark stands, nothing is sent;
+- a `NewStream` waiting for a closing stream, and a `Run` waiting for
+  the Wave mutex, when the failure is published: both refuse at their
+  next try; a caller already inside the lower driver's call stays until
+  it returns (29.9);
+- a conflicting path rejected by today's `PathFree`: the walk keeps it
+  as the candidate, a free path found later wins, and with none the
+  lingering owner is evicted and the second walk claims; the shared
+  source at 48 kHz lingering against a capture at 44.1 kHz; a second
+  candidate after eviction ends in `STATUS_DEVICE_BUSY`;
+- an expired deadline whose record stays owned, and deadlines held back
+  below D0 or while quiescing: the thread waits without a time-out or
+  to the next runnable deadline, never in a loop of zero-length waits;
+- a startup expiry swallowed by an advisory step (`ReadName`'s fallback,
+  `Learn` skipping a format, `uac1`'s null function), and one followed
+  by a successful completion: `Start` fails with `STATUS_IO_TIMEOUT`;
+- each device-mutex site of 29.5.8 refused before submission: no
+  request sent, the record and `AttemptAt` unchanged, the walk storage
+  freed, no partial rates returned;
+- a first batch late in part, on the data pipe and on the feedback
+  pipe: counted in `FirstLate` and resynced (26.13), which today's
+  aggregate-loss handling does not do on its own.
+
+**The simulator** (`uacemu.py`; the device models become committed,
+documented options; `uacsimtest.py` covers each option without a guest).
+It reproduces the request-density trigger hypothesis, not the field
+device or the controller's wedge:
+
+- `--stop-after-alts N --stop-window-ms T`: the device stops answering
+  every control request after `N` alternate changes within `T` ms, stays
+  connected and keeps accepting the isochronous stream (the scratch
+  model of the record, made an option).
+- `--stop-alt0-within-ms X`: it stops when an alternate 0 arrives within
+  `X` ms of an alternate N; `--stop-altn-within-ms X`: when an alternate
+  N arrives within `X` ms of an alternate 0 (the newest report's
+  millisecond spacing).
+- `--stop-sessions K --session-max-ms S --session-gap-ms G`: the newest
+  report's recipe: it stops after `K` sessions in a row each streamed at
+  most `S` ms (default 400) and begun within `G` ms (default 400) of the
+  alternate 0 before it. With the linger on no SET_INTERFACE separates
+  two sounds, so sessions are also told apart by the gap in isochronous
+  packets.
+- `--stop-at-request N` and `--stop-after-s S`: it stops regardless (the
+  forced stop of the failed-state legs), at the `N`th control request or
+  `S` seconds after the first stream.
+- `--delay-request N --delay-ms D`: the `N`th control request answered
+  after `D` ms (4900 to 5100 around the deadline, and an answer just
+  after the cancellation); `--stall-request N` and
+  `--xact-error-request N`.
+- The control log tells a request on the bus from the host's
+  cancellation of one.
+- `--rough-check` (always on, logged): a stream whose first 8 ms of
+  packets do not match the selected alternate's nominal cadence within
+  a cumulative tolerance (8 ms of a fractional rate need not hold its
+  exact long-term ratio), or carry partial frames, is logged as rough;
+  with `--pcm` and a known test signal the received samples of each
+  session, by packet gap, are checked for data that did not belong to
+  it.
+- `--rough-every N --rough-kind KIND`: one start in `N` the device
+  shows a condition the driver can see: `clock-invalid` (its validity
+  reads 0 for that start) or, on an asynchronous profile,
+  `feedback-skew` (its feedback off by 1 % for the first 100 ms). Neither
+  is the field roughness, which is not known; they exercise `uac2`'s
+  handling of a start that goes wrong. Plus a feedback and a capture
+  stream restarted after a linger.
+- Section 28's selector and level requests against a lingering record,
+  once section 28's stage that makes them is wired (28.18).
+
+**Host driver injection** (xHCI98's own work, arranged separately): a
+cancellation completed late, or never; a stale ASAP schedule after an
+idle pipe; a request held by a controller recovery.
+
+**The rig's test programs** (committed with `src/audio/uac2`, built by
+its `build.cmd`): the rapid open and close program of the record
+(`waveOut` open, 5 ms written, reset, close; the DirectSound variants)
+and a system-sounds program (a 250 ms WAV played with `PlaySound` and
+with `waveOut`, again and again about 0.3 s apart, and as fast as
+possible).
+
+**The joint legs** (after the code). Windows 7 SP1 x86 and x64, XP SP3,
+Vista, 2000, 98 SE and ME as far as the rig allows, each under the host
+controller drivers it runs: Windows' own UHCI, OHCI and EHCI drivers,
+NUSB's EHCI on 98 SE, and xHCI98 (under QEMU with xHCI98's QEMU build).
+Other xHCI drivers are named where a leg runs them and are otherwise
+listed as unverified.
+
+1. **Baseline**, released `uac2` 0.1.12.0, the system-sounds program and
+   `--stop-sessions`: the device stops answering; opens fail after 10 to
+   15 s each while `uac2` keeps sending; with the host driver's injection
+   (built by xHCI98's own work, arranged separately) its present handling
+   takes the controller down.
+2. **With the change, defaults:** the system-sounds program: the
+   simulator's log shows one SET_INTERFACE(N) at the first sound, none
+   during the run, and SET_INTERFACE(0) no sooner than 2 s after the last
+   stop; the stop condition is never reached; playback correct (the
+   rough check clean, `--pcm` content checked). The rapid open and close
+   program: no alternate change inside the linger and none sooner than
+   the hold, read from the log's times.
+3. **The forced stop** (`--stop-at-request`): `uac2` enters the failed
+   state at the first expiry; the simulator logs no request after it;
+   opens fail at once (each `waveOutOpen`'s time, against 10 to 15 s
+   before); Windows is told (the Device Manager code read on each NT
+   system; whatever 98 SE and ME show); `Uac2Failed` and `Uac2Alts`
+   read; what a program playing at the failure gets, on each system
+   (O5); the same with a handle left open on 98 SE and ME; the simulated
+   device unplugged and plugged again (QMP `device_del` and `device_add`
+   of its `usb-redir`) works again.
+4. **With the host driver's new handling on** (xHCI98's change): the
+   forced stop again: only the audio device fails; the other devices on
+   the controller (a simulated tablet and a disk) keep working.
+5. **The quiet form,** with the probe on (the test build's setting): the
+   simulator stops answering in the middle of a stream; the probe finds
+   it after its interval, the wait for the device mutex and the
+   deadline.
+6. **Regressions:** all four settings at 0 give the baseline's request
+   sequence; an exclusive-mode format change on 7 (alternate 0 after the
+   hold, then the new alternate after the second hold); playback and
+   capture at once on a shared clock.
+7. **Lifecycle:** sleep, hibernation and resume during a linger and
+   while streaming (no record survives; the next start sends
+   everything); disable and enable; a PnP stop and restart where the
+   system offers one; a removal during a linger (no request after it, no
+   crash), on 98 SE and ME an unplug, which arrives as a remove alone.
+8. **The restart of an adopted pipe** on each stack: the explicit first
+   frames accepted, `FirstLate` read, the start of a short sound present
+   in the `--pcm` capture; the same with ABORT_PIPE before the first
+   batch, to compare (29.4.8).
+9. **Bandwidth:** a second device that needs periodic bandwidth (a
+   second simulated audio device, or a webcam under `uvc98`) opened
+   during a linger: whether it is refused, and whether it succeeds when
+   opened again after the linger ends.
+
+**What the emulation cannot show:** the real chip's firmware, whether a
+kept alternate keeps it answering, whether the rough playback is the
+device's, anything electrical, and the timing of real hardware (QEMU's
+TCG guests run far slower, record section 4).
+
+### 29.15 What only the real adapters can show
+
+A test build for the reporting user (provisional, O13), in stages, each
+with the request to repeat the system-sounds recipe on the same port and
+send the driver key (`Uac2Failed`, `Uac2Alts`, `Uac2UsbStats`) and a
+host driver report:
+
+1. the mechanism at its defaults, the probe off;
+2. then, as a separate comparison, the same with the probe on
+   (`Uac2ProbeMs` 10000);
+3. then the two discriminating tests below, with the same recipe and
+   the released driver, on Windows 7 x64 as the reporter runs it.
+
+- **U1:** the same adapter on a port run by Windows' own USB 2.0 driver
+  (an EHCI port on the same board) instead of xHCI98, same `uac2`: does
+  it still stop? A useful comparison of hypothesis 3 against 1 and 2;
+  alone it separates neither cleanly.
+- **U2:** another make of USB Audio 2.0 device on the same port: does it
+  survive? Useful for 1 against 2; alone not conclusive either.
+
+### 29.16 Open points for the owner
+
+**Decided (owner, 2026-11-17):** D1, the linger, about 2 s; D2, a
+minimum hold, about 200 ms; D3, a clean failed state.
+
+**Decided later the same day (owner, 2026-11-17):**
+
+- **O2:** the hold applies in both directions: no two alternate changes
+  of one interface closer than `H`; a format change can wait up to `2H`.
+- **O5:** a stream running at the failure is stopped. What its client
+  sees is read on each system's legs, 98 SE above all, before release.
+- **O7:** an event log entry in the driver's own words on 2000 and
+  later, plus README and release-note text; on 98 SE and ME the README
+  only. Every string stays a draft for the owner.
+- **O8:** the probe is off by default and on only in a test build. The
+  feature is kept.
+- **O13:** a test build for the reporting user: not yet. The owner
+  decides after the emulator results; nothing is prepared for it.
+- **O14:** the linger and the probe are off on 98 SE and ME for now, and
+  no new thread is created there; those systems behave as today, and the
+  failed state still applies there, noticed at the next call into the
+  driver. This is not the option the text below recommended (a linger
+  without a timer): where 29.5.6, 29.9, 29.10 and 29.14 are written with
+  that earlier provisional choice they are to be brought to this
+  decision.
+
+The integrated step of 29.17 does not yet carry O14's failed state to 98
+SE and ME: there, nothing of the feature is active in this step, and how
+the failed state reaches those systems is OPEN (29.17).
+
+The points below keep their text as it was written before these
+decisions, each with its recommendation first; O2, O5, O7, O8, O13 and
+O14 are settled as above, and the rest is open and written into the
+section provisionally.
+
+- **O2, the hold's direction. OPEN FOR THE OWNER.** Recommended: both
+  directions, 200 ms: no two alternate changes of one interface closer
+  than `H`; the newest report's changes were alternate N a few ms after
+  alternate 0. Its costs: a format change can wait up to `2H` (29.7),
+  and the hold spaces alternate changes only, not the clock and mute
+  requests between them. Or: alternate N to 0 only.
+- **O8, the probe's default. OPEN FOR THE OWNER.** Recommended: off by
+  default; on only in the reporting user's test build (GET_STATUS every
+  10 s while streaming), as a separate comparison (29.15). Or: on for
+  every device; or a class GET_CUR instead of GET_STATUS.
+- **O5, a stream running at the failure. OPEN FOR THE OWNER.**
+  Recommended: stopped at once, its position frozen and its
+  notifications ended (29.9), with what its client sees read on each
+  system's legs, 98 SE and ME above all, before the code is called ready.
+  Or: left running until its program stops it. Not recommended: a
+  position kept moving with nothing sent.
+- **O7, the message to the user. OPEN FOR THE OWNER.** Recommended: an
+  event log entry with the driver's own text on 2000 and later (a
+  message table and the INF's event log registration), plus the README
+  and release-note drafts of 29.9, all saying that a request was not
+  answered in time rather than that the device is broken. Or: Windows'
+  generic time-out text from `IoLogMsg.dll` (no resources of our own,
+  no advice to replug); or none. On 98 SE and ME only the README can
+  say it. Every string is a draft.
+- **O13, the reporting user's test build. OPEN FOR THE OWNER.**
+  Recommended: in stages (29.15): the mechanism at its defaults first,
+  then the probe as a separate comparison, then U1 and U2, on Windows 7
+  x64. Or: one build with everything on.
+- **O14, threads on 98 SE and ME. OPEN FOR THE OWNER.** No mechanism
+  documented as available there has been found that observes a system
+  thread's end or keeps the image resident until it has ended (29.5.6),
+  so no rundown of a new thread can be shown. Recommended: no alt thread
+  or notifier there; the linger without a timer (alternate 0 at the next
+  event that needs it), no probe, the failure noticed by the next
+  passive entry. Or: both threads with the stream worker's `Exited` and
+  10 ms practice, as a stated unproven residual; or the linger and probe
+  off there. Also whether the existing residuals (the stream worker on
+  98 SE and ME; `CreateWorker` and the executive work items on x86) are
+  to be addressed, which this section leaves as they are. Until decided,
+  integrated transport code is written for 2000 and later only.
+- **O1, the ranges. OPEN FOR THE OWNER.** The defaults are D1 and D2;
+  proposed ranges 0 to 10000 ms for the linger and 0 to 1000 ms for the
+  hold (29.8). Of the four failures the linger avoids the fatal change
+  in three and only defers it in the fourth (29.13).
+- **O4, what counts as stopped answering. OPEN FOR THE OWNER.**
+  Recommended: one expired 5 s deadline of a request to the device,
+  recorded at the expiry, accepting that a slow host can fail a healthy
+  device (29.9). Or: an expiry confirmed by a second request; or
+  transaction errors as well.
+- **O6, telling Windows on 2000 and later. OPEN FOR THE OWNER.**
+  Recommended: `IoInvalidateDeviceState` and `PNP_DEVICE_FAILED`, from
+  the alt thread, with the lifecycle guards of 29.9. Or: only failing
+  the entry points and leaving the device in place.
+- **O9, `Uac2FailOnTimeout`. OPEN FOR THE OWNER.** Recommended: a
+  setting, 0 restoring today's behaviour after a time-out; all four
+  settings at 0 for the exact baseline (29.8).
+- **O3, a pause after each SET_INTERFACE. OPEN FOR THE OWNER.**
+  Recommended: none for every device. Linux applies its 50 ms only per
+  device, through a quirk flag (`QUIRK_FLAG_IFACE_DELAY`, 29.2); the
+  linger and the hold do not replace a settle between alternate N and
+  the first packet, so if rough starts persist with the linger, a
+  setting in the test build for the reporting device alone.
+- **O10, the restart of an adopted pipe. OPEN FOR THE OWNER
+  (confirmation).** Changed by this revision: an explicit start frame
+  for the first batch on each pipe (29.4.8) instead of ABORT_PIPE first,
+  which stays only as a precaution a leg shows to be needed.
+- **O11, section 28's selector reads at a capture RUN inside a linger.
+  OPEN FOR THE OWNER.** Recommended: skipped on an adoption only while
+  the record's claim has stayed valid; any permitted selector write ends
+  that (29.11). Agreed with that work.
+- **O12, the stats words. OPEN FOR THE OWNER.** Recommended: appended
+  after section 28's and renumbered by whichever adds its words second,
+  the indices in one place and every reader tested (29.11).
+
+### 29.17 The integrated step: the failed state alone (2026-11-17)
+
+What the driver carries of this section so far, so that nothing above
+is read as built when it is not. Applies to `uac2` and `uac1` alike.
+
+**Scope.** Only the failed state (29.9) with its gate (29.5.5),
+admission (29.5.7, 29.5.8) and notifier. Not integrated: the linger,
+the hold, the probe, the alt thread, the records of 29.4 and `Uac2Alts`;
+`uacalt.c` is not wired.
+
+**Default off, Windows 2000 and later only.** The gate is active only
+when `IoIsWdmVersionAvailable(1, 0x10)` holds and the driver key's
+`Uac2FailOnTimeout` reads exactly 1 at the PnP start. No INF writes the
+value, so a device behaves as before unless a test writes it; a missing,
+malformed or other value is off. This is a staging rule for this step,
+not 29.8's eventual default of 1, and it must survive the wiring of
+`uacalt.c`: `UacAltFailOn` turns a missing value (`0xFFFFFFFF`) or any
+value but 0 into on (`UAC_FAIL_DEFAULT` 1), so its normalisation is not
+to decide this setting until the owner enables the feature; until then
+the driver's own "exactly 1" stays the test.
+
+**Not complete, not to be enabled.** The owner chose (O7) an event log
+entry in the driver's own words on 2000 and later and README and
+release-note text (29.9, drafts 1 to 5). None of it is implemented: no
+message table, no event log registration in the INFs, no README or
+release-note text, no INF line for any of the four settings. Until they
+are, the failed state is an incomplete, experimental foundation: it is
+not to be enabled by an INF or a default, and not to be described as the
+owner's feature.
+
+**98 SE and ME.** Nothing of the feature is active there in this step:
+the gate is never active below WDM 1.10, no notifier is created, nothing
+is refused, and no device-state call is made. The feature stays
+inactive and the old functional paths remain; the gate's own setup and
+its inactive checks still run there and refuse nothing (so "no new code
+runs there" would not be true). 29.16 records the owner's decision that
+the failed state applies on 98 SE and ME, noticed at the next call into
+the driver (O14); this step does not do that. **How the failed state
+reaches 98 SE and ME (which passive entries notice it, what they record,
+what refuses there): OPEN, still to be designed.** The binary's import
+of `IoInvalidateDeviceState` is called on 2000 and later only; its
+presence on 98 SE and ME rests on the import evidence of 29.9 and needs
+this binary's loader legs there.
+
+**As built, against the text above.**
+
+- The notifier is created by the PnP start right after the gate's reset,
+  before the start's first request (the configuration descriptor), not
+  by `UacUsbOpen`; Life stays starting until the start has succeeded, so
+  a startup expiry is recorded and no device-state call is made for an
+  unstarted device. Every failed start joins it. Each wake reads the exit
+  flag first and writes a pending record, first or final, before it
+  honours the exit (`UacNotifyStep`), so a join never discards it.
+- The startup latch (29.9) overrides every outcome of a start's step
+  (`UacStartVerdict`): after `ParseDevice`, `ReadName`, `Prepare` (before
+  `uac1`'s null-function test), pair 0's ports and power registration,
+  each later pair's `Prepare` and ports, and last.
+- Gate-aware acquisition (`UacGateAcquire`) reads the gate before each
+  100 ms try and once after acquiring; the Wave operation mutex in
+  `NewStream`, `Run` and a level SET (`Apply`, and with it the level work
+  item `Shutdown` waits for) is taken so.
+- The admission rule is the one 29.5.8 states as built (`GateAdmit`;
+  `FrameSend` and `SubmitSlot` at the stream lock).
+- `Uac2Failed`: `Status` is the lower stack's own completion status;
+  `LateMs` is saturated at `0xFFFFFFFE`; `TimeLow`, `TimeHigh`,
+  `MsSinceAltChange`, `AltChanges10s` and `Streams` read `0xFFFFFFFF`
+  (not recorded in this step); `Build` is 29 for `uac2`, `uac1`'s own
+  build number for `uac1`.
+- A volume or mute SET on a failed device stays in the cache and writes
+  nothing, as 29.9's table says, but in this step the saved level is not
+  written either (the SET is refused before the operation mutex, which
+  the hung request's thread may hold).
+
+**Tests of this step.** `failtest.c` (in `test.cmd`) runs the decisions
+`uacgate.h` gives the driver: the acquisition, the notifier's wakes and
+join, the record's status and `LateMs`, the latch. The kernel's waits,
+locks and threads are read and run on the legs (the dated records under
+`docs/testing`), with the simulator's forced stop (29.14) as the device.
+
+## 30. A remove while a pin is open, on 98 SE and ME (2026-11-18)
+
+### 30.1 What was seen
+
+On 98 SE in QEMU, removing a simulated device while `uac2` recorded from
+it ended in "A fatal exception 0E has occurred at 0028:FF018C77 in VXD
+ks(05) + 00004C17", or in a stall: the application's next WinMM call
+(`waveInReset`) did not return within the observation window and
+Explorer's clock stopped, while the processor and the driver's own
+threads went on ([uac-98se-removal](../testing/2026-11-18-uac-98se-removal.md);
+first seen in leg 5 of the guest legs of section 28.24). Idle removals
+under NUSB's EHCI ended the same two ways.
+
+### 30.2 What the markers observed, and the explanation proposed
+
+98 SE and ME send IRP_MN_REMOVE_DEVICE with no IRP_MN_SURPRISE_REMOVAL
+before it, while the system's audio components may still hold the
+device's pins and filters (Microsoft Learn, "Understanding When Remove
+IRPs Are Issued"). The driver's own part of the remove (29.6) runs, then
+it passes the remove to PortCls.
+
+**Observed** (lifecycle markers of a diagnostic trace build, four
+`x4full` removals while recording under NUSB's EHCI):
+
+- after the forward, another thread sent the open pin state requests
+  (RUN to PAUSE, ACQUIRE, STOP), then its cleanup and close, then the
+  cleanup and close of its filter;
+- a final release of a `Wave` was logged (the marker carries no thread);
+- where the client's pin close returned before that final release, the
+  remove returned (1 removal); where the final release came first, either
+  the pin close did not return and the fault screen came up (2), or the
+  client's first state request returned `STATUS_PENDING` without reaching
+  the driver's `SetState` and no further marker came in the observation
+  window (1);
+- the driver had no transfer or work item outstanding: its transport was
+  drained and destroyed before the forward.
+
+**Explanation proposed, not established:** the outcome depends on whether
+the client's teardown of the pin and filter completes before PortCls's
+remove releases the subdevices. The traces do not show PortCls's or KS's
+internals (their locking, which object the fault touched, why a request
+stayed pending). The same ordering for idle removals, the other devices
+and the other moments is inferred, not traced. One variant withdrew the
+pairs' interfaces before the forward and waited 10 s: no client closed a
+handle in that time (1 trial).
+
+### 30.3 The mitigation
+
+On a remove with no surprise removal before it (below WDM 1.10: 98 SE
+and ME), the driver delays PortCls's remove at the one place it was seen
+to call back into the driver early in it, its first release of a
+miniport (`Wave` or `Topology`), on the PnP thread, at PASSIVE, once per
+remove. It waits while:
+
+- a stream of the device is not yet destroyed (counted from its
+  publication by `UacStream::Create` to the end of its destroy; 30.6), or
+- a create or close is executing in PortCls's dispatch (counted from the
+  wrapper's entry to its return, failed and pending creates included), or
+- one of those ended less than `UAC_REMOVE_QUIET_MS` (250 ms) ago,
+  counted from the later of that and the hold's start;
+
+and never longer than `UAC_REMOVE_HOLD_MS` (5 s). `UacPlanRemoveHold`
+decides; `RemoveHold` (`uacwdm.cpp`) polls every 10 ms. The hold is not
+taken at all (`UacPlanRemoveHoldTake`, read once at its start) when the
+last device power state PortCls gave the device (`PowerChangeState`) is
+not D0 even after the driver asked for D0 before the forward, or when
+nothing of the device is left to tear down: no stream, no open handle, no
+create or close executing (30.6). Open handles are
+counted and traced, not waited for: a handle a client keeps (one did:
+opened with the recording and not closed at the remove) does not hold it.
+
+This is a bounded timing mitigation, not a teardown barrier:
+
+- a client that starts after the quiet time, or pauses more than 250 ms
+  between its pin close and its filter close (or anywhere in its
+  teardown), can still meet the order the markers saw fail, and nothing
+  excludes a request arriving right after the last poll;
+- at the 5 s cap the remove goes on whatever is left, so a stream or a
+  close still in progress then meets that order too; the cap only keeps
+  the wait from being endless;
+- the wait delays the PnP thread; a client that needed that thread to go
+  on would be released only by the cap.
+
+Each device's accounting entry is allocated at AddDevice, before
+`PcAddAdapterDevice`: a device for which none can be allocated is not
+added (`STATUS_INSUFFICIENT_RESOURCES`), so no device runs without the
+mitigation. The entries are in a list outside the device extension; a
+remove's forward marks its thread there, and the entry is unlinked and
+freed when PortCls's remove returns, so a close or destroy that comes
+later finds nothing and touches nothing. The list holds no reference on
+the device object and no generation number: an entry is found by the
+device object's address, which relies on the device's own lifetime (a
+new device at the same address before a late close of the old one would
+be counted against the new one). On 2000 and later the remove follows a
+surprise removal and nothing waits; the counting runs everywhere. The
+trace flavour writes one line per hold (`rmhold`: streams and executing
+operations, open handles, milliseconds held) and one per hold not taken
+(`rmskip`: the same counts and whether the device was not in D0).
+
+### 30.4 What it does not change
+
+The driver's own teardown (29.6) is as before; nothing is sent to the
+device at a remove. A remove of a device with no stream, no handle and
+nothing executing does not wait; one with an open handle and no client
+activity waits the quiet time once (250 ms). ME is covered by the version
+test but was not run.
+
+### 30.5 Tests
+
+`desctest.c`: `UacPlanRemoveHoldTake`'s cases (a device in D0 with a
+stream, a handle or an executing operation is held; one with nothing left,
+or powered down, is not), `UacPlanRemoveHold`'s cases with streams, executing
+operations, the quiet time and the bound, and the teardown as the
+markers read it, modelled at `RemoveHold`'s 10 ms polls: the hold ends
+250 ms after the last destroy; a close executing for 400 ms keeps it
+through and 250 ms after; a client starting after the quiet time is not
+waited for (the window above); a stream or a close left ends at the
+bound. `streamtest.cpp`: the stream count stays untouched by every
+injected creation failure and is balanced over a stream's life (30.6).
+What the host checks cannot reach: the driver's calls into PortCls (the
+request for D0, the hold's place in PortCls's remove), the list's locking
+and lifetime, and the timing of real clients; those rest on the guest
+legs: the record above.
+
+### 30.6 Two devices removed together: a device PortCls had powered down
+
+With the hold as first made, a `uac2` device (`x4full`) and a `uac1`
+device (`hs`) removed together under NUSB's EHCI stalled every time, and
+with `main`'s images less often (the record, "Two devices removed
+together"). Read again with the lifecycle markers in trace builds of both
+drivers (the `uac1` lines told apart from the `uac2` ones), the earlier
+hold against `main`'s code, each device in turn the one recording:
+
+**Observed:**
+
+- 98 SE removed the two devices one after the other on the same thread:
+  the `uac2` device's remove first, the `uac1` device's 630 to 930 ms after
+  the first had returned.
+- During the `uac2` device's remove, the `uac1` driver logged
+  `PowerChangeState` with D3 for its device, and no D0 came before that
+  device's own remove. When the `uac1` device was the one recording, its
+  pin was stopped on the remove's thread during the `uac2` device's remove
+  (the transport drained for about 2 s).
+- At the `uac1` device's remove, a client thread's cleanup and close of one
+  of its handles came 6 to 10 ms after the remove's entry; the close
+  returned `STATUS_PENDING`, and the remove did not return in the window
+  watched: the stall. With the earlier hold this happened at all 6 such
+  removes read (the close came inside the hold); with `main`'s code at 1 of
+  3 (after PortCls's releases); at the other 2 no client request reached
+  the driver during the remove (28 and 52 ms), and it returned.
+- A `uac1` device alone: no power change before its remove, the client's
+  closes inside the hold returned success (3 of 3). Two `uac2` devices
+  (`x4full`, `hs24`): during the first device's remove the `uac2` driver
+  logged a D3 and, about 750 ms later and before the second device's
+  remove, a D0 (that build's line does not name the device); the second
+  device's closes inside its hold returned success (3 of 3).
+
+**Explanation proposed, not established:** a close that reaches PortCls
+during the remove of a device it has set to D3 is not completed, and the
+remove does not finish while it is outstanding; the hold, by keeping the
+remove going for 250 ms or more, made such a close certain to arrive
+inside it, where `main`'s 28 to 52 ms remove met it only sometimes. The
+traces show only the calls into the driver, not what PortCls or KS do with
+them; why the second device stayed in D3 is not known.
+
+**The change:** PortCls's last device power state for each device is
+recorded with its entry (`PowerChangeState`, pair 0's, the one PortCls
+calls). At a remove with no surprise removal before it, a device whose
+last state was not D0 is asked back to D0 before PortCls is given the
+remove (`UacPlanRemoveWake`; `PcRequestNewPowerState`, which 98 SE's and
+ME's PortCls export, `docs/testing/exports/w98port.txt` and
+`wmeport.txt`). The hold is then taken as for any device in D0; it is not
+taken when the device is still not in D0, nor when nothing of the device
+is left to tear down (`UacPlanRemoveHoldTake`). With the markers, at 6 of 6
+such removes the request returned success (after 1 to 37 ms), the driver
+logged D0 before the forward, the client's closes after the forward came
+inside the hold and returned success (their cleanups returned
+`STATUS_INVALID_DEVICE_REQUEST`, as cleanups did in every trace, passing
+or not; in one of the 6 the client had begun closing during the request,
+before the forward), and the remove returned 262 to 320 ms after its
+entry.
+
+The stream count runs from `UacStream::Create`'s publication of a stream
+(`UAC_STREAM_BORN`) to the end of a published stream's destroy
+(`UAC_STREAM_GONE`); a creation that fails after taking its device
+reference is destroyed without touching the count (`streamtest.cpp`
+checks the balance on each injected failure and over a stream's life).
+
+What it leaves open:
+
+- the request waits on the PnP thread for PortCls's power request to
+  complete; it returned in 1 to 37 ms in the 6 traced, and nothing bounds
+  it (the 5 s cap of the hold comes after it);
+- the request's return status is not used: whether the hold may be taken
+  follows the last `PowerChangeState` call alone (a D0 call taken as D0
+  whatever the request returns; none, and the device stays not in D0);
+- a device left in D3 (the request refused) has no hold and `main`'s risk:
+  a client close inside its remove can still stall it (with the first step
+  of this change, which had no request, 2 of 3 such removes in a trace run
+  stalled that way);
+- creates and closes count as executing from their entry into the
+  driver's dispatch to its return, not to the request's completion; a
+  pending create or close is not counted while it pends, and the open
+  count is approximate;
+- a device left in D3 (the request refused) has no hold and `main`'s risk:
+  a client close inside its remove can still stall it (with the first step
+  of this change, which had no request, 2 of 3 such removes in a trace run
+  stalled that way);
+- a device whose power changed without a call to `PowerChangeState` is
+  not seen as powered down;
+- the windows of 30.3 (a late client, a pause over 250 ms, the 5 s cap)
+  for a device in D0.

@@ -1,0 +1,358 @@
+# The device's lifetime: references, locks, the close, GIVENUP and its
+# cleanup, removal, a revoked claim or a replacement, program exit.
+# docs/design/mtp.md 7.9, "Threads and the device's lifetime", "Close",
+# "GIVENUP", "Removal frees nothing", "5, and the replacement check",
+# "Program exit", "The registry"; 12. Format: ../README.md. Every case opens
+# the default device first (dev d0; open d0) unless it says otherwise.
+
+case LIF-001
+  title  a close of an idle device: every step in order, CLOSED last, the allocations balanced
+  from   7.9/Close steps 1 to 7
+  close d0
+  wait notice d0 CLOSED
+end
+
+case LIF-002
+  title  MtpClose during a transfer: returns at once; the latched cancel settles; then the close
+  from   7.9/Close; 7.9/The host test, the engine (MtpClose during a transfer)
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async close d0 -> rc     # lands as the hold is left, in DATA-IN
+  wait notice d0 CLOSED
+end
+
+case LIF-003
+  title  MtpClose during recovery: recovery runs to its end, then the close
+  from   7.9/Close; 7.9/The host test, the engine (MtpClose during recovery)
+  sim d0 fault busy n=5
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  at io.recover.4#1 : close d0              # RECOVERING; the I/O thread holds nothing here
+  wait notice d0 CLOSED
+end
+
+case LIF-004
+  title  MtpCancel and MtpClose together from two threads: neither waits for the other
+  from   7.9/MtpCancel and MtpClose may come at any time; 11.4
+  retain d0
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async par { thread t1: cancel d0 j1 -> rc ; thread t2: close d0 -> rx }   # both blocked on the section; t1 first by rank
+  release d0
+  wait notice d0 CLOSED
+end
+
+case LIF-005
+  title  a second MtpClose and a cancel in CLOSING do nothing
+  from   7.9/MtpCancel and MtpClose may come at any time
+  retain d0
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async close d0
+  at io.close.5 : call MtpClose d0 by=retained -> r2 ; cancel d0 0 -> r3
+  release d0
+  wait notice d0 CLOSED
+end
+
+case LIF-006
+  title  MtpClose while a job's call is stuck: the deadline runs from the request; GIVENUP without the close starting
+  from   7.9/Close (deadline armed by MtpClose); 12/interleavings/close and cleanup
+  sim d0 stuck read#3                       # GetObject h=2: two data reads, then the response read, which pends
+  queue d0 j1 { GetObject h=2 sink=s -> r; post }
+  queue d0 j2 { post }
+  wait io.call#4                            # the response read, in RESPONSE
+  clock +5000
+  close d0                                  # the latch finds RESPONSE: no cancel procedure, so only the close's deadline runs
+  clock +29900
+  check state d0 CLOSING
+  clock +600
+  wait state d0 GIVENUP
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case LIF-007
+  title  the stuck call returning while EVENTS stop or ABORT is not yet quiet: retained, Busy, read again every second, then step 7
+  from   7.9/GIVENUP (quiescence); 12/interleavings/close and cleanup
+  power P
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  close d0
+  clock +30500
+  wait state d0 GIVENUP
+  sim d0 quiet=0
+  sim d0 unstick
+  clock +3000
+  check alloc retained d0
+  bcast PBT_APMQUERYSUSPEND
+  bcast PBT_APMQUERYSUSPENDFAILED
+  sim d0 quiet=1
+  clock +1000
+  wait notice d0 CLOSED
+end
+
+case LIF-008
+  title  a GIVENUP device whose call never returns: retained, Busy, no balance asked
+  from   7.9/GIVENUP; 12 (the allocation balance distinguishes retention)
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  close d0
+  clock +31000
+  wait state d0 GIVENUP
+  clock +60000                              # the call never returns within the case; teardown checks the retention first (X10)
+end
+
+case LIF-009
+  title  the close's step 6 finding an output not quiet: the I/O thread sets GIVENUP, then the quiescence loop
+  from   7.9/Close step 6; 7.9/GIVENUP
+  sim d0 abort-mask=1 always
+  close d0
+  wait state d0 GIVENUP
+  clock +2000
+  sim d0 abort-mask=0
+  clock +1000
+  wait notice d0 CLOSED
+end
+
+case LIF-010
+  title  the close's step 3: the event thread ends by its own WAIT_EVENT time-out and is joined
+  from   7.9/Close step 3
+  wait ev.wait#1                            # a WAIT_EVENT begun after the open; no event comes, so it pends to its time-out
+  close d0
+  wait notice d0 CLOSED                     # the idle advance reaches that time-out (X3)
+end
+
+case LIF-011
+  title  the close's step 4 waits for entry references only, not for retained, job or thread references
+  from   7.9/Close step 4
+  retain d0
+  par { thread t1: hold-inside MtpQueue d0 j1 { post } -> rq }   # t1 stopped at entry.ref: its entry reference taken, OPEN read, no lock held
+  close d0
+  wait io.close.4
+  check io.close.5 not reached while t1 is inside MtpQueue
+  release-thread t1
+  wait notice d0 CLOSED
+  release d0
+end
+
+case LIF-012
+  title  CLOSED posted while a retained reference is out: the free comes at its release, with the process hooks only
+  from   7.9/What the program passes; 12/interleavings/close and cleanup
+  retain d0
+  close d0
+  wait notice d0 CLOSED
+  free-host d0
+  release d0
+end
+
+case LIF-013
+  title  CLOSED posted while the power thread's snapshot reference is out: detached device skipped, freed at the unsnap, outside both locks
+  from   7.9/The answer over the registry; 7.9/Detachment; 12/interleavings/locks and references
+  power P
+  dev d1
+  open d1
+  hold pw.ask.d0                            # the snapshot references taken and the registry lock released
+  bcast PBT_APMQUERYSUSPEND async
+  wait pw.ask.d0
+  close d0
+  at reg.detach.in : check snapshot of d0 held
+  wait notice d0 CLOSED                     # CLOSED established before the snapshot is let go
+  go pw.ask.d0
+  wait answer
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case LIF-014
+  title  MtpRelease and MtpRetain in every state by a caller that owns a reference
+  from   7.9/Callers are counted (MtpRelease works in every state)
+  table  st
+    a  OPEN
+    b  CLOSING
+    c  CLOSED
+    d  GIVENUP
+  end
+  retain d0 ; retain d0
+  bring d0 to <st>
+  retain d0 -> r1
+  release d0 -> r2
+  release d0 -> r3
+  finish d0
+end
+
+case LIF-015
+  title  every entry in CLOSING, CLOSED or GIVENUP: refused at once, nothing submitted; the five exempt calls not refused by state
+  from   7.9/Callers are counted
+  table  st
+    a  CLOSING
+    b  CLOSED
+    c  GIVENUP
+  end
+  power P
+  dev d0
+  open d0
+  retain d0
+  bring d0 to <st>
+  queue d0 j1 { post } -> rq                # refused by state
+  call GetObjectInfo d0 h=2 from=test -> ro # refused by state, before the thread check
+  cancel d0 0 -> rc                         # exempt: MtpCancel
+  call MtpClose d0 by=retained -> rx        # exempt: MtpClose (a second close)
+  retain d0 -> rr                           # exempt: MtpRetain
+  release d0 -> rl                          # exempt: MtpRelease
+  bcast PBT_APMQUERYSUSPEND                 # exempt: MtpPower, asked by the power thread if d0 is attached
+  bcast PBT_APMQUERYSUSPENDFAILED
+  release d0
+  finish d0
+end
+
+case LIF-016
+  title  the device removed with a read pending: GONE; the pending call's buffers and MTP_DEV kept until it returns
+  from   7.9/Removal frees nothing of a pending call; 7.9/Errors (1167)
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  sim d0 remove pending-returns=later
+  close d0
+  clock +2000
+  sim d0 unstick code=1167
+  wait notice d0 CLOSED
+end
+
+case LIF-017
+  title  a call failing 5 with the same generation and no removal flag: a revoked claim
+  from   7.9/5, and the replacement check
+  sim d0 fail read#2 5
+  queue d0 j1 { GetObject h=2 sink=s -> r; post }
+  wait job j1 done
+  close d0
+  open d0 -> r2
+end
+
+case LIF-018
+  title  5 with the removal flag, with another generation, with the info open failing: GONE
+  from   7.9/5, and the replacement check; 11.4 (a replacement device with a new generation)
+  table  how
+    a  flags=3
+    b  gen=8
+    c  info-open-fails
+  end
+  sim d0 fail read#2 5
+  sim d0 after-5 <how>
+  queue d0 j1 { GetObject h=2 sink=s -> r; post }
+  wait job j1 done
+end
+
+case LIF-019
+  title  program exit with every device closing in time
+  from   7.9/Program exit
+  power P
+  dev d1
+  open d1
+  exit
+end
+
+case LIF-020
+  title  program exit with the power thread still answering: a standby during the closes refused
+  from   7.9/Program exit; 12/host (exit with the power thread still answering)
+  power P
+  sim d0 delay CloseSession 2000
+  exit async
+  at io.close.5 : bcast PBT_APMQUERYSUSPEND
+  wait exit done
+end
+
+case LIF-021
+  title  exit at the budget with a device CLOSING, one GIVENUP, one OPENING, one held open and a name read out
+  from   7.9/Program exit; 12/interleavings/close and cleanup (exit at the budget)
+  rule   A
+  power P
+  dev d1 ; dev d2 ; dev d3 ; dev d4 unclaimed
+  open d1
+  sim d1 stuck read#3
+  queue d1 j1 { GetObject h=4 sink=s; post }
+  wait io.call#3 d1
+  close d1
+  clock +31000
+  wait state d1 GIVENUP                     # first, so that no later clock step passes d0's close deadline
+  sim d0 stuck CloseSession                 # d0's close staged before the suspend, held inside its CloseSession
+  close d0
+  wait io.call#closesession.cmd d0
+  sim d2 stuck devinfo
+  open d2 async
+  wait open.step.devinfo d2
+  sim d4 stuck GET_STRING
+  names d4 async
+  wait names.call d4
+  bcast PBT_APMSUSPEND
+  open d3 async
+  wait open.held.wait d3
+  exit
+end
+
+case LIF-022
+  title  the I/O thread is never joined; its handle is closed by whoever frees the MTP_DEV
+  from   7.9/Who keeps the device alive (one per library thread); Close step 7
+  retain d0
+  close d0
+  wait notice d0 CLOSED
+  wait thread io d0 returned
+  release d0
+end
+
+case LIF-023
+  title  the GIVENUP cleanup's order: event and cancel threads joined, no call out, then quiet, then step 7
+  from   7.9/GIVENUP (quiescence)
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  wait io.call#3
+  close d0
+  clock +30500
+  wait state d0 GIVENUP
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case LIF-024
+  title  the deadline observer without any window: a stuck call in the command-line mode's process is bounded the same way
+  from   7.9/The deadline observer; 12/host (the command-line mode with the window absent)
+  program cli
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  close d0
+  clock +31000
+  wait state d0 GIVENUP
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case LIF-025
+  title  references: one per thread, per queued job, the registry's and the program's; no notice carries one
+  from   7.9/Who keeps the device alive
+  hold io.dequeue.in#1
+  queue d0 j1 { post }
+  queue d0 j2 { post }
+  check refs d0
+  go io.dequeue.in
+  wait idle d0
+  check refs d0
+  close d0
+  wait notice d0 CLOSED
+end
+
+case LIF-026
+  title  the snapshot reference against a release to zero: whichever drops last frees, once, outside both locks
+  from   races R7 (a close and a GIVENUP device during an answer); 7.9/Who keeps the device alive; The lock order (a release to zero frees after both locks)
+  power P
+  dev d1
+  open d1
+  retain d0                                 # the program's own extra reference, released at every point of the answer's end
+  hold pw.ask.d0                            # the snapshot taken, the registry lock released
+  bcast PBT_APMQUERYSUSPEND async -> a
+  wait pw.ask.d0
+  close d0
+  wait notice d0 CLOSED                     # detached and CLOSED: only the snapshot and the retained reference are left
+  go pw.ask.d0
+  wait answer
+  {rel} release d0                          # the recording run's release, after the answer
+  sweep pw.ask.d0 .. pw.unsnap.d1 : release d0 instead of {rel}   # replaced, never added: one reference, one release (X9)
+  bcast PBT_APMQUERYSUSPENDFAILED
+end

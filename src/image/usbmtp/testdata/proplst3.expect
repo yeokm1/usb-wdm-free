@@ -1,0 +1,15 @@
+# Expected decoding of proplst3.hex, written by hand from MTP 1.1, 5.4 and 3.2; 7.9 here (an unknown datatype stops the parse) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectPropList for folder 0001A2B3h (depth 1)
+result = MTPE_PROTOCOL (the list discarded whole; nothing published; the folder falls back to GetObjectHandles and GetObjectInfo)
+NumberOfElements = 3
+element 1 ObjectHandle = 0002C3D4h
+element 1 PropertyCode = DC01h (StorageID)
+element 1 Datatype = 0006h (UINT32)
+element 1 Value = 00020001h
+element 2 ObjectHandle = 0002C3D4h
+element 2 PropertyCode = DD00h (unknown)
+element 2 Datatype = 0099h (not a datatype of 3.2: the parse stops here; element 3 is never read)
+children[] = none
+end

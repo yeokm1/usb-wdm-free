@@ -31,6 +31,16 @@ for %%O in (Od O2) do (
     if errorlevel 1 goto fail
     type test.log
 )
+cl /nologo /W4 /WX /MD /O2 /DUAC_V1=1 /I"%SRC%." /I"%COMMON%" /Fe"%OUT%\leveltest.exe" "%SRC%..\uac2\leveltest.c" "%COMMON%\uaclevel.c" "%COMMON%\uacvol.c" "%COMMON%\uacctl.c" "%COMMON%\uacdesc.c" > build.log 2>&1
+if errorlevel 1 goto fail
+"%OUT%\leveltest.exe" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+cl /nologo /W4 /WX /MD /Od /DUAC_V1=1 /I"%SRC%." /I"%COMMON%" /Fe"%OUT%\captest.exe" "%SRC%..\uac2\captest.c" "%COMMON%\uaccap.c" "%COMMON%\uacctl.c" "%COMMON%\uacdesc.c" > build.log 2>&1
+if errorlevel 1 goto fail
+"%OUT%\captest.exe" "%SRC%testdata\play2.bin" "%SRC%testdata\logi0a64.bin" "%SRC%testdata\brio100.bin" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
 echo PASS uac1 host > PASS.TXT
 popd
 exit /b 0

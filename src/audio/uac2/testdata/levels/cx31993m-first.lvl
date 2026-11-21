@@ -1,0 +1,14 @@
+# cx31993m (the CX31993+MAX97220 replay), uacemu --vol-range -32512:3072:256 --vol-cur 3072:
+# the start inside the Found New Hardware install (port 2 devnode), XP SP3, EHCI. FU 0x10: volume per channel, no mute.
+!profile ..\cx31993m\config0.bin 0 0 2
+!nosaved
+!start 1 2 14
+A1 02 0201 1000 50 0 8 01000081000c0001
+A1 02 0202 1000 50 0 8 01000081000c0001
+A1 01 0201 1000 2 0 2 000c
+A1 01 0202 1000 2 0 2 000c
+21 01 0201 1000 2 0 2 0000
+21 01 0202 1000 2 0 2 0000
+# SET_INTERFACE 1 alt 1
+# SET_INTERFACE 1 alt 1
+!end

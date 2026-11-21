@@ -1,0 +1,12 @@
+# Expected decoding of datahdr.hex, written by hand from MTP 1.1, D.2; 7.2 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = data container header, for GetObject with tid 00012345h
+result = MTPE_OK
+length = 16
+type = 0002h
+code = 1009h
+tid = 00012345h
+payload = DE AD BE EF
+code 1008h: result = MTPE_PROTOCOL; type 0001h: result = MTPE_PROTOCOL; tid 00022345h (differs in its third byte only): result = MTPE_PROTOCOL
+end

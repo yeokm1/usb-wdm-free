@@ -1,0 +1,13 @@
+# Expected decoding of respok.hex, written by hand from MTP 1.1, D.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = response container, expected tid 5
+result = MTPE_OK
+length = 12
+type = 0003h
+code = 2001h
+tid = 5
+parameters[] =
+truncated at every byte 0 to 11: result = MTPE_PROTOCOL
+with tid 4 expected: result = MTPE_PROTOCOL
+end

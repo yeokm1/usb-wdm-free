@@ -1,0 +1,426 @@
+# Expected results of cancel.cas, written by hand from docs/design/mtp.md
+# 7.5 and 7.9. Format: ../README.md. I1 to I10 and U1 to U4 hold in every
+# case; the execution contract (X1 to X11) makes every order below exact.
+#
+# Shorthands (README): SETTLE = ABORT in|out -> 0; HC(t) = SETTLE, CANCEL
+# tid=t, STATUS -> 0400 0120; RESET6 = EVENTS stop -> 1, SETTLE, RESET,
+# RESET_PIPE in, RESET_PIPE out, RESET_PIPE int, STATUS -> 0400 0120 (7.5
+# 6.1 to 6.6); EVSTART = EVENTS start, once, after the new session's
+# OpenSession (7.3); NOCANCEL = no CANCEL, RESET or RESET_PIPE.
+# A cancel in IDLE or RESPONSE issues no ABORT (7.5 step 1; CQ20).
+# bytes= counts object payload only (7.9, "The bytes moved").
+
+CAN-001
+  ret r1 = MTPE_OK bytes=1000
+  ret r2 = MTPE_CANCELLED flags=none bytes=0
+  wire d0 after open = [GetObject h=2 tid=1]
+  ctl d0 after open = []
+end
+
+CAN-002
+  ret r = MTPE_CANCELLED flags=none
+  list delivered = none
+  wire d0 after open = [GetObjectHandles 00010001h 0 1 tid=1]
+  ctl d0 after open = []
+end
+
+CAN-003
+  ret r = MTPE_CANCELLED flags=none
+  call read#2 = 995 (ended by the cancel thread's ABORT)
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0120]
+  order: cancel < io.call#2 returns from the directive < the read is made and pends < ABORT < the read returns 995 < cx.publish.in < CANCEL
+  the cancel thread's check 100 ms after its ABORT finds in call cleared: one ABORT round only
+  wire d0 after open = [GetObject h=4 tid=1]
+  never an I/O thread call for tid 1 after the read but the class requests above
+end
+
+CAN-004
+  ret r = MTPE_CANCELLED flags=none (a reading operation: nothing to be uncertain about)
+  call write#1 = 995
+  ctl d0 after open = [HC(1)]
+end
+
+CAN-005
+  ret r2 = MTPE_CANCELLED flags=none (refused at its start)
+  wire d0 after open = [GetObject h=4 tid=1]
+  at every point before the last data read's io.submit.pre.in (data still to come when the cancel lands):
+    ret r = MTPE_CANCELLED flags=none
+    ctl d0 after open = [HC(1)]
+  at the last data read's io.submit.pre.in, io.call and io.ret (the read is made and completes before the settlement):
+    ret r = MTPE_OK bytes=5242880
+    ctl d0 after open = [SETTLE]; NOCANCEL (7.5 step 2: every byte moved, RESPONSE after all)
+  at the last data read's io.submit.post.in and io.phase.RESPONSE#1 (the phase is RESPONSE when the cancel lands: 7.9, the handshake's step 2):
+    ret r = MTPE_OK bytes=5242880
+    ctl d0 after open = []
+end
+
+CAN-006
+  wire d0 after open starts [SendObjectInfo 00010001h 1 tid=1, SendObject tid=2]
+  wire d0 !has GetObjectInfo (the readback, a new transaction, is refused by the latch at every point: CQ21)
+  never a second SendObject or SendObjectInfo
+  at io.phase.DATA-OUT#2 (SendObject's command submitted, no data):
+    ret r = MTPE_CANCELLED flags=UNCERTAIN bytes=0
+    ctl d0 after open = [HC(2)]
+    wire d0 !has DeleteObject (Q24, state (ii): the command may have reached the device, so the pair is abandoned)
+  at the data write's io.submit.pre.in, io.call and io.ret (the one write of 300,012 bytes made and complete before the settlement):
+    ret r = MTPE_OK flags=UNVERIFIED bytes=300000, the new handle returned
+    ctl d0 after open = [SETTLE]; NOCANCEL
+    wire d0 !has DeleteObject
+  at the data write's io.submit.post.in and io.phase.RESPONSE#2:
+    ret r = MTPE_OK flags=UNVERIFIED bytes=300000, the new handle returned
+    ctl d0 after open = []
+    wire d0 !has DeleteObject
+end
+
+CAN-007
+  ret r1 = MTPE_OK bytes=1000
+  ret r2 = MTPE_CANCELLED flags=none
+  wire d0 after open = [GetObject h=2 tid=1]
+  ctl d0 after open = []
+end
+
+CAN-008
+  ret r1 = MTPE_OK bytes=70000
+  ret r2 = MTPE_CANCELLED flags=none
+  ctl d0 after open = [SETTLE]
+  NOCANCEL
+  wire d0 after open = [GetObject h=3 tid=1]
+end
+
+CAN-009
+  ret r1 = MTPE_OK bytes=500
+  ret r2 = MTPE_CANCELLED flags=none
+  reads of tid 1 = [512 -> 512, 512 -> 0, 512 -> response 12]
+  ctl d0 after open = [] (the read after a whole-packet data phase is made in RESPONSE)
+  wire d0 after open = [GetObject h=30 tid=1]
+end
+
+CAN-010
+  writes of tid 2 = [12 + 1012 bytes as one write of 1024, WRITE_ZLP]
+  ctl d0 after open = []; NOCANCEL
+  ret r = MTPE_OK flags=UNVERIFIED bytes=1012, the new handle returned (CQ21: the readback refused by the latch)
+  wire d0 after open = [SendObjectInfo 00010001h 1 tid=1, SendObject tid=2]
+end
+
+CAN-011
+  writes of tid 2 = [1048576 (the 12-byte header and 1,048,564 payload bytes: 7.9, "Data out") -> 1048576, the second -> 995 count 65536]
+  ret r = MTPE_CANCELLED flags=UNCERTAIN bytes=1048564 (the first write's payload; the failed write counts nothing, whatever count it reported)
+  ctl d0 after open = [HC(2)]
+end
+
+CAN-012
+  ret r1 = MTPE_OK bytes=1000
+  ret r2 = MTPE_OK bytes=70000
+  wire d0 after open = [GetObject h=2 tid=1, GetObject h=3 tid=2]
+  ctl d0 after open = [] at every point
+  never ABORT after io.dequeue.in of j2
+end
+
+CAN-013
+  ret r1 = MTPE_CANCELLED flags=none
+  ret r2 = MTPE_OK
+  order: cx.publish.in (j1) < io.dequeue.in (j2)
+  ctl d0 after open = [HC(1)]; nothing on the control handle after io.dequeue.in of j2
+  wire d0 after open = [GetObject h=4 tid=1, GetObjectInfo h=2 tid=2]
+end
+
+CAN-014
+  ret r1 = MTPE_CANCELLED flags=none
+  ret r2 = MTPE_OK
+  state d0 = OPEN
+  notice d0 = []
+  wire d0 after open = [GetObject h=4 tid=1, GetObjectInfo h=2 tid=2]
+end
+
+CAN-015
+  ret r = MTPE_CANCELLED flags=none
+  ctl d0 after open = [HC(1)] (one CANCEL, one round of the cancel thread)
+end
+
+CAN-016
+  ret r = MTPE_CANCELLED flags=none
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1920 (3 times, 50 ms apart), STATUS -> 0400 0120]
+  the second cancel, in RECOVERING, changed nothing
+end
+
+CAN-017
+  GIVENUP set by io, the settlement having read the mask (a transition: the state at the end of the steps is CLOSED)
+  ctl d0 after open = [ABORT in|out -> 1], then the cleanup's rounds [EVENTS stop -> 1, ABORT in|out -> 1] once a second, then after abort-mask=0 [EVENTS stop -> 1, ABORT in|out -> 0] and the cleanup's step 7
+  NOCANCEL
+  ret r = MTPE_GIVENUP
+  busy d0 = 1 until the quiet round
+  alloc = balanced
+  notice d0 = [GIVENUP, CLOSED]
+end
+
+CAN-018
+  ctl d0: ABORT in|out at the cancel (returning after its 1,000 ms wait, the pipe busy), then again 100 ms after each return while in call is set; none begun at or after 10,000 ms after the cancel
+  GIVENUP set within [cancel+20000, cancel+20500], set by cx (the outer bound of 7.5: the I/O thread never reached step 6)
+  NOCANCEL
+  notice d0 = [GIVENUP, CLOSED]
+  ret r = MTPE_GIVENUP
+  alloc = balanced
+end
+
+CAN-019
+  ret r = MTPE_CANCELLED flags=SESSION_LOST
+  ret r2 = MTPE_CANCELLED flags=none (the flag; the changed session would give MTPE_SESSION, later in the order)
+  ctl d0 after open = [SETTLE, CANCEL tid=1 -> 31, RESET6, EVSTART]
+  session d0 = 2
+  wire d0 after open = [GetObject h=4 tid=1, OpenSession tid=0]
+  order: run j1 returns < OpenSession (the resume job) < EVENTS start
+  notice d0 has SESSION_LOST
+end
+
+CAN-020
+  ret r = MTPE_CANCELLED flags=none
+  ctl d0 after open = [HC(1)]
+end
+
+CAN-021
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1920, STATUS -> 0400 1920, STATUS -> 0400 1920, STATUS -> 0400 0120]
+  each STATUS after the first 50 ms (fake clock) after the one before
+  ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-022
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1f20, STATUS -> 0400 0120], 50 ms apart
+  ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-023
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0800 1f20 81000000, RESET_PIPE in, STATUS -> 0400 0120]
+  ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-024
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0c00 1f20 81000000 02000000, RESET_PIPE in, RESET_PIPE out, STATUS -> 0400 0120]
+  ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-025
+  row a (the bare 2: bulk OUT 02h alone has it): ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS, RESET_PIPE out, STATUS -> 0400 0120]
+  row b (the bare 1: bulk IN 81h alone has it, CQ23): ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS, RESET_PIPE in, STATUS -> 0400 0120]
+  every row: ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-026
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS, RESET_PIPE in, RESET_PIPE out, STATUS -> 0400 0120] (the bare 1 is shared: both)
+  ret r = MTPE_CANCELLED flags=none
+end
+
+CAN-027
+  every row:
+    ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> <status>, RESET6, EVSTART]
+    no RESET_PIPE before RESET
+    ret r = MTPE_CANCELLED flags=SESSION_LOST
+    ret r2 = MTPE_CANCELLED flags=none
+    session d0 = 2
+    wire d0 after open = [GetObject h=4 tid=1, OpenSession tid=0]
+end
+
+CAN-028
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, RESET6, EVSTART]
+  wire d0 after open = [GetObject h=4 tid=1, OpenSession tid=0]
+  order: run j1 returns < OpenSession < EVENTS start < drop j2
+  run j2 = 0
+  drop j2 = MTPE_SESSION on io
+  ret r = MTPE_CANCELLED flags=SESSION_LOST
+  ret r2 = MTPE_CANCELLED flags=none
+  notice d0 = [SESSION_LOST]
+end
+
+CAN-029
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 0, SETTLE]
+  ctl d0 !has RESET
+  GIVENUP set by io (a transition: the state at the end of the steps is CLOSED)
+  then every second: [EVENTS stop, ABORT in|out]; after events-stop-out=1 the cleanup's step 7
+  ret r = MTPE_GIVENUP
+  alloc = balanced
+  notice d0 = [GIVENUP, CLOSED]
+end
+
+CAN-030
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 1, ABORT in|out -> 2]
+  ctl d0 !has RESET
+  GIVENUP set by io (a transition: the state at the end of the steps is CLOSED)
+  ret r = MTPE_GIVENUP
+  notice d0 = [GIVENUP, CLOSED]
+end
+
+CAN-031
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1920 (repeated, 50 ms apart), RESET6, EVSTART]
+  the last Busy STATUS at or before 10,000 ms after the cancel; EVENTS stop of step 6 at or after it, before 10,100 ms
+  ret r = MTPE_CANCELLED flags=SESSION_LOST
+  ret r2 = MTPE_CANCELLED flags=none
+  state d0 = OPEN, session d0 = 2
+end
+
+CAN-032
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS (Busy, until 10,000 ms), EVENTS stop -> 1, SETTLE, RESET, RESET_PIPE in, RESET_PIPE out, RESET_PIPE int, STATUS (Busy, until 20,000 ms)]
+  ctl d0 !has EVENTS start
+  GIVENUP set within [cancel+20000, cancel+20500]
+  notice d0 = [GIVENUP] at the end of the steps; after teardown: notice d0 = [GIVENUP, CLOSED] (CLOSED once the cleanup found it quiet)
+  ret r = MTPE_GIVENUP
+end
+
+CAN-033
+  ret r = MTPE_CANCELLED flags=none
+  ret r2 = MTPE_OK
+  reads for tid 2: the stale response (tid 1) read whole and dropped, then the data and response of tid 2
+  trace has stale-response-dropped
+end
+
+CAN-034
+  ret r = MTPE_CANCELLED flags=none
+  ret r2 = MTPE_PROTOCOL reason=MTPR_CTID
+  the first stale container dropped; the second is the protocol error
+end
+
+CAN-035
+  ret r1 = MTPE_DEVICE resp=201Fh flags=none (the device-initiated cancel: 7.5; 7.9, "A bulk failure of no named Win32 code")
+  ret r2 = MTPE_OK
+  ctl d0 after open = [SETTLE, STATUS -> 0c00 1f20 81000000 02000000, RESET_PIPE in, RESET_PIPE out, STATUS -> 0400 0120]
+  ctl d0 !has CANCEL
+  wire d0 after open = [GetObject h=4 tid=1, GetObjectInfo h=2 tid=2]
+end
+
+CAN-036
+  row a: ctl d0 after open = [SETTLE, STATUS -> 0400 0120, CANCEL tid=1, STATUS -> 0400 0120]
+  row b: ctl d0 after open = [SETTLE, STATUS -> 0400 1920, CANCEL tid=1, STATUS -> 0400 0120]
+  STATUS before any CANCEL in both
+  every row: ret r1 = MTPE_DEVICE resp=0 win32=31 flags=none
+end
+
+CAN-037
+  ctl d0 after open = [SETTLE, STATUS -> 0400 0220, RESET6, EVSTART]
+  ctl d0 !has CANCEL
+  session d0 = 2
+  ret r1 = MTPE_DEVICE resp=0 win32=31 flags=SESSION_LOST
+end
+
+CAN-038
+  ret r1 = MTPE_DEVICE resp=201Fh flags=none (cancelled by the device; the job goes on)
+  ret r2 = MTPE_OK
+  ctl d0 after open = [SETTLE (by cx), STATUS -> 0c00 1f20 81000000 02000000, RESET_PIPE in, RESET_PIPE out, STATUS -> 0400 0120]
+  ctl d0 !has CANCEL
+  wire d0 after open = [GetObject h=4 tid=1, GetObjectInfo h=2 tid=2]
+end
+
+CAN-039
+  ret r1 = MTPE_OK bytes=5242880
+  ctl d0 after open = []
+  trace has event-cancel-other-id
+end
+
+CAN-040
+  ctl d0 after open = [RESET6, EVSTART] (no CANCEL: a response is not cancelled)
+  ret r1 = MTPE_CANCELLED flags=SESSION_LOST (CQ26: the flag was set before the time-out)
+  ret r2 = MTPE_CANCELLED flags=none
+  wire d0 after open = [GetObject h=2 tid=1, OpenSession tid=0]
+end
+
+CAN-041
+  ret r = MTPE_CANCELLED flags=UNCERTAIN
+  ctl d0 after open = [HC(1)]
+  wire d0 after open = [DeleteObject h=5 0 tid=1]
+  never a second DeleteObject
+end
+
+CAN-042
+  ret rb = MTPE_OK
+  ret rs = MTPE_CANCELLED flags=UNCERTAIN (the cleanup's response read: no EDIT_OPEN)
+  ret re = MTPE_CANCELLED flags=none (the flag is read before the edit state; nothing sent)
+  wire d0 after open = [BeginEditObject h=4 tid=1, SendPartialObject h=4 1000 0 3000000 tid=2, EndEditObject h=4 tid=3]
+  EndEditObject sent exactly once, inside the AndroidSendPartial call (CQ18)
+  ctl d0 after open = [HC(2)]
+end
+
+CAN-043
+  ret rs = MTPE_CANCELLED flags=UNCERTAIN|SESSION_LOST|EDIT_OPEN
+  ret re = MTPE_CANCELLED flags=none
+  ctl d0 after open = [SETTLE, CANCEL tid=2, STATUS -> 0400 0220, RESET6, EVSTART]
+  wire d0 !has EndEditObject
+end
+
+CAN-044
+  ret rs = MTPE_CANCELLED flags=UNCERTAIN|SESSION_LOST|EDIT_OPEN (the session changed before the cleanup's admission)
+  ret re = MTPE_CANCELLED flags=none
+  ctl d0 after open = [HC(2), EVSTART]
+  wire d0 after open = [BeginEditObject h=4 tid=1, SendPartialObject h=4 1000 0 3000000 tid=2, OpenSession tid=0]
+  wire d0 !has EndEditObject
+end
+
+CAN-045
+  ret rs = MTPE_POWER flags=STANDBY|UNCERTAIN|SESSION_LOST|EDIT_OPEN
+  ret re = MTPE_SESSION flags=none (the session was taken as lost with rs)
+  wire d0 !has EndEditObject
+end
+
+CAN-046
+  ret rs = MTPE_CANCELLED flags=UNCERTAIN|EDIT_OPEN
+  ret re = MTPE_CANCELLED flags=none
+  ctl d0 after open starts [HC(2)]
+  wire d0 !has EndEditObject
+  wire d0 after the resume = [OpenSession tid=0] and nothing of j1 again
+  held d0 = 1 from PBT_APMSUSPEND to the resume
+end
+
+CAN-047
+  wire d0 !has EndEditObject
+  GIVENUP set by io (a transition: the state at the end of the steps is CLOSED)
+  ret rs = MTPE_GIVENUP flags=UNCERTAIN|EDIT_OPEN
+  ret re = MTPE_GIVENUP
+end
+
+CAN-048
+  wire d0 after open = [BeginEditObject h=4 tid=1, SendPartialObject h=4 1000 0 3000000 tid=2, EndEditObject h=4 tid=3, CloseSession tid=4]
+  ret rs = MTPE_CLOSING flags=UNCERTAIN (the close's latched cancel; CLOSING first in the order, CQ15)
+  ret re = MTPE_CLOSING
+  ctl d0 after open = [HC(2), EVENTS stop -> 1, SETTLE]
+  notice d0 = [CLOSED]
+end
+
+CAN-049
+  EndEditObject sent exactly once (tid 3)
+  ret rs = MTPE_CANCELLED flags=UNCERTAIN|SESSION_LOST|EDIT_OPEN (the cleanup's response lost: 7.5 step 1's stuck device)
+  ret re = MTPE_CANCELLED flags=none
+  ctl d0 after open = [HC(2), RESET6, EVSTART]
+  never a second EndEditObject
+end
+
+CAN-050
+  ret r1 = MTPE_OK bytes=1000
+  wire d0 after open = [GetObject h=2 tid=1]
+  ctl d0 after open = []
+end
+
+CAN-051
+  rc1, rc2 returned while cx was held at cx.abort
+  never a driver call on the test thread that called MtpCancel
+  ABORT calls on cx only; CANCEL and STATUS on io only
+  ret r1 = MTPE_CANCELLED
+end
+
+CAN-052
+  GIVENUP set within [t+20000, t+20500], t the hold that published read#3's failure, set by cx (7.5, the outer bound: the I/O thread is blocked in its first class request)
+  drop j2 = MTPE_GIVENUP on cx
+  notice d0 = [GIVENUP, CLOSED]
+  ret r1 = MTPE_GIVENUP
+  alloc = balanced
+end
+
+CAN-053
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 1, SETTLE, RESET (failing)], then the cleanup's [EVENTS stop -> 1, SETTLE] and its step 7
+  no RESET_PIPE; no second RESET; no OpenSession; nothing on the bulk pipes after GIVENUP (I8)
+  GIVENUP set by io (a transition: the state at the end of the steps is CLOSED, the notice having been waited for); ret r = MTPE_GIVENUP flags=none; ret r2 = MTPE_GIVENUP
+  drop j2 = MTPE_GIVENUP (by the thread that made the device GIVENUP: io here)
+  notice d0 = [GIVENUP, CLOSED]
+  alloc = balanced
+end
+
+CAN-054
+  every row: ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 1, SETTLE, RESET, then RESET_PIPE in, out and int up to the failing one], then only the cleanup's quiet checks
+  every row: no Get Device Status after the failing RESET_PIPE; no EVENTS start; no OpenSession
+  every row: GIVENUP set by io (a transition), state d0 = CLOSED at the end of the steps; ret r = MTPE_GIVENUP; notice d0 = [GIVENUP, CLOSED]; alloc = balanced
+end

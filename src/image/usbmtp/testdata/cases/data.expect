@@ -1,0 +1,80 @@
+# Expected results of data.cas, written by hand from docs/design/mtp.md
+# 7.2 and 7.9 "Parsing". Format: ../README.md. I5 and I6 hold (no read
+# past either guard page; temporaries freed by the return).
+
+DAT-001
+  every row: r1 and r2 equal <fixture>.expect, field by field; no fault at either guard; canaries intact
+  the two encoder rows (C, D): the library's encoding equals the fixture byte for byte
+end
+
+DAT-002
+  every row, every n: r[n] = MTPE_PROTOCOL (a dataset cut inside a field or a count), never a fault, never a read past the cut
+  except: a cut that leaves every field a dataset knows whole (the trailing bytes of devinfo2 cut away) = MTPE_OK with the same fields
+end
+
+DAT-003
+  a string's rows: rA = MTPE_OK, the field decoded as 254 units 0041h (the replaced string) and every other field as <fixture>.expect has it (at its moved offset); rC, where run, = MTPE_PROTOCOL reason=MTPR_STRING
+  a capped array's rows (1,048,576 handles; 4,194,304 property-list elements): rA = MTPE_OK (at the cap: the handles 00100000h + i decoded; the property-list extension dropped as the folder's own, the fixture's objects as its .expect has them); rB = MTPE_TOOLARGE (it fits and is over the cap); rC, rD, rE = MTPE_PROTOCOL reason=MTPR_COUNT (the fit fails; the fit is checked first, CQ39, so rD and rE, which also pass the cap, are MTPE_PROTOCOL)
+  an uncapped array's rows: rA = MTPE_OK, the 1,000 extra elements decoded as inserted (a property value's array as a decoded value, or skipped by its size for an unknown property, as the fixture's .expect has that element); rC, rD (where run), rE = MTPE_PROTOCOL reason=MTPR_COUNT
+  every row: never an allocation sized by a count that failed either check; allocation sizes narrowed to 32 bits by a checked conversion
+end
+
+DAT-004
+  as each fixture's .expect (strpast: MTPE_PROTOCOL; strnul: "ab", the next fields right; strsurr: U+FFFD for each unpaired unit, the same every time; str255: 254 units)
+end
+
+DAT-005
+  r, r2 = MTPE_OK, every field as strnonul.expect; Filename "abc", terminated by the library; trace has string-without-nul, once per parse (Q15: accepted, with a trace line)
+end
+
+DAT-006
+  row a: r = MTPE_PROTOCOL reason=MTPR_DATATYPE; the list discarded whole; the folder falls back to GetObjectHandles and GetObjectInfo (OPS-022)
+  rows b, c, d, g: r = MTPE_OK with object 0002C3D4h (rows b, c, d) or 0003E4F5h (row g) marked for GetObjectInfo; the other one decoded as proplst1.expect has it; the list marked suspect (completeness check, OPS-023)
+  rows e, f: r = MTPE_OK with the elements of the sentinel handle not published as an object; 0003E4F5h decoded; the list suspect
+  row h: r = MTPE_OK, object 0002C3D4h as proplst1.expect has it (a property given twice with one value is not a conflict)
+  every row: nothing partly validated published
+end
+
+DAT-007
+  row a: r = MTPE_OK, 1,048,576 handles; 4,194,304 bytes charged; 1,048,576 visits
+  row b: r = MTPE_OK, no child (every element the folder's own, dropped); 0 bytes charged; 4,194,304 visits
+  row c: r = MTPE_TOOLARGE at element 116,915: each object charges 64 + 510 = 574 bytes; after 116,914 objects and the 64 of the next, 67,108,700, within; its name's 510 make 67,109,210, past 67,108,864
+  row d: r = MTPE_TOOLARGE at element 2,097,153: each element visits 4 (itself and its 3 array elements, skipped); 2,097,152 elements make 8,388,608, the cap itself, not past it; the next passes it
+  rows c, d: nothing published; temporaries freed by the return (I6)
+end
+
+DAT-008
+  the data phase checked as it arrives: the read stops once 64 MiB is passed; never more than 64 MiB held
+  the transaction ended by the cancel procedure (ctl d0 = [HC(1)]), then the listing falls back (7.4: a cap reached): ret r = MTPE_OK children = [2, 3]
+end
+
+DAT-009
+  every input: r in {MTPE_OK, MTPE_PROTOCOL, MTPE_TOOLARGE, MTPE_NOMEM}; never a fault; canaries intact; within the execution budget (elements visited)
+  every input decoding MTPE_OK: counts within their caps, every string terminated, no handle 0 or FFFFFFFFh in a listing
+  inputs = 1,984,000 (31 fixtures, 64 seeds, 1,000 each), parses = 3,968,000, the inputs identical on every run (MUT1)
+  the run's counts (inputs, results by code) written to the result file (12: the fuzzing's counts); the counts by code are the library's to report, not predicted here
+end
+
+DAT-010
+  every n: r[n] = MTPE_NOMEM; temporaries freed; allocations balanced after the call
+end
+
+DAT-011
+  the run with no allocation failed: r0 to r4 = MTPE_OK, rq = MTPE_OK
+  every n of X11's sweep, by X11's one stopping rule:
+  nomem: when the n-th allocation is inside the open: r0 = MTPE_NOMEM, every open step undone, no MTP_DEV; the control script stops there
+  nomem: inside the queue: rq = MTPE_NOMEM, neither run nor drop for j1 (I4); the control script stops there
+  nomem: inside one of j1's operations: that one = MTPE_NOMEM; j1's body stops there (the operations after it are not called, their results unset), does its post and returns; the control script goes on: j1 done, the close, CLOSED
+  nomem: inside the close's own work or a library thread's (not a call of a script): no script call returns MTPE_NOMEM for it; the action of 7.9 for it (the open's undo, an event dropped and a full refresh asked, the device given up); the control script stops at a wait that can no longer end, and teardown runs
+  nomem: every n: no fault; I4 over teardown; alloc = balanced after teardown (I9)
+end
+
+DAT-012
+  waits the capture: each equals its .expect, written by hand from the capture and the specification; the serial number replaced; committed only after the owner has seen the fixture's readable fields (Q16)
+end
+
+DAT-013
+  rows a, b, c, f: r = MTPE_PROTOCOL reason=MTPR_CLEN
+  row d: r = MTPE_PROTOCOL reason=MTPR_CTID
+  row e: r = MTPE_PROTOCOL reason=MTPR_CTYPE
+end

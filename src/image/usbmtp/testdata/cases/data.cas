@@ -1,0 +1,211 @@
+# Parsers: the fixtures, their mutations, the caps, the decoding budget,
+# the guard pages, the canaries and allocation failure. docs/design/mtp.md
+# 7.2 (datasets, caps); 7.9, "Parsing: every length and count the device
+# sends is checked", "The host test" (fixtures, malformed datasets,
+# fuzzing, allocation, semantic assertions); 11.3; 12. Format:
+# ../README.md. These cases call the parsers directly (pure functions of a
+# byte range and an output structure): no device, no thread.
+#
+# Steps used only here:
+#   parse <parser> <fixture> [mutate <m>] [guard low|high] -> r
+#   mutate: trunc <n> (the first n bytes), set <off> <size> <value>,
+#           seeded <seed> <count> (the generator of 7.9: bit flips, bytes
+#           00h, FFh, 80h, cuts and insertions)
+
+case DAT-001
+  title  every fixture decodes as its .expect file says, in both guard positions
+  from   7.9/The host test (semantic assertions; the guard pages); 11.3
+  table  fixture
+    a devinfo1   b devinfo0   c devinfo2   d storinfo   e storinfr   f objinfo1
+    g objinfo2   h objinfo3   i handles3   j handles0   k storids    l proplst1
+    m proplst2   n proplst3   o respok     p resp5      q respsoi    r datahdr
+    s evadded    t evcancel   u gdstat     v strnul     w strsurr    x strpast
+    y str255     z harrovf    A harrshrt   B plcnt      C cmdgeto    D cmdgopl
+    E pltypes1   F pltypes2   G strnonul
+  end
+  parse <parser of the fixture> <fixture> guard high -> r1
+  parse <parser of the fixture> <fixture> guard low -> r2
+end
+
+case DAT-002
+  title  every fixture truncated at every byte
+  from   7.9/Malformed datasets (every fixture truncated at every byte); 11.3 (lengths 0 to 11)
+  table  fixture
+    every fixture of DAT-001 rows a to u, v, w, y, E, F, G
+  end
+  for n = 0 .. size(<fixture>) - 1 : parse <parser> <fixture> mutate trunc n guard high -> r[n]
+end
+
+case DAT-003
+  title  each count set to its cap, one past it, and to values whose product with the element size passes 2^32
+  from   7.9/Malformed datasets; 7.9/Before a count is used (the fit checked first, CQ39); 7.2 (caps)
+  table  fixture
+    every fixture with a counts block that decodes MTPE_OK as it is (so not harrovf, harrshrt, plcnt, proplst3 or strpast)
+  end
+  # Each count field of <fixture>.expect's counts block, `at <off> <size> elem <e> cap <c>`, is
+  # mutated alone, every other byte of the fixture kept. Let rest be the bytes from the first
+  # byte after the count field to the end of the dataset.
+  # A string (size 1) is **replaced**, not extended: in row A its count and units are replaced
+  # whole by the count 255 and 254 units 0041h ('A') and a NUL (the old units removed, so no early
+  # NUL or surrogate of the fixture remains); every later offset moves by the difference.
+  # An array is **extended** by inserting elements right after its existing ones (every later
+  # offset moves by the inserted length), each element a valid one of the array's own type:
+  #   elem 1 (AINT8, AUINT8): the bytes (i mod 255) + 1, for i = 1, 2, ... (01h to FFh, never 00h);
+  #   elem 2 (UINT16 code arrays, AINT16, AUINT16): 1001h, 1002h, ... in turn (a code repeated is
+  #     not an error);
+  #   elem 4 (handles, storage ids, AINT32, AUINT32): 00100000h + i;
+  #   elem 8 or 16 (AINT64, AUINT64, AINT128, AUINT128): the value i in its low 32 bits, its other
+  #     bytes 01h;
+  #   elem 9 (a property list): the element (the folder's own handle as the fixture names it,
+  #     property D811h, datatype UINT8 0002h, value 5Ah), which the parser drops (the folder's
+  #     own elements are dropped: 7.4), so the extension decodes to nothing.
+  # The rows, by the field's size and cap; a row whose count is not encodable, or whose C count
+  # would fit after all, is not run. With the fixtures as they are, that is string row C of
+  # str255's StorageDescription (at 26: the 511 bytes after its count would hold any count up to
+  # 255) and row D of pltypes2's two byte arrays (counts at 12 and 39, elem 1). The others all run.
+  #   size 1, cap 255 (a string): A as above; C the count c = floor(rest / 2) + 1, the bytes kept,
+  #     so the units cannot fit; when that c is above 255 the string would fit at any encodable
+  #     count, and row C is not run. No B, D or E: nothing past 255 is encodable in the field.
+  #   size 4, cap n (an array with a cap of 7.2): A the count n, extended to n elements; B the
+  #     count n + 1, extended to n + 1; C the count n + 1, nothing extended (no fixture has
+  #     (n + 1) e bytes left); D the count floor(2^32 / e) + 1, nothing extended; E FFFFFFFFh.
+  #   size 4, cap fit (an array without a cap of its own): A the count with 1,000 elements more,
+  #     extended; C the count floor(rest / e) + 1, nothing extended (one element more than the
+  #     whole rest of the dataset could hold); D the count floor(2^32 / e) + 1, run only for e of
+  #     2 or more (for e = 1 it is not encodable in a UINT32; row E covers that field); E
+  #     FFFFFFFFh.
+  for each count field of <fixture>.expect, for each row of its kind : parse <parser> <mutated fixture> guard high -> r<row>
+end
+
+case DAT-004
+  title  string counts past the end; the whole counted string consumed after an early NUL; an unpaired surrogate; the largest string
+  from   7.9/Strings; 11.3 (a string count past the payload)
+  table  fixture
+    a strpast
+    b strnul
+    c strsurr
+    d str255
+  end
+  parse ObjectInfo|StorageInfo <fixture> guard high -> r
+end
+
+case DAT-005
+  title  a string without its terminating NUL
+  from   7.9/Strings (Q15, decided: accepted, with a trace line)
+  parse ObjectInfo strnonul guard high -> r
+  parse ObjectInfo strnonul guard low -> r2
+end
+
+case DAT-006
+  title  property lists: unknown and wrong datatypes, duplicates, missing required properties, sentinel handles, parent loops
+  from   7.9/Malformed datasets; Property lists; 11.3 (property list elements of unknown and wrong datatypes)
+  table  build
+    a proplst3 as it is                                                   # unknown datatype
+    b proplst1 with element 4 (DC04h) given datatype 0006h                # wrong datatype for a known property: that object falls back
+    c proplst1 with element 5 repeated for h=0002C3D4h with "c.jpg"       # a duplicate with another value
+    d proplst1 with element 7 (DC0Bh of h=0002C3D4h) removed              # a required property missing
+    e proplst1 with elements 2 to 7 given handle FFFFFFFFh                # a sentinel handle
+    f proplst1 with elements 2 to 7 given handle 0                        # handle 0
+    g proplst1 with element 13 (DC0Bh of h=0003E4F5h) = 0003E4F5h         # its own parent (a loop): not the folder asked
+    h proplst1 with element 5 repeated for h=0002C3D4h with "a.jpg"       # a duplicate with the same value
+  end
+  # proplst1 lists folder 0001A2B3h ("DCIM"): its own element 1, then a.jpg (0002C3D4h,
+  # elements 2 to 7) and b.jpg (0003E4F5h, elements 8 to 13); a repeated or removed element is
+  # inserted or cut at its own place, the list's count changed to match.
+  parse ObjectPropList(folder=0001A2B3h) <build> guard high -> r
+end
+
+case DAT-007
+  title  the decoding budget: 64 MiB of decoded results per call, and the work cap
+  from   7.9/A decoding budget per call
+  # The accounting (7.9, "A decoding budget per call", made exact there): each decoded handle
+  # or storage id charges 4 bytes; each object of a listing 64 bytes, charged when its first
+  # element is met, before its value; a string 2 bytes per unit, its NUL included; an array value
+  # its element size times its count; a scalar value its size; a skipped or dropped element
+  # nothing. The work counter adds 1 per element or handle visited and 1 per array element read
+  # or skipped. The caps: 67,108,864 bytes decoded; 8,388,608 visits (twice 7.2's 4,194,304).
+  table  build
+    a  HandleArray: count 1,048,576 (7.2's cap), the handles 00100000h + i
+    b  ObjectPropList for folder 0001A2B3h: 4,194,304 elements (7.2's cap), each (0001A2B3h, D811h, UINT8 0002h, 5Ah): the folder's own, dropped
+    c  ObjectPropList for folder 0001A2B3h: 120,000 elements, element k (00200000h + k, ObjectFileName DC07h, STR FFFFh, a count of 255: 254 units 0061h and a NUL)
+    d  ObjectPropList for folder 0001A2B3h: 2,200,000 elements, each (0001A2B3h, D812h, AUINT16 4004h, count 3, 1001h 1002h 1003h): the folder's own, skipped by size
+  end
+  parse <parser> <build> guard high -> r
+end
+
+case DAT-008
+  title  a dataset read with the sentinel length is checked against the caps as it arrives
+  from   7.9/A decoding budget per call (the sentinel); 7.2 (caps: a dataset at most 64 MiB)
+  dev d0
+  power P
+  open d0
+  sim d0 respond GetObjectPropList 1 sentinel endless=1
+  queue d0 j1 { Children storage=00010001h parent=1 -> r; post }
+  wait job j1 done
+end
+
+case DAT-009
+  title  the fuzzing: each parser over a fixed number of deterministic mutations of each fixture, in both guard positions, outputs fenced by canaries
+  from   7.9/The parsers are fuzzable; 12 (the fuzzing's counts)
+  table  fixture
+    every fixture of DAT-001
+  end
+  # The generator MUT1 (version 1; a change to it is a new version and new counts):
+  #   state s, 32 bits unsigned, set to the seed (1 to 64) at the start of each seed's run;
+  #   next(): s = s XOR (s << 13); s = s XOR (s >> 17); s = s XOR (s << 5); return s.
+  #   Input i of a seed (i = 1 to 1000, in order, s carried from input to input): start from the
+  #   fixture's bytes, length L; make m = 1 + next() mod 4 mutations, each of kind k = next() mod 6,
+  #   on the current length L':
+  #     0 a bit flip: p = next() mod L', b = next() mod 8; byte p XOR (1 << b)
+  #     1, 2, 3 byte p = next() mod L' set to 00h, FFh, 80h
+  #     4 a cut: p = next() mod (L' + 1); the bytes from p to the end removed
+  #     5 an insertion: p = next() mod (L' + 1), n = 1 + next() mod 8; n bytes, each next() AND FFh, inserted at p
+  #   (kinds 0 to 3 on L' = 0 draw nothing and change nothing).
+  # The order of inputs: the fixtures in DAT-001's row order; for each, seed 1 to 64; for each
+  # seed, i 1 to 1000; each input parsed with the guard high, then with the guard low.
+  # So 31 fixtures (rows C and D are the encoders and are not parsed) by 64,000 inputs:
+  # 1,984,000 inputs, 3,968,000 parses, the same inputs on every run and every host.
+  for fixture in order : for seed = 1 .. 64 : for i = 1 .. 1000 : parse <parser> <fixture> mutate MUT1 seed i guard high ; parse <same input> guard low -> r
+end
+
+case DAT-010
+  title  allocation failure: the nth allocation of every parse fails, for every n
+  from   7.9/Allocation; 12 (the allocation balance)
+  table  fixture
+    every fixture of DAT-001 whose parse allocates (rows a to n, y, E, F, G)
+  end
+  for n = 1 .. allocations(<fixture>) : parse <parser> <fixture> fail-alloc n -> r[n]
+end
+
+case DAT-011
+  title  a scripted session's exact outcomes under the allocation sweep (every case is swept so: README X11; this one also names each call's result)
+  from   7.9/Allocation (the host test fails the nth allocation for every n of each case); README X11
+  power P
+  dev d0
+  open d0 -> r0
+  queue d0 j1 { StorageIds -> r1; StorageInfo id=00010001h -> r2; Children storage=00010001h parent=1 -> r3; GetObject h=2 sink=s -> r4; post } -> rq
+  wait job j1 done
+  close d0
+  wait notice d0 CLOSED
+end
+
+case DAT-012
+  title  the bench phone's GetDeviceInfo and two StorageInfos as fixtures
+  from   7.9/Fixtures (real devices' datasets); Q16 (decided: allowed; each fixture's readable fields shown to the owner before it is committed)
+  waits  capture                            # the bench capture and the owner's look at its fields come first; no such fixture exists yet
+  parse DeviceInfo fp3devinf ; parse StorageInfo fp3stor1 ; parse StorageInfo fp3stor2
+end
+
+case DAT-013
+  title  the container decoder over the container fixtures: lengths 0 to 11, a length past the data, a wrong tid or type
+  from   11.3 (malformed: lengths 0 to 11; a length past the data; a wrong transaction id or type)
+  table  fixture  mutation
+    a  respok   length field 0 .. 11 (each)
+    b  respok   length field 16 with 12 bytes present
+    c  datahdr  length field 1000 with 16 bytes present (a phase that ends short)
+    d  respok   tid 4 expected 5
+    e  respok   type 4
+    f  evadded  length field 15
+  end
+  parse Container <fixture> mutate <mutation> -> r
+end

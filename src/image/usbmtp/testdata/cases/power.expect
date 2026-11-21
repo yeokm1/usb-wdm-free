@@ -1,0 +1,369 @@
+# Expected results of power.cas, written by hand from docs/design/mtp.md
+# 7.9, 13 and 14 (Q18 (c), Q19, Q22, Q23 (A); (B) is the alternative
+# built for these cases only). Format: ../README.md. I1 to I10 hold.
+# "TRUE" and "DENY" are the window procedure's answers (BROADCAST_QUERY_DENY).
+# "nothing out at the gate" = simdev records no request of the program's
+# pending when the gate closes (the condition under which the driver's
+# zero-bound build would refuse: 5.4).
+# Lines prefixed [A] or [B] hold under that rule only (README). U1 (hold
+# admission) and U2 (session-tagged admission) hold in every case.
+
+PWR-001
+  at queue.return and io.dequeue.pre#1 (the broadcast answered before the dequeue's hold):
+    a = TRUE; pwr d0 = AGREED; held d0 = 1
+    j1's first submission only after PBT_APMQUERYSUSPENDFAILED's routine cleared HELD
+  at io.dequeue.in#1 (the broadcast lands as the dequeue's hold is left, j1 taken) and every later point:
+    a = DENY; pwr d0 = BUSY; held d0 = 0
+  never a submission of d0 between an agreement and the end of its hold
+  ret r = MTPE_OK bytes=70000 at every point
+  [B] the same (the 1,000 ms here is inside QUERY-HELD's 10 s)
+end
+
+PWR-002
+  at points before io.publish.in of j1: a = DENY
+  at io.publish.in and after it, before io.dequeue.in#2: a = TRUE; j2 not dequeued until the failure's routine
+  at io.dequeue.in#2: a = DENY
+  never Busy cleared before j1's result was published
+  ret r = MTPE_OK; ret r2 = MTPE_OK
+end
+
+PWR-003
+  a = DENY at every point
+  pwr d0 = BUSY
+  held d0 = 0 throughout
+end
+
+PWR-004
+  a = DENY at every point (OPENING is Busy)
+  ret r = MTPE_OK
+  never d1 HELD
+end
+
+PWR-005
+  at close.req.in (landing as its hold is left), every point before io.close.7, and io.close.7 itself: a = DENY (CLOSING before step 7 is Busy)
+  at every point after io.close.7: a = TRUE
+  notice d0 = [CLOSED]
+end
+
+PWR-006
+  a1 = TRUE; held d0 = 1
+  a2 = TRUE (a held device's close is not Busy)
+  wire d0 after open = []   (no CloseSession: the session is left open)
+  ctl d0 after open = [EVENTS stop -> 1, ABORT in|out -> 0]
+  notice d0 = [CLOSED]
+  alloc = balanced
+end
+
+PWR-007
+  GIVENUP within [close+20000, close+20500] (the latched cancel's outer bound, 7.5)
+  a = DENY (GIVENUP, not yet quiet)
+  a2 = TRUE (detached after its cleanup)
+end
+
+PWR-008
+  a = DENY
+  pwr d0 = BUSY (asked first, by the snapshot's order); pwr d1 = AGREED
+  held d1 = 1 when k1 was queued (at pw.outcome.in); held d1 = 0 after the answer (released by the one routine of "Ending the hold")
+  order: pw.ask.d0 < pw.ask.d1 < pw.outcome.in < k1 queued < pw.end.dev.d1.in < answer returned < go io.call (the control thread keeps the baton) < k1's dequeue and j1's third call, by rank (d0's I/O thread first)
+  ret r = MTPE_OK bytes=5242880; ret rk = MTPE_OK
+end
+
+PWR-009
+  a = TRUE at every point
+  d1 inserted HELD; never a driver call of d1 before the failure's routine
+  ret r = MTPE_OK; d1's first driver call after "no hold" was set
+  never busy d1 = 1 while the hold stood
+end
+
+PWR-010
+  a = DENY (d0 Busy at the barrier)
+  d1 waited at open.held.wait, then proceeded after the refusal's outcome; ret r = MTPE_OK
+  order: pw.outcome.in < d1's first driver call
+end
+
+PWR-011
+  the snapshot taken while d0 was CLOSING; GIVENUP within [close+20000, close+20500], while the power thread was held at pw.ask.d0
+  a = DENY (d0 GIVENUP and not quiet when asked)
+  pwr d0 = BUSY
+end
+
+PWR-012
+  a = DENY at every point of the sweep (the registry counts the read out until it has returned)
+  ret rn = MTPE_OK, strings 1 to 3 as simdev holds them
+  a query after MtpNames returned: TRUE
+end
+
+PWR-013
+  a1 = DENY; a6 = DENY; a60 = DENY
+  trace has name-read-slow, once, at 5,000 ms
+  ret rn2 = MTPE_HELD (an earlier read of that generation is still out, CQ8); no second GET_STRING
+  ret rn = MTPE_OK after the unstick
+  a61 = TRUE
+end
+
+PWR-014
+  at the exit: the name read's context (its info handle, buffer, MTP_POWER reference) kept
+  MtpPowerStop ends the power thread and leaves the registry allocated
+  alloc = retained registry, names(d4)
+end
+
+PWR-015
+  a1 = DENY
+  a7 = TRUE (the reading older than DRAIN_FRESH_MS, 6,000 ms)
+end
+
+PWR-016
+  row a: a = TRUE (the n absent from the scan: evicted)
+  row b: a = TRUE (a new generation on the n: evicted; the new one not draining)
+end
+
+PWR-017
+  a = TRUE
+  every row and every point, but [B] row d: the hold ended by the failure; ret r = MTPE_OK; session d0 = 1 (a failure does not invalidate the session)
+  [B] row d: QUERY-HELD lapsed within [10000, 10500] ms and j1 ran then; the failure at 12,000 ms found no hold and changed nothing
+  row a: the failure handled after the answer that agreed (one broadcast at a time)
+  never j1 dequeued while held d0 = 1
+end
+
+PWR-018
+  every row: held d0 = 1 and j1 not started until the button (check held d0 = 1 at <button-at>); never a lapse
+  rows c, d, g, h: msg = M-HOLD-WAIT shown at 10,000 ms (POWER_HOLD_NOTICE_MS) after the hold's tick (the agreement's, or the suspend's in rows e to h), not before
+  rows a, b, e, f: msg none before the button
+  after the button: the hold ended for every device; held d0 = 0; ret r = MTPE_OK; session d0 = 1
+end
+
+PWR-019
+  row a: held d0 = 1 at 9,500 ms after the agreement; j1 dequeued between 10,000 and 10,500 ms; trace has power-hold-lapsed phase=QUERY-HELD
+  row b: held d0 = 1 at 29,500 ms after the suspend; j1 dequeued between 30,000 and 30,500 ms; trace has power-hold-lapsed phase=SUSPENDING
+  ret r = MTPE_OK
+end
+
+PWR-020
+  [A] held d0 = 1 at 5,000 and at 11,000 ms (across the wrap); run j1 = 0 and drop j1 = none at the end of the steps (teardown's close drops it MTPE_CLOSING: X10)
+  [B] held d0 = 1 at 5,000 ms; j1 dequeued once 10,000 ms had elapsed (unsigned), not at the wrap; ret r = MTPE_OK
+end
+
+PWR-021
+  [A] a = TRUE; none of j0, j9, j11 started before the resume
+  [A] nothing out at the gate (12,000 ms)
+  [A] after the resume: drop j0, j9, j11 = MTPE_SESSION on io; msg = M-NOT-DONE-POWER for each
+  [A] wire d0 after open = [OpenSession tid=0]
+  [B] QUERY-HELD lapsed within [10000, 10500] ms; j0 dequeued then, its read#3 pending from then on (the delay)
+  [B] at 11,500 ms the suspend found no hold: held d0 = 1 (the unsolicited sequence); j9 and j11 not dequeued
+  [B] at 12,000 ms j0's pending read#3 ended 995, simdev recording it out at the gate
+  [B] ret r0 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  [B] after the resume: drop j9, j11 = MTPE_SESSION; wire d0 after j0 = [OpenSession tid=0]
+end
+
+PWR-022
+  [A] none of j0, j29, j31 started; nothing out at the gate (35,000 ms after the suspend)
+  [A] after the resume: drop j0, j29, j31 = MTPE_SESSION; msg = M-NOT-DONE-POWER for each
+  [B] SUSPENDING lapsed within [30000, 30500] ms after the suspend broadcast (not after the agreement); j0 dequeued then, its read#3 pending from then on (the delay)
+  [B] at 35,000 ms j0's pending read#3 ended 995 at the gate, simdev recording it out: ret r0 = MTPE_POWER flags=STANDBY|SESSION_LOST
+  [B] j29, j31 not dequeued (behind j0, then the session lost at j0's stop): dropped MTPE_SESSION
+end
+
+PWR-023
+  after the suspend: held d0 = 1, held d1 = 1; "no hold" reset; the registry's state SUSPENDING
+  d2 inserted HELD; no driver call of d2 before the hold ended
+  [A] j1 not started; nothing out at the gate; after the resume drop j1 = MTPE_SESSION; ret r2 = MTPE_OK after the resume
+  [B] the hold lapsed within [30000, 30500] ms after the suspend: j1 ran (ret r = MTPE_OK) and d2 opened (ret r2 = MTPE_OK) before 35,000 ms; at the resume both sessions lost
+end
+
+PWR-024
+  every row, every point:
+    j1 not stopped by the hold itself: its call ended only by the gate (995 for the pending call, rows a, b, d, f, g; 21 for the call made after the close, rows c, e)
+    held d0 = 1 from pw.suspend.dev.d0.in to the resume
+    drop j2 = MTPE_SESSION, run j2 = 0: the session was taken as lost at j1's stop (7.3), so j2 is dropped at its dequeue whether that comes before the resume or at it
+    no Device Reset sent into the closed gate (ctl d0 has no RESET after the gate closed)
+    rows a, b, c: ret r = MTPE_POWER flags=STANDBY|SESSION_LOST
+    rows d, e: ret r = MTPE_POWER flags=STANDBY|UNCERTAIN|SESSION_LOST
+    row f: ret r = MTPE_POWER flags=STANDBY|UNCERTAIN|SESSION_LOST
+    row g: ret r = MTPE_POWER flags=STANDBY|SESSION_LOST (recovery stopped at the failing step: 7.9, "Recovery under a closed gate")
+    after the resume: wire d0 after the resume = [OpenSession tid=0]; ctl d0 after the resume = [EVSTART]; nothing of j1 sent again
+    never a notice, message or trace that says the device was quiet at the driver's query
+    msg for j1 = the power-change interruption (Q22), with "a standby" (MTPF_STANDBY) and, rows d to f, the uncertainty sentence
+  rows a, b, d, f, g, at the sweep's point pw.suspend.in (the gate closes before the sequence reaches d0):
+    j1's run returns and j2 is dropped (MTPE_SESSION) before held d0 = 1; no transaction of j2
+  rows a, b, d, f, g, at pw.suspend.dev.d0.in (HELD already set inside the hold):
+    the I/O thread publishes j1's 995 only after the power thread left d0's section (the lock handoff)
+  rows c, e: every point the same (j1 is stopped before its call until after the suspend sequence and the close)
+end
+
+PWR-025
+  held d0 = 1 while j1 was stopped at the barrier and after
+  ret r = MTPE_OK bytes=5242880 (the running job finished: the suspend stopped only new dequeues)
+  j2 not dequeued before the button; msg = M-HOLD-WAIT after 10,000 ms
+  after the button: ret r2 = MTPE_OK; session d0 = 1
+end
+
+PWR-026
+  at every point: run j1 = 0, run j2 = 0
+  drop j1 = MTPE_SESSION on io; drop j2 = MTPE_SESSION on io
+  order: session count raised < held d0 cleared < the queue event signalled
+  at pw.end.in and pw.end.signal.in: the spurious wake reads HELD (pw.end.in) or finds the resume job at the head (pw.end.signal.in)
+  at pw.end.dev.d0.in: the woken dequeue blocks on the section until the routine leaves it, then finds the resume job at the head
+  the resume job first after the routine: GET_INFO, then OpenSession tid=0, then EVENTS start; then drop j1 < drop j2
+end
+
+PWR-027
+  every row: a = TRUE; j1 not started before the resume; drop j1 = MTPE_SESSION; nothing out at the gate
+end
+
+PWR-028
+  every row:
+    rows a, d, e (SendObject): ret r = MTPE_POWER flags=STANDBY|UNCERTAIN|SESSION_LOST
+    rows b, c (GetObject): ret r = MTPE_POWER flags=STANDBY|SESSION_LOST
+    rows a, b, d: the pending call ended 995; rows c, e: the call made after the close failed 21
+    ctl d0 has no RESET while the gate was closed
+    after the gate reopened: the I/O thread's 250 ms readings saw it open; wire d0 = [... , OpenSession tid=0]; ctl d0 ends [EVSTART]
+    nothing of j1 sent again
+  rows d, e: wire d0 !has DeleteObject (SendObject's data phase had begun)
+  row a: wire d0 !has DeleteObject (Q24, state (ii): the pair abandoned; the session was lost too)
+end
+
+PWR-029
+  the scan read every device at once when the power thread posted the failure
+  row a: msg = [M-DRIVER-REFUSED, M-SERIAL-98]
+  row b: msg = [M-DRIVER-REFUSED]
+  the baseline then 1: a second failure with no change shows nothing
+end
+
+PWR-030
+  a1 = DENY; a2 = TRUE
+  every answer given while the window thread was blocked
+  the window thread learned of each by a posted message only
+end
+
+PWR-031
+  a = TRUE
+  after the resume: GET_INFO, OpenSession tid=0, EVENTS start, in that order; session d0 = 2; notice d0 has SESSION_LOST
+end
+
+PWR-032
+  every row: the waiter waits until the routine that <end> runs; never "no hold" set before every device's HELD was cleared
+  rows e to h (refusal): a = DENY (d1 OPENING is Busy); pwr d0 = AGREED before the refusal; the routine ends d0's hold
+  rows a to d, i to t: a = TRUE
+  job-at-head rows: j1 not dequeued while held; then: rows a, e, m, q: ret r = MTPE_OK, session d0 = 1; row i: drop j1 = MTPE_SESSION (a resume invalidates the session)
+  open-on-no-hold rows: d2 registered HELD (or met the mark: row f), waited on "no hold", reread the state under the registry lock and its section, opened; ret r = MTPE_OK; no driver call of d2 before the routine
+  name-read rows: ret rn1 = MTPE_HELD at once, nothing started (CQ8); ret rn2 = MTPE_OK, the read started after "no hold"
+  new-agreement rows: the new query handled after the routine ended (one broadcast at a time); rows d, l, p, t: a2 = TRUE, a fresh QUERY-HELD with its own tick, held d0 = 1 again and "no hold" reset again; row h: a2 = DENY (d1 still OPENING, Busy) and no new hold
+end
+
+PWR-033
+  wire d0 after open = []   (no GetObject, no CloseSession)
+  ctl d0 after open = [EVENTS stop -> 1, ABORT in|out -> 0]
+  the CLI's exit code = its held-command code (distinct from success and from its other failures)
+  the CLI's log has M-CLI-POWERWAIT
+  the CLI gave up at 60,000 ms (/powerwait) after the command, not before
+end
+
+PWR-034
+  ret r = MTPE_HELD, returned within [call+40000, call+40500] (one deadline from the call covers the wait: CQ3)
+  never a driver call of d1; d1 detached; alloc = balanced
+end
+
+PWR-035
+  a1 = TRUE; a2 = TRUE (the tick refreshed at 8,000 ms)
+  the power status, battery and OEM broadcasts changed neither the hold nor its tick
+  held d0 = 1 at 17,000 ms; j1 dequeued between 18,000 and 18,500 ms
+end
+
+PWR-036
+  every row: the hold ended at <first>; drop j1 = MTPE_SESSION; session count raised once
+  <then> changed nothing: no second invalidation, no second resume job
+end
+
+PWR-037
+  ret r = MTPE_OK
+  session d0 = 1 (no resume: no invalidation)
+end
+
+PWR-038
+  a = DENY (d4 draining, its reading fresh)
+  a2 = TRUE
+end
+
+PWR-039
+  a = DENY
+  msg = M-REFUSED-BY-PROGRAM (status line)
+  no dialog of the program's own; lParam's prompt bit not used
+  ret r = MTPE_OK (the copy finished)
+end
+
+PWR-040
+  row a: msg M-FIRST-SIGHT-98 once
+  row b: once in all
+  row c: once in all (the same generation came back)
+  row d: twice (the count rose)
+  row e: twice (a new generation)
+  row f: twice (a new run)
+  row g: none
+  row h: none (ME)
+end
+
+PWR-041
+  both rows: no M-DRIVER-REFUSED
+end
+
+PWR-042
+  never a driver call, a file call or a registry call on the power thread
+  never a wait of the power thread on another thread
+  the power thread's lock holds: the registry lock and one device's section at a time, nothing called inside
+end
+
+PWR-043
+  every point: d1 inserted HELD (it met the mark); no driver call of d1 before the button
+  a = TRUE
+  ret r = MTPE_OK after the button
+end
+
+PWR-044
+  drop j1 = MTPE_SESSION
+  msg = M-NOT-DONE-POWER
+end
+
+PWR-045
+  a = TRUE
+  order: resume < GET_INFO (the resume job's first step) < OpenSession tid=0 < EVENTS start
+  session d0 = 2; notice d0 has SESSION_LOST
+end
+
+PWR-046
+  j1 not dequeued for the 5,000 ms of the hold
+  order: pw.end.dev.d0.in clears HELD and signals < io.dequeue.in of j1
+  ret r = MTPE_OK
+end
+
+PWR-047
+  every row, every point from io.recover.6.1 to the row's end: a = DENY (RECOVERING, or GIVENUP not yet quiet, is Busy); pwr d0 = BUSY; held d0 = 0
+  row a: ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, RESET6, EVSTART]; ret r = MTPE_CANCELLED flags=SESSION_LOST; wire d0 after open = [GetObject h=4 tid=1, OpenSession tid=0]
+  row b: ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 1, SETTLE, RESET (failing)], then only the cleanup's quiet checks; GIVENUP set by io (a transition); ret r = MTPE_GIVENUP; notice d0 = [GIVENUP, CLOSED], state d0 = CLOSED at the end of the steps
+  row c: ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 0220, EVENTS stop -> 1, SETTLE, RESET, RESET_PIPE in, RESET_PIPE out (failing)], then only the cleanup's quiet checks; GIVENUP set by io (a transition); ret r = MTPE_GIVENUP; notice d0 = [GIVENUP, CLOSED], state d0 = CLOSED at the end of the steps
+  row d: the Busy STATUS of step 6 repeated 50 ms apart until step 6's own deadline; GIVENUP within [t6+10000, t6+10500], t6 the time io.recover.6.1 was reached (before 7.5's outer bound of 20,000 ms after the cancel); ret r = MTPE_GIVENUP; ctl d0 !has EVENTS start; notice d0 = [GIVENUP, CLOSED], state d0 = CLOSED at the end of the steps
+  rows b, c, d: no second Device Reset; no OpenSession; nothing on the bulk pipes after GIVENUP (I8)
+end
+
+PWR-048
+  ret r0 = MTPE_OK (the session in use before the hold)
+  the injected button is added (X9), the script's own button still runs; at every point the button's message is handled by the power thread after the broadcast in hand (one at a time); j1 runs only after a routine ended every hold; ret r = MTPE_OK; session d0 = 1
+  row a (QUERY-HELD), every point: the injected button ends the hold the answer set (at pw.mark.in to pw.outcome.in, once the answer is done), by the one routine, once; the script's later button finds no hold and does nothing (no routine, no second "no hold" set)
+  row b (SUSPENDING), points of the answer (pw.mark.in to pw.unsnap.d0, before the suspend broadcast): the injected button ends QUERY-HELD; PBT_APMSUSPEND then finds no hold and runs the unsolicited sequence (held d0 = 1 again, "no hold" reset); the script's button ends that hold: two routines in all
+  row b, points after the suspend broadcast (the dequeue's and the event thread's points while SUSPENDING stands, and pw.end.in): the injected button ends SUSPENDING, once; the script's later button does nothing
+  never "no hold" set before every device's HELD was cleared
+  [A] never a lapse
+end
+
+PWR-049
+  a = TRUE; held d0 = 1 until the failure's routine
+  wire d0 from the agreement to the routine = [] (U1)
+  row a: after the routine: wire d0 = [GetDeviceInfo tid=1], then the event callback with the device as its target
+  row b: after the routine: the resume job first: wire d0 = [OpenSession tid=0], ctl d0 = [EVSTART]; session d0 = 2; notice d0 has SESSION_LOST
+end
+
+PWR-050
+  a = TRUE; ret r = MTPE_OK
+  at every point before pw.end.signal.in (the registry lock held, so the registration lands as the routine leaves it, after "no hold" was set): d1 registers with no hold standing and opens at once; ret r1 = MTPE_OK
+  at pw.end.signal.in (the same: it lands after the routine): ret r1 = MTPE_OK, never inserted HELD
+  never a driver call of d1 while held d0 = 1; never d1 inserted HELD with "no hold" set and no hold standing (it would wait for nothing)
+end

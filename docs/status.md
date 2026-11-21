@@ -160,6 +160,10 @@ Order, after the survey of existing drivers
   modules for the USB serial bridges no vendor driver covers on 98 SE and
   ME (FTDI FT-X, FT232H, FT4232H, PL2303 old and G series, CP2105, CP2108;
   `docs/design/serial.md` milestone M5), released in 0.1.5.
+- **Taken up** (owner, 2026-11-16): MTP and PTP on 98 SE and ME, phones
+  and cameras, shown to the user as a GUI file explorer program over
+  whatever binding or driver it needs; reading and design first
+  ([candidates.md](design/candidates.md), Decisions, 7).
 
 Other classes considered, and which come next, are surveyed in
 [docs/design/candidates.md](design/candidates.md).
@@ -246,6 +250,28 @@ ms of the queue on the controller (four transfers a pipe), so a delay in
 xHCI98 itself longer than that is not covered. Not yet read on the user's PC.
 The design is [design record 19](design/uac2.md), the legs are
 [uac2-queue](testing/2026-11-04-uac2-queue.md).
+
+### Reading (2026-11-17): a CX31993 with a MAX97220 offers no gain above 0 dB
+
+A driver-key export a user sent on 2026-11-17: 64-bit Windows, `uac2`
+0.1.11.0 (build 29) installed by the class match, the device named
+"CX31993+MAX97220 PRO" (the USB id is not in the export). Its
+`Uac2UsbStats` ([design record 20](design/uac2.md), 20.5) show volume
+per channel on Feature Unit 2, two channels, each one subrange from
+-74.0 dB to 0.0 dB in 0.5 dB steps; the top reached and the top offered
+0 dB; 0.0 dB at start on both channels; `Uac2VolAboveZero` 0 and nothing
+lowered at start. The configuration descriptor in the export has Feature
+Unit 2 with mute on the master and volume on each channel, playback
+alternates of 16, 24 and 32 bits and no Extension Unit: a different
+layout from the unit of design record 20.1 (Feature Unit `0x10` behind
+an Extension Unit). The user reports no distortion at the maximum, no
+more loudness than a plain CX31993 dongle, and no audible difference
+between `Uac2VolAboveZero` 0 and 1.
+
+What it shows: this device offers no gain above 0 dB, so the 0 dB top of
+design record 20 changes nothing on it and the setting has no effect on
+it. It says nothing about the earlier distorted unit, whose volume range
+is still unread.
 
 ### Fixed in 0.1.6: `uac2` playback garbled after seeking (XP, Conexant CX31993)
 

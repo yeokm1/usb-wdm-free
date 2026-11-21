@@ -1,0 +1,17 @@
+# Expected decoding of storinfr.hex, written by hand from MTP 1.1, 5.2.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = StorageInfo
+result = MTPE_OK
+StorageType = 0004h (RemovableRAM)
+FilesystemType = 0003h (DCF)
+AccessCapability = 0002h (read-only with object deletion)
+MaxCapacity = 18446744073709551615 (FFFFFFFFFFFFFFFFh)
+FreeSpaceInBytes = 68414056839 (0000000FEDCBA987h)
+FreeSpaceInObjects = 258785 (0003F2E1h)
+StorageDescription = "SD"
+VolumeIdentifier = "V1"
+counts
+  at 26 1 elem 2 cap 255
+  at 33 1 elem 2 cap 255
+end

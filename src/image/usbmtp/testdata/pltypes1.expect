@@ -1,0 +1,101 @@
+# Expected decoding of pltypes1.hex, written by hand from MTP 1.1, 5.4 and 3.2 (the scalar datatypes and their sizes);
+# 7.4 here (unknown properties skipped by their datatype's size) (not produced by the library or by simdev.c).
+# Format: README.md. Each unknown element is skipped by exactly its value's size: the "at" of each skipped line
+# is where the next element's ObjectHandle must be read.
+
+parser = ObjectPropList for folder 0001A2B3h (depth 1)
+result = MTPE_OK
+NumberOfElements = 21
+element 1 ObjectHandle = 000A1B2Ch
+element 1 PropertyCode = D811h (unknown)
+element 1 Datatype = 0001h (INT8)
+element 1 Value = skipped: INT8, 1 byte; element 2 at 13
+element 2 ObjectHandle = 000A1B2Ch
+element 2 PropertyCode = DC01h (StorageID)
+element 2 Datatype = 0006h (UINT32)
+element 2 Value = 00020001h
+element 3 ObjectHandle = 000A1B2Ch
+element 3 PropertyCode = D812h (unknown)
+element 3 Datatype = 0002h (UINT8)
+element 3 Value = skipped: UINT8, 1 byte; element 4 at 34
+element 4 ObjectHandle = 000A1B2Ch
+element 4 PropertyCode = DC02h (ObjectFormat)
+element 4 Datatype = 0004h (UINT16)
+element 4 Value = 3009h
+element 5 ObjectHandle = 000A1B2Ch
+element 5 PropertyCode = D813h (unknown)
+element 5 Datatype = 0003h (INT16)
+element 5 Value = skipped: INT16, 2 bytes; element 6 at 54
+element 6 ObjectHandle = 000A1B2Ch
+element 6 PropertyCode = DC04h (ObjectSize)
+element 6 Datatype = 0008h (UINT64)
+element 6 Value = 13323942989 (000000031A2B3C4Dh)
+element 7 ObjectHandle = 000A1B2Ch
+element 7 PropertyCode = D814h (unknown)
+element 7 Datatype = 0004h (UINT16)
+element 7 Value = skipped: UINT16, 2 bytes; element 8 at 80
+element 8 ObjectHandle = 000A1B2Ch
+element 8 PropertyCode = DC07h (ObjectFileName)
+element 8 Datatype = FFFFh (STR)
+element 8 Value = "song.mp3"
+element 9 ObjectHandle = 000A1B2Ch
+element 9 PropertyCode = D815h (unknown)
+element 9 Datatype = 0005h (INT32)
+element 9 Value = skipped: INT32, 4 bytes; element 10 at 119
+element 10 ObjectHandle = 000A1B2Ch
+element 10 PropertyCode = DC09h (DateModified)
+element 10 Datatype = FFFFh (STR)
+element 10 Value = "20251231T235958"
+element 11 ObjectHandle = 000A1B2Ch
+element 11 PropertyCode = D816h (unknown)
+element 11 Datatype = 0006h (UINT32)
+element 11 Value = skipped: UINT32, 4 bytes; element 12 at 172
+element 12 ObjectHandle = 000A1B2Ch
+element 12 PropertyCode = DC0Bh (ParentObject)
+element 12 Datatype = 0006h (UINT32)
+element 12 Value = 0001A2B3h
+element 13 ObjectHandle = 000B2C3Dh
+element 13 PropertyCode = D817h (unknown)
+element 13 Datatype = 0007h (INT64)
+element 13 Value = skipped: INT64, 8 bytes; element 14 at 200
+element 14 ObjectHandle = 000B2C3Dh
+element 14 PropertyCode = DC01h (StorageID)
+element 14 Datatype = 0006h (UINT32)
+element 14 Value = 00020001h
+element 15 ObjectHandle = 000B2C3Dh
+element 15 PropertyCode = D818h (unknown)
+element 15 Datatype = 0008h (UINT64)
+element 15 Value = skipped: UINT64, 8 bytes; element 16 at 228
+element 16 ObjectHandle = 000B2C3Dh
+element 16 PropertyCode = DC02h (ObjectFormat)
+element 16 Datatype = 0004h (UINT16)
+element 16 Value = 3008h
+element 17 ObjectHandle = 000B2C3Dh
+element 17 PropertyCode = D819h (unknown)
+element 17 Datatype = 0009h (INT128)
+element 17 Value = skipped: INT128, 16 bytes; element 18 at 262
+element 18 ObjectHandle = 000B2C3Dh
+element 18 PropertyCode = DC04h (ObjectSize)
+element 18 Datatype = 0008h (UINT64)
+element 18 Value = 18747391872 (000000045D6E7F80h)
+element 19 ObjectHandle = 000B2C3Dh
+element 19 PropertyCode = D81Ah (unknown)
+element 19 Datatype = 000Ah (UINT128)
+element 19 Value = skipped: UINT128, 16 bytes; element 20 at 302
+element 20 ObjectHandle = 000B2C3Dh
+element 20 PropertyCode = DC07h (ObjectFileName)
+element 20 Datatype = FFFFh (STR)
+element 20 Value = "clip.wav"
+element 21 ObjectHandle = 000B2C3Dh
+element 21 PropertyCode = DC0Bh (ParentObject)
+element 21 Datatype = 0006h (UINT32)
+element 21 Value = 0001A2B3h
+object 000A1B2Ch: StorageID = 00020001h, ObjectFormat = 3009h, ObjectSize = 13323942989, ObjectFileName = "song.mp3", DateModified = "20251231T235958", ParentObject = 0001A2B3h
+object 000B2C3Dh: StorageID = 00020001h, ObjectFormat = 3008h, ObjectSize = 18747391872, ObjectFileName = "clip.wav", DateModified = none (no element), ParentObject = 0001A2B3h
+children[] = 000A1B2Ch, 000B2C3Dh
+counts
+  at 0 4 elem 9 cap 4194304
+  at 88 1 elem 2 cap 255
+  at 127 1 elem 2 cap 255
+  at 310 1 elem 2 cap 255
+end

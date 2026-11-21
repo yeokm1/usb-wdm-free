@@ -1,0 +1,52 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; USBMTP.INF - Windows 98 SE and ME: binds USBMTP.SYS, the transport for
+; MTP and PTP devices (docs/design/mtp.md 3.2, 9), to still image
+; interfaces (class 06/01/01) in a device class of its own. Vendor-class
+; (FF) phones get model lines with their VID/PID once listed (3.2); none
+; is listed yet. The class GUID was made once for this package (9).
+[Version]
+Signature="$CHICAGO$"
+Class=UsbMtpDevices
+ClassGUID={2EFBDFB0-C5E2-4591-8903-72D29C3A8A4B}
+Provider=%Provider%
+DriverVer=11/16/2026,0.1.0.0
+
+[ClassInstall]
+AddReg=UsbMtp.ClassReg
+
+[UsbMtp.ClassReg]
+HKR,,,,%ClassName%
+HKR,,Icon,,"-20"
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%Device%=UsbMtp,USB\Class_06&SubClass_01&Prot_01
+
+[UsbMtp]
+CopyFiles=UsbMtp.Sys
+AddReg=UsbMtp.AddReg
+
+[UsbMtp.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,USBMTP.SYS
+
+[UsbMtp.Sys]
+USBMTP.SYS
+
+[DestinationDirs]
+UsbMtp.Sys=10,System32\Drivers
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+USBMTP.SYS=1
+
+[Strings]
+Provider="usb-wdm-free"
+ClassName="Portable Devices"
+Device="MTP or PTP device (wdm-free)"
+Disk="usb-wdm-free usbmtp disk"

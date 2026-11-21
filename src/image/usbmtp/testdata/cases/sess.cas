@@ -1,0 +1,243 @@
+# The open and the session: docs/design/mtp.md 7.3; 7.9, "Open is all or
+# nothing", "The registry" (registration comes first), "The deadline
+# observer" (the open's deadline); 11.4; 12. Format: ../README.md.
+# These cases open the device themselves.
+
+case SES-001
+  title  a successful open: registration before the first driver call, every resource in order, ids 0 then 1
+  from   7.9/Open is all or nothing; 7.9/Registration comes first; 7.3
+  power P
+  dev d0
+  open d0 -> r
+  queue d0 j1 { GetStorageIds -> r1; post }
+  wait job j1 done
+end
+
+case SES-002
+  title  each failed step of MtpOpen: undone in reverse, no MTP_DEV, detached only after the undo's last call
+  from   7.9/Open is all or nothing; 7.9/A failed open; 11.4 (a failed bind and every other failed step)
+  table  step  fault
+    a  handle    fail CreateFile 2
+    b  info1     fail GET_INFO 31
+    c  claim     fail CLAIM 32
+    d  info2     fail GET_INFO#2 31
+    e  ctl       fail CreateFile#2 2
+    f  bindctl   fail BIND#1 31
+    g  evt       fail CreateFile#3 2
+    h  bindevt   fail BIND#2 31
+    i  timeouts  fail SET_TIMEOUTS 87
+    j  threads   fail CreateThread#2
+    k  devinfo   respond GetDeviceInfo 2002
+    l  session   respond OpenSession 2002 always
+  end
+  power P
+  dev d0
+  sim d0 <fault>
+  open d0 -> r
+end
+
+case SES-003
+  title  a failed open's undo with a query at each point of it
+  from   7.9/A failed open; races table (a failed open); 12/host (a failed open's undo with a query at each point)
+  power P
+  dev d0
+  sim d0 respond OpenSession 2002 always
+  sweep open.undo.session .. ref.free : bcast PBT_APMQUERYSUSPEND ; bcast PBT_APMQUERYSUSPENDFAILED   # async where a lock is held (X9)
+  open d0 -> r
+end
+
+case SES-004
+  title  CLAIM refused busy (170) every time: retried 100 ms apart, then MTPE_INUSE
+  from   7.9/Open is all or nothing (CLAIM busy; 11 tries in all, CQ6)
+  power P
+  dev d0
+  sim d0 claim busy=1000
+  open d0 -> r
+end
+
+case SES-005
+  title  CLAIM busy three times, then claimed: the open succeeds
+  from   7.9/Open is all or nothing
+  power P
+  dev d0
+  sim d0 claim busy=3
+  open d0 -> r
+end
+
+case SES-006
+  title  a bind's failure releases the claim with the owner handle's close
+  from   7.9/Open is all or nothing
+  power P
+  dev d0
+  sim d0 fail BIND#1 31
+  open d0 -> r
+  dev d0b same-n=d0
+  open d0b -> r2
+end
+
+case SES-007
+  title  GET_INFO's generation not MtpEnum's: refused before any CLAIM
+  from   7.9/Open is all or nothing (the generation must be MtpEnum's; the code per step, CQ2)
+  power P
+  dev d0
+  enum -> g
+  sim d0 gen=g+1
+  open d0 gen=g -> r
+end
+
+case SES-008
+  title  GET_INFO's major version not 1: refused
+  from   7.9/Open is all or nothing (major version 1, else refused; the code per step, CQ2); Interface 1.1 (the reading)
+  power P
+  dev d0 major=2
+  open d0 -> r
+end
+
+case SES-009
+  title  transaction ids wrap from FFFFFFFEh to 1, never FFFFFFFFh
+  from   7.3 (in a session); 11.4 (the session and id rules)
+  power P
+  dev d0
+  open d0
+  poke d0 next-tid=FFFFFFFDh
+  queue d0 j1 { GetObjectInfo h=2; GetObjectInfo h=2; GetObjectInfo h=2; post }
+  wait job j1 done
+end
+
+case SES-010
+  title  SessionAlreadyOpen: logged with its id; CloseSession, then OpenSession
+  from   7.3 (SessionAlreadyOpen); 7.9/operations table (OpenSession)
+  power P
+  dev d0
+  sim d0 respond OpenSession#1 201E param=1
+  open d0 -> r
+end
+
+case SES-011
+  title  SessionAlreadyOpen, then the second OpenSession failing: Device Reset, then OpenSession once more
+  from   7.3
+  power P
+  dev d0
+  sim d0 respond OpenSession#1 201E ; respond OpenSession#2 2002
+  open d0 -> r
+end
+
+case SES-012
+  title  SessionAlreadyOpen and every recovery failing: the open fails, the device shown as needing a replug
+  from   7.3; 7.9/Open is all or nothing (the code per step, CQ2)
+  power P
+  dev d0
+  sim d0 respond OpenSession 201E always
+  open d0 -> r
+end
+
+case SES-013
+  title  OpenSession answered DeviceBusy three times: retried 500 ms apart, the fourth (the third retry) opens
+  from   7.3 (other OpenSession failures; 4 tries in all, CQ6)
+  power P
+  dev d0
+  sim d0 respond OpenSession#1..3 2019
+  open d0 -> r
+end
+
+case SES-014
+  title  OpenSession answered another code: Device Reset once, then the replug message
+  from   7.3 (other OpenSession failures; no further OpenSession, CQ28)
+  power P
+  dev d0
+  sim d0 respond OpenSession#1 2002
+  open d0 -> r
+end
+
+case SES-015
+  title  the open's deadline: a transaction of the open stuck; MtpOpen returns MTPE_GIVENUP after the deadline and 1 s more
+  from   7.9/The deadline observer (the open's); 12/host (the deadline observer for open)
+  power P
+  dev d0
+  sim d0 stuck read#devinfo.1
+  open d0 async -> r
+  clock +39900
+  check open d0 still waiting
+  clock +1200
+  wait open d0 returned
+  bcast PBT_APMQUERYSUSPEND
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case SES-016
+  title  the device's form learned from GetDeviceInfo: a split device gets split data phases after it
+  from   7.2 (detecting the form; GetDeviceInfo first); 7.9/Open
+  power P
+  dev d0 form=split
+  open d0
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="s.bin" size=100 src=src -> r; post }
+  wait job j1 done
+end
+
+case SES-017
+  title  the registration: allocation and initialisation outside every lock, then link and read in one hold, nothing allocated there
+  from   7.9/Registration comes first
+  power P
+  dev d0
+  open d0 -> r
+end
+
+case SES-018
+  title  the open's recovery Device Reset failing: step 7, the open given up, nothing more sent
+  from   7.3 (anything else: Device Reset once); 7.5 step 6 (a step of 6 that fails); 7.9/Open is all or nothing
+  power P
+  dev d0
+  sim d0 respond OpenSession 2002 always ; reset-ok 0
+  open d0 -> r
+end
+
+case SES-019
+  title  OpenSession answered DeviceBusy every time: 4 tries 500 ms apart, then MTPE_DEVICE with 2019h and no Device Reset
+  from   7.3 (other OpenSession failures: DeviceBusy, 4 in all, CQ6)
+  power P
+  dev d0
+  sim d0 respond OpenSession 2019 always
+  open d0 -> r
+end
+
+case SES-020
+  title  each failed step of MtpOpen with a query at each point of its undo (the races table's cross-product)
+  from   races R7 (each failed step of MtpOpen with a query at each point of its undo); 7.9/A failed open
+  rule   A,B
+  table  step  fault
+    a  handle    fail CreateFile 2
+    b  info1     fail GET_INFO 31
+    c  claim     fail CLAIM 32
+    d  info2     fail GET_INFO#2 31
+    e  ctl       fail CreateFile#2 2
+    f  bindctl   fail BIND#1 31
+    g  evt       fail CreateFile#3 2
+    h  bindevt   fail BIND#2 31
+    i  timeouts  fail SET_TIMEOUTS 87
+    j  threads   fail CreateThread#2
+    k  devinfo   respond GetDeviceInfo 2002
+    l  session   respond OpenSession 2002 always
+  end
+  power P
+  dev d0
+  sim d0 <fault>
+  sweep open.step.<step> .. ref.free : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED   # async where a lock is held (X9)
+  open d0 -> r
+end
+
+case SES-021
+  title  the session's remembered refusal forgotten at a new session
+  from   7.9/Events (session-specific state cleared at every new session); 7.4 (fallback remembered for the session)
+  power P
+  dev d0
+  open d0
+  sim d0 respond GetObjectPropList 2005 once
+  queue d0 j1 { Children storage=00010001h parent=1 -> r1; Children storage=00010001h parent=6 -> r2; post }
+  wait job j1 done
+  sim d0 event DeviceReset
+  wait notice d0 SESSION_LOST               # posted after the resume job opened session 2
+  wait idle d0
+  queue d0 j2 { Children storage=00010001h parent=1 -> r3; post }
+  wait job j2 done
+end

@@ -1,0 +1,57 @@
+# Expected results of names.cas, written by hand from docs/design/mtp.md
+# 7.6. Format: ../README.md.
+
+NAM-001
+  row a: "a_b.txt"
+  row b: "a_b.txt" (never a path step)
+  row c: "a_b.txt"
+  row d: "a_b_c_d_e_f_g_h.txt"
+  row e: "_mega.jpg"
+  row f: "caf\u00E9.txt" (in code page 1252)
+  row g: "x_y.txt" (the pair is one character: Q27)
+end
+
+NAM-002
+  row a: "name"
+  rows b, c, d, e, f: "_"
+end
+
+NAM-003
+  row a: "_CON"; b: "_con.txt"; c: "_Prn.Log"; d: "_AUX"; e: "_nul.tar.gz"; f: "_CLOCK$"; g: "_COM1"; h: "_com9.x"; i: "_LPT1"; j: "_lpt9"
+  rows k, l: unchanged ("COM10", "CONSOLE")
+end
+
+NAM-004
+  every row: the full path's length at most 260 - 13 = 247; row a and b keep their extension (".jpg", ".mp3"); row c shortened with no extension added
+end
+
+NAM-005
+  row a: "a (2).jpg"
+  row b: "a (2).jpg" (the clash is case-insensitive)
+  row c: "longna~1 (2).txt" (it clashes with the 8.3 alias)
+  row d: "x_.txt" and "x_ (2).txt" (clashes after mapping)
+  row e: "a (3).jpg" (" (2)" checked again)
+  row f: "_con" and "_con (2)"
+  row g: "Name" and "name (2)"
+end
+
+NAM-006
+  row a: ".._.._evil.txt" mapped, under "C:\\Dest\\"; rows b, c: mapped with "_" for ":" and "\\", under "C:\\Dest\\"
+  every row: GetFullPathName of the result starts with "C:\\Dest\\"; never a file outside it
+end
+
+NAM-007
+  row a: shown "?.jpg" in 1252; Properties "U+03A9.jpg"
+  row b: shown "?.jpg"; Properties "U+4E2D.jpg"
+  row c: shown "?.jpg"; Properties "U+1F600.jpg" (the pair is one character: Q27)
+  the three are three objects (their handles), whatever they show
+end
+
+NAM-008
+  row a: "caf\u00E9.txt"
+  row b: "あ.txt" (82h A0h is one double-byte character of code page 932, U+3042; then ".txt")
+end
+
+NAM-009
+  the summary lists "a:b.txt" as "a_b.txt" and "con" as "_con"; "ok.txt" not listed
+end

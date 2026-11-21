@@ -1,0 +1,438 @@
+# Operations: each operation's contract, uncertainty for every mutating
+# operation, uploads and their ownership, deletion, partial reads, the
+# listing and its fallback, Android's writing operations.
+# docs/design/mtp.md 7.4; 7.9, "The operations of the first cut",
+# "Uncertainty covers every mutating operation", "Android's writing
+# operations", "Uploads and deletion", "Parsing" (property lists, partial
+# reads); 12. Format: ../README.md. Every case has `power P` and opens the
+# default device d0 unless it says otherwise.
+
+case OPS-001
+  title  each operation's command parameters, their number exact, and its data direction
+  from   7.9/The operations of the first cut (the table)
+  table  call                                                      expect-cmd
+    a  StorageIds                                                  GetStorageIDs ()
+    b  StorageInfo id=00010001h                                    GetStorageInfo (00010001h)
+    c  ObjectHandles storage=00010001h parent=1                    GetObjectHandles (00010001h, 0, 1)
+    d  ObjectHandles storage=00010001h parent=root                 GetObjectHandles (00010001h, 0, FFFFFFFFh)
+    e  ObjectInfo h=2                                              GetObjectInfo (2)
+    f  GetObject h=2 sink=s                                        GetObject (2)
+    g  GetPartial h=3 off=100 max=1000 buf=1000                    Android GetPartialObject64 (3, 100, 0, 1000) (95C1h is listed: CQ31)
+    h  Delete h=5                                                  DeleteObject (5, 0)
+    i  Children storage=00010001h parent=1                         GetObjectPropList (1, 0, FFFFFFFFh, 0, 1)
+    j  ObjectSize64 h=4                                            GetObjectPropValue (4, DC04h) if ObjectInfo says FFFFFFFFh, else none
+    k  NewFolder storage=00010001h parent=1 name="New Folder"      SendObjectInfo (00010001h, 1) + data out
+  end
+  queue d0 j1 { <call> -> r; post }
+  wait job j1 done
+end
+
+case OPS-002
+  title  an OK response with fewer parameters than its operation needs: a protocol error
+  from   7.9/The operations (OK response carries); Parsing (a response's parameter count)
+  table  op  setup
+    a  SendObjectInfo    respond SendObjectInfo 2001 params=2
+    b  GetPartialObject  respond GetPartialObject 2001 params=0
+  end
+  dev d0 ops=-95C1h                         # so that MtpGetPartial uses GetPartialObject, whose OK needs one parameter
+  open d0
+  sim d0 <setup>
+  queue d0 j1 { NewFolder storage=00010001h parent=1 name="F" -> ra; GetPartial h=3 off=0 max=100 buf=100 -> rb; post }
+  wait job j1 done
+end
+
+case OPS-003
+  title  a refusal with fewer parameters, or none: MTPE_DEVICE with its code, never a protocol error for that
+  from   7.9/The operations (a response other than OK)
+  table  op  code  call
+    a  SendObjectInfo  200C  NewFolder storage=00010001h parent=1 name="F"
+    b  GetObject       2009  GetObject h=2 sink=s
+    c  DeleteObject    200F  Delete h=5
+  end
+  sim d0 respond <op> <code> params=0       # only this row's operation is refused
+  queue d0 j1 { <call> -> r; post }
+  wait idle d0
+end
+
+case OPS-004
+  title  offsets and lengths checked in 64-bit arithmetic before anything is sent
+  from   7.9/The operations (every offset and length checked)
+  table  call
+    a  GetPartial h=3 off=69999 max=2 buf=2
+    b  GetPartial h=3 off=FFFFFFFFFFFFFFF0h max=100 buf=100
+    c  GetPartial h=3 off=0 max=1000 buf=999
+    d  AndroidSendPartial h=4 off=FFFFFFFFFFFFFF00h len=512 src=src
+  end
+  queue d0 j1 { <call> -> r; post }
+  wait job j1 done
+end
+
+case OPS-005
+  title  GetPartialObject: the bytes that arrived at most the maximum asked, and equal to the response's parameter
+  from   7.9/Partial reads; the operations table (GetPartialObject)
+  table  sends  param
+    a  1000  1000
+    b  600   600
+    c  600   1000
+    d  1000  999
+  end
+  dev d0 ops=-95C1h                         # GetPartialObject, with its response parameter
+  open d0
+  sim d0 respond GetPartialObject data=<sends> param=<param>
+  queue d0 j1 { GetPartial h=3 off=0 max=1000 buf=1000 -> r; post }
+  wait job j1 done
+end
+
+case OPS-006
+  title  GetPartialObject64: sent only when listed; any offset; at most the maximum asked
+  from   7.9/The operations (Android GetPartialObject64); Partial reads; MtpGetPartial (CQ31: 95C1h whenever listed; CQ30)
+  table  setup              call
+    a  ops=+95C1h           GetPartial h=40 off=100000 max=4096 buf=4096
+    b  ops=+95C1h           GetPartial h=40 off=100000000h max=4096 buf=4096
+    c  ops=-95C1h           GetPartial h=40 off=100000000h max=4096 buf=4096
+    d  ops=+95C1h sends=5000  GetPartial h=40 off=100000000h max=4096 buf=4096
+  end
+  dev d0 <setup> store+=h=40:"huge.bin":parent=root:size=5368709120:formula
+  open d0
+  queue d0 j1 { <call> -> r; post }
+  wait job j1 done
+end
+
+case OPS-007
+  title  GetObject's length checked against ObjectInfo's size
+  from   7.9/The operations (GetObject)
+  table  sends
+    a  1000
+    b  999
+    c  1001
+  end
+  sim d0 respond GetObject h=2 data=<sends>
+  queue d0 j1 { ObjectInfo h=2 -> ri; GetObject h=2 sink=s -> r; post }
+  wait job j1 done
+end
+
+case OPS-008
+  title  a successful upload: SendObjectInfo and SendObject as one pair, the readback, the new handle
+  from   7.9/Uploads (the pair reserved; readback); 7.8 (sizes on the device)
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="up.bin" size=300000 src=src -> r h -> hn; post }
+  at io.phase.IDLE#1 : sim d0 event ObjectAdded h=next   # between the pair: SendObjectInfo done, SendObject not begun
+  wait job j1 done
+  wait ev.route.in                          # the event routed (after j1: the I/O thread never blocked meanwhile)
+  wait idle d0
+end
+
+case OPS-009
+  title  SendObjectInfo's OK response checked: storage and parent as sent, a handle not 0 or FFFFFFFFh
+  from   7.9/Uploads (ownership; a complete OK settles it, CQ33)
+  table  params
+    a  00010001h 1 0
+    b  00010001h 1 FFFFFFFFh
+    c  00010001h 6 50
+    d  00010002h 1 50
+  end
+  sim d0 respond SendObjectInfo 2001 params=<params>
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="o.bin" size=100 src=src -> r; post }
+  wait job j1 done
+end
+
+case OPS-010
+  title  a failure between the pair or before SendObject's data phase: what may be deleted
+  from   7.9/Uploads (the pair reserved; a failure before SendObject's data: Q24, by state)
+  table  failure
+    a  sim d0 src fails-at-open                                    # state (i): the source fails before SendObject is sent
+    b  sim d0 fail write#sendobject.cmd 31                         # state (ii): SendObject's command write fails
+    c  sim d0 respond SendObject 200C                              # state (iii): SendObject refused (store full) before any data
+    d  at io.phase.IDLE#1 : cancel d0 j1                           # state (i): a cancel between the pair (the I/O thread holds nothing there)
+    e  sim d0 respond SendObject 200C ; sim d0 respond DeleteObject 2002   # state (iii), the cleanup refused
+  end
+  <failure>
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="f.bin" size=300000 src=src -> r; post }
+  wait idle d0
+end
+
+case OPS-011
+  title  SendObject failing or losing its response after its data phase began: uncertain, never replayed, never deleted
+  from   7.9/Uploads (uncertain completion); Uncertainty
+  table  failure
+    a  fault stall_out at sendobject.data.2
+    b  fault no_response at SendObject
+    c  fail write#sendobject.data.2 1167
+  end
+  sim d0 <failure>
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="u.bin" size=3000000 src=src -> r; post }
+  wait idle d0
+end
+
+case OPS-012
+  title  a source that underflows or fails: the run ends, the transaction is cancelled by 7.5, the upload uncertain
+  from   7.9/Framing (data out); Uploads (byte accounting); 11.4 (a source callback that underflows); MTPE_SOURCE (CQ25)
+  table  src
+    a  src short=100
+    b  src fail-after=65536
+  end
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="s.bin" size=300000 src=<src> -> r; post }
+  wait idle d0
+end
+
+case OPS-013
+  title  the readback: size, name and parent checked; a mismatch reported
+  from   7.9/Uploads (readback)
+
+  table  readback
+    a  as sent
+    b  size=299999
+    c  name="up(1).bin"
+    d  parent=6
+    e  size=FFFFFFFFh objectsize64=300000
+  end
+  sim d0 readback <readback>
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="up.bin" size=300000 src=src -> r; post }
+  wait job j1 done
+end
+
+case OPS-014
+  title  every mutating operation: uncertain once its command may have reached the device, unless a complete response settled it
+  from   7.9/Uncertainty covers every mutating operation; 7.9/The host test (a DeleteObject and a new folder whose responses are lost)
+  table  call                                                                lose
+    a  NewFolder storage=00010001h parent=1 name="N" -> r                    SendObjectInfo
+    b  SendObject storage=00010001h parent=1 name="x" size=100 src=src -> r  SendObjectInfo
+    c  SendObject storage=00010001h parent=1 name="x" size=100 src=src -> r  SendObject
+    d  Delete h=5 -> r                                                       DeleteObject
+    e  AndroidBeginEdit h=4 -> rb; AndroidSendPartial h=4 off=0 len=100 src=src -> r   SendPartialObject
+    f  AndroidBeginEdit h=4 -> rb; AndroidTruncate h=4 off=100 -> r                    TruncateObject
+    g  AndroidBeginEdit h=4 -> r                                             BeginEditObject
+    h  AndroidBeginEdit h=4 -> rb; AndroidEndEdit h=4 -> r                   EndEditObject
+  end
+  # The Android rows run the edit inside one job, as the edit lifetime requires.
+  sim d0 fault no_response at <lose>
+  queue d0 j1 { <call>; post }
+  wait idle d0
+end
+
+case OPS-015
+  title  every mutating operation settled by a complete response: OK, or a refusal code
+  from   7.9/Uncertainty (an OK, or a refusal code, either of which settles it)
+  table  call                                                           answer
+    a  NewFolder storage=00010001h parent=1 name="N"                    200C
+    b  Delete h=5                                                       200D
+    c  NewFolder storage=00010001h parent=1 name="N"                    2001
+    d  Delete h=5                                                       2001
+  end
+  sim d0 respond <call> <answer>
+  queue d0 j1 { <call> -> r; post }
+  wait job j1 done
+end
+
+case OPS-016
+  title  a reading operation's lost response: no uncertainty; the stuck device reset, the session lost, the job queued under it dropped
+  from   7.9/Uncertainty (a reading operation's lost response); 7.5 step 1 (a response that does not come, CQ35); 7.3 (the session count)
+  sim d0 fault no_response
+  queue d0 j1 { ObjectInfo h=2 -> r1; post }
+  queue d0 j2 { ObjectInfo h=3 -> r2; post }
+  wait idle d0
+end
+
+case OPS-017
+  title  deleting a folder: a refusal classified by its code; only PartialDeletion leads to the children
+  from   7.9/Deleting a folder; 7.4
+  table  code
+    a  200D
+    b  200E
+    c  200F
+    d  2013
+    e  2009
+    f  2002
+  end
+  sim d0 respond DeleteObject h=6 <code>
+  queue d0 j1 { Delete h=6 -> r; post }
+  wait job j1 done
+end
+
+case OPS-018
+  title  PartialDeletion: the children listed again, deleted depth first, then the folder
+  from   7.9/Deleting a folder; 7.4 (DeleteObject; a child folder first tried as one call, CQ36)
+  sim d0 delete non-empty-folder=2012
+  queue d0 j1 { Delete h=6 -> r; post }
+  wait job j1 done
+end
+
+case OPS-019
+  title  the deletion's traversal: bounds, sentinel handles, a handle seen twice, a parent loop, handles not under the folder
+  from   7.9/Deleting a folder (the traversal is bounded)
+
+  table  tree
+    a  a chain of 65 nested folders under h=6
+    b  a listing of h=6 holding handle 0
+    c  a listing of h=6 holding FFFFFFFFh
+    d  h=8's listing holding h=7 again
+    e  h=8's listing holding h=6 (a loop)
+    f  h=8's listing holding h=2 (parent DCIM, not under h=6)
+    g  100,001 children under h=6
+  end
+  sim d0 delete non-empty-folder=2012
+  sim d0 store <tree>
+  queue d0 j1 { Delete h=6 -> r; post }
+  wait job j1 done
+end
+
+case OPS-020
+  title  a step of a folder's deletion losing its response: uncertain, the deletion stops, nothing sent again
+  from   7.9/Uncertainty (DeleteObject: each step of a folder's deletion)
+  sim d0 delete non-empty-folder=2012
+  sim d0 fault no_response at DeleteObject h=7
+  queue d0 j1 { Delete h=6 -> r; post }
+  wait idle d0
+end
+
+case OPS-021
+  title  the listing by GetObjectPropList: the folder's own elements dropped; the root by handle 0 depth 1 filtered by StorageID
+  from   7.4 (GetObjectPropList for a folder); 7.9/Parsing (property lists)
+  dev d0 storages=2
+  open d0
+  queue d0 j1 { Children storage=00010001h parent=1 -> r1; Children storage=00010001h parent=root -> r2; post }
+  wait job j1 done
+end
+
+case OPS-022
+  title  the listing's fallback: a refusal, a protocol error or a cap; the refusal remembered for the session
+  from   7.4 (fallback; only a refusal remembered, CQ38); 7.9/Parsing (an unknown datatype stops the parse)
+  table  how
+    a  respond GetObjectPropList 2005
+    b  proplist malformed unknown-datatype=0099h
+    c  proplist count=4194305
+  end
+  sim d0 <how>
+  queue d0 j1 { Children storage=00010001h parent=1 -> r1; Children storage=00010001h parent=6 -> r2; post }
+  wait job j1 done
+end
+
+case OPS-023
+  title  per-object fallbacks in a property list: a duplicate with another value, a required property missing, a sentinel handle, a foreign parent, a wrong datatype
+  from   7.9/Parsing (property lists); 7.4 (an element whose datatype is not the expected one)
+  table  fault
+    a  h=2 DC07h twice with two values
+    b  h=2 without DC0Bh
+    c  an element with handle FFFFFFFFh
+    d  h=3 with DC0Bh = 6
+    e  h=2 DC01h as UINT16
+    f  an unknown property DD00h of UINT32 for h=2
+  end
+  sim d0 proplist <fault>
+  queue d0 j1 { Children storage=00010001h parent=1 -> r; post }
+  wait job j1 done
+end
+
+case OPS-024
+  title  completeness: a suspect list compared with GetObjectHandles; GetObjectHandles' list is the folder's
+  from   7.9/Parsing (completeness)
+  queue d0 j1 { Children storage=00010001h parent=1 -> r1; post }
+  wait job j1 done
+  sim d0 proplist omit h=3
+  queue d0 j2 { Children storage=00010001h parent=1 -> r2; post }
+  wait job j2 done
+end
+
+case OPS-025
+  title  a camera refusing a parent filter: read whole once, the tree built from each object's parent
+  from   7.4 (GetObjectHandles)
+  table  code
+    a  2006
+    b  2014
+    c  201A
+  end
+  dev d0 ops=-GetObjectPropList
+  open d0
+  sim d0 respond GetObjectHandles parent!=0 <code>
+  queue d0 j1 { Children storage=00010001h parent=1 -> r1; Children storage=00010001h parent=6 -> r2; post }
+  wait job j1 done
+end
+
+case OPS-026
+  title  a storage id whose low 16 bits are 0 is absent and not shown
+  from   7.4 (GetStorageIDs)
+  sim d0 storageids 00010001h 00020000h 00030001h
+  queue d0 j1 { StorageIds -> r; post }
+  wait job j1 done
+end
+
+case OPS-027
+  title  the 64-bit size: GetObjectPropValue DC04h when ObjectInfo says FFFFFFFFh
+  from   7.4 (GetObjectPropValue); 7.2 (ObjectCompressedSize)
+  dev d0 store+=h=40:"huge.bin":parent=root:size=5368709120:formula
+  open d0
+  queue d0 j1 { ObjectSize64 h=40 -> r1; ObjectSize64 h=2 -> r2; post }
+  wait job j1 done
+end
+
+case OPS-028
+  title  Android's writing operations refused on a device that is not a simulator, unless the test flag is passed
+  from   7.9/Android's writing operations (disabled on real devices until qualified; the refusal and "SIMULATED" made exact, CQ1; Q17 decides whether real devices are ever enabled)
+  table  strings  flag  call
+    a  real       0     AndroidSendPartial h=4 off=0 len=10 src=src -> r
+    b  real       0     AndroidTruncate h=4 off=10 -> r
+    c  real       0     AndroidBeginEdit h=4 -> r
+    d  real       0     AndroidEndEdit h=4 -> r
+    e  real       1     AndroidBeginEdit h=4; AndroidTruncate h=4 off=10 -> r; AndroidEndEdit h=4
+    f  SIMULATED  0     AndroidBeginEdit h=4; AndroidTruncate h=4 off=10 -> r; AndroidEndEdit h=4
+    g  real       0     GetPartial h=4 off=0 max=10 buf=10 -> r
+  end
+  # strings=real: GetDeviceInfo's Model without "SIMULATED"; SIMULATED: with it (CQ1).
+  dev d0 strings=<strings> ops=+95C1h
+  open d0 testflag=<flag>
+  queue d0 j1 { <call>; post }
+  wait job j1 done
+end
+
+case OPS-029
+  title  SendPartialObject always in the split form, its header a packet of its own, on a combined device
+  from   7.9/Android's writing operations (framing)
+  dev d0 form=combined mps=512
+  open d0
+  queue d0 j1 { AndroidBeginEdit h=4; AndroidSendPartial h=4 off=1000 len=100 src=src -> r; AndroidEndEdit h=4; post }
+  wait job j1 done
+end
+
+case OPS-030
+  title  the Android-like responder that puts header-packet data at offset 0: a partial write at a nonzero offset, a truncate, the untouched bytes compared
+  from   7.9/Android's writing operations (tests)
+  dev d0 responder=android-header-at-0
+  open d0
+  queue d0 j1 { AndroidBeginEdit h=4; AndroidSendPartial h=4 off=1000000 len=70000 src=src -> r1; AndroidTruncate h=4 off=2000000 -> r2; AndroidEndEdit h=4; post }
+  wait job j1 done
+end
+
+case OPS-031
+  title  the partial write and the truncate interrupted at every phase
+  from   7.9/Android's writing operations (tests: each interrupted at every phase)
+  dev d0 responder=android-header-at-0
+  open d0
+  queue d0 j1 { AndroidBeginEdit h=4; AndroidSendPartial h=4 off=1000000 len=70000 src=src -> r1; AndroidTruncate h=4 off=2000000 -> r2; AndroidEndEdit h=4 -> r3; post }
+  sweep io.phase.COMMAND#2 .. io.phase.IDLE#4 : cancel d0 j1   # async where a lock is held (X9)
+  wait idle d0
+end
+
+case OPS-032
+  title  one edit at a time; only SendPartialObject and TruncateObject on the edited handle inside it
+  from   7.9/Edit lifetime (the refusal's code and reason, CQ30)
+  table  call
+    a  AndroidBeginEdit h=7
+    b  AndroidSendPartial h=7 off=0 len=10 src=src
+    c  GetObject h=2 sink=s
+    d  AndroidTruncate h=7 off=0
+  end
+  queue d0 j1 { AndroidBeginEdit h=4; <call> -> r; AndroidEndEdit h=4; post }
+  wait job j1 done
+end
+
+case OPS-033
+  title  the upload's reservation is not the library's once the session or the cache generation changed between the pair
+  from   7.9/Uploads (ownership: the same session and cache generation); 7.9/Events (session-specific state cleared); U4
+  table  between
+    a  sim d0 event DeviceReset                         # the session lost between the pair
+    b  sim d0 event-raw 0b00000004000240000000         # a malformed event: a full refresh asked, the cache generation raised
+  end
+  sim d0 respond SendObject 200C                      # SendObject, if sent, refused at once (Q24's state (iii))
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="r.bin" size=100 src=src -> r; post }
+  at io.phase.IDLE#1 : <between> ; wait ev.route.in   # SendObjectInfo done; the I/O thread stopped outside every lock
+  wait idle d0
+end

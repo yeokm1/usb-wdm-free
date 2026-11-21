@@ -1,0 +1,12 @@
+# Expected decoding of evcancel.hex, written by hand from MTP 1.1, G.2.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = event container
+result = MTPE_OK
+length = 12
+type = 0004h
+code = 4001h
+tid = 00056789h
+parameters[] =
+route = engine state at once: cancels the transaction in progress only if its tid is 00056789h (with 00006789h or 00016789h in progress it is logged and dropped)
+end

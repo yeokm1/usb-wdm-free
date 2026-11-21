@@ -1,0 +1,7 @@
+# Expected decoding of harrshrt.hex, written by hand from MTP 1.1, 3.2.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = HandleArray
+result = MTPE_PROTOCOL (3 handles do not fit in 8 bytes); nothing allocated
+count = 3
+end

@@ -1,0 +1,23 @@
+# An ObjectPropList whose count needs more than 9 bytes per element left: 3 elements, 22 bytes after the count (fewer than 27).
+# Written by hand from MTP 1.1, 5.4; 7.9 here (a property list element: at least 9 bytes).
+# @0 NumberOfElements UINT32 = 3 (4 bytes)
+03 00 00 00
+# element 1: a.jpg
+# @4 element 1 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @8 element 1 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @10 element 1 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @12 element 1 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# element 2: b.jpg; no element 3 follows
+# @16 element 2 ObjectHandle UINT32 = 0003E4F5h (4 bytes)
+f5 e4 03 00
+# @20 element 2 PropertyCode UINT16 = DC02h ObjectFormat (2 bytes)
+02 dc
+# @22 element 2 Datatype UINT16 = 0004h UINT16 (2 bytes)
+04 00
+# @24 element 2 Value UINT16 = 3000h (2 bytes)
+00 30
+# total 26 bytes

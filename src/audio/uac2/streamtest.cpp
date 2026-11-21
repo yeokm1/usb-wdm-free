@@ -13,6 +13,11 @@
 #include <assert.h>
 #include <string.h>
 inline void *operator new(size_t,void *p){return p;}
+/* docs/design/uac2.md 30: the driver's stream count, born at publication and
+ * gone at a published stream's destroy; a failed creation is neither */
+static LONG born=0, gone=0;
+#define UAC_STREAM_BORN(device) (++born)
+#define UAC_STREAM_GONE(device) (++gone)
 #include "uacstream.h"
 static LONG allocations=0, groups=0, failAllocation=-1;
 static BOOLEAN failGroup=FALSE,failWork=FALSE;
@@ -91,7 +96,7 @@ int main(){
  Owner owner;LONG active=0;PMINIPORTWAVECYCLICSTREAM stream=NULL;PDMACHANNEL dma=NULL;PSERVICEGROUP service=NULL;
  UAC_STREAM_HOOKS hooks={NULL,Start,Stop,Close,Notify};
  PDEVICE_OBJECT device=(PDEVICE_OBJECT)&owner;
- for(LONG failure=0;failure<4;++failure){failAllocation=failure<2?failure:-1;failGroup=failure==2;failWork=failure==3;assert(UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device)==STATUS_INSUFFICIENT_RESOURCES);assert(!active&&owner.refs==1&&!allocations&&!groups&&!stream&&!dma&&!service&&!deviceRefs&&!workItems&&!closes);}
+ for(LONG failure=0;failure<4;++failure){failAllocation=failure<2?failure:-1;failGroup=failure==2;failWork=failure==3;assert(UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device)==STATUS_INSUFFICIENT_RESOURCES);assert(!active&&owner.refs==1&&!allocations&&!groups&&!stream&&!dma&&!service&&!deviceRefs&&!workItems&&!closes);assert(!born&&!gone);}
  failAllocation=-1;failGroup=failWork=FALSE;
  assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&hooks,device));assert(active==1&&owner.refs==2&&allocations==2&&groups==1);
  UacStream *s=(UacStream*)stream;
@@ -116,7 +121,7 @@ int main(){
  for(i=0;i<sizeof(values)/sizeof(values[0]);++i){LONGLONG n=values[i],expected=(n/12)*625+((n%12)*625)/12;assert(!stream->NormalizePhysicalPosition(&n)&&n==expected);}
  for(i=0;i<5000;++i){LARGE_INTEGER random;random.HighPart=(LONG)((ULONG)rand()%0x02752546);random.LowPart=((ULONG)rand()<<17)^((ULONG)rand()<<2)^(ULONG)rand();LONGLONG n=random.QuadPart,expected=(n/12)*625+((n%12)*625)/12;assert(!stream->NormalizePhysicalPosition(&n)&&n==expected);}
  LONGLONG invalid=-1;assert(!NT_SUCCESS(stream->NormalizePhysicalPosition(&invalid)));invalid=177088743107611696i64;assert(!NT_SUCCESS(stream->NormalizePhysicalPosition(&invalid)));
- service->Release();stream->Release();assert(active==1);testIrql=DISPATCH_LEVEL;dma->Release();assert(active==UacStream::GateClosing&&queued&&owner.refs==2&&closes==0&&deviceRefs==2);testIrql=PASSIVE_LEVEL;RunQueued();assert(!active&&owner.refs==1&&!allocations&&!groups&&closes==1&&!deviceRefs&&!workItems);
+ service->Release();stream->Release();assert(active==1);testIrql=DISPATCH_LEVEL;dma->Release();assert(active==UacStream::GateClosing&&queued&&owner.refs==2&&closes==0&&deviceRefs==2);testIrql=PASSIVE_LEVEL;RunQueued();assert(!active&&owner.refs==1&&!allocations&&!groups&&closes==1&&!deviceRefs&&!workItems);assert(born==1&&gone==1);
  /* PASSIVE final reference drops inside the actual CompleteBytes->Notify
   * call stack. Close must not execute inline (would join its USB caller).
   * The production header queues it; simulate native execution after return. */
@@ -136,6 +141,9 @@ int main(){
   service->Release();stream->Release();dma->Release();delays=0;runAfterDelays=-1;
   assert(UacStream::WaitClosing(&active,2000,&ms)&&ms==2000&&delays==200&&active==UacStream::GateClosing);
   assert(UacStream::Create(&owner,&active,&f.DataFormat,&second,&d2,&g2,&hooks,device)==STATUS_DEVICE_BUSY&&!second);
+  /* 29.5.7: the device's failure ends the wait at once; a clear flag waits as before. */
+  {LONG failed=1;delays=0;assert(UacStream::WaitClosing(&active,2000,&ms,&failed)&&!delays&&active==UacStream::GateClosing);
+   failed=0;assert(UacStream::WaitClosing(&active,2000,&ms,&failed)&&ms==2000&&delays==200);}
   testIrql=DISPATCH_LEVEL;assert(!UacStream::WaitClosing(&active,2000,&ms)&&!ms);testIrql=PASSIVE_LEVEL;
   RunQueued();assert(closes==4&&!active&&owner.refs==1&&!allocations&&!groups&&!deviceRefs&&!workItems);delays=0;}
  UAC_STREAM_HOOKS capHooks={NULL,Start,Stop,Close,Notify,AcceptAll};
@@ -157,5 +165,6 @@ int main(){
   UAC_STREAM_HOOKS anyHooks={NULL,Start,Stop,Close,Notify,AcceptAll};assert(!UacStream::Create(&owner,&active,&f.DataFormat,&stream,&dma,&service,&anyHooks,device,FALSE,128));
   assert(dma->AllocatedBufferSize()==420480);
   service->Release();stream->Release();dma->Release();RunQueued();assert(!active&&owner.refs==1&&!allocations);}
+ assert(born==gone&&born>0); /* docs/design/uac2.md 30: every published stream uncounted once, no failed creation counted */
  puts("PASS: stream format/allocation/ring (and its size from the queue); render position = fetch cursor, taken bytes cleared, no rewind on pause; capture position = written; deferred DISPATCH and PASSIVE-in-Notify final release; a closing gate waited for, an open one refused at once; native callback-return FDO guard and exactly-once close");return 0;
 }

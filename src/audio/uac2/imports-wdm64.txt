@@ -53,3 +53,7 @@ NTOSKRNL.EXE!IoOpenDeviceInterfaceRegistryKey
 # Vista+: the devnode FriendlyName (docs/design/uac2.md section 21)
 NTOSKRNL.EXE!ZwQueryKey
 NTOSKRNL.EXE!ZwOpenKey
+# The failed state (docs/design/uac2.md 29.9)
+NTOSKRNL.EXE!IoInvalidateDeviceState
+# 98 SE and ME remove (docs/design/uac2.md 30.6): a powered-down device asked back to D0
+PORTCLS.SYS!PcRequestNewPowerState

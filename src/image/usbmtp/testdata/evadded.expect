@@ -1,0 +1,12 @@
+# Expected decoding of evadded.hex, written by hand from MTP 1.1, 4.8.3 and G.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = event container
+result = MTPE_OK
+length = 16
+type = 0004h
+code = 4002h
+tid = 0005B6C7h (not compared: the event's own rule, 7.4)
+parameters[] = 0002C3D4h
+route = refresh job, target the folder of handle 0002C3D4h
+end

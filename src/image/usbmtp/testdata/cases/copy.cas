@@ -1,0 +1,58 @@
+# Copying safely (7.8) against a fake file layer that fails at each step
+# in turn. docs/design/mtp.md 7.8; 11.4 (the temporary-file and replace
+# sequence). Format: ../README.md. `copy <object> to <folder> [replace]`
+# runs the copy of one object into a folder of the fake file layer;
+# `fail <step> [n]` makes that call fail the n-th time.
+# The steps: create (CreateFile CREATE_NEW of ~MTPnnnn.TMP), write, size
+# check, flush, close, move-new (temporary to target), move-old (target to
+# ~MTPnnnn.OLD), move-tmp (temporary to target), delete-old, move-back
+# (backup to target), delete-tmp.
+
+case CPY-001
+  title  no file of the target name: each step failing in turn
+  from   7.8 steps 1 to 3
+  table  fail
+    a  none
+    b  create
+    c  create 1 (a clash: ~MTP0000.TMP exists)
+    d  write 3
+    e  size check
+    f  flush
+    g  close
+    h  move-new
+    i  move-new and delete-tmp
+    j  device error at 50% of the data
+    k  cancel at 50%
+  end
+  copy a.jpg (h=2, 1,000 bytes) to C:\Dest
+end
+
+case CPY-002
+  title  replacing a file: each step failing in turn
+  from   7.8 step 4
+  table  fail
+    a  none
+    b  move-old (another reason than a clash)
+    c  move-old 1 (a clash: ~MTP0000.OLD exists)
+    d  move-tmp
+    e  delete-old
+    f  move-tmp and move-back
+    g  move-tmp and delete-tmp
+  end
+  folder C:\Dest holds a.jpg (500 bytes, contents O)
+  copy a.jpg (h=2, 1,000 bytes, contents N) to C:\Dest replace
+end
+
+case CPY-003
+  title  sizes on the PC's disk: FAT32's ceiling of 4 GiB - 2; FAT16 by free space; any other file system nothing refused in advance
+  from   7.8 (sizes on the PC's disk)
+  table  fs     size
+    a  FAT32  FFFFFFFEh
+    b  FAT32  FFFFFFFFh
+    c  FAT32  140000000h
+    d  FAT    80000000h with 1 GiB free
+    e  NTFS   140000000h
+    f  FAT32  80000000h (the signed boundary)
+  end
+  copy a huge formula object of <size> to a <fs> volume
+end

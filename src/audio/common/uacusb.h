@@ -7,6 +7,7 @@
 #define UACUSB_H
 #include "uacdesc.h"
 #include "uacplan.h"
+#include "uacgate.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -85,13 +86,52 @@ typedef struct UAC_USB_STATS {
 
 #define UAC_USB_RATES 16
 
+/* docs/design/uac2.md 29.5.5 and 29.9: the device-wide gate and the failed
+ * state. It lives in the FDO's extension from AddDevice (so before any
+ * device record and after one is retired). It acts only while Active:
+ * on 2000 and later (WDM 1.10 and above) with Uac2FailOnTimeout set to 1,
+ * decided at each PnP start. Inactive (on 98 SE and ME always), the
+ * feature stays inactive and the old functional paths remain: the gate's
+ * own setup and its inactive checks still run, and refuse nothing (29.17).
+ * Lock is a spin lock; Failed and Active are also read without it
+ * (interlocked), as early refusals only. Life: UAC_LIFE_* (uacgate.h). */
+#define UAC_REQ_HOST      0   /* host-local: never the failed state */
+#define UAC_REQ_CLASS     1
+#define UAC_REQ_STANDARD  2
+#define UAC_REQ_SELECT_IF 3
+#define UAC_REQ_SELECT_CF 4
+typedef struct UAC_GATE {
+    KSPIN_LOCK Lock;
+    LONG Active, Failed, Life, Notifying;
+    LIST_ENTRY Streams;        /* the registered streams of the device record */
+    KEVENT NotifyWake;         /* set at the expiry and at its completion */
+    /* The expiry's record (Uac2Failed): set once, at the first expiry. */
+    ULONG Kind, Setup0, Setup1;
+    ULONGLONG ExpiredAt;       /* interrupt time */
+    LONG Completed;            /* the expired request has completed */
+    NTSTATUS Status;           /* its final status, after the drain */
+    ULONG UrbStatus, LateMs;   /* LateMs: expiry to completion */
+    ULONG Refused, HostTimeouts;
+} UAC_GATE;
+/* At AddDevice: zeroed, the lock, the list and the event set up, inactive. */
+void UacGateInit(UAC_GATE *g);
+/* At each PnP start, before any request: active or not, the failure and
+ * the expiry's record cleared, Life starting. */
+void UacGateReset(UAC_GATE *g, BOOLEAN active);
+/* Nonzero when the gate is active and the device has failed. */
+LONG UacGateFailed(UAC_GATE *g);
+/* Life, under the gate lock; returns the previous value. */
+LONG UacGateSetLife(UAC_GATE *g, LONG life);
+
 /* Device: PASSIVE. Open copies the descriptor view, learns the bus speed
  * and selects the configuration (every interface at alternate 0). Rates
  * lists the sample rates the terminal's clock path can run (selector
  * inputs included), ascending; discrete ranges as given, continuous ones
  * as the common rates they contain. Close requires every stream destroyed.
+ * The gate (above) is the FDO's and outlives the device record.
  */
-NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_DEV **out);
+NTSTATUS UacUsbOpen(PDEVICE_OBJECT lower, PDEVICE_OBJECT pdo, const UAC_DESC *desc, UAC_GATE *gate,
+                    UAC_DEV **out);
 NTSTATUS UacUsbRates(UAC_DEV *dev, UAC_BYTE terminal, ULONG *rates, ULONG max, ULONG *count);
 int UacUsbHighSpeed(UAC_DEV *dev);
 #ifdef UAC_V1
@@ -108,9 +148,10 @@ void UacUsbClose(UAC_DEV *dev);
 NTSTATUS UacUsbClassRequest(UAC_DEV *dev, const UCHAR *setup, PVOID bytes, ULONG *length);
 /* PASSIVE, before UacUsbOpen too: GET_DESCRIPTOR from the device below
  * lower (type, index, language), at most 5 s, then cancelled and drained
- * as every request here; *got the bytes moved (0 on failure). */
-NTSTATUS UacUsbDescriptor(PDEVICE_OBJECT lower, UCHAR type, UCHAR index, USHORT language,
-                          PVOID buffer, USHORT size, ULONG *got);
+ * as every request here; *got the bytes moved (0 on failure). gate may
+ * be NULL (no gate). */
+NTSTATUS UacUsbDescriptor(UAC_GATE *gate, PDEVICE_OBJECT lower, UCHAR type, UCHAR index,
+                          USHORT language, PVOID buffer, USHORT size, ULONG *got);
 
 /* Stream: one direction, one format, one rate. Create plans the alternate
  * (UacPlanPick) and the queue (UacPlanQueue: queueMs as UacPlanQueueMs

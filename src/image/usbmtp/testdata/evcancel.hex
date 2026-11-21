@@ -1,0 +1,11 @@
+# An event container: CancelTransaction (4001h), tid 00056789h, no parameter.
+# Written by hand from MTP 1.1, G.2.2.
+# @0 length UINT32 = 12 (4 bytes)
+0c 00 00 00
+# @4 type UINT16 = 0004h (2 bytes)
+04 00
+# @6 code UINT16 = 4001h (2 bytes)
+01 40
+# @8 tid UINT32 = 00056789h (4 bytes)
+89 67 05 00
+# total 12 bytes

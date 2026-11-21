@@ -1,0 +1,55 @@
+# Expected decoding of proplst2.hex, written by hand from MTP 1.1, 5.4 and 3.2; 7.4 here (unknown properties skipped by their datatype's size) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = ObjectPropList for folder 0001A2B3h (depth 1)
+result = MTPE_OK
+NumberOfElements = 10
+element 1 ObjectHandle = 0002C3D4h
+element 1 PropertyCode = DD00h (unknown)
+element 1 Datatype = 0001h (INT8)
+element 1 Value = skipped: INT8, 1 byte; element 2 at 13
+element 2 ObjectHandle = 0002C3D4h
+element 2 PropertyCode = DD01h (unknown)
+element 2 Datatype = 000Ah (UINT128)
+element 2 Value = skipped: UINT128, 16 bytes; element 3 at 37
+element 3 ObjectHandle = 0002C3D4h
+element 3 PropertyCode = DD02h (unknown)
+element 3 Datatype = 4004h (AUINT16)
+element 3 Value = skipped: AUINT16, 8 bytes; element 4 at 53
+element 4 ObjectHandle = 0002C3D4h
+element 4 PropertyCode = DD03h (unknown)
+element 4 Datatype = 4007h (AINT64)
+element 4 Value = skipped: AINT64, 4 bytes; element 5 at 65
+element 5 ObjectHandle = 0002C3D4h
+element 5 PropertyCode = DC01h (StorageID)
+element 5 Datatype = 0006h (UINT32)
+element 5 Value = 00020001h
+element 6 ObjectHandle = 0002C3D4h
+element 6 PropertyCode = DC02h (ObjectFormat)
+element 6 Datatype = 0004h (UINT16)
+element 6 Value = 3801h
+element 7 ObjectHandle = 0002C3D4h
+element 7 PropertyCode = DC04h (ObjectSize)
+element 7 Datatype = 0008h (UINT64)
+element 7 Value = 9468016794 (000000023456789Ah)
+element 8 ObjectHandle = 0002C3D4h
+element 8 PropertyCode = DC07h (ObjectFileName)
+element 8 Datatype = FFFFh (STR)
+element 8 Value = "a.jpg"
+element 9 ObjectHandle = 0002C3D4h
+element 9 PropertyCode = DC0Bh (ParentObject)
+element 9 Datatype = 0006h (UINT32)
+element 9 Value = 0001A2B3h
+element 10 ObjectHandle = 0002C3D4h
+element 10 PropertyCode = DD04h (unknown)
+element 10 Datatype = FFFFh (STR)
+element 10 Value = skipped: STR, 5 bytes; the list ends at 149
+object 0002C3D4h: StorageID = 00020001h, ObjectFormat = 3801h, ObjectSize = 9468016794, ObjectFileName = "a.jpg", DateModified = none (no element), ParentObject = 0001A2B3h
+children[] = 0002C3D4h
+counts
+  at 0 4 elem 9 cap 4194304
+  at 45 4 elem 2 cap fit
+  at 61 4 elem 8 cap fit
+  at 111 1 elem 2 cap 255
+  at 144 1 elem 2 cap 255
+end

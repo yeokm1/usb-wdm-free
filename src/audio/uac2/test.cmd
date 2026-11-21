@@ -41,6 +41,31 @@ if errorlevel 1 goto fail
 .\voltest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log
+cl /nologo /W4 /WX /MD /O2 /I"%SRC%..\common" /Fe"%OUT%\leveltest.exe" "%SRC%..\common\uaclevel.c" "%SRC%..\common\uacvol.c" "%SRC%..\common\uacctl.c" "%SRC%..\common\uacdesc.c" "%SRC%leveltest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+.\leveltest.exe "%SRC%testdata\levels" cx31993m-first.lvl cx31993m.lvl hs24-full.lvl hs24-master.lvl hs24-channels.lvl x4full.lvl hs24-stall.lvl hs24-above0.lvl > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+cl /nologo /W4 /WX /MD /Od /I"%SRC%..\common" /Fe"%OUT%\captest.exe" "%SRC%..\common\uaccap.c" "%SRC%..\common\uacctl.c" "%SRC%..\common\uacdesc.c" "%SRC%..\common\uacplan.c" "%SRC%captest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+.\captest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+cl /nologo /W4 /WX /MD /O2 /I"%SRC%..\common" /DUAC_ROUTE_CONTROLS=96 /DUAC_ROUTE_ENDPOINTS=2 /DUAC_ROUTE_ROUTES=8 /Fe"%OUT%\routetest.exe" "%SRC%..\common\uacroute.c" "%SRC%..\common\uaccap.c" "%SRC%..\common\uacctl.c" "%SRC%..\common\uacdesc.c" "%SRC%..\common\uacplan.c" "%SRC%routetest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+.\routetest.exe "%SRC%testdata\sbx4\config0.bin" > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+cl /nologo /W4 /WX /MD /Od /Zi /I"%SRC%..\common" /Fe"%OUT%\alttest.exe" "%SRC%..\common\uacalt.c" "%SRC%alttest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+.\alttest.exe > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
+cl /nologo /W4 /WX /MD /Od /Zi /I"%SRC%..\common" /Fe"%OUT%\failtest.exe" "%SRC%failtest.c" > build.log 2>&1
+if errorlevel 1 goto fail
+.\failtest.exe > test.log 2>&1
+if errorlevel 1 goto fail
+type test.log
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%SRC%infchk.ps1" > test.log 2>&1
 if errorlevel 1 goto fail
 type test.log

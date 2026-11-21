@@ -1,0 +1,117 @@
+# Names (7.6), pure functions: the name copied to the PC, shown, and sent
+# to the device. docs/design/mtp.md 7.6; 11.4 (the name mapping, rule by
+# rule, and clashes after mapping). Format: ../README.md. The code page is
+# 1252 unless a row says otherwise; `\uXXXX` is a UTF-16 unit.
+
+case NAM-001
+  title  rule 1: characters outside the code page and characters Windows forbids become "_"
+  from   7.6 (copied to the PC, rule 1)
+  table  device
+    a  "a\u0001b.txt"
+    b  "a\\b.txt"
+    c  "a/b.txt"
+    d  "a:b*c?d\"e<f>g|h.txt"
+    e  "\u03A9mega.jpg"
+    f  "caf\u00E9.txt"
+    g  "x\uD83D\uDE00y.txt"
+  end
+  map <device> -> r
+end
+
+case NAM-002
+  title  rules 2 and 3: trailing dots and spaces dropped; empty, "." and ".." become "_"
+  from   7.6 (rules 2, 3)
+  table  device
+    a  "name. . "
+    b  "..."
+    c  "."
+    d  ".."
+    e  ""
+    f  "   "
+  end
+  map <device> -> r
+end
+
+case NAM-003
+  title  rule 4: reserved device names, with or without an extension, in any case
+  from   7.6 (rule 4)
+  table  device
+    a  "CON"
+    b  "con.txt"
+    c  "Prn.Log"
+    d  "AUX"
+    e  "nul.tar.gz"
+    f  "CLOCK$"
+    g  "COM1"
+    h  "com9.x"
+    i  "LPT1"
+    j  "lpt9"
+    k  "COM10"
+    l  "CONSOLE"
+  end
+  map <device> -> r
+end
+
+case NAM-004
+  title  rule 5: a path past MAX_PATH less 13 shortened, its extension kept
+  from   7.6 (rule 5)
+  table  folder  device
+    a  "C:\\D"  a name of 254 "x" then ".jpg"
+    b  a folder of 200 characters  a name of 60 "y" then ".mp3"
+    c  "C:\\D"  a name of 247 "z" with no extension
+  end
+  map <device> in <folder> -> r
+end
+
+case NAM-005
+  title  rule 6: clashes checked last, case-insensitively, against the folder's files and their 8.3 aliases and the copy's other names; " (2)", " (3)" before the extension
+  from   7.6 (rule 6); 11.4 (clashes after mapping)
+  table  folder-has  copy
+    a  "a.jpg"          "a.jpg"
+    b  "A.JPG"          "a.jpg"
+    c  "LONGNA~1.TXT" (alias of "Long name one.txt")  "longna~1.txt"
+    d  -                "x?.txt", "x*.txt"
+    e  "a.jpg", "a (2).jpg"  "a.jpg"
+    f  -                "con", "_con"
+    g  -                "Name", "name"
+  end
+  map-copy <copy> into a folder holding <folder-has> -> r
+end
+
+case NAM-006
+  title  containment: the destination is built from mapped names only and must be under the chosen folder
+  from   7.6 (containment)
+  table  device
+    a  "..\\..\\evil.txt"
+    b  "C:\\evil.txt"
+    c  "\\\\server\\share"
+  end
+  map <device> in "C:\\Dest" -> r
+end
+
+case NAM-007
+  title  shown names: "?" for a character the code page lacks; the exact name with U+XXXX in Properties; two names shown alike are two objects
+  from   7.6 (shown)
+  table  device
+    a  "\u03A9.jpg"
+    b  "\u4E2D.jpg"
+    c  "\uD83D\uDE00.jpg"
+  end
+  show <device> -> r
+end
+
+case NAM-008
+  title  copied to the device: the ANSI long name through MultiByteToWideChar(CP_ACP)
+  from   7.6 (copied to the device)
+  table  ansi  cp
+    a  "caf\xE9.txt"  1252
+    b  "\x82\xA0.txt"  932                  # 82h A0h: one double-byte character of code page 932, HIRAGANA LETTER A
+  end
+  todevice <ansi> cp=<cp> -> r
+end
+
+case NAM-009
+  title  every name changed is listed in the copy's summary
+  from   7.6 (every name changed this way is listed)
+  map-copy "a:b.txt", "ok.txt", "con" into an empty folder -> r
+end

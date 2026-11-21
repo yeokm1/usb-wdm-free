@@ -1,0 +1,162 @@
+# Expected results of sess.cas, written by hand from docs/design/mtp.md
+# 7.3 and 7.9. Format: ../README.md. I1 to I10 hold.
+
+SES-001
+  ret r = MTPE_OK
+  order: open.alloc < open.register.in < CreateFile (owner) < GET_INFO 52 < CLAIM < GET_INFO 52 < CreateFile (control) < BIND < CreateFile (event) < BIND < SET_TIMEOUTS < threads (io, event, cancel) < GetDeviceInfo < OpenSession < EVENTS start
+  wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0, GetStorageIDs tid=1]
+  GetDeviceInfo's command carries no parameter; OpenSession's exactly one (1)
+  ret r1 = MTPE_OK
+  state d0 = OPEN
+end
+
+SES-002
+  every row:
+    ret r != MTPE_OK; no MTP_DEV returned
+    the steps done are undone in reverse order: threads ended (each joined), event handle closed, control handle closed, owner handle closed (which releases the claim)
+    order: the undo's last driver call returned < open.detach.in < attachment reference dropped < ref.free
+    wire d0 after the failed step = [] (except row l: as SES-012's recovery)
+    notice d0 = [] (no CLOSED for a device the program never had, unless the open was given up: SES-015)
+    alloc = balanced
+  the code of each row (7.9, "Open is all or nothing", CQ2):
+    row a: ret r = MTPE_GONE win32=2
+    row b: ret r = MTPE_DEVICE resp=0 win32=31
+    row c: ret r = MTPE_INUSE win32=32
+    row d: ret r = MTPE_DEVICE resp=0 win32=31
+    row e: ret r = MTPE_DEVICE resp=0 win32=2
+    row f: ret r = MTPE_DEVICE resp=0 win32=31
+    row g: ret r = MTPE_DEVICE resp=0 win32=2
+    row h: ret r = MTPE_DEVICE resp=0 win32=31
+    row i: ret r = MTPE_DEVICE resp=0 win32=87
+    row j: ret r = MTPE_NOMEM; no I/O thread transaction was made; the threads already made ended
+    row k: ret r = MTPE_DEVICE resp=2002h
+    row l: ret r = MTPE_DEVICE resp=2002h; wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0]; ctl d0 has RESET6 after the OpenSession and no EVENTS start; no further OpenSession (CQ28)
+end
+
+SES-003
+  ret r = MTPE_DEVICE resp=2002h
+  at every point before open.detach.in: answer = DENY (OPENING is Busy)
+  at open.detach.in (the broadcast lands as the hold is left) and every point after: answer = TRUE (d0 no longer attached)
+  never a driver call of d0 after open.detach.in
+  alloc = balanced
+end
+
+SES-004
+  CLAIM tried 11 times (the first and ten retries, CQ6), 100 ms apart by the fake clock
+  ret r = MTPE_INUSE
+  alloc = balanced
+end
+
+SES-005
+  CLAIM tried 4 times, 100 ms apart
+  ret r = MTPE_OK
+end
+
+SES-006
+  ret r = MTPE_DEVICE resp=0 win32=31
+  the owner handle closed after the BIND failed; no other call to release the claim
+  ret r2 = MTPE_OK (the claim was released: a new open claims it)
+end
+
+SES-007
+  ret r = MTPE_GONE (a generation other than MtpEnum's: a replacement)
+  never CLAIM
+  alloc = balanced
+end
+
+SES-008
+  ret r = MTPE_DEVICE resp=0 win32=0 (a failed reading: the call succeeded)
+  never CLAIM
+end
+
+SES-009
+  wire d0 after open = [GetObjectInfo h=2 tid=FFFFFFFDh, GetObjectInfo h=2 tid=FFFFFFFEh, GetObjectInfo h=2 tid=1]
+  never tid FFFFFFFFh
+end
+
+SES-010
+  ret r = MTPE_OK
+  wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0, CloseSession, OpenSession 1 tid=0]
+  trace has session-already-open id=1
+  CloseSession's tid: as the device's open session has it (not judged here)
+end
+
+SES-011
+  ret r = MTPE_OK
+  wire d0 = [GetDeviceInfo tid=0, OpenSession tid=0, CloseSession, OpenSession tid=0, OpenSession tid=0]
+  ctl d0 between the second and third OpenSession = [RESET6]
+  ctl d0 after the third OpenSession = [EVSTART]
+end
+
+SES-012
+  ret r = MTPE_DEVICE resp=201Eh; no MTP_DEV
+  ctl d0 !has EVENTS start
+  wire d0 = [GetDeviceInfo, OpenSession, CloseSession, OpenSession, OpenSession] with one Device Reset (RESET6) before the last
+  alloc = balanced
+end
+
+SES-013
+  OpenSession sent 4 times (CQ6), 500 ms apart by the fake clock; the first three answered 2019h, the fourth 2001h
+  no Device Reset
+  ret r = MTPE_OK
+end
+
+SES-014
+  ctl d0 after the refused OpenSession = [RESET6] (no EVENTS start: no session was opened)
+  wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0] (no OpenSession after the reset, CQ28)
+  ret r = MTPE_DEVICE resp=2002h
+  trace has replug-needed
+end
+
+SES-015
+  open d0 still waiting at 39,900 ms
+  state d0 = GIVENUP at 40,000 ms (+ 500 ms), set by cx
+  ret r = MTPE_GIVENUP, returned at most 41,000 ms (+ 500 ms) after the call; no MTP_DEV
+  answer = DENY (d0 retained, attached and Busy until its stuck call returned and its cleanup ran)
+  after the unstick: notice d0 = [GIVENUP, CLOSED] with the cookie given in MTP_HOST
+  alloc = balanced
+end
+
+SES-016
+  wire d0 after open: SendObjectInfo's data and SendObject's data each as a 12-byte header write, then the payload as its own run
+  ret r = MTPE_OK
+end
+
+SES-017
+  ret r = MTPE_OK
+  the allocation hook's calls for d0's MTP_DEV, lock and events made with no library lock held
+  in open.register.in: no allocation, no callback, no driver call
+  state d0 = OPENING, refs = caller + attachment, when it is linked
+end
+
+SES-018
+  wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0]
+  ctl d0 = [EVENTS stop -> 1, ABORT in|out -> 0, RESET (failing)]; no RESET_PIPE, no second RESET, no further OpenSession (7.5 step 6 failing goes to step 7)
+  ret r = MTPE_GIVENUP (GIVENUP before DEVICE in the order); no MTP_DEV
+  the open's undo ran with nothing stuck; notice d0 = [GIVENUP, CLOSED] with the cookie given in MTP_HOST
+  alloc = balanced
+end
+
+SES-019
+  wire d0 = [GetDeviceInfo tid=0, OpenSession 1 tid=0 (4 times, 500 ms apart by the fake clock)]
+  ctl d0 has no RESET (DeviceBusy is retried, not reset)
+  ret r = MTPE_DEVICE resp=2019h; no MTP_DEV
+  alloc = balanced
+end
+
+SES-020
+  every row and point: the code of SES-002's row; no MTP_DEV
+  at open.step.<step> and every point before open.detach.in: a = DENY (OPENING is Busy)
+  at open.detach.in (landing as its hold is left) and every point after: a = TRUE (d0 no longer attached)
+  never a driver call of d0 after open.detach.in
+  the undo in reverse at every point, the query changing nothing of it
+  [B] the same (no hold lapses within a case this short)
+  alloc = balanced
+end
+
+SES-021
+  ret r1 = MTPE_OK children = [2, 3] through the fallback (GetObjectPropList (1, ...) refused 2005h)
+  ret r2 = MTPE_OK children = [7, 8]; wire for r2 = [GetObjectHandles (00010001h, 0, 6), GetObjectInfo (7), GetObjectInfo (8)] (the refusal remembered in session 1)
+  ret r3 = MTPE_OK children = [2, 3]; wire for r3 = [GetObjectPropList (1, 0, FFFFFFFFh, 0, 1)] (session 2 forgot it)
+  session d0 = 2
+end

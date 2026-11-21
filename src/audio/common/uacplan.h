@@ -310,6 +310,29 @@ unsigned int UacPlanResyncAhead(unsigned long frame, unsigned long ageMs, unsign
  * the stack (their storage is freed only after it). */
 unsigned int UacPlanWorkerExit(unsigned int stop, unsigned int slotsOut, unsigned int frameOut);
 
+/* Section 30: the hold in PortCls's remove on 98 SE and ME, a bounded
+ * mitigation. 1 to keep waiting, 0 to let the remove go on: it waits while
+ * a stream of the device is not yet destroyed (streams), a create or close
+ * is executing (busy), or one ended less than UAC_REMOVE_QUIET_MS ago
+ * (quietMs: since the later of that and the hold's start); at
+ * UAC_REMOVE_HOLD_MS (heldMs: since the hold's start) it goes on whatever
+ * is left. */
+#define UAC_REMOVE_QUIET_MS 250UL
+#define UAC_REMOVE_HOLD_MS 5000UL
+unsigned int UacPlanRemoveHold(unsigned long streams, unsigned long busy, unsigned long quietMs,
+                               unsigned long heldMs);
+/* Section 30: 1 to take the hold at all, read once at its start: only when
+ * PortCls's last device power state for the device was D0 (d0 1) and
+ * something of the device is left to tear down (a stream not yet destroyed,
+ * a handle open, or a create or close executing). */
+unsigned int UacPlanRemoveHoldTake(unsigned int d0, unsigned long streams, unsigned long opens,
+                                   unsigned long busy);
+/* Section 30.6: 1 to ask PortCls to bring the device back to D0 before it
+ * is given the remove: a remove with no surprise removal before it (old:
+ * WDM below 1.10, 98 SE and ME; surprised: a surprise removal came) of a
+ * device whose last device power state from PortCls was not D0 (down). */
+unsigned int UacPlanRemoveWake(unsigned int old, unsigned int surprised, unsigned int down);
+
 /* Section 25: 1 when a device's PDO belongs to Windows 2000's USB 1.1
  * hub driver, whose devices run at Full or Low Speed: the driver object's
  * name (count UTF-16 units, no terminator needed) is "\Driver\usbhub",

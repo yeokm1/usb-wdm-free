@@ -1,0 +1,41 @@
+# ObjectInfo whose Filename count is 3 with no terminating NUL (Q15).
+# Written by hand from MTP 1.1, 3.2.3; 7.9 here (Strings).
+# @0 StorageID UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# @4 ObjectFormat UINT16 = 3004h (2 bytes)
+04 30
+# @6 ProtectionStatus UINT16 = 8002h (2 bytes)
+02 80
+# @8 ObjectCompressedSize UINT32 = 00012D3Ch (4 bytes)
+3c 2d 01 00
+# @12 ThumbFormat UINT16 = 3808h (2 bytes)
+08 38
+# @14 ThumbCompressedSize UINT32 = 0031A1B1h (4 bytes)
+b1 a1 31 00
+# @18 ThumbPixWidth UINT32 = 00320150h (4 bytes)
+50 01 32 00
+# @22 ThumbPixHeight UINT32 = 003300E0h (4 bytes)
+e0 00 33 00
+# @26 ImagePixWidth UINT32 = 00340C80h (4 bytes)
+80 0c 34 00
+# @30 ImagePixHeight UINT32 = 00350960h (4 bytes)
+60 09 35 00
+# @34 ImageBitDepth UINT32 = 00360010h (4 bytes)
+10 00 36 00
+# @38 ParentObject UINT32 = 0001A2B3h (4 bytes)
+b3 a2 01 00
+# @42 AssociationType UINT16 = 0000h (2 bytes)
+00 00
+# @44 AssociationDesc UINT32 = 0037C2D2h (4 bytes)
+d2 c2 37 00
+# @48 SequenceNumber UINT32 = 0038E3F3h (4 bytes)
+f3 e3 38 00
+# @52 Filename String count 3 = units "abc" (7 bytes)
+03 61 00 62 00 63 00
+# @59 DateCreated String = "" (1 bytes)
+00
+# @60 DateModified String = "" (1 bytes)
+00
+# @61 Keywords String = "" (1 bytes)
+00
+# total 62 bytes

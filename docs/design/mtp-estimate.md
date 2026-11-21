@@ -4,7 +4,9 @@ Status: estimate of 2026-11-06, no code (owner, 2026-11-06: "an estimate
 only"). It sizes what an MTP (Media Transfer Protocol) and PTP (Picture
 Transfer Protocol) package would take on 98 SE, ME and 2000, how a phone's
 or camera's files could be presented on each, and what could test it. Every
-size below is an estimate, not a measurement.
+size below is an estimate, not a measurement. Owner, 2026-11-16: MTP on
+98 SE and ME is taken up, as a GUI file explorer program
+([candidates.md](candidates.md), Decisions, 7).
 
 ## 1. The devices and what they speak
 

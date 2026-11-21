@@ -1,0 +1,50 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 Yeo Kheng Meng
+; MTPPRB.INF - Windows 98 SE and ME: binds MTPPRB.SYS, the M0 probe driver
+; of docs/design/mtp.md (5.6), to test devices only: QEMU's usb-mtp and the
+; SIMULATED profiles of mtpemu.py. Not shipped; for throwaway test guests.
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+DriverVer=11/16/2026,0.0.0.1
+
+[Manufacturer]
+%Provider%=Models
+
+[Models]
+%UsbMtp%=MtpPrb,USB\VID_46F4&PID_0004
+%SimAndroid%=MtpPrb,USB\VID_FFFF&PID_0060&MI_00
+%SimAndroidFF%=MtpPrb,USB\VID_FFFF&PID_0061&MI_00
+%SimCamera%=MtpPrb,USB\VID_FFFF&PID_0062
+%SimSingle%=MtpPrb,USB\VID_FFFF&PID_0065
+
+[MtpPrb]
+CopyFiles=MtpPrb.Sys
+AddReg=MtpPrb.AddReg
+
+[MtpPrb.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,MTPPRB.SYS
+
+[MtpPrb.Sys]
+MTPPRB.SYS
+
+[DestinationDirs]
+MtpPrb.Sys=10,System32\Drivers
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+MTPPRB.SYS=1
+
+[Strings]
+Provider="usb-wdm-free"
+UsbMtp="MTP probe: QEMU usb-mtp (test only)"
+SimAndroid="MTP probe: SIMULATED android (test only)"
+SimAndroidFF="MTP probe: SIMULATED android, class FF (test only)"
+SimCamera="MTP probe: SIMULATED camera (test only)"
+SimSingle="MTP probe: SIMULATED single interface (test only)"
+Disk="MTP probe"

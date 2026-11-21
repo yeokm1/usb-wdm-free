@@ -100,6 +100,41 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(self.control(1, 0xa1, 0x208, 0x0103, 2)[2], b'\0\0')
         self.assertEqual(self.control(1, 0x21, 0x100, 0x0103, 1, b'\1')[0], 4)
 
+    def test_forced_stop_at_request(self):
+        # --stop-at-request 4: the 4th control request (SET_CONFIGURATION,
+        # SET_INTERFACE and control transfers all count) and every later one
+        # go unanswered; the stream still runs.
+        self.model.stop_at_request = 4
+        self.configure()                                    # requests 1 and 2
+        self.assertEqual(self.control(1, 0xa1, 0x100, 0x2103, 4)[0], 0)   # 3
+        before = len(self.wire.messages)
+        self.model.control(5, struct.pack('<BBBBHHH', 0, 1, 0xa1, 0, 0x200, 0x2103, 1))  # 4
+        self.model.handle(9, 6, b'\x04\x00')                # 5
+        self.model.handle(6, 7, b'\x01')                    # 6
+        self.assertEqual(len(self.wire.messages), before)
+        self.assertTrue(self.model.stopped)
+        log = [json.loads(line) for line in self.trace.getvalue().splitlines()]
+        events = [e.get('event') for e in log]
+        self.assertEqual(events.count('stopped_answering'), 1)
+        self.assertEqual(events.count('unanswered'), 3)
+        self.assertEqual(self.model.alts[4], 1)            # the SET_INTERFACE was not applied
+        self.model.handle(12, 8, bytes((1, 32, 4)))         # the stream still starts
+        self.assertEqual(self.wire.messages[-1][:2], (14, 8))
+        self.assertEqual(self.wire.messages[-1][2][0], 0)
+
+    def test_forced_stop_after_seconds(self):
+        self.model.stop_after_s = 2.0
+        self.configure()
+        self.assertEqual(self.control(1, 0xa1, 0x100, 0x2103, 4)[0], 0)   # no stream yet
+        self.model.handle(12, 3, bytes((1, 32, 4)))
+        self.time += 1.9
+        self.assertEqual(self.control(1, 0xa1, 0x100, 0x2103, 4)[0], 0)
+        self.time += 0.2
+        before = len(self.wire.messages)
+        self.model.control(9, struct.pack('<BBBBHHH', 0, 1, 0xa1, 0, 0x100, 0x2103, 4))
+        self.assertEqual(len(self.wire.messages), before)
+        self.assertTrue(self.model.stopped)
+
     def test_iso_out_evidence_and_feedback_clock(self):
         self.model.pcm = io.BytesIO()
         self.model.handle(12, 1, bytes((1, 32, 4)))

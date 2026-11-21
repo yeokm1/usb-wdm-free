@@ -1,0 +1,809 @@
+# The power hold, the registry, the program's refusal and the scan.
+# docs/design/mtp.md 7.9, "Standby: the program refuses during a
+# transfer" (every part, its races table row by row), "The registry, and
+# I/O outside jobs", "The hold's two phases", "Entering the hold", "The
+# hold ends", "Ending the hold", "After an identifiable driver refusal",
+# "A count already nonzero at first sight"; 12; 13; 14 (Q18 (c) with the
+# program's refusal, Q19 every recommendation, Q22, Q23 (A)).
+# Format: ../README.md. Every case has `power P`, opens the default device
+# d0, and (where named) a second default device d1, unless it says
+# otherwise.
+#
+# Message ids (13; the texts stay drafts and are not judged here):
+#   M-REFUSED-BY-PROGRAM   the status line when the program refused (Q19 (b))
+#   M-DRIVER-REFUSED       "USBMTP.SYS refused a power change ..."
+#   M-SERIAL-98            the 98 SE restart sentence after it (Q19 (c))
+#   M-DRAINING             the draining string
+#   M-FIRST-SIGHT-98       the first-sight warning (Q19 (d))
+#   M-HOLD-WAIT            (A)'s status line past 10 s, with its button
+#   M-NOT-DONE-POWER       a command held, or dropped with the old session
+#   M-CLI-POWERWAIT        MTPEXP /c held past /powerwait
+#
+# Races table rows (7.9) are named R1 to R21 in its order.
+
+case PWR-001
+  title  R1: a query as a job starts, at every step from the dequeue to the first submission's step 1
+  from   races R1; 7.9/The answer (HELD and Busy in one hold)
+  rule   A,B
+  queue d0 j1 { GetObject h=3 sink=s -> r; post }
+  sweep queue.return .. io.submit.pre.in#1 : bcast PBT_APMQUERYSUSPEND -> a
+  clock +1000
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+end
+
+case PWR-002
+  title  R2: a query as a job ends, at every step from the last response to the publication
+  from   races R2
+  rule   A,B
+  queue d0 j1 { GetObject h=3 sink=s -> r; post }
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  sweep io.phase.RESPONSE#1 .. io.dequeue.in#2 : bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait idle d0
+end
+
+case PWR-003
+  title  R3: a query at each step of 7.5's recovery
+  from   races R3; 7.9/A transfer active (RECOVERING)
+  rule   A,B
+  sim d0 fault busy n=2
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  sweep io.recover.2 .. io.recover.5 : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+end
+
+case PWR-004
+  title  R4: a query at each step of MtpOpen
+  from   races R4; 7.9/A transfer active (OPENING)
+  rule   A,B
+  dev d1
+  sweep open.register.in .. open.step.session : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED
+  open d1 -> r
+end
+
+case PWR-005
+  title  R4: a query at each step of MtpClose
+  from   races R4; 7.9/A transfer active (CLOSING before step 7)
+  rule   A,B
+  sweep close.req.in .. ref.free : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED
+  close d0
+  wait notice d0 CLOSED
+end
+
+case PWR-006
+  title  R4 and 12: a close requested during a hold sends no transaction; only EVENTS stop and ABORT; not Busy
+  from   races R4; 7.9/Close step 5; 12/interleavings/close and the hold
+  rule   A,B
+  bcast PBT_APMQUERYSUSPEND -> a1
+  at io.close.6 : bcast PBT_APMQUERYSUSPEND -> a2
+  close d0
+  wait notice d0 CLOSED
+  bcast PBT_APMRESUMESUSPEND
+end
+
+case PWR-007
+  title  R5: a query with a call stuck after GIVENUP
+  from   races R5; 7.9/A transfer active (GIVENUP not yet quiet)
+  rule   A,B
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  wait io.call#3
+  close d0
+  clock +31000
+  wait state d0 GIVENUP
+  bcast PBT_APMQUERYSUSPEND -> a
+  sim d0 unstick
+  wait notice d0 CLOSED
+  bcast PBT_APMQUERYSUSPEND -> a2
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case PWR-008
+  title  R6: two devices, one busy: all or nothing, the agreed one released, its queued job runs
+  from   races R6; 7.9/The answer
+  rule   A,B
+  dev d1
+  open d1
+  hold io.call#3                            # the barrier: j1 running on d0 (Busy), stopped outside every lock
+  at pw.outcome.in : queue d1 k1 { GetObjectInfo h=2 -> rk; post }   # d1 has agreed and is still HELD; takes d1's section only
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  bcast PBT_APMQUERYSUSPEND -> a            # synchronous: nothing the answer needs is held
+  go io.call
+  wait idle d0 ; wait idle d1
+end
+
+case PWR-009
+  title  R7: a device registered at every step of an answer that agrees; it waits; it opens after the hold ends
+  from   races R7; 7.9/Registration comes first; 12/host (registration while a query is answered or a hold stands)
+  rule   A,B
+  dev d1
+  sweep pw.mark.in .. pw.unsnap.d0 : open d1 async -> r
+  bcast PBT_APMQUERYSUSPEND -> a
+  clock +2000
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait open d1 returned
+end
+
+case PWR-010
+  title  R7: a registration meeting a query whose answer is a refusal proceeds
+  from   races R7; 7.9/The answer over the registry
+  rule   A,B
+  dev d1
+  hold io.call#3                            # the barrier: d0 Busy
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  wait io.call#3
+  hold pw.ask.d0
+  bcast PBT_APMQUERYSUSPEND async -> a
+  wait pw.ask.d0
+  open d1 async -> r
+  wait open.held.wait d1
+  go pw.ask.d0
+  wait open d1 returned
+  go io.call
+end
+
+case PWR-011
+  title  R7: a device going GIVENUP during an answer
+  from   races R7
+  rule   A,B
+  sim d0 stuck read#3
+  queue d0 j1 { GetObject h=4 sink=s; post }
+  wait io.call#3
+  close d0                                  # the latched cancel's procedure begins: its outer bound is 20 s (7.5)
+  clock +19900
+  hold pw.ask.d0
+  bcast PBT_APMQUERYSUSPEND async -> a
+  wait pw.ask.d0                            # snapshot taken while d0 is still CLOSING
+  clock +700
+  wait state d0 GIVENUP
+  go pw.ask.d0
+  wait answer
+  sim d0 unstick
+  wait notice d0 CLOSED
+end
+
+case PWR-012
+  title  R8: a query at each step of MtpNames
+  from   races R8; 7.9/strings
+  rule   A,B
+  dev d4 unclaimed
+  sweep names.admit.in .. names.return : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED
+  names d4 -> rn
+end
+
+case PWR-013
+  title  R8: a name read stuck; queries at 1 s, 6 s and 60 s refused; the read returns; the next agreed
+  from   races R8; 12/interleavings/name reads
+  dev d4 unclaimed
+  sim d4 stuck GET_STRING
+  names d4 async -> rn
+  wait names.call d4
+  clock +1000
+  bcast PBT_APMQUERYSUSPEND -> a1
+  clock +4000
+  check trace has name-read-slow at 5,000 ms
+  clock +1000
+  bcast PBT_APMQUERYSUSPEND -> a6
+  clock +54000
+  bcast PBT_APMQUERYSUSPEND -> a60
+  names d4 again -> rn2
+  sim d4 unstick
+  wait names d4 returned
+  bcast PBT_APMQUERYSUSPEND -> a61
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case PWR-014
+  title  R8 and 12: exit with a name read still out: its context and the registry kept
+  from   races R8; 7.9/Program exit; 12/interleavings/name reads
+  dev d4 unclaimed
+  sim d4 stuck GET_STRING
+  names d4 async
+  wait names.call d4
+  exit
+end
+
+case PWR-015
+  title  R9: a draining reading gone stale: refused at 1 s, agreed at 7 s
+  from   races R9; 7.9/Draining readings; 12/host (a stale draining reading)
+  dev d4 unclaimed gate=8 held=1
+  scan
+  scan stop
+  clock +1000
+  bcast PBT_APMQUERYSUSPEND -> a1
+  bcast PBT_APMQUERYSUSPENDFAILED
+  clock +6000
+  bcast PBT_APMQUERYSUSPEND -> a7
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case PWR-016
+  title  R9: a draining reading evicted when its n is absent from a scan, and when a new generation appears
+  from   races R9; 7.9/Draining readings
+  table  how
+    a  sim d4 unplug
+    b  sim d4 replug gen=9 gate=0
+  end
+  dev d4 unclaimed gate=8 held=1
+  scan
+  <how>
+  scan
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case PWR-017
+  title  R10: an agreement, then PBT_APMQUERYSUSPENDFAILED at every point of the hold: the hold ends, queued jobs run
+  from   races R10; 7.9/The hold ends
+  rule   A,B
+  table  when
+    a  during                # the failure posted at every point of the answer that agrees
+    b  0
+    c  5000
+    d  12000
+  end
+  if <when>=during : sweep pw.mark.in .. pw.unsnap.d0 : bcast PBT_APMQUERYSUSPENDFAILED async
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  if <when>!=during : clock +<when> ; bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+end
+
+case PWR-018
+  title  R11 under (A): an agreement, then nothing: held past 10 s and 30 s in each phase; the status line; the button at every point
+  from   races R11; 7.9/The hold ends (A); 13 (the hold past 10 s)
+  rule   A
+  table  phase  button-at
+    a  QUERY-HELD  0
+    b  QUERY-HELD  9900
+    c  QUERY-HELD  10100
+    d  QUERY-HELD  40100
+    e  SUSPENDING  0
+    f  SUSPENDING  9900
+    g  SUSPENDING  10100
+    h  SUSPENDING  40100
+  end
+  bcast PBT_APMQUERYSUSPEND -> a
+  if <phase>=SUSPENDING : bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +<button-at>
+  check held d0 = 1
+  button
+  wait job j1 done
+end
+
+case PWR-019
+  title  R11 under (B): QUERY-HELD lapses 10 s after its tick, SUSPENDING 30 s after its tick
+  from   races R11; 7.9/The hold ends (B)
+  rule   B
+  table  phase  before
+    a  QUERY-HELD  9500
+    b  SUSPENDING  29500
+  end
+  bcast PBT_APMQUERYSUSPEND -> a
+  if <phase>=SUSPENDING : bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +<before>
+  check held d0 = 1
+  clock +1000
+  wait job j1 done
+end
+
+case PWR-020
+  title  R11: the hold's elapsed time across the tick count's wrap
+  from   races R11; 7.9/The hold's two phases (unsigned elapsed time)
+  rule   A,B
+  clock =FFFFF000h
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +5000
+  check held d0 = 1
+  clock +6000
+end
+
+case PWR-021
+  title  R12, QUERY-HELD delayed: the agreement, the suspend 11.5 s later, the gate closing at 12 s; jobs queued at 0, 9 and 11 s
+  from   races R12; 12/host (the hold delayed in QUERY-HELD)
+  rule   A,B
+  sim d0 delay read#3 60000                 # j0's second data read, if j0 runs, pends 60 s: a call held across the gate
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j0 { GetObject h=4 sink=s -> r0; post }
+  clock +9000
+  queue d0 j9 { GetObject h=7 sink=s -> r9; post }
+  clock +2000
+  queue d0 j11 { GetObjectInfo h=2 -> r11; post }
+  clock +500
+  bcast PBT_APMSUSPEND
+  clock +500
+  sim d0 gateclose at=now code=995 gate=1|4
+  clock +2000
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-022
+  title  R13, SUSPENDING delayed: the suspend after an agreement, the gate closing 35 s later; jobs queued at 0, 29 and 31 s after the suspend
+  from   races R13; 12/host (the hold delayed in SUSPENDING)
+  rule   A,B
+  sim d0 delay read#3 60000                 # j0's second data read, if j0 runs, pends 60 s: a call held across the gate
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  queue d0 j0 { GetObject h=4 sink=s -> r0; post }
+  clock +29000
+  queue d0 j29 { GetObject h=7 sink=s -> r29; post }
+  clock +2000
+  queue d0 j31 { GetObjectInfo h=2 -> r31; post }
+  clock +4000
+  sim d0 gateclose at=now code=995 gate=1|4
+  clock +2000
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-023
+  title  R13: a suspend with no hold standing and no job running: every device HELD, "no hold" reset
+  from   races R13; 7.9/Entering the hold (the second sequence)
+  rule   A,B
+  dev d1
+  open d1
+  bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  dev d2
+  open d2 async -> r2
+  clock +35000
+  sim d0 gateclose at=now code=995 gate=1
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0 ; wait open d2 returned
+end
+
+case PWR-024
+  title  R14: a job already running at an unsolicited suspend, in each phase; the gate closing at every point of the suspend sequence; then the resume
+  from   races R14; 7.9/Entering the hold; 12/interleavings/an unsolicited suspend with a job running
+  rule   A
+  table  phase  job  pend  at  stop
+    a  COMMAND     { GetObject h=4 sink=s -> r; post }   delay write#1 60000                    io.call#1                    995
+    b  DATA-IN     { GetObject h=4 sink=s -> r; post }   delay read#3 60000                     io.call#3                    995
+    c  DATA-IN     { GetObject h=4 sink=s -> r; post }   none                                   io.call#3                    21
+    d  DATA-OUT    { SendObject storage=00010001h parent=1 name="u.bin" size=3000000 src=src -> r; post }   delay write#sendobject.data.1 60000   io.call#sendobject.data.1   995
+    e  DATA-OUT    { SendObject storage=00010001h parent=1 name="u.bin" size=3000000 src=src -> r; post }   none   io.call#sendobject.data.1   21
+    f  RESPONSE    { Delete h=5 -> r; post }             delay read#1 60000                     io.call#2                    995
+    g  RECOVERING  { GetObject h=4 sink=s -> r; post }   delay CLASS.STATUS#2 60000             io.call#6                    995
+  end
+  # 995 rows: j1's call of that phase pends (a delay the gate ends); 21 rows: j1 is stopped before
+  # that call, so nothing is pending when the gate closes and the call then fails 21.
+  # Row g: the cancel at io.submit.post.in#3 starts 7.5; io.call#4 is CANCEL, #5 the first STATUS
+  # (Busy), #6 the second, which pends.
+  if <pend>!=none : sim d0 <pend>
+  if <phase>=RECOVERING : sim d0 fault busy n=50 ; at io.submit.post.in#3 : async cancel d0 j1
+  if <stop>=21 : hold <at>
+  queue d0 j1 <job>
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  wait <at>
+  bcast PBT_APMSUSPEND async                # the unsolicited suspend, j1 running
+  wait answer
+  sim d0 gateclose at=now code=<stop> gate=1     # the recording run's gate close, after the suspend sequence
+  if <stop>=21 : go <at>
+  sweep pw.suspend.in .. pw.suspend.dev.d0.in : sim d0 gateclose at=now code=<stop> gate=1   # the gate closing at each point of the sequence
+  wait job j1 done
+  clock +5000
+  check job j2 not started
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-025
+  title  R14 under (A): the unsolicited suspend with a job running, then the button instead of a resume
+  from   races R14; 7.9/Entering the hold; 7.9/The hold ends (A)
+  rule   A
+  hold io.call#3                            # the barrier: j1 running (Busy), stopped outside every lock
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  wait io.call#3
+  bcast PBT_APMSUSPEND
+  go io.call
+  wait job j1 done
+  clock +11000
+  button
+  wait idle d0
+end
+
+case PWR-026
+  title  R15: a resume at every point of the ending routine while jobs of the old session are queued
+  from   races R15; 7.9/Ending the hold (on a resume, the session invalidated first)
+  rule   A,B
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r1; post }
+  queue d0 j2 { GetObjectInfo h=3 -> r2; post }
+  sweep pw.end.in .. pw.end.signal.in : signal d0 queue-event
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-027
+  title  R16: the interval from the agreement to the driver's query: the suspend at 0 ms and after 60 s
+  from   races R16
+  rule   A
+  table  wait
+    a  0
+    b  60000
+  end
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +<wait>
+  bcast PBT_APMSUSPEND
+  sim d0 gateclose at=now code=995 gate=1|4
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-028
+  title  R17: a stop with no agreement (a forced set, a lapse, another client): the gate's 995 or 21 in each phase, then recovery after it opens
+  from   races R17; 7.9/A forced transition
+  table  phase  job  pend  at  stop
+    a  COMMAND   { SendObject storage=00010001h parent=1 name="f.bin" size=3000000 src=src -> r; post }   delay write#sendobject.cmd 60000      io.call#sendobject.cmd      995
+    b  DATA-IN   { GetObject h=4 sink=s -> r; post }                                                      delay read#3 60000                    io.call#3                   995
+    c  DATA-IN   { GetObject h=4 sink=s -> r; post }                                                      none                                  io.call#3                   21
+    d  DATA-OUT  { SendObject storage=00010001h parent=1 name="f.bin" size=3000000 src=src -> r; post }   delay write#sendobject.data.2 60000   io.call#sendobject.data.2   995
+    e  RESPONSE  { SendObject storage=00010001h parent=1 name="f.bin" size=3000000 src=src -> r; post }   none                                  io.call#sendobject.5        21
+  end
+  # SendObject's transaction: the command (1), three data writes of 1,048,576 (the header and
+  # 1,048,564 bytes), 1,048,576 and 902,860 bytes (2 to 4), the response read (5).
+  if <pend>!=none : sim d0 <pend>
+  if <stop>=21 : hold <at>
+  queue d0 j1 <job>
+  wait <at>
+  sim d0 gateclose at=now code=<stop> gate=1
+  if <stop>=21 : go <at>
+  clock +3000
+  sim d0 gate=0 reopen
+  wait idle d0
+end
+
+case PWR-029
+  title  R18: a driver refusal identified by the count, after a failed query; 98 SE and ME
+  from   races R18; 7.9/After an identifiable driver refusal; 13; Q19 (c)
+  table  os
+    a  4.10
+    b  4.90
+  end
+  system <os>
+  scan
+  sim d0 vetoes=1
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait scan done
+end
+
+case PWR-030
+  title  R19: the window thread blocked for 60 s while broadcasts are sent: the power thread answers
+  from   races R19; 7.9/Which thread answers
+  rule   A,B
+  block window 60000
+  hold io.call#3                            # the barrier: j1 Busy
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  bcast PBT_APMQUERYSUSPEND -> a1
+  bcast PBT_APMQUERYSUSPENDFAILED
+  go io.call
+  wait job j1 done
+  bcast PBT_APMQUERYSUSPEND -> a2
+  bcast PBT_APMSUSPEND
+  bcast PBT_APMRESUMESUSPEND
+end
+
+case PWR-031
+  title  R20: idle: agreed
+  from   races R20
+  rule   A,B
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-032
+  title  hold release: each end of the hold against each waiter
+  from   12/interleavings/hold release; 7.9/Ending the hold (the waiters table)
+  rule   A,B
+  # Each row: <setup> makes the hold; <wait> puts the waiter in place while it stands (for the
+  # refusal rows, inside the answer, at pw.ask.d1, after d0 agreed); <end> ends it; then the
+  # waiter's outcome. d1's open is held Busy (OPENING) in the refusal rows only; d2 is the
+  # device opened by the open-on-no-hold waiter; d4 is unclaimed (names only).
+  table  end      waiter           setup                                              wait                                                        endstep
+    a  failed   job-at-head      bcast PBT_APMQUERYSUSPEND -> a                     queue d0 j1 { GetObjectInfo h=2 -> r; post }                bcast PBT_APMQUERYSUSPENDFAILED
+    b  failed   open-on-no-hold  bcast PBT_APMQUERYSUSPEND -> a                     open d2 async -> r                                          bcast PBT_APMQUERYSUSPENDFAILED
+    c  failed   name-read        bcast PBT_APMQUERYSUSPEND -> a                     names d4 -> rn1                                             bcast PBT_APMQUERYSUSPENDFAILED
+    d  failed   new-agreement    bcast PBT_APMQUERYSUSPEND -> a                     at pw.end.dev.d0.in : bcast PBT_APMQUERYSUSPEND async -> a2  bcast PBT_APMQUERYSUSPENDFAILED
+    e  refusal  job-at-head      sim d1 stuck devinfo ; open d1 async ; wait open.step.devinfo d1   at pw.ask.d1 : queue d0 j1 { GetObjectInfo h=2 -> r; post }   bcast PBT_APMQUERYSUSPEND -> a
+    f  refusal  open-on-no-hold  sim d1 stuck devinfo ; open d1 async ; wait open.step.devinfo d1   at pw.ask.d1 : open d2 async -> r                       bcast PBT_APMQUERYSUSPEND -> a
+    g  refusal  name-read        sim d1 stuck devinfo ; open d1 async ; wait open.step.devinfo d1   at pw.ask.d1 : names d4 -> rn1                          bcast PBT_APMQUERYSUSPEND -> a
+    h  refusal  new-agreement    sim d1 stuck devinfo ; open d1 async ; wait open.step.devinfo d1   at pw.end.dev.d0.in : bcast PBT_APMQUERYSUSPEND async -> a2   bcast PBT_APMQUERYSUSPEND -> a
+    i  resume   job-at-head      bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMSUSPEND   queue d0 j1 { GetObjectInfo h=2 -> r; post }           bcast PBT_APMRESUMESUSPEND
+    j  resume   open-on-no-hold  bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMSUSPEND   open d2 async -> r                                     bcast PBT_APMRESUMESUSPEND
+    k  resume   name-read        bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMSUSPEND   names d4 -> rn1                                        bcast PBT_APMRESUMESUSPEND
+    l  resume   new-agreement    bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMSUSPEND   at pw.end.dev.d0.in : bcast PBT_APMQUERYSUSPEND async -> a2   bcast PBT_APMRESUMESUSPEND
+    m  [A] button     job-at-head      bcast PBT_APMQUERYSUSPEND -> a                     queue d0 j1 { GetObjectInfo h=2 -> r; post }                button
+    n  [A] button     open-on-no-hold  bcast PBT_APMQUERYSUSPEND -> a                     open d2 async -> r                                          button
+    o  [A] button     name-read        bcast PBT_APMQUERYSUSPEND -> a                     names d4 -> rn1                                             button
+    p  [A] button     new-agreement    bcast PBT_APMQUERYSUSPEND -> a                     at pw.end.dev.d0.in : bcast PBT_APMQUERYSUSPEND async -> a2  button
+    q  [B] lapse      job-at-head      bcast PBT_APMQUERYSUSPEND -> a                     queue d0 j1 { GetObjectInfo h=2 -> r; post }                clock +10500
+    r  [B] lapse      open-on-no-hold  bcast PBT_APMQUERYSUSPEND -> a                     open d2 async -> r                                          clock +10500
+    s  [B] lapse      name-read        bcast PBT_APMQUERYSUSPEND -> a                     names d4 -> rn1                                             clock +10500
+    t  [B] lapse      new-agreement    bcast PBT_APMQUERYSUSPEND -> a                     at pw.end.dev.d0.in : bcast PBT_APMQUERYSUSPEND async -> a2  clock +10500
+  end
+  dev d1 ; dev d2 ; dev d4 unclaimed
+  <setup>
+  <wait>
+  <endstep>
+  if <waiter>=job-at-head : wait job j1 done
+  if <waiter>=open-on-no-hold : wait open d2 returned
+  if <waiter>=name-read : names d4 -> rn2          # the program's next scan asks again
+  if <waiter>=new-agreement : wait answer
+  if <end>=refusal : sim d1 unstick ; wait open d1 returned
+end
+
+case PWR-033
+  title  /powerwait expiring after an agreement, then the close, with nothing sent to the device
+  from   7.9/The hold ends (A) (the command-line mode); 12/interleavings/close and the hold; 13 (M-CLI-POWERWAIT)
+  rule   A
+  program cli /powerwait 60
+  bcast PBT_APMQUERYSUSPEND -> a
+  cli get 0:Internal\DCIM\a.jpg a.jpg -> exit
+  clock +61000
+  wait cli done
+end
+
+case PWR-034
+  title  an open inserted held past its deadline: MTPE_HELD, nothing sent
+  from   7.9/Registration comes first; the waiters table; 13 (MTPE_HELD)
+  rule   A
+  bcast PBT_APMQUERYSUSPEND -> a
+  dev d1
+  open d1 async -> r
+  clock +41000
+  wait open d1 returned
+end
+
+case PWR-035
+  title  a repeated PBT_APMQUERYSUSPEND refreshes QUERY-HELD's tick; other broadcasts touch nothing
+  from   7.9/The hold's two phases
+  rule   B
+  bcast PBT_APMQUERYSUSPEND -> a1
+  clock +8000
+  bcast PBT_APMQUERYSUSPEND -> a2
+  bcast PBT_APMPOWERSTATUSCHANGE
+  bcast PBT_APMBATTERYLOW
+  bcast PBT_APMOEMEVENT
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +9000
+  check held d0 = 1
+  clock +1500
+  wait job j1 done
+end
+
+case PWR-036
+  title  the resume notices: whichever comes first ends the hold; the others do nothing
+  from   7.9/The hold ends
+  rule   A
+  table  first                     then
+    a  PBT_APMRESUMESUSPEND        PBT_APMRESUMEAUTOMATIC
+    b  PBT_APMRESUMEAUTOMATIC      PBT_APMRESUMESUSPEND
+    c  PBT_APMRESUMECRITICAL       PBT_APMRESUMEAUTOMATIC
+  end
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  bcast <first>
+  wait idle d0
+  bcast <then>
+  wait idle d0
+end
+
+case PWR-037
+  title  PBT_APMQUERYSUSPENDFAILED in SUSPENDING ends the hold too
+  from   7.9/The hold ends (it ends either phase)
+  rule   A
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+end
+
+case PWR-038
+  title  the program refuses while any device's scan reading shows draining, claimed or not
+  from   7.9/The answer; 7.9/Interface 1.1 (the quarantine and the program's refusal); 13 (M-DRAINING)
+  rule   A
+  dev d4 unclaimed gate=8 held=2
+  scan
+  bcast PBT_APMQUERYSUSPEND -> a
+  sim d4 gate=0 held=0
+  clock +2000
+  scan
+  bcast PBT_APMQUERYSUSPEND -> a2
+  bcast PBT_APMQUERYSUSPENDFAILED
+end
+
+case PWR-039
+  title  the program's own refusal: BROADCAST_QUERY_DENY, the status line, no dialog, no prompt
+  from   7.9/The answer; 13; Q19 (b)
+  hold io.call#3                            # the barrier: j1 Busy
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait io.call#3
+  bcast PBT_APMQUERYSUSPEND lparam=1 -> a
+  go io.call
+  wait job j1 done
+end
+
+case PWR-040
+  title  the first-sight warning's scope: a new generation, a risen count, a device leaving and coming back, a new run; 98 SE only
+  from   7.9/A count already nonzero at first sight; 12/host (the first-sight warning's scope); Q19 (d); 7.9/Program exit (the program's own source file, CQ16: the case drives it)
+  table  os  steps
+    a  4.10  first sight vetoes=2
+    b  4.10  first sight vetoes=2 ; scan ; scan
+    c  4.10  first sight vetoes=2 ; sim d4 unplug ; scan ; sim d4 replug same-gen ; scan
+    d  4.10  first sight vetoes=2 ; sim d4 vetoes=3 ; scan
+    e  4.10  first sight vetoes=2 ; sim d4 replug gen=9 vetoes=2 ; scan
+    f  4.10  first sight vetoes=2 ; new run of the program ; scan
+    g  4.10  first sight vetoes=0
+    h  4.90  first sight vetoes=2
+  end
+  system <os>
+  dev d4 unclaimed
+  <steps>
+end
+
+case PWR-041
+  title  no message where the count cannot show a refusal: a new device object at 0, a driver without the power fields
+  from   7.9/After an identifiable driver refusal (not visible this way)
+  table  how
+    a  sim d4 replug gen=9 vetoes=0
+    b  sim d4 info=44
+  end
+  system 4.10
+  dev d4 unclaimed vetoes=1
+  scan
+  <how>
+  bcast PBT_APMQUERYSUSPEND
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait scan done
+end
+
+case PWR-042
+  title  the power thread makes no driver, file or registry call and waits on no other thread
+  from   7.9/Which thread answers
+  rule   A,B
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  bcast PBT_APMQUERYSUSPEND
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+  bcast PBT_APMQUERYSUSPEND
+  bcast PBT_APMSUSPEND
+  bcast PBT_APMRESUMESUSPEND
+  [A] button
+end
+
+case PWR-043
+  title  an answer starting resets "no hold" in the hold that marks the query: a registration racing it waits
+  from   7.9/Ending the hold (starting an answer resets the event)
+  rule   A
+  dev d1
+  sweep pw.mark.in .. pw.ask.d0 : open d1 async -> r
+  bcast PBT_APMQUERYSUSPEND -> a
+  clock +12000
+  button
+  wait open d1 returned
+end
+
+case PWR-044
+  title  a command queued during the hold and dropped with the old session at the resume: the program's message
+  from   7.9/The hold ends (after a resume, a user command ends as not done); 13 (M-NOT-DONE-POWER)
+  rule   A,B
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  queue d0 j1 user { GetObject h=2 sink=s; post }
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-045
+  title  standby when idle and the resume: the resume job reads GET_INFO first, opens a new session, then EVENTS start
+  from   7.9/Standby when idle; 7.9/I/O that is not a job (the resume job); 7.3
+  rule   A,B
+  bcast PBT_APMQUERYSUSPEND -> a
+  bcast PBT_APMSUSPEND
+  sim d0 gateclose at=now code=995 gate=1|4
+  sim d0 gate=0 reopen
+  bcast PBT_APMRESUMESUSPEND
+  wait idle d0
+end
+
+case PWR-046
+  title  a held device's dequeue: HELD read in the hold that would set Busy; the queue event wakes it
+  from   7.9/The answer; 7.9/Ending the hold (signals the I/O thread's queue event)
+  rule   A
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +5000
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+end
+
+case PWR-047
+  title  R3: a query at every point of 7.5's Device Reset, its parts one by one, a part failing, and its own deadline
+  from   races R3 (the query at each step of 7.5); 7.5 step 6 (its parts; a step of 6 that fails; its deadline)
+  rule   A,B
+  table  how                                                                              end                    final
+    a  sim d0 status 0400 0220 ; then 0400 0120                                           io.recover.6.6         wait idle d0               # step 6 in full, then the resume job
+    b  sim d0 status 0400 0220 ; sim d0 reset-ok 0                                        io.cleanup.quiet#1     wait notice d0 CLOSED      # the Device Reset Request fails: 6.5 and 6.6 never reached
+    c  sim d0 status 0400 0220 ; sim d0 fail CLASS.RESET_PIPE#2 31                        io.cleanup.quiet#1     wait notice d0 CLOSED      # RESET_PIPE of bulk OUT fails: 6.6 never reached
+    d  sim d0 status 0400 0220 ; then 0400 1920 always ; sim d0 clock-per-status=50       io.recover.6.6         wait notice d0 CLOSED      # step 6's Get Device Status Busy past its deadline
+  end
+  # Each row names an end its own path reaches (X9): rows b and c fail before 6.6, so their
+  # sweep runs on into the given-up device's first quiet check.
+  <how>
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  sweep io.recover.6.1 .. <end> : bcast PBT_APMQUERYSUSPEND -> a ; bcast PBT_APMQUERYSUSPENDFAILED
+  wait job j1 done
+  <final>
+end
+
+case PWR-048
+  title  R11 under (A): the button at every point of the hold, from the agreement's first hold to the ending routine
+  from   races R11 ((A) the action at every point of the hold); 7.9/Ending the hold
+  rule   A
+  table  phase
+    a  QUERY-HELD
+    b  SUSPENDING
+  end
+  queue d0 j0 { GetObjectInfo h=3 -> r0; post }
+  wait job j0 done
+  bcast PBT_APMQUERYSUSPEND async -> a
+  wait answer
+  if <phase>=SUSPENDING : bcast PBT_APMSUSPEND
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  clock +11000
+  button                                    # the recording run's end of the hold
+  wait job j1 done
+  sweep pw.mark.in .. pw.end.in : button    # in each run the button is also posted at that point (added, X9); the script's own button still runs
+end
+
+case PWR-049
+  title  while held, no internal transaction is admitted: a refresh job's GetDeviceInfo, the resume job's OpenSession
+  from   7.9/What a hold keeps from the device; I/O that is not a job; U1
+  rule   A,B
+  table  event
+    a  DeviceInfoChanged                    # its refresh job would send GetDeviceInfo
+    b  DeviceReset                          # its resume job would send OpenSession and EVENTS start
+  end
+  bcast PBT_APMQUERYSUSPEND -> a
+  sim d0 event <event>
+  wait ev.route.in#1
+  clock +5000
+  check wire d0 after the agreement = []
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait idle d0
+end
+
+case PWR-050
+  title  a registration arriving at every point of the ending routine: it waits, then opens once "no hold" is set
+  from   7.9/Ending the hold (the waiters table: an open inserted held); 12/interleavings/hold release
+  rule   A,B
+  dev d1
+  bcast PBT_APMQUERYSUSPEND -> a
+  queue d0 j1 { GetObjectInfo h=2 -> r; post }
+  bcast PBT_APMQUERYSUSPENDFAILED           # the recording run's end of the hold
+  wait job j1 done
+  sweep pw.end.in .. pw.end.signal.in : open d1 async -> r1   # async where a lock is held (X9)
+  wait open d1 returned
+end

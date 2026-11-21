@@ -1,0 +1,346 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+Local changes Copyright (C) 2026 Yeo Kheng Meng
+Test-only: QEMU 11.1.0's usb-mtp (hw/usb/dev-mtp.c) built and run on a
+Windows host, for the MTP task's M0 readings (docs/design/mtp.md 11.2 and
+12; 2026-11-16-mtp-m0.md). Upstream gates usb-mtp off on Windows
+(hw/usb/meson.build). This patch lifts that gate and makes the file build
+with MSYS2 MINGW64: object paths stay UTF-8 (GLib's convention) and reach
+the files through the wide-character C runtime, every open is binary
+(O_BINARY), free space comes from GetDiskFreeSpaceExW instead of statvfs,
+O_CLOEXEC is O_NOINHERIT, and no symbolic link is followed specially. The
+file monitor stays the upstream stub (no events). Applies with patch -p1
+to the release tarball qemu-11.1.0.tar.xz (SHA-256 6ee1d1a6...fa858),
+before qemu-nosymlink.patch and qemu-smm-tlb.patch.
+
+diff --git a/hw/usb/dev-mtp.c b/hw/usb/dev-mtp.c
+index 1d8cfd3..ecc2ab7 100644
+--- a/hw/usb/dev-mtp.c
++++ b/hw/usb/dev-mtp.c
+@@ -15,7 +15,82 @@
+ #include <wchar.h>
+ #include <dirent.h>
+ #include <glib/gstdio.h>
++#ifndef _WIN32
+ #include <sys/statvfs.h>
++#endif
++
++#ifdef _WIN32
++/*
++ * Windows hosts: object paths are UTF-8 (GLib's convention); reach the
++ * files through the wide-character C runtime so that any name works,
++ * and always in binary mode. No symbolic links are followed specially.
++ */
++#include <io.h>
++typedef struct _stati64 mtp_stat_t;
++#ifndef O_NOFOLLOW
++#define O_NOFOLLOW 0
++#endif
++#ifndef O_CLOEXEC
++#define O_CLOEXEC O_NOINHERIT   /* the Windows C runtime's equivalent */
++#endif
++
++static wchar_t *mtp_wpath(const char *path)
++{
++    return (wchar_t *)g_utf8_to_utf16(path, -1, NULL, NULL, NULL);
++}
++
++static int mtp_lstat(const char *path, mtp_stat_t *st)
++{
++    wchar_t *w = mtp_wpath(path);
++    int ret = w ? _wstati64(w, st) : -1;
++
++    g_free(w);
++    return ret;
++}
++
++static int mtp_open(const char *path, int flags, int mode)
++{
++    wchar_t *w = mtp_wpath(path);
++    int ret = w ? _wopen(w, flags | O_BINARY, mode) : -1;
++
++    g_free(w);
++    return ret;
++}
++
++static int mtp_access(const char *path, int mode)
++{
++    wchar_t *w = mtp_wpath(path);
++    int ret = w ? _waccess(w, mode) : -1;
++
++    g_free(w);
++    return ret;
++}
++
++static int mtp_remove(const char *path)
++{
++    wchar_t *w = mtp_wpath(path);
++    int ret = w ? _wremove(w) : -1;
++
++    g_free(w);
++    return ret;
++}
++
++static int mtp_rmdir(const char *path)
++{
++    wchar_t *w = mtp_wpath(path);
++    int ret = w ? _wrmdir(w) : -1;
++
++    g_free(w);
++    return ret;
++}
++#else
++typedef struct stat mtp_stat_t;
++#define mtp_lstat  lstat
++#define mtp_open   open
++#define mtp_access access
++#define mtp_remove remove
++#define mtp_rmdir  rmdir
++#endif
+ 
+ 
+ #include "qemu/iov.h"
+@@ -173,7 +248,7 @@ struct MTPObject {
+     uint16_t     format;
+     char         *name;
+     char         *path;
+-    struct stat  stat;
++    mtp_stat_t   stat;
+     /* file monitor watch id */
+     int64_t      watchid;
+     MTPObject    *parent;
+@@ -395,7 +470,7 @@ static MTPObject *usb_mtp_object_alloc(MTPState *s, uint32_t handle,
+         o->path = g_strdup_printf("%s/%s", parent->path, name);
+     }
+ 
+-    if (lstat(o->path, &o->stat) != 0) {
++    if (mtp_lstat(o->path, &o->stat) != 0) {
+         goto ignore;
+     }
+     if (S_ISREG(o->stat.st_mode)) {
+@@ -406,7 +481,7 @@ static MTPObject *usb_mtp_object_alloc(MTPState *s, uint32_t handle,
+         goto ignore;
+     }
+ 
+-    if (access(o->path, R_OK) != 0) {
++    if (mtp_access(o->path, R_OK) != 0) {
+         goto ignore;
+     }
+ 
+@@ -606,9 +681,14 @@ static void usb_mtp_file_monitor_cleanup(MTPState *s)
+ 
+ static void usb_mtp_object_readdir(MTPState *s, MTPObject *o)
+ {
++#ifdef _WIN32
++    GDir *dir;
++    const char *entry;
++#else
+     struct dirent *entry;
+     DIR *dir;
+     int fd;
++#endif
+     Error *err = NULL;
+ 
+     if (o->have_children) {
+@@ -616,6 +696,13 @@ static void usb_mtp_object_readdir(MTPState *s, MTPObject *o)
+     }
+     o->have_children = true;
+ 
++#ifdef _WIN32
++    /* GDir takes and returns UTF-8 names and skips "." and "..". */
++    dir = g_dir_open(o->path, 0, NULL);
++    if (!dir) {
++        return;
++    }
++#else
+     fd = open(o->path, O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+     if (fd < 0) {
+         return;
+@@ -625,6 +712,7 @@ static void usb_mtp_object_readdir(MTPState *s, MTPObject *o)
+         close(fd);
+         return;
+     }
++#endif
+ 
+     if (s->file_monitor) {
+         int64_t id = qemu_file_monitor_add_watch(s->file_monitor, o->path, NULL,
+@@ -640,10 +728,17 @@ static void usb_mtp_object_readdir(MTPState *s, MTPObject *o)
+         }
+     }
+ 
++#ifdef _WIN32
++    while ((entry = g_dir_read_name(dir)) != NULL) {
++        usb_mtp_add_child(s, o, entry);
++    }
++    g_dir_close(dir);
++#else
+     while ((entry = readdir(dir)) != NULL) {
+         usb_mtp_add_child(s, o, entry->d_name);
+     }
+     closedir(dir);
++#endif
+ }
+ 
+ /* ----------------------------------------------------------------------- */
+@@ -753,6 +848,15 @@ static void usb_mtp_add_wstr(MTPData *data, const wchar_t *str)
+ }
+ 
+ static void usb_mtp_add_str(MTPData *data, const char *str)
++#ifdef _WIN32
++{
++    /* Names are UTF-8 here; wchar_t is UTF-16 on Windows. */
++    wchar_t *wstr = (wchar_t *)g_utf8_to_utf16(str, -1, NULL, NULL, NULL);
++
++    usb_mtp_add_wstr(data, wstr ? wstr : L"Oops");
++    g_free(wstr);
++}
++#else
+ {
+     uint32_t len = strlen(str)+1;
+     wchar_t *wstr = g_new(wchar_t, len);
+@@ -767,6 +871,7 @@ static void usb_mtp_add_str(MTPData *data, const char *str)
+ 
+     g_free(wstr);
+ }
++#endif
+ 
+ static void usb_mtp_add_time(MTPData *data, time_t time)
+ {
+@@ -867,7 +972,12 @@ static MTPData *usb_mtp_get_storage_ids(MTPState *s, MTPControl *c)
+ static MTPData *usb_mtp_get_storage_info(MTPState *s, MTPControl *c)
+ {
+     MTPData *d = usb_mtp_data_alloc(c);
++#ifdef _WIN32
++    ULARGE_INTEGER avail, total, unused;
++    wchar_t *wroot;
++#else
+     struct statvfs buf;
++#endif
+     int rc;
+ 
+     trace_usb_mtp_op_get_storage_info(s->dev.addr);
+@@ -882,12 +992,23 @@ static MTPData *usb_mtp_get_storage_info(MTPState *s, MTPControl *c)
+         usb_mtp_add_u16(d, 0x0001);
+     }
+ 
++#ifdef _WIN32
++    wroot = mtp_wpath(s->root);
++    rc = (wroot && GetDiskFreeSpaceExW(wroot, &avail, &total, &unused)) ? 0 : -1;
++    g_free(wroot);
++    if (rc == 0) {
++        usb_mtp_add_u64(d, total.QuadPart);
++        usb_mtp_add_u64(d, avail.QuadPart);
++        usb_mtp_add_u32(d, 0xffffffff);
++    } else {
++#else
+     rc = statvfs(s->root, &buf);
+     if (rc == 0) {
+         usb_mtp_add_u64(d, (uint64_t)buf.f_frsize * buf.f_blocks);
+         usb_mtp_add_u64(d, (uint64_t)buf.f_frsize * buf.f_bavail);
+         usb_mtp_add_u32(d, buf.f_ffree);
+     } else {
++#endif
+         usb_mtp_add_u64(d, 0xffffffff);
+         usb_mtp_add_u64(d, 0xffffffff);
+         usb_mtp_add_u32(d, 0xffffffff);
+@@ -972,7 +1093,7 @@ static MTPData *usb_mtp_get_object(MTPState *s, MTPControl *c,
+ 
+     trace_usb_mtp_op_get_object(s->dev.addr, o->handle, o->path);
+ 
+-    d->fd = open(o->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    d->fd = mtp_open(o->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+     if (d->fd == -1) {
+         usb_mtp_data_free(d);
+         return NULL;
+@@ -996,7 +1117,7 @@ static MTPData *usb_mtp_get_partial_object(MTPState *s, MTPControl *c,
+                                         c->argv[1], c->argv[2]);
+ 
+     d = usb_mtp_data_alloc(c);
+-    d->fd = open(o->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    d->fd = mtp_open(o->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+     if (d->fd == -1) {
+         usb_mtp_data_free(d);
+         return NULL;
+@@ -1168,14 +1289,14 @@ static int usb_mtp_deletefn(MTPState *s, MTPObject *o, uint32_t trans)
+     }
+ 
+     if (o->format == FMT_UNDEFINED_OBJECT) {
+-        if (remove(o->path)) {
++        if (mtp_remove(o->path)) {
+             ret |= DELETE_FAILURE;
+         } else {
+             usb_mtp_object_free(s, o);
+             ret |= DELETE_SUCCESS;
+         }
+     } else if (o->format == FMT_ASSOCIATION) {
+-        if (rmdir(o->path)) {
++        if (mtp_rmdir(o->path)) {
+             ret |= DELETE_FAILURE;
+         } else {
+             usb_mtp_object_free(s, o);
+@@ -1560,9 +1681,18 @@ static char *utf16_to_str(uint8_t len, uint8_t *str16)
+     }
+     wstr[count] = 0;
+ 
++#ifdef _WIN32
++    /* UTF-16 to the UTF-8 the paths here use; surrogate pairs included. */
++    (void)dlen;
++    dest = g_utf16_to_utf8((gunichar2 *)wstr, -1, NULL, NULL, NULL);
++    if (!dest) {
++        dest = g_strdup("");
++    }
++#else
+     dlen = wcstombs(NULL, wstr, 0) + 1;
+     dest = g_malloc(dlen);
+     wcstombs(dest, wstr, dlen);
++#endif
+     g_free(wstr);
+     return dest;
+ }
+@@ -1590,7 +1720,7 @@ static int usb_mtp_update_object(MTPObject *parent, char *name)
+         usb_mtp_object_lookup_name(parent, name, strlen(name));
+ 
+     if (o) {
+-        ret = lstat(o->path, &o->stat);
++        ret = mtp_lstat(o->path, &o->stat);
+     }
+ 
+     return ret;
+@@ -1630,8 +1760,8 @@ static void usb_mtp_write_data(MTPState *s, uint32_t handle)
+                 goto done;
+             }
+ 
+-            d->fd = open(path, O_CREAT | O_WRONLY |
+-                         O_CLOEXEC | O_NOFOLLOW, mask & 0666);
++            d->fd = mtp_open(path, O_CREAT | O_WRONLY |
++                             O_CLOEXEC | O_NOFOLLOW, mask & 0666);
+             if (d->fd == -1) {
+                 ret = 1;
+                 goto done;
+@@ -2037,10 +2167,10 @@ static void usb_mtp_realize(USBDevice *dev, Error **errp)
+         return;
+     }
+ 
+-    if (access(s->root, R_OK) != 0) {
++    if (mtp_access(s->root, R_OK) != 0) {
+         error_setg(errp, "usb-mtp: rootdir does not exist/not readable");
+         return;
+-    } else if (!s->readonly && access(s->root, W_OK) != 0) {
++    } else if (!s->readonly && mtp_access(s->root, W_OK) != 0) {
+         error_setg(errp, "usb-mtp: rootdir does not have write permissions");
+         return;
+     }
+diff --git a/hw/usb/meson.build b/hw/usb/meson.build
+index ba55c28..538c587 100644
+--- a/hw/usb/meson.build
++++ b/hw/usb/meson.build
+@@ -44,9 +44,7 @@ system_ss.add(when: 'CONFIG_USB_STORAGE_UAS', if_true: files('dev-uas.c'))
+ system_ss.add(when: 'CONFIG_USB_AUDIO', if_true: files('dev-audio.c'))
+ system_ss.add(when: 'CONFIG_USB_SERIAL', if_true: files('dev-serial.c'))
+ system_ss.add(when: 'CONFIG_USB_NETWORK', if_true: files('dev-network.c'))
+-if host_os != 'windows'
+-  system_ss.add(when: 'CONFIG_USB_STORAGE_MTP', if_true: files('dev-mtp.c'))
+-endif
++system_ss.add(when: 'CONFIG_USB_STORAGE_MTP', if_true: files('dev-mtp.c'))
+ 
+ # smartcard
+ system_ss.add(when: 'CONFIG_USB_SMARTCARD', if_true: files('dev-smartcard-reader.c'))

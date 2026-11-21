@@ -1,0 +1,32 @@
+# ObjectPropList with an unknown datatype: the whole list discarded (7.9, Parsing).
+# Written by hand from MTP 1.1, 5.4 and 3.2.
+# @0 NumberOfElements UINT32 = 3 (4 bytes)
+03 00 00 00
+# element 1: a.jpg
+# @4 element 1 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @8 element 1 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @10 element 1 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @12 element 1 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# element 2: datatype 0099h, not one of 3.2's: the parse stops here
+# @16 element 2 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @20 element 2 PropertyCode UINT16 = DD00h (2 bytes)
+00 dd
+# @22 element 2 Datatype UINT16 = 0099h unknown (2 bytes)
+99 00
+# @24 element 2 unread bytes = 5A 4B 3C 2D (4 bytes)
+5a 4b 3c 2d
+# element 3: b.jpg (never reached)
+# @28 element 3 ObjectHandle UINT32 = 0003E4F5h (4 bytes)
+f5 e4 03 00
+# @32 element 3 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @34 element 3 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @36 element 3 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# total 40 bytes

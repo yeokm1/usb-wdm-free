@@ -1,0 +1,251 @@
+# Framing against simdev: containers, both forms of a data phase, small
+# packets, the zero-length packet, the response read, the sentinel and the
+# boundary sizes. docs/design/mtp.md 7.2; 7.9, "Framing"; 11.4. Format:
+# ../README.md. Every case has `power P`, makes d0 with the settings given
+# and opens it. `obj <n>` adds h=50 of n bytes (contents by a formula) to
+# the default tree; `obj huge <n>` the same for the `huge` sizes.
+
+case FRM-001
+  title  combined data in at 8-, 16-, 64- and 512-byte packets: the header accumulated, reads sized to the container
+  from   7.9/Framing (small packets; reads sized to the container); 7.2 (data phase from the device, finite length)
+  table  mps  n
+    a  512  1000
+    b  8    100
+    c  16   4
+    d  64   52
+    e  8    0
+  end
+  dev d0 mps=<mps> form=combined zlp=1 obj <n>
+  open d0
+  queue d0 j1 { GetObject h=50 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-002
+  title  the split form told from the read that completes the header, in packet terms, at every size
+  from   7.9/Framing (small packets); 7.2 (detecting the form)
+  table  mps  n
+    a  8    100
+    b  16   100
+    c  64   100
+    d  512  1000
+    e  16   0
+  end
+  dev d0 mps=<mps> form=split zlp=1 obj <n>
+  open d0
+  queue d0 j1 { GetObject h=50 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-003
+  title  the response read: the smallest whole number of packets longer than 32 bytes; a 32-byte response ended by its zero-length packet
+  from   7.9/Framing (the response read); 7.9/The host test (the response read with 8-, 16-, 32- and 64-byte packets)
+  table  mps
+    a  8
+    b  16
+    c  32
+    d  64
+    e  512
+  end
+  dev d0 mps=<mps> zlp=1
+  open d0
+  sim d0 respond GetObjectInfo h=2 2001 params=5
+  queue d0 j1 { ObjectInfo h=2 -> r; post }
+  wait job j1 done
+end
+
+case FRM-004
+  title  a full-speed device with 32-byte packets omitting the zero-length packet after an exact response: the read ends by its time-out
+  from   7.9/Framing (the response read: a simdev case; its time-out MTPE_TIMEOUT, CQ13); 7.5 step 1 (the stuck device, CQ35)
+  dev d0 mps=32 speed=full zlp=0
+  open d0
+  sim d0 respond GetObjectInfo h=2 2001 params=5
+  queue d0 j1 { ObjectInfo h=2 -> r; post }
+  wait job j1 done
+end
+
+case FRM-005
+  title  the read after a whole-packet data phase: 0 bytes is the zero-length packet; data is the response itself, kept
+  from   7.9/Framing (the read after a data phase); 7.2 rule 4; 11.4 (a response in place of the optional zero-length packet)
+  table  zlp  fault
+    a  1    none
+    b  1    response_for_zlp
+    c  0    none
+  end
+  dev d0 mps=512 zlp=<zlp> obj 500
+  open d0
+  sim d0 fault <fault>
+  queue d0 j1 { GetObject h=50 sink=s -> r; GetObjectInfo h=2 -> r2; post }
+  wait job j1 done
+end
+
+case FRM-006
+  title  the split form's zero-length rule counts the payload alone; an empty split payload is the header alone
+  from   7.2 rule 4 and Appendix H; 7.9/Framing
+  table  n
+    a  512
+    b  0
+    c  500
+  end
+  dev d0 mps=512 form=split zlp=1 obj <n>
+  open d0
+  queue d0 j1 { GetObject h=50 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-007
+  title  a short packet before the count: a truncation, a protocol error, 7.5 run
+  from   7.2 rule 2; 11.2 short_data; 11.4 (early short packet)
+  table  form
+    a  combined
+    b  split
+  end
+  dev d0 form=<form> obj 70000
+  open d0
+  sim d0 fault short_data
+  queue d0 j1 { GetObject h=50 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-008
+  title  excess bytes in the last packet of a data phase: a protocol error
+  from   7.2 rule 3
+  dev d0 mps=64 obj 100
+  open d0
+  sim d0 respond GetObject h=50 length=112 sends=120
+  queue d0 j1 { GetObject h=50 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-009
+  title  a response in place of the data container, at 8 and 512 bytes: the transaction ends with it
+  from   7.2 (a response in place of the data container); 7.9/Framing
+  table  mps
+    a  8
+    b  512
+  end
+  dev d0 mps=<mps>
+  open d0
+  sim d0 respond-now GetObject 2009
+  queue d0 j1 { GetObject h=2 sink=s -> r; GetObjectInfo h=3 -> r2; post }
+  wait job j1 done
+end
+
+case FRM-010
+  title  data out, combined: one run, every write but the last a whole number of packets, WRITE_ZLP after a whole-packet run
+  from   7.9/Framing (data out); 7.2 (data phase to the device)
+  table  mps  n
+    a  512  1012
+    b  512  1000
+    c  512  3000000
+    d  64   52
+    e  8    4
+  end
+  dev d0 mps=<mps> form=combined
+  open d0
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="o" size=<n> src=src(chunks=7,333) -> r; post }
+  wait job j1 done
+end
+
+case FRM-011
+  title  data out, split: the header alone, then the payload as its own run; WRITE_ZLP after a non-empty whole-packet payload; empty is the header alone
+  from   7.2 (data phase to the device, split)
+  table  n
+    a  1024
+    b  1000
+    c  0
+  end
+  dev d0 mps=512 form=split
+  open d0
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="o" size=<n> src=src -> r; post }
+  wait job j1 done
+end
+
+case FRM-012
+  title  reads of a 5 MiB object: one packet first, then at most 1 MiB, rounded up to whole packets, never past the container
+  from   7.9/Framing (reads sized to the container)
+  dev d0 mps=512
+  open d0
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  wait job j1 done
+end
+
+case FRM-013
+  title  the boundary sizes through GetObject: the length field, the sentinel, ObjectCompressedSize and the 64-bit size
+  from   7.2 (sizes; boundary points); 11.4 (the sizes through every size path)
+  table  n
+    a  7FFFFFFFh
+    b  80000000h
+    c  FFFFFFF2h
+    d  FFFFFFF3h
+    e  FFFFFFFEh
+    f  FFFFFFFFh
+    g  100000000h
+    h  140000000h
+  end
+  dev d0 mps=512 obj huge <n>
+  open d0
+  queue d0 j1 { ObjectSize64 h=50 -> rs; GetObject h=50 sink=crc -> r; post }
+  wait job j1 done
+end
+
+case FRM-014
+  title  the boundary sizes through SendObject, up to the FAT32 ceiling
+  from   7.2 (sizes; the sentinel to the device); 7.8 (sizes on the device)
+  table  n
+    a  7FFFFFFFh
+    b  80000000h
+    c  FFFFFFF2h
+    d  FFFFFFF3h
+    e  FFFFFFFEh
+  end
+  dev d0 mps=512
+  open d0
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="h" size=<n> src=formula -> r; post }
+  wait job j1 done
+end
+
+case FRM-015
+  title  the sentinel data phase in the split form: the header packet does not end it
+  from   7.2 (data phase from the device, sentinel)
+  dev d0 mps=512 form=split obj huge FFFFFFF3h
+  open d0
+  queue d0 j1 { GetObject h=50 sink=crc -> r; post }
+  wait job j1 done
+end
+
+case FRM-016
+  title  the sentinel arriving short of the expected 64-bit size, or past it
+  from   7.2 (checked against the 64-bit size the library expected)
+  table  sends
+    a  FFFFFFF2h
+    b  FFFFFFF4h
+  end
+  dev d0 obj huge FFFFFFF3h
+  open d0
+  sim d0 respond GetObject h=50 sentinel sends=<sends>
+  queue d0 j1 { GetObject h=50 sink=crc -> r; post }
+  wait job j1 done
+end
+
+case FRM-017
+  title  every received container checked: length, type, code, transaction id, the response's length, the sentinel outside a data container
+  from   7.2 (checked before use; the sentinel)
+  table  bad
+    a  data container length 11
+    b  data container type 3 with length 200
+    c  data container type 1
+    d  data container code 1008h for GetObject
+    e  data container tid one more than sent
+    f  response length 14
+    g  response length 36 (k = 6)
+    h  response length FFFFFFFFh
+    i  response type 2 after the data phase
+    j  response tid one less than sent (not after a cancel)
+  end
+  dev d0
+  open d0
+  sim d0 corrupt GetObject h=2 <bad>
+  queue d0 j1 { GetObject h=2 sink=s -> r; post }
+  wait job j1 done
+end

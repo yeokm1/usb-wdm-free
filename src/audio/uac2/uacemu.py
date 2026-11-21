@@ -107,7 +107,12 @@ takes its input terminal directly). --vol-range MIN:MAX:RES (1/256 dB,
 signed; default -24576:0:256, -96 to 0 dB in 1 dB steps) and --vol-cur
 (1/256 dB, default 0) shape the volume control; --vol-cur-at CH=V sets
 one logical channel's CUR at plug-in (0 the master), --vol-cur-stall N
-stalls the first N volume GET CURs. --product TEXT sets iProduct's string
+stalls the first N volume GET CURs. --stop-at-request N and --stop-after-s
+S are the forced stop (docs/design/uac2.md 29.14): from the Nth control
+request, or S seconds after the first isochronous stream began, the device
+answers no control transfer, SET_CONFIGURATION or SET_INTERFACE (the log's
+stopped_answering and unanswered lines), stays connected and keeps taking
+its stream. --product TEXT sets iProduct's string
 ('' an empty descriptor), --no-product sets iProduct to 0. Playback is "rendered"
 through the feature units on its path: every 0.25 s the log carries the
 received peak per channel (dBFS) and the rendered peak (each packet with
@@ -609,8 +614,16 @@ class Profile:
 
 class Model:
     def __init__(self, connection, trace, now=time.monotonic, pcm=None, profile=None,
-                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4, vol_stall=0):
+                 fb_ppm=0.0, fb_zero_every=0, fb_stop_after=None, pcm_max=4, vol_stall=0,
+                 stop_at_request=0, stop_after_s=None):
         self.connection, self.trace, self.now = connection, trace, now
+        # --stop-at-request / --stop-after-s (docs/design/uac2.md 29.14): a
+        # device that stops answering its control endpoint (no reply to a
+        # control transfer, SET_CONFIGURATION or SET_INTERFACE, whose host
+        # side then waits until it cancels) while it stays connected and
+        # keeps taking its isochronous stream.
+        self.stop_at_request, self.stop_after_s = stop_at_request, stop_after_s
+        self.requests, self.stopped, self.first_stream = 0, False, None
         self.p = profile or Profile('x4')
         self.fb_ppm, self.fb_zero_every, self.fb_stop_after = fb_ppm, fb_zero_every, fb_stop_after
         self.peer_caps = self.config = 0
@@ -843,6 +856,22 @@ class Model:
                 return interface, alternate, info
         return None
 
+    def silent(self, what, **fields):
+        """True when this control request goes unanswered: the forced stop
+        has begun, at the Nth request (--stop-at-request, counting every
+        control transfer, SET_CONFIGURATION and SET_INTERFACE) or S seconds
+        after the first isochronous stream began (--stop-after-s)."""
+        self.requests += 1
+        if not self.stopped and (
+                (self.stop_at_request and self.requests >= self.stop_at_request) or
+                (self.stop_after_s is not None and self.first_stream is not None and
+                 self.now() - self.first_stream >= self.stop_after_s)):
+            self.stopped = True
+            self.log('stopped_answering', count=self.requests, what=what, **fields)
+        if self.stopped:
+            self.log('unanswered', count=self.requests, what=what, **fields)
+        return self.stopped
+
     # -- control transfers -------------------------------------------------
     def control(self, ident, packet):
         if len(packet) < 10:
@@ -851,6 +880,8 @@ class Model:
         payload = packet[10:]
         if len(payload) != (0 if rt & 128 else length):
             raise ValueError('control length mismatch')
+        if self.silent('control', request=request, request_type=rt, value=value, index=index):
+            return
         p = self.p
         data, status = b'', 4
         if request == 6 and rt == 0x80:
@@ -881,8 +912,11 @@ class Model:
         actual = len(data) if rt & 128 else (0 if status else length)
         self.send(100, ident, struct.pack('<BBBBHHH', ep, request, rt, status,
                                         value, index, actual) + data)
+        # data: the data stage as hex, the host's bytes of an OUT request or
+        # the answer to an IN one (the level baselines, design 28.15).
         self.log('control', request=request, request_type=rt, value=value, index=index,
-                 requested=length, status=status, actual=actual)
+                 requested=length, status=status, actual=actual,
+                 data=(data if rt & 128 else payload).hex())
 
     def entity_request(self, request, get, entity, selector, channel, payload):
         """UAC2 5.2.5: CUR is request 1, RANGE request 2."""
@@ -990,6 +1024,8 @@ class Model:
         elif kind in (6, 7):
             if len(packet) != (1 if kind == 6 else 0):
                 raise ValueError('configuration length')
+            if self.silent('set_configuration' if kind == 6 else 'get_configuration'):
+                return
             status = 0
             if kind == 6:
                 status = 0 if packet[0] in (0, 1) or (packet[0] == 2 and self.p.config2) else 4
@@ -1006,6 +1042,9 @@ class Model:
         elif kind in (9, 10):
             if len(packet) != (2 if kind == 9 else 1):
                 raise ValueError('alternate length')
+            if self.silent('set_interface' if kind == 9 else 'get_interface', interface=packet[0],
+                           alternate=packet[1] if kind == 9 else None):
+                return
             interface = packet[0]
             alternate = packet[1] if kind == 9 else self.alts.get(interface, 0)
             known = interface in self.alts and (interface, alternate) in self.p.layout
@@ -1029,6 +1068,8 @@ class Model:
                 if not packet[1] or not packet[2]:
                     status = 4
                 else:
+                    if self.first_stream is None:
+                        self.first_stream = self.now()
                     self.start(ep, own)
             elif kind == 13:
                 self.stop(ep)
@@ -1273,7 +1314,15 @@ def main():
                     help='volume CUR at plug-in of logical channel CH (0 master) of every feature unit')
     ap.add_argument('--vol-cur-stall', type=int, default=0, metavar='N',
                     help='the first N volume GET CUR requests stall')
+    ap.add_argument('--stop-at-request', type=int, default=0, metavar='N',
+                    help='forced stop: from the Nth control request on (control transfers, '
+                    'SET_CONFIGURATION, SET_INTERFACE), none is answered; the stream goes on')
+    ap.add_argument('--stop-after-s', type=float, metavar='S',
+                    help='forced stop: S seconds after the first isochronous stream began, no '
+                    'control request is answered any more')
     args = ap.parse_args()
+    if args.stop_at_request < 0 or (args.stop_after_s is not None and args.stop_after_s < 0):
+        ap.error('--stop-at-request and --stop-after-s take values of 0 or more')
     if args.fu != 'full' and args.profile in ('x4', 'x4full', 'cx31993'):
         ap.error('--fu applies to the built profiles other than cx31993')
     vol_range = tuple(int(v) for v in args.vol_range.split(':'))
@@ -1323,7 +1372,8 @@ def main():
             pcm = args.pcm.open('xb') if args.pcm else None
             model = Model(connection, trace, pcm=pcm, profile=profile, fb_ppm=args.fb_ppm,
                           fb_zero_every=args.fb_zero_every, fb_stop_after=args.fb_stop_after,
-                          pcm_max=args.pcm_max, vol_stall=args.vol_cur_stall)
+                          pcm_max=args.pcm_max, vol_stall=args.vol_cur_stall,
+                          stop_at_request=args.stop_at_request, stop_after_s=args.stop_after_s)
             try:
                 try:
                     model.run()

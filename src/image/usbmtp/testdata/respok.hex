@@ -1,0 +1,11 @@
+# A response container: OK, tid 5, no parameter (tid 5: data.cas DAT-013 row d expects it).
+# Written by hand from MTP 1.1, D.2.
+# @0 length UINT32 = 12 (4 bytes)
+0c 00 00 00
+# @4 type UINT16 = 0003h (2 bytes)
+03 00
+# @6 code UINT16 = 2001h (2 bytes)
+01 20
+# @8 tid UINT32 = 5 (4 bytes)
+05 00 00 00
+# total 12 bytes

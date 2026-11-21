@@ -1,0 +1,7 @@
+# Expected decoding of harrovf.hex, written by hand from MTP 1.1, 3.2.2; 7.9 here (before a count is used) (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = HandleArray
+result = MTPE_PROTOCOL reason=MTPR_COUNT (the fit is checked before the cap: CQ39); never an allocation for the count
+count = 40000001h (its product with 4 is 100000004h, past 2^32; 8 bytes follow)
+end

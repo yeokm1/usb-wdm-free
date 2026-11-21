@@ -1,0 +1,203 @@
+# Expected results of life.cas, written by hand from docs/design/mtp.md
+# 7.9. Format: ../README.md; shorthands as cancel.expect. I1 to I10 hold.
+
+LIF-001
+  wire d0 after open = [CloseSession tid=1]
+  ctl d0 after open = [EVENTS stop -> 1, ABORT in|out -> 0]
+  order: event thread joined < CloseSession < EVENTS stop < ABORT < cancel thread joined < handles closed (event, control, owner) < reg.detach.in < notice CLOSED < attachment reference dropped < io's reference dropped
+  state d0 = CLOSED (read by the harness before the free)
+  notice d0 = [CLOSED]
+  alloc = balanced
+end
+
+LIF-002
+  ret rc returned before the next driver call of d0
+  ctl d0 after open = [HC(1), EVENTS stop -> 1, ABORT in|out -> 0]
+  wire d0 after open = [GetObject h=4 tid=1, CloseSession tid=2]
+  ret r = MTPE_CLOSING flags=none (the close's latched cancel: CLOSING first in the order, CQ15)
+  notice d0 = [CLOSED]
+  alloc = balanced
+end
+
+LIF-003
+  ctl d0 after open = [SETTLE, CANCEL tid=1, STATUS -> 0400 1920 (5), STATUS -> 0400 0120, EVENTS stop -> 1, ABORT in|out -> 0]
+  wire d0 after open = [GetObject h=4 tid=1, CloseSession tid=2]
+  ret r = MTPE_CLOSING flags=none (cancelled, then closed: CLOSING first in the order, CQ15)
+  the close at io.recover.4 changed nothing of the recovery in progress
+  notice d0 = [CLOSED]
+end
+
+LIF-004
+  rc and rx returned without waiting on each other or on any driver call
+  order: t1's MtpCancel < t2's MtpClose (the lock handoff, by rank)
+  ctl d0 after open = [HC(1), EVENTS stop -> 1, ABORT in|out -> 0] (the close's latch found CANCELLING: one CANCEL)
+  ret r = MTPE_CLOSING flags=none
+  notice d0 = [CLOSED]
+  alloc = balanced
+end
+
+LIF-005
+  ret r2: no effect (a second close); r3: no effect (a cancel in CLOSING)
+  ret r = MTPE_CLOSING flags=none
+  wire d0 after open = [GetObject h=4 tid=1, CloseSession tid=2]
+  notice d0 = [CLOSED] (once)
+end
+
+LIF-006
+  state d0 = CLOSING at 29,900 ms after the close request
+  GIVENUP set within [close+30000, close+30500] (from the close request, not the job's start), set by cx
+  ctl d0 before the unstick = [] (a cancel in RESPONSE issues no ABORT and starts no procedure)
+  drop j2 = MTPE_GIVENUP on cx
+  never CloseSession; never a close step 3 to 6 before the unstick
+  notice d0 = [GIVENUP, CLOSED]
+  ret r = MTPE_GIVENUP
+  after unstick: ctl d0 = [EVENTS stop -> 1, ABORT in|out -> 0], then step 7
+  alloc = balanced
+end
+
+LIF-007
+  GIVENUP within [close+20000, close+20500] (the latched cancel's outer bound, 7.5), set by cx
+  after the unstick and before quiet=1: ctl d0 = [EVENTS stop, ABORT in|out] once a second (1,000 ms apart by the fake clock), none quiet
+  busy d0 = 1 until the quiet round
+  answer = DENY for the query during that time (pwr d0 = BUSY)
+  check alloc retained d0 held
+  after quiet=1: step 7 from the handle closing on; notice d0 = [GIVENUP, CLOSED]
+  alloc = balanced
+end
+
+LIF-008
+  state d0 = GIVENUP to the end of the steps
+  busy d0 = 1 to the end of the steps
+  notice d0 = [GIVENUP]
+  alloc = retained d0 (checked after teardown's close, before its unstick: X10; the balance follows the unstick)
+end
+
+LIF-009
+  ctl d0 after open = [EVENTS stop -> 1, ABORT in|out -> 1], then every second [EVENTS stop, ABORT in|out]
+  wire d0 after open = [CloseSession tid=1]
+  GIVENUP set by io, its notice posted by io (a transition: the state at the end of the steps is CLOSED)
+  after abort-mask=0: notice d0 = [GIVENUP, CLOSED]
+  alloc = balanced
+end
+
+LIF-010
+  order: ev.wait#1 at t0 < io.close.3 < that WAIT_EVENT returns its time-out at t0+1000 < the event thread ends and is joined < io.close.4 < EVENTS stop
+  ev.got never reached (a time-out is not a container)
+  no further WAIT_EVENT after io.close.3
+  notice d0 = [CLOSED]
+end
+
+LIF-011
+  io.close.5 not reached until t1 left MtpQueue
+  ret rq = MTPE_CLOSING (its insertion hold reads CLOSING: no job is ever queued behind the close); run j1 = 0; drop j1 = none
+  the close went on with the retained reference still out
+  notice d0 = [CLOSED] before release d0
+  alloc = balanced after release d0
+end
+
+LIF-012
+  order: notice CLOSED < free-host < release d0 < ref.free
+  never access to d0's MTP_HOST, its cookie or its callbacks after CLOSED
+  the free's calls go only to the process-wide allocation and trace hooks
+  alloc = balanced
+end
+
+LIF-013
+  pwr d0 not asked (DETACHED skipped); pwr d1 = AGREED
+  answer = TRUE
+  wire d0 after open = [CloseSession tid=1] (d0 was not held: it had not been asked)
+  order: pw.ask.d0 reached < reg.detach.in < notice CLOSED < go < pw.unsnap.d0 < ref.zero.in (d0) < ref.free (d0)
+  ref.free of d0 entered with neither the registry lock nor d0's section held
+  never the registry lock taken with a section held
+  alloc = balanced
+end
+
+LIF-014
+  every row: ret r1, r2, r3 = MTPE_OK; no access to d0 after the last release; freed once, outside the locks
+  alloc = balanced
+end
+
+LIF-015
+  rows a, b: ret rq = MTPE_CLOSING, ret ro = MTPE_CLOSING; row c: ret rq = MTPE_GIVENUP, ret ro = MTPE_GIVENUP; every row: run j1 = 0; drop j1 = none
+  every row: rc, rx: no effect and nothing sent (codes not judged); rr = MTPE_OK; rl = MTPE_OK
+  row a: answer = DENY, pwr d0 = BUSY (CLOSING before step 7 is Busy)
+  row b: answer = TRUE, pwr d0 not asked (detached)
+  row c: answer = DENY, pwr d0 = BUSY (GIVENUP, not yet quiet)
+  wire d0 after <st> = []
+end
+
+LIF-016
+  ret r = MTPE_GONE
+  the read's buffer and the MTP_DEV not freed before the read returned 1167
+  ctl d0: the latched cancel's ABORTs report the pipe busy while the read is out; the close's quiet checks only after it returned
+  notice d0 has GONE; notice d0 last = CLOSED
+  alloc = balanced
+end
+
+LIF-017
+  info handle opened and GET_INFO read after the 5
+  ret r = MTPE_INUSE flags=SESSION_LOST (CQ14)
+  never a BIND or call on the old handles after the 5
+  ret r2 = MTPE_OK (a new MtpOpen: a new claim, new binds)
+end
+
+LIF-018
+  every row: ret r = MTPE_GONE flags=SESSION_LOST; notice d0 has GONE
+  never a BIND or call on the old handles after the 5
+end
+
+LIF-019
+  order: window hidden < MtpClose d0, d1 < both CLOSED < MtpPowerStop < ExitProcess
+  the exit's wait less than 5,000 ms
+  registry freed by MtpPowerStop
+  alloc = balanced
+end
+
+LIF-020
+  answer = DENY (d0 CLOSING before step 7 is Busy)
+  the power thread answered during the exit's wait
+end
+
+LIF-021
+  held d3 = 1 (inserted HELD under the unasked suspend's hold); nothing sent to d3
+  state d0 = CLOSING (its CloseSession still out), state d1 = GIVENUP, state d2 = OPENING at the exit's end
+  the exit's wait ends at 5,000 ms by the fake clock
+  nothing freed at the budget's expiry: d0 CLOSING, d1 GIVENUP, d2 OPENING, d3's held open, d4's name read context and its MTP_POWER reference all kept
+  MtpPowerStop: the power thread ended; registry not freed (devices attached, a name read out)
+  alloc = retained d0, d1, d2, names(d4), registry (rule R at teardown's step 5: d0's CloseSession, d1's read and d2's GetDeviceInfo still pending (d0's and d2's deadlines having made them GIVENUP during step 4, their calls still out), d4's GET_STRING still pending, the registry left by the exit's MtpPowerStop; d3 is not retained: its held open ended by its 40 s deadline during step 4, MTPE_HELD, nothing sent, undone)
+  ExitProcess called
+end
+
+LIF-022
+  never a join of d0's I/O thread
+  the I/O thread's handle closed by the releaser of the last reference
+  the I/O thread's last access to d0 = dropping its own reference
+end
+
+LIF-023
+  order: unstick < event thread joined < cancel thread joined < EVENTS stop -> 1 < ABORT in|out -> 0 < handles closed < reg.detach.in < notice CLOSED
+  wire d0 after GIVENUP = []
+end
+
+LIF-024
+  no window thread in the process
+  GIVENUP set within [close+20000, close+20500] (the latched cancel's outer bound, 7.5), set by cx
+  notice d0 = [GIVENUP, CLOSED]
+  alloc = balanced
+end
+
+LIF-025
+  first check: refs d0 = 1 program + 3 threads + 2 jobs + 1 registry (+ entry references of calls in progress: 0)
+  second check: refs d0 = 1 program + 3 threads + 1 registry
+  notices carry the program's cookie and no reference
+  alloc = balanced
+end
+
+LIF-026
+  at every point: ref.zero.in for d0 exactly once; ref.free for d0 exactly once, with neither the registry lock nor d0's section held
+  at pw.ask.d0, pw.ask.d1, pw.outcome.in (landing as its hold is left) and pw.unsnap.d0 (which comes before d0's snapshot reference is dropped): the test's release comes first, so the power thread's drop at d0's unsnap is the last: ref.zero.in on the power thread
+  at pw.unsnap.d1 (d0's snapshot already dropped): the test's release is the last: ref.zero.in on the test thread
+  never an access to d0 by either thread after its own release
+  pwr d0 not asked (DETACHED); pwr d1 = AGREED; a = TRUE
+  alloc = balanced
+end

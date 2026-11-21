@@ -1,0 +1,239 @@
+# Expected results of ops.cas, written by hand from docs/design/mtp.md 7.4
+# and 7.9. Format: ../README.md. I1 to I10 and U1 to U4 hold.
+# A response lost to a time-out, with or without a cancel, is 7.5 step 1's
+# stuck device: step 6 runs, the session is lost (CQ35); so every such row
+# reads ctl d0 = [RESET6, EVSTART] and MTPF_SESSION_LOST.
+
+OPS-001
+  every row: wire d0 after open = [<expect-cmd> tid=1], the parameter count exactly as listed; ret r = MTPE_OK
+  row f, g: data in; row k: data out (an ObjectInfo with ObjectFormat 3001h, ObjectCompressedSize 0, Filename "New Folder", AssociationType 0001h), no SendObject after it
+  row f: bytes=1000; row g: bytes=1000; every other row: bytes=0 (7.9, "The bytes moved")
+  row j: wire d0 after open = [GetObjectInfo (4) tid=1]; ret r = MTPE_OK size=5242880 (no GetObjectPropValue: the size is not FFFFFFFFh)
+end
+
+OPS-002
+  row a: ret ra = MTPE_PROTOCOL reason=MTPR_RPARAMS flags=none (the complete OK settles it, CQ33; no ownership, no SendObject); ret rb = MTPE_OK bytes=100
+  row b: ret ra = MTPE_OK; ret rb = MTPE_PROTOCOL reason=MTPR_RPARAMS
+end
+
+OPS-003
+  row a: ret r = MTPE_DEVICE resp=200Ch flags=none
+  row b: ret r = MTPE_DEVICE resp=2009h flags=none bytes=0 (the response in place of the data phase ends the transaction)
+  row c: ret r = MTPE_DEVICE resp=200Fh flags=none
+  every row: wire d0 after open = [the row's one operation tid=1]; never MTPE_PROTOCOL for a refusal's missing parameters
+end
+
+OPS-004
+  every row: ret r = MTPE_ARG reason=MTPR_ARG_VALUE flags=none; wire d0 after open = [] (the range checks come first, before any state check)
+end
+
+OPS-005
+  row a: ret r = MTPE_OK bytes=1000
+  row b: ret r = MTPE_OK bytes=600
+  row c: ret r = MTPE_PROTOCOL reason=MTPR_RVALUE (the parameter 1000 is not the 600 bytes that arrived)
+  row d: ret r = MTPE_PROTOCOL reason=MTPR_RVALUE (the parameter 999 is not the 1000 bytes that arrived)
+  every row: wire d0 after open = [GetPartialObject (3, 0, 1000) tid=1]
+end
+
+OPS-006
+  row a: wire d0 after open = [Android GetPartialObject64 (40, 100000, 0, 4096) tid=1] (95C1h whenever listed, low offsets included: CQ31); ret r = MTPE_OK bytes=4096
+  row b: wire d0 after open = [Android GetPartialObject64 (40, 0, 1, 4096) tid=1]; ret r = MTPE_OK bytes=4096, the bytes the formula gives at 100000000h
+  row c: wire d0 after open = []; ret r = MTPE_ARG reason=MTPR_ARG_UNLISTED (95C1h not listed and the offset does not fit GetPartialObject's 32 bits: CQ30)
+  row d: ret r = MTPE_PROTOCOL reason=MTPR_DLEN (5000 bytes arrived, more than the 4096 asked)
+end
+
+OPS-007
+  row a: ret r = MTPE_OK bytes=1000
+  rows b, c: ret r = MTPE_PROTOCOL reason=MTPR_DLEN (the length differs from ObjectInfo's 1000)
+end
+
+OPS-008
+  wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, SendObject () tid=2, GetObjectInfo (hn) tid=3]
+  ret r = MTPE_OK flags=none bytes=300000; hn = the third parameter of SendObjectInfo's OK response
+  nothing between SendObjectInfo and SendObject; the event's refresh job ran after j1's run returned
+end
+
+OPS-009
+  every row: ret r = MTPE_PROTOCOL reason=MTPR_RVALUE flags=none (the complete OK settled SendObjectInfo: CQ33)
+  wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1]; wire d0 !has SendObject; wire d0 !has DeleteObject (no ownership established)
+end
+
+OPS-010
+  (Q24, decided by state: the reserved handle deleted once in states (i) and (iii), the pair abandoned in state (ii))
+  row a (state (i): the source failed before SendObject was submitted): wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, DeleteObject (hn, 0) tid=2 -> 2001h]; ret r = MTPE_SOURCE flags=none
+  row b (state (ii): SendObject's command written, its write failing 31): wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, SendObject tid=2]; ret r = MTPE_DEVICE resp=0 win32=31 flags=UNCERTAIN, the reserved handle in the result; no DeleteObject
+  row c (state (iii): SendObject refused at once): wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, SendObject tid=2 -> 200Ch, DeleteObject (hn, 0) tid=3 -> 2001h]; ret r = MTPE_DEVICE resp=200Ch flags=none
+  row d (state (i): a cancel between the pair): wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, DeleteObject (hn, 0) tid=2 -> 2001h] (the cleanup let through the latch by name; SendObject refused by it); ret r = MTPE_CANCELLED flags=none; ctl d0 after open = [] (the cancel came in IDLE)
+  row e (state (iii), the cleanup refused): wire d0 after open = [SendObjectInfo tid=1, SendObject tid=2 -> 200Ch, DeleteObject (hn, 0) tid=3 -> 2002h]; ret r = MTPE_DEVICE resp=200Ch flags=UNCERTAIN (the reservation left); the DeleteObject not sent again
+  every row: never a second SendObject; never a DeleteObject of any other handle; at most one DeleteObject
+end
+
+OPS-011
+  row a: ret r = MTPE_DEVICE resp=201Fh flags=UNCERTAIN (the device-initiated case: 7.5; 7.9, "A bulk failure of no named Win32 code")
+  row b: ret r = MTPE_TIMEOUT flags=UNCERTAIN|SESSION_LOST; ctl d0 after open = [RESET6, EVSTART]
+  row c: ret r = MTPE_GONE flags=UNCERTAIN|SESSION_LOST
+  every row: wire d0 !has DeleteObject; never a second SendObject
+end
+
+OPS-012
+  every row: ret r = MTPE_SOURCE flags=UNCERTAIN bytes=0
+  bytes=0: the source's bytes are gathered into the 1 MiB write buffer (7.9, "Data out"), and the one write of 300,012 bytes it would have made is never made: row a ends 100 bytes short, row b fails after 65,536
+  ctl d0 after the short or failed delivery = [HC(2)] (SendObject's command was submitted; the data phase had not begun)
+  wire d0 !has DeleteObject; never a second SendObject
+end
+
+OPS-013
+  row a: ret r = MTPE_OK flags=none; wire d0 after open = [SendObjectInfo, SendObject, GetObjectInfo (hn)]
+  row e: wire d0 after open = [SendObjectInfo, SendObject, GetObjectInfo (hn), GetObjectPropValue (hn, DC04h)]; ret r = MTPE_OK flags=none
+  row b: ret r = MTPE_PROTOCOL reason=MTPR_READBACK_SIZE flags=none, the new handle returned (Q25: a failed verification)
+  row c: ret r = MTPE_PROTOCOL reason=MTPR_READBACK_NAME flags=none, the new handle returned
+  row d: ret r = MTPE_PROTOCOL reason=MTPR_READBACK_PARENT flags=none, the new handle returned
+  rows b, c, d: wire d0 after open = [SendObjectInfo, SendObject, GetObjectInfo (hn)], nothing after it
+  every row: never a DeleteObject or a second SendObject
+end
+
+OPS-014
+  every row: ret r = MTPE_TIMEOUT; ctl d0 after open = [RESET6, EVSTART]; the operation never sent again
+  rows a to d: ret r flags=UNCERTAIN|SESSION_LOST
+  rows e to h: ret r flags=UNCERTAIN|SESSION_LOST|EDIT_OPEN (a Device Reset ran, so no cleanup EndEditObject is admitted; row h: the lost one was the job's EndEditObject)
+  rows e, f, h: ret rb = MTPE_OK
+  row b: wire d0 !has SendObject (the pair abandoned after SendObjectInfo's lost response; no ownership, nothing deleted)
+  rows e to h: wire d0 has no EndEditObject but row h's own
+end
+
+OPS-015
+  row a: ret r = MTPE_DEVICE resp=200Ch flags=none
+  row b: ret r = MTPE_DEVICE resp=200Dh flags=none
+  row c: ret r = MTPE_OK flags=none, the new folder's handle returned
+  row d: ret r = MTPE_OK flags=none
+end
+
+OPS-016
+  ret r1 = MTPE_TIMEOUT flags=SESSION_LOST (a reading operation: no UNCERTAIN)
+  ctl d0 after open = [RESET6, EVSTART]
+  run j2 = 0; drop j2 = MTPE_SESSION on io (queued under the old session: 7.3)
+  wire d0 after open = [GetObjectInfo (2) tid=1, OpenSession tid=0]
+  session d0 = 2
+end
+
+OPS-017
+  every row: ret r = MTPE_DEVICE resp=<code>
+  wire d0 after open = [DeleteObject (6, 0) tid=1]   (no listing, no child deleted)
+end
+
+OPS-018
+  ret r = MTPE_OK
+  wire d0 after open = [DeleteObject (6, 0) tid=1 -> 2012h, GetObjectPropList (6, 0, FFFFFFFFh, 0, 1) tid=2, DeleteObject (7, 0) tid=3, DeleteObject (8, 0) tid=4 -> 2012h, GetObjectPropList (8, 0, FFFFFFFFh, 0, 1) tid=5, DeleteObject (9, 0) tid=6, DeleteObject (8, 0) tid=7, DeleteObject (6, 0) tid=8]
+  every handle deleted was listed in this session under h=6
+end
+
+OPS-019
+  every row: never DeleteObject (0), DeleteObject (FFFFFFFFh) or DeleteObject (2); never a second DeleteObject of a handle except a folder's one retry after its first was settled by 2012h (U4), and here none: the deletion stops before any folder is retried; h=6's only DeleteObject is its first attempt, answered 2012h, and it is never retried
+  row a: no folder deeper than 64 levels is deleted
+  row g: no DeleteObject from a listing of more than 100,000 objects
+  (Q26, decided: the whole deletion stops)
+  rows a, g: ret r = MTPE_PROTOCOL reason=MTPR_DELETE_BOUND flags=none
+  rows b to f: ret r = MTPE_PROTOCOL reason=MTPR_DELETE_HANDLE flags=none
+  rows b, c (h=6's own listing holds the refused handle): wire d0 after open = [DeleteObject (6, 0) tid=1 -> 2012h, GetObjectPropList (6, 0, FFFFFFFFh, 0, 1) tid=2]; nothing of that listing deleted; the deleted count = 0
+  rows d, e, f (h=8's listing holds it): wire d0 after open = [DeleteObject (6, 0) tid=1 -> 2012h, GetObjectPropList (6, ...) tid=2, DeleteObject (7, 0) tid=3 -> 2001h, DeleteObject (8, 0) tid=4 -> 2012h, GetObjectPropList (8, ...) tid=5]; nothing after it; the deleted count = 1
+  every row: each listing checked whole, by the deletion's own rules ahead of the listing's per-object fallback (7.9, "The deletion's own listing": no GetObjectInfo or GetObjectHandles for the refused object), before any object of it is deleted; its objects deleted in the listing's order (simdev's listings are in ascending handle order: README); no DeleteObject after the failing listing; the deleted count equals the DeleteObjects answered 2001h before it; h=6 itself not deleted
+end
+
+OPS-020
+  wire d0 ends with DeleteObject (7, 0) (its response lost); no DeleteObject after it
+  ret r = MTPE_TIMEOUT flags=UNCERTAIN|SESSION_LOST
+  ctl d0 after open = [RESET6, EVSTART]
+end
+
+OPS-021
+  ret r1 = MTPE_OK, children = [2, 3] (h=1's own elements dropped)
+  ret r2 = MTPE_OK, children = [1, 4, 5, 6] (storage 00010002h's root objects filtered out)
+  wire d0 after open = [GetObjectPropList (1, 0, FFFFFFFFh, 0, 1) tid=1, GetObjectPropList (0, 0, FFFFFFFFh, 0, 1) tid=2]
+  never GetObjectPropList with handle 0 and depth 0
+end
+
+OPS-022
+  every row: ret r1 = MTPE_OK children = [2, 3] through GetObjectHandles (00010001h, 0, 1) and GetObjectInfo (2), (3)
+  every row: ret r2 = MTPE_OK children = [7, 8]
+  row a (a refusal: remembered for the session): wire for r2 = [GetObjectHandles (00010001h, 0, 6), GetObjectInfo (7), GetObjectInfo (8)]
+  rows b, c (a protocol error, a cap: that listing only, CQ38): wire for r2 = [GetObjectPropList (6, 0, FFFFFFFFh, 0, 1), GetObjectHandles (00010001h, 0, 6), GetObjectInfo (7), GetObjectInfo (8)] (the fault applies to every GetObjectPropList)
+end
+
+OPS-023
+  rows a, b, d, e: wire d0 has GetObjectInfo of the object named (2, 2, 3, 2) and GetObjectHandles (00010001h, 0, 1) (any fallback makes the count suspect); order not judged; ret r = MTPE_OK children = [2, 3]
+  row c: never GetObjectInfo (FFFFFFFFh); GetObjectHandles (00010001h, 0, 1) read; ret r = MTPE_OK children = [2, 3]
+  row f: wire d0 after open = [GetObjectPropList (1, ...)] only; ret r = MTPE_OK children = [2, 3]
+  every row: nothing of the list reaches the program before every element is checked
+end
+
+OPS-024
+  ret r1 = MTPE_OK children = [2, 3]; wire for r1 = [GetObjectPropList (1, ...)]
+  ret r2 = MTPE_OK children = [2, 3]; wire for r2 has GetObjectHandles (00010001h, 0, 1) and GetObjectInfo (3)
+end
+
+OPS-025
+  every row: wire for r1 = [GetObjectHandles (00010001h, 0, 1) -> <code>, GetObjectHandles (00010001h, 0, 0), GetObjectInfo of each object]
+  ret r1 = MTPE_OK children = [2, 3]; ret r2 = MTPE_OK children = [7, 8]
+  wire for r2 = []   (read whole once; the tree built from each object's parent)
+end
+
+OPS-026
+  ret r = MTPE_OK ids = [00010001h, 00030001h]
+end
+
+OPS-027
+  ret r1 = MTPE_OK size=5368709120; wire for r1 = [GetObjectInfo (40), GetObjectPropValue (40, DC04h)]
+  ret r2 = MTPE_OK size=1000; wire for r2 = [GetObjectInfo (2)]
+end
+
+OPS-028
+  rows a to d: ret r = MTPE_ARG reason=MTPR_ARG_UNQUALIFIED flags=none; wire d0 after open = [] (the qualification checked before the edit state)
+  rows e, f: wire d0 after open = [BeginEditObject (4) tid=1, TruncateObject (4, 10, 0) tid=2, EndEditObject (4) tid=3]; ret r = MTPE_OK
+  row g: wire d0 after open = [Android GetPartialObject64 (4, 0, 0, 10) tid=1] (it only reads); ret r = MTPE_OK bytes=10
+end
+
+OPS-029
+  SendPartialObject's data phase: a write of exactly the 12-byte header, then the 100-byte payload as its own run, no WRITE_ZLP
+  the device's other data phases stay combined
+  ret r = MTPE_OK bytes=100
+end
+
+OPS-030
+  ret r1 = MTPE_OK bytes=70000; ret r2 = MTPE_OK
+  h=4 on the device after j1: bytes 0 to 999,999 as before; 1,000,000 to 1,069,999 the source's; 1,070,000 to 1,999,999 as before; size 2,000,000
+  SendPartialObject's header in a packet of its own (no payload byte with it)
+end
+
+OPS-031
+  every point: EndEditObject on the wire exactly once; never SendPartialObject or TruncateObject sent twice
+  the transactions: BeginEditObject tid=1, SendPartialObject tid=2, TruncateObject tid=3, EndEditObject tid=4 (the job's) or the cleanup's EndEditObject at the next id
+  the cancel landing in SendPartialObject's COMMAND or DATA-OUT, data still to go (admitted, unsettled):
+    ret r1 = MTPE_CANCELLED flags=UNCERTAIN; ctl d0 after open = [HC(2)]; the cleanup EndEditObject tid=3 inside r1's call, OK
+    ret r2 = MTPE_CANCELLED flags=none, ret r3 = MTPE_CANCELLED flags=none (refused at their start; nothing sent)
+  the cancel landing in SendPartialObject after its last byte (the last write's io.submit.pre.in, io.call, io.ret: settled as "every byte moved"):
+    ret r1 = MTPE_OK bytes=70000; ctl d0 after open = [SETTLE]
+    ret r2 = MTPE_CANCELLED flags=UNCERTAIN (refused at its start; the edit interrupted: the cleanup EndEditObject tid=3 inside r2's call, OK); ret r3 = MTPE_CANCELLED flags=none
+  the cancel landing in SendPartialObject's RESPONSE, or between it and TruncateObject's start (response completion):
+    ret r1 = MTPE_OK bytes=70000; ctl d0 after open = []
+    ret r2 = MTPE_CANCELLED flags=UNCERTAIN with the cleanup EndEditObject tid=3 inside it; ret r3 = MTPE_CANCELLED flags=none
+  the cancel landing in TruncateObject's COMMAND (it has no data phase):
+    ret r1 = MTPE_OK; ret r2 = MTPE_CANCELLED flags=UNCERTAIN; ctl d0 after open = [HC(3)]; the cleanup EndEditObject tid=4 inside r2's call; ret r3 = MTPE_CANCELLED flags=none
+  the cancel landing in TruncateObject's RESPONSE, or between it and EndEditObject's start:
+    ret r1 = MTPE_OK; ret r2 = MTPE_OK; ctl d0 after open = []
+    ret r3 = MTPE_CANCELLED flags=UNCERTAIN (the job's EndEditObject refused at its start: the cleanup EndEditObject tid=4 sent inside r3's call instead, OK)
+  the cancel landing in the job's EndEditObject's COMMAND:
+    ret r1 = MTPE_OK; ret r2 = MTPE_OK; ret r3 = MTPE_CANCELLED flags=UNCERTAIN|EDIT_OPEN; ctl d0 after open = [HC(4)]; no cleanup after it (EndEditObject is not sent again)
+  the cancel landing in EndEditObject's RESPONSE or at io.phase.IDLE#4:
+    every call MTPE_OK; ctl d0 after open = []
+end
+
+OPS-032
+  every row: ret r = MTPE_ARG reason=MTPR_ARG_EDIT flags=none; nothing of it sent; the edit not interrupted (an argument refusal sends nothing)
+  then EndEditObject (4) sent, by the job, and OK
+end
+
+OPS-033
+  row a (state (i), the session changed: the cleanup not admitted): ret r = MTPE_SESSION flags=SESSION_LOST|UNCERTAIN (the session ended within this call; the reservation left); wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, OpenSession tid=0] (SendObject never sent: the session tag, 7.3)
+  row b (state (iii), the cache generation changed: the cleanup not admitted): wire d0 after open = [SendObjectInfo (00010001h, 1) tid=1, SendObject tid=2 -> 200Ch] (no readback after a refusal); ret r = MTPE_DEVICE resp=200Ch flags=UNCERTAIN; the full refresh asked by the event runs after j1
+  every row: never DeleteObject: the reservation was made under another session or cache generation, so it is not the library's (Q24's cleanup is admitted only for the reservation's own)
+end

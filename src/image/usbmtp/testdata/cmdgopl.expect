@@ -1,0 +1,12 @@
+# Expected decoding of cmdgopl.hex, written by hand from MTP 1.1, E.2.1; 7.4 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+encoder = command container
+the library's encoding of GetObjectPropList for folder 0001A2B3h with tid 00023456h equals the fixture byte for byte
+decoder = container
+length = 32
+type = 0001h
+code = 9805h
+tid = 00023456h
+parameters[] = 0001A2B3h, 0, FFFFFFFFh, 0, 1
+end

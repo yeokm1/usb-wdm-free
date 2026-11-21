@@ -416,6 +416,11 @@ static WCHAR paramText[32];
 void NdisOpenConfiguration(PNDIS_STATUS s, PNDIS_HANDLE h, NDIS_HANDLE config)
 {
     (void)config;
+    if (Fake.FailOpenConfiguration) {
+        *h = NULL;
+        *s = NDIS_STATUS_FAILURE;
+        return;
+    }
     configOpen++;
     *h = &configOpen;
     *s = NDIS_STATUS_SUCCESS;

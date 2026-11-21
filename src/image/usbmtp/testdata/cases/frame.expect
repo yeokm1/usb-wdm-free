@@ -1,0 +1,121 @@
+# Expected results of frame.cas, written by hand from docs/design/mtp.md
+# 7.2 and 7.9 "Framing". Format: ../README.md. I1 to I10 hold.
+# "reads = [a -> b, ...]": each bulk IN read of the transaction, the bytes
+# asked and the bytes returned, in order. "R" = the response read's size
+# for the packet size (40 at 8, 48 at 16, 64 at 32 and 64, 512 at 512).
+
+FRM-001
+  row a: reads = [512 -> 512, 512 -> 500, 512 -> 12]; ret r = MTPE_OK bytes=1000
+  row b: reads = [8 -> 8, 8 -> 8, 96 -> 96, 40 -> 0, 40 -> 12]; ret r = MTPE_OK bytes=100
+  row c: reads = [16 -> 16, 48 -> 0, 48 -> 12]; ret r = MTPE_OK bytes=4
+  row d: reads = [64 -> 64, 64 -> 0, 64 -> 12]; ret r = MTPE_OK bytes=52
+  row e: reads = [8 -> 8, 8 -> 4, 40 -> 12]; ret r = MTPE_OK bytes=0 (length 12: combined, no zero-length packet)
+  every row: the device's form stays combined
+end
+
+FRM-002
+  row a: reads = [8 -> 8, 8 -> 4, 104 -> 100, 40 -> 12]; split learned (the read completing the header ended short, length > 12)
+  row b: reads = [16 -> 12, 112 -> 100, 48 -> 12]; split learned
+  row c: reads = [64 -> 12, 128 -> 100, 64 -> 12]; split learned
+  row d: reads = [512 -> 12, 1024 -> 1000, 512 -> 12]; split learned
+  row e: reads = [16 -> 12, 48 -> 12]; length 12: the empty data phase is the header alone in either form, so it adds no evidence of the form; the split form learned at the open from GetDeviceInfo (7.2) stands
+  rows a to d: ret r = MTPE_OK bytes=<n>; data later sent to d0 in the split form
+end
+
+FRM-003
+  row a: the response read asks 40, returns 32 (four full packets ended by the zero-length packet)
+  row b: asks 48, returns 32
+  row c: asks 64, returns 32
+  row d: asks 64, returns 32 (a short packet)
+  row e: asks 512, returns 32
+  every row: ret r = MTPE_OK; nothing left in the pipe (the next transaction's first read gets its own container)
+end
+
+FRM-004
+  the response read asks 64 and ends by the bulk IN time-out (121); what it may have received is not used
+  ret r = MTPE_TIMEOUT flags=SESSION_LOST (CQ13; a reading operation: no UNCERTAIN)
+  ctl d0 after open = [RESET6, EVSTART] (the lost response is 7.5 step 1's stuck device, CQ35)
+end
+
+FRM-005
+  row a: reads = [512 -> 512, 512 -> 0, 512 -> 12]; ret r = MTPE_OK; ret r2 = MTPE_OK
+  row b: reads = [512 -> 512, 512 -> 12 (the response, kept)]; ret r = MTPE_OK; ret r2 = MTPE_OK (nothing stale read)
+  row c: as row b with no zero-length packet: reads = [512 -> 512, 512 -> 12]
+end
+
+FRM-006
+  row a: reads = [512 -> 12, 512 -> 512, 512 -> 0, 512 -> 12]
+  row b: reads = [512 -> 12, 512 -> 12] (the header ends the phase; the response read next)
+  row c: reads = [512 -> 12, 512 -> 500, 512 -> 12]
+  every row: ret r = MTPE_OK bytes=<n>
+end
+
+FRM-007
+  every row: ret r = MTPE_PROTOCOL reason=MTPR_CLEN (the data container ended before its length field said); ctl d0 after open = [HC(1)] (the cancel procedure, then the error reported)
+  row b: the 12-byte header packet was not taken as the truncation
+end
+
+FRM-008
+  ret r = MTPE_PROTOCOL reason=MTPR_CLEN (bytes past the container's length in its last packet)
+end
+
+FRM-009
+  every row: ret r = MTPE_DEVICE resp=2009h flags=none; the response read whole before the next transaction
+  ret r2 = MTPE_OK (its own tid; nothing stale)
+end
+
+FRM-010
+  every row: the first write starts with the 12-byte header (length 12 + n); every write but the last a whole number of packets; the writes add up to 12 + n
+  row a: writes = [1024], then WRITE_ZLP
+  row b: writes = [1012], no WRITE_ZLP
+  row c: writes = [1048576 (the header and 1,048,564 bytes), 1048576, 902860], no WRITE_ZLP (3,000,012 is not a whole number of 512-byte packets; 7.9, "Data out": 1 MiB writes)
+  row d: writes = [64], then WRITE_ZLP
+  row e: writes = [16], then WRITE_ZLP
+  every row: ret r = MTPE_OK bytes=<n>
+end
+
+FRM-011
+  row a: writes = [12], then [1024] as its own run, then WRITE_ZLP
+  row b: writes = [12], then [1000], no WRITE_ZLP
+  row c: writes = [12] only, no WRITE_ZLP
+  every row: ret r = MTPE_OK
+end
+
+FRM-012
+  reads = [512 -> 512, 1048576 -> 1048576 (4 times), 1048576 -> 1048076, 512 -> 12]
+  ret r = MTPE_OK bytes=5242880
+end
+
+FRM-013
+  row a: ObjectInfo's ObjectCompressedSize 7FFFFFFFh; data length field 8000000Bh; rs = 7FFFFFFFh
+  row b: ObjectCompressedSize 80000000h; length field 8000000Ch; rs = 80000000h
+  row c: ObjectCompressedSize FFFFFFF2h; length field FFFFFFFEh (the last finite length); rs = FFFFFFF2h
+  row d: ObjectCompressedSize FFFFFFF3h; length field FFFFFFFFh (the sentinel), read to a short packet; rs = FFFFFFF3h
+  row e: ObjectCompressedSize FFFFFFFEh (the last size given in ObjectInfo); the sentinel; rs = FFFFFFFEh
+  rows f, g, h: ObjectCompressedSize FFFFFFFFh; GetObjectPropValue (50, DC04h) read; rs = <n>; the sentinel
+  every row: ret r = MTPE_OK bytes=<n>; the CRC-32 of what the sink got equals the formula's for <n> bytes (computed by the test, not by simdev)
+end
+
+FRM-014
+  row a: length field 8000000Bh; row b: 8000000Ch; row c: FFFFFFFEh; rows d, e: FFFFFFFFh (the sentinel)
+  ObjectInfo's ObjectCompressedSize = <n> in every row
+  every row: WRITE_ZLP exactly when 12 + <n> (combined) is a whole number of 512-byte packets; ret r = MTPE_OK bytes=<n>
+end
+
+FRM-015
+  reads: [512 -> 12] (the header packet; it does not end the phase), then payload reads until a short packet
+  ret r = MTPE_OK bytes=FFFFFFF3h
+end
+
+FRM-016
+  every row: ret r = MTPE_PROTOCOL reason=MTPR_DLEN (the payload differs from the expected 64-bit size)
+end
+
+FRM-017
+  rows a, f, g, h: ret r = MTPE_PROTOCOL reason=MTPR_CLEN
+  row b: ret r = MTPE_PROTOCOL reason=MTPR_CLEN (a response in place of the data phase, its length 200 not 12 + 4k)
+  rows c, i: ret r = MTPE_PROTOCOL reason=MTPR_CTYPE
+  row d: ret r = MTPE_PROTOCOL reason=MTPR_CCODE
+  rows e, j: ret r = MTPE_PROTOCOL reason=MTPR_CTID
+  rows a, c, d, e: ctl d0 after open starts with SETTLE (the cancel procedure runs: the error found in the data phase)
+end

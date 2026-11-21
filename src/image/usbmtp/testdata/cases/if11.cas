@@ -1,0 +1,363 @@
+# Interface 1.1: GET_INFO's reading, the gate's reasons, the quarantine,
+# classifying a stopped call, the counts, recovery under a closed gate.
+# docs/design/mtp.md 7.9, "Interface 1.1: what the library reads and what
+# it does with it", "One code, and flags", "Errors from the driver"; 5.3;
+# 12. Format: ../README.md. Every case has `power P` and opens the default
+# device d0 unless it says otherwise.
+#
+# A stop by the gate is made one of two ways, so that its code is exact:
+#   995: `sim d0 delay read#3 60000` and `wait io.call#3`: GetObject h=4's
+#        second data read pends; the gate's closing ends it 995;
+#   21:  `hold io.call#3`, the gate closed, `go io.call`: nothing pends at
+#        the closing, and the read then made fails 21.
+# A gate closing with no call pending ends nothing (README: gateclose).
+
+case IF-001
+  title  GET_INFO at the open answering 0 or 39 bytes, failing, or with cbSize below the bytes returned: a failed reading, the open refused
+  from   7.9/Interface 1.1 (the reading); 7.9/The host test (GET_INFO failing, 0, 39, 52 with a smaller cbSize)
+  table  setting
+    a  info=0
+    b  info=39
+    c  info=52 fail=31
+    d  info=52 cbsize=48
+    e  info=44 cbsize=40
+  end
+  dev d0 <setting>
+  open d0 -> r
+end
+
+case IF-002
+  title  GET_INFO at the open answering 40, 41, 42 or 43 bytes: refused, MTPE_DEVICE, traced
+  from   7.9/Interface 1.1 (40 to 43 bytes); 12/interleavings/classification (41, 42, 43 at open)
+  table  n
+    a  40
+    b  41
+    c  42
+    d  43
+  end
+  dev d0 info=<n> cbsize=<n> minor=0
+  open d0 -> r
+end
+
+case IF-003
+  title  44 and 51 bytes: the endpoint addresses used, the power fields absent, the features off, traced once
+  from   7.9/Interface 1.1 (44 to 51 bytes)
+  table  n
+    a  44
+    b  51
+  end
+  dev d0 info=<n> cbsize=<n> minor=0 ep.in=82h ep.out=01h
+  open d0 -> r
+  queue d0 j1 { GetObject h=3 sink=s -> r1; GetObject h=2 sink=s -> r2; post }
+  wait job j1 done
+end
+
+case IF-004
+  title  52 bytes from a driver reporting minor 0: read as 44
+  from   7.9/Interface 1.1 (52 bytes with minor 0)
+  dev d0 info=52 minor=0 gate=4
+  open d0 -> r
+  sim d0 gateclose at=now code=21 gate=4
+  queue d0 j1 { GetObjectInfo h=2 -> r1; post }
+  wait job j1 done
+end
+
+case IF-005
+  title  a later reading shorter than 44 bytes or than the open's: a failed reading, the gate unknown, retried after 250 ms; the addresses kept
+  from   7.9/Interface 1.1 (after the open)
+  table  later
+    a  info=43
+    b  info=44
+  end
+  hold io.call#3
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 <later> ep.in=85h
+  sim d0 gateclose at=now code=21 gate=0
+  go io.call                                # read#2 fails 21; the reading after it is short: failed
+  clock +250
+  sim d0 info=52 gate=0 reopen
+  clock +500
+  wait job j1 done
+end
+
+case IF-006
+  title  when GET_INFO is read: at the open before and after CLAIM; at each job's start; after a 21; after a 995 not the library's; every 250 ms while waiting; first in the resume job
+  from   7.9/Interface 1.1 (when it is read)
+  hold io.call#4                            # j2's command write (j1's three calls: write, data read, response read)
+  queue d0 j1 { GetObjectInfo h=2; post }
+  wait job j1 done
+  queue d0 j2 { GetObjectInfo h=3; post }
+  wait io.call#4                            # j2's start reading taken with the gate open
+  sim d0 gateclose at=now code=21 gate=4
+  go io.call
+  clock +1000
+  sim d0 gate=0 reopen
+  clock +500
+  wait idle d0
+end
+
+case IF-007
+  title  gate reason 1 or 4: a standby under way: no call, the session owed; the gate open: a new session
+  from   7.9/The gate's reasons (1, 4)
+  table  g
+    a  1
+    b  4
+    c  1|4
+  end
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=<g>
+  clock +2000
+  sim d0 gate=0 reopen
+  clock +500
+  wait idle d0
+end
+
+case IF-008
+  title  the lapse reached by the library's own readings: an accepted query followed by nothing reopens at QUERY_HOLD_MS
+  from   7.9/The gate's reasons (the lapse applied in GET_INFO's hold)
+  sim d0 lapse QUERY_HOLD_MS=30000
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=4 query-accepted
+  clock +31000
+  wait idle d0
+end
+
+case IF-009
+  title  gate reason 2 or 16 (another component's power change or query): the same; the session owed
+  from   7.9/The gate's reasons (2, 16)
+  table  g
+    a  2
+    b  16
+    c  2|16
+  end
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=<g>
+  clock +2000
+  sim d0 gate=0 reopen
+  clock +500
+  wait idle d0
+end
+
+case IF-010
+  title  the quarantine: draining begins and ends; no call meanwhile; the notices once each; a new session
+  from   7.9/The gate's reasons (8, the quarantine); 7.9/The host test (the quarantine beginning and ending)
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  queue d0 j2 { GetObjectInfo h=2 -> r2; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=8 held=1
+  clock +5000
+  sim d0 gate=0 held=0 reopen
+  clock +1500
+  wait idle d0
+end
+
+case IF-011
+  title  the quarantine never ending: the device stays draining, nothing sent, the notice once
+  from   7.9/The gate's reasons (8: if it never clears)
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=8 held=1
+  clock +600000
+end
+
+case IF-012
+  title  combined reasons: draining takes precedence; without it, waiting
+  from   7.9/The gate's reasons (the order)
+  table  g
+    a  8|4
+    b  8|1|2
+    c  4|2
+    d  16|1
+  end
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=<g> held=1
+  clock +3000
+  sim d0 gate=0 held=0 reopen
+  clock +1500
+  wait idle d0
+end
+
+case IF-013
+  title  a stopped call classified MTPE_POWER only by a power reason in the reading right after the stop; MTPF_STANDBY for 1 and 4 only
+  from   7.9/Classifying a stopped call; 7.9/The host test (each reason)
+  table  g  stop
+    a  1   995
+    b  4   995
+    c  2   995
+    d  16  995
+    e  8   995
+    f  1   21
+    g  4   21
+    h  2   21
+    i  16  21
+    j  8   21
+  end
+  if <stop>=995 : sim d0 delay read#3 60000
+  if <stop>=21 : hold io.call#3
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=<stop> gate=<g> held=1
+  if <stop>=21 : go io.call
+  clock +2000
+  sim d0 gate=0 held=0 reopen
+  wait idle d0
+end
+
+case IF-014
+  title  a device-query refusal early in a long job, then an unrelated 995: MTPE_STOPPED with MTPF_POWER_SEEN, not MTPE_POWER
+  from   7.9/Classifying a stopped call; 12/interleavings/classification
+  sim d0 fail read#4 995                    # an unrelated 995, the library's cancel not involved; the gate open
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#2 : sim d0 vetoes=+1 # early in the job, after its baseline
+  wait job j1 done
+end
+
+case IF-015
+  title  the forced-set count changing within the window: MTPF_POWER_SEEN the same way
+  from   7.9/What the counts say
+  sim d0 fail read#4 995
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#2 : sim d0 forced=+1
+  wait job j1 done
+end
+
+case IF-016
+  title  21 with no power reason: the started gate: MTPE_GONE with removal pending, else MTPE_STOPPED
+  from   7.9/Classifying a stopped call (21 with no power reason)
+  table  flags
+    a  1
+    b  3
+  end
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : sim d0 fail read#4 21 ; sim d0 flags=<flags> gate=0
+  wait job j1 done
+end
+
+case IF-017
+  title  no reason and no count change, and the next call failing 5: the release or removal path
+  from   7.9/Classifying a stopped call (neither, and the next call fails 5)
+  sim d0 fail read#4 995
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.ret#5 : sim d0 fail next 5 ; sim d0 after-5 flags=3   # read#4 is j1's fifth call; the next read or write fails 5
+  wait job j1 done
+  wait notice d0 GONE
+end
+
+case IF-018
+  title  no reason and no count change otherwise: the conservative fallback, MTPE_STOPPED
+  from   7.9/Classifying a stopped call (neither otherwise); 7.9/The host test (the fallback classification)
+  sim d0 fail read#4 995
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait job j1 done
+end
+
+case IF-019
+  title  a driver without the power fields: a stopped call always MTPE_STOPPED
+  from   7.9/Classifying a stopped call (a driver without the power fields)
+  table  stop  flags
+    a  995   1
+    b  21    1
+    c  21    3
+  end
+  dev d0 info=44 cbsize=44 minor=0
+  open d0
+  sim d0 fail read#4 <stop>
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : sim d0 flags=<flags>
+  wait job j1 done
+end
+
+case IF-020
+  title  a count change before the job's baseline is not taken as the cause of a later stop
+  from   7.9/Classifying a stopped call (a change before the baseline); 7.9/The host test
+  queue d0 j1 { GetObjectInfo h=2; post }
+  wait job j1 done
+  sim d0 vetoes=+1
+  sim d0 fail read#j2.4 995                 # j2's fourth read
+  queue d0 j2 { GetObject h=4 sink=s -> r2; post }
+  wait job j2 done
+end
+
+case IF-021
+  title  the counts across their wrap at 65,536
+  from   7.9/The host test (the counts across their wrap)
+  table  field  base  after
+    a  vetoes   65535  0
+    b  forced   65535  0
+    c  vetoes   65535  65535
+  end
+  sim d0 <field>=<base>
+  sim d0 fail read#4 995
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#2 : sim d0 <field>=<after>
+  wait job j1 done
+end
+
+case IF-022
+  title  a recovery step failing 21 or ending 995 not the library's: no Device Reset; the result by the same rule
+  from   7.9/Recovery under a closed gate; 12/interleavings/classification (a recovery step's 995 with and without a power reason)
+  table  stop  g
+    a  995   4
+    b  995   0
+    c  21    1
+    d  21    0
+  end
+  sim d0 status 0400 1920 ; then 0400 0120
+  sim d0 fail CLASS.STATUS#2 <stop>         # the second Get Device Status of step 4 (the first answers Busy)
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : async cancel d0 j1
+  at io.recover.4#1 : sim d0 gate=<g>       # the reading after the failing step shows <g>
+  clock +2000
+  sim d0 gate=0 reopen
+  wait idle d0
+end
+
+case IF-023
+  title  the code precedence when several apply
+  from   7.9/One code, and flags (the order); 7.9/The host test (the code precedence)
+  table  setup
+    a  at io.submit.post.in#sendobject.data.1 : sim d0 fail write#sendobject.data.2 21 ; sim d0 gate=4 flags=3
+    b  at io.submit.post.in#sendobject.data.1 : sim d0 gateclose at=now code=21 gate=1 ; async close d0
+    c  at io.submit.post.in#sendobject.data.1 : sim d0 gateclose at=now code=21 gate=4 ; async cancel d0 j1
+    d  sim d0 stuck write#sendobject.data.1 ; wait io.call#sendobject.data.1 ; close d0 ; clock +31000 ; sim d0 unstick code=995 gate=4
+    e  sim d0 fault no_response at SendObject ; at io.phase.RESPONSE#2 : cancel d0 j1
+  end
+  queue d0 j1 { SendObject storage=00010001h parent=1 name="p.bin" size=3000000 src=src -> r1; post }
+  <setup>
+  wait job j1 done
+end
+
+case IF-024
+  title  ABORT and EVENTS stop answer while the gate is closed: MtpClose's quiet checks still made
+  from   7.9/Recovery under a closed gate (ABORT and EVENTS act without a slot)
+  sim d0 delay read#3 60000
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  wait io.call#3
+  sim d0 gateclose at=now code=995 gate=4
+  wait job j1 done
+  close d0
+  wait notice d0 CLOSED
+end
+
+case IF-025
+  title  MtpEnum over readings of 39, 42, 44 and 52 bytes and a failing one: 42 listed as not openable, 44 and 52 listed, 39 and the failure left out
+  from   7.9/Devices (MtpEnum: CQ17); Interface 1.1 (the reading)
+  dev d0 info=42 cbsize=42 minor=0
+  dev d1 info=44 cbsize=44 minor=0
+  dev d2 info=39
+  dev d3 info=52 fail=31
+  dev d4 info=52
+  enum -> list
+  open d0 -> r0
+end

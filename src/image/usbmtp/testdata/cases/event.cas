@@ -1,0 +1,152 @@
+# Events: containers and parameters, routing, coalescing, the flood, the
+# lost flag, DeviceReset, session tags. docs/design/mtp.md 7.2 (event
+# containers); 7.4 (events); 7.9, "Events"; 11.4; 12. Format:
+# ../README.md. Every case has `power P`, opens the default device d0 with
+# an event callback that records each target, and sends events by
+# `sim d0 event <name> [params] [tid=]` or raw by `sim d0 event-raw <hex>`.
+
+case EVT-001
+  title  each recognised event with its own parameters: routed to its target
+  from   7.9/Events (the table); 7.4
+  table  event                     params        target
+    a  ObjectAdded                 2             folder 1
+    b  ObjectRemoved               3             folder 1
+    c  ObjectInfoChanged           2             row 2
+    d  ObjectPropChanged           2 DC07h       row 2
+    e  StoreAdded                  00020001h     storages
+    f  StoreRemoved                00010001h     storages
+    g  StorageInfoChanged          00010001h     storages
+    h  DeviceInfoChanged           -             device
+  end
+  sim d0 event <event> <params> tid=0
+  wait event-callback d0 done               # the routing and the refresh job's callback (row h: after its GetDeviceInfo)
+  wait idle d0
+end
+
+case EVT-002
+  title  an event with fewer parameters than its own, or a malformed container: a full refresh
+  from   7.9/Events (G.2 parameter counts; an event that fails a check); 7.2 (event containers)
+  table  raw
+    a  0c00000004000240 00000000                      # ObjectAdded with no parameter
+    b  10000000 0400 01c8 00000000 02000000           # ObjectPropChanged (C801h) with one
+    c  0d00000004000240 0000000002                    # length 13: not 12 + 4k
+    d  20000000 0400 0240 00000000 02000000 00000000 00000000 00000000 00000000   # k = 5
+    e  1000000003000240 00000000 02000000              # type 3
+    f  0b00000004000240 000000                        # length 11
+    g  ffffffff04000240 00000000 02000000              # the sentinel
+  end
+  sim d0 event-raw <raw>
+  wait event-callback d0 done               # the full refresh's callback
+  wait idle d0
+end
+
+case EVT-003
+  title  coalescing: a second refresh of the same target while one is queued is dropped
+  from   7.9/Events (bounded)
+  hold io.call#1                            # j0 running, its I/O thread stopped outside every lock: the refreshes queue behind it
+  queue d0 j0 { GetObject h=4 sink=s; post }
+  wait io.call#1
+  sim d0 event ObjectAdded 2
+  sim d0 event ObjectAdded 3
+  sim d0 event ObjectInfoChanged 2
+  sim d0 event ObjectInfoChanged 2
+  wait ev.route.in#4                        # all four routed while j0 runs
+  go io.call
+  wait idle d0
+end
+
+case EVT-004
+  title  past 64 queued refresh jobs: one full refresh replaces them
+  from   7.9/Events (bounded)
+  hold io.call#1                            # j0 running, stopped outside every lock
+  queue d0 j0 { GetObject h=4 sink=s; post }
+  wait io.call#1
+  for k = 1 to 65 : sim d0 event ObjectInfoChanged h=<999+k> ; wait ev.route.in#<k>   # each routed before the next: the driver's queue of 16 never fills
+  go io.call
+  wait idle d0
+end
+
+case EVT-005
+  title  an event flood of 100 past the driver's queue of 16, with the lost flag: a full refresh, the program's queue bounded
+  from   7.9/Events (bounded); 11.2 flood; 11.4 (an event flood past the driver's 16 and the coalescing cap)
+  hold io.call#1                            # j0 running, stopped outside every lock
+  queue d0 j0 { GetObject h=4 sink=s; post }
+  wait io.call#1
+  sim d0 fault flood 100 driver-queue=16    # all at once: the driver's queue overflows, the lost flag set
+  clock +5000
+  go io.call
+  wait idle d0
+end
+
+case EVT-006
+  title  other events ignored; an ordinary event's transaction id never compared with the transaction in progress
+  from   7.4 (other events ignored; the transaction id not used)
+  table  event
+    a  event-raw 0c00000004000640 00000000        # 4006h RequestObjectTransfer
+    b  event-raw 10000000 0400 02c8 00000000 07dc0000  # C802h ObjectPropDescChanged
+    c  event ObjectAdded 2 tid=current
+    d  event ObjectAdded 2 tid=12345678h
+  end
+  queue d0 j1 { GetObject h=4 sink=s -> r; post }
+  at io.submit.post.in#3 : sim d0 <event> ; wait ev.got   # the event in the event thread's hands while j1's transaction is in progress; routed as the hold is left
+  wait idle d0
+end
+
+case EVT-007
+  title  DeviceReset: the session lost, the transaction in progress cancelled, a new session by the resume job, EVENTS start
+  from   7.9/Events (routed to the engine); 7.4 (DeviceReset); 7.9/I/O that is not a job
+  queue d0 j1 { GetObject h=4 sink=s -> r1; post }
+  at io.submit.post.in#3 : sim d0 fault reset_event ; wait ev.got   # routed as the hold is left, while j1's transaction is in DATA-IN
+  wait idle d0
+end
+
+case EVT-008
+  title  refresh jobs tagged with their session: after a new session the old ones are dropped and the program told the session was lost
+  from   7.9/Events (tagged with the session); 7.3 (the session count raised at the loss)
+  hold io.dequeue.pre#1                     # before j0's dequeue: no transaction in progress
+  queue d0 j0 { GetObject h=4 sink=s; post }
+  wait io.dequeue.pre#1
+  sim d0 event ObjectAdded 2
+  sim d0 fault reset_event
+  wait ev.route.in#2                        # the refresh queued under session 1, then the DeviceReset applied
+  go io.dequeue.pre
+  wait idle d0
+end
+
+case EVT-009
+  title  the event thread makes only WAIT_EVENT, of 1,000 ms
+  from   7.9/Threads per device; 7.9/Events
+  sim d0 event ObjectAdded 2
+  clock +5000
+  close d0
+  wait notice d0 CLOSED
+end
+
+case EVT-010
+  title  a refresh job is a job: it waits while held and behind a running job
+  from   7.9/Notices (the event callback run as a job); Events
+  rule   A
+  bcast PBT_APMQUERYSUSPEND
+  sim d0 event ObjectAdded 2
+  clock +3000
+  bcast PBT_APMQUERYSUSPENDFAILED
+  wait idle d0
+end
+
+case EVT-011
+  title  MtpDeviceInfo: the DeviceInfo kept from the open; GetDeviceInfo again only after DeviceInfoChanged, before the event callback
+  from   7.4 (DeviceInfoChanged: CQ32); 7.9/the operations (MtpDeviceInfo)
+  table  how
+    a  none
+    b  sim d0 devinfo model="Second model" ; sim d0 event DeviceInfoChanged
+    c  sim d0 respond GetDeviceInfo 2002 ; sim d0 event DeviceInfoChanged
+  end
+  power P
+  dev d0
+  open d0 host.event={ DeviceInfo -> rc }
+  queue d0 j1 { DeviceInfo -> r1; post }
+  wait job j1 done
+  <how>
+  if <how>!=none : wait event-callback d0 done
+  wait idle d0
+end

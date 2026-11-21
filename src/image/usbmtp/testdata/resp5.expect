@@ -1,0 +1,13 @@
+# Expected decoding of resp5.hex, written by hand from MTP 1.1, D.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+decoder = response container, expected tid 00034567h
+result = MTPE_OK
+length = 32
+type = 0003h
+code = 2001h
+tid = 00034567h
+parameters[] = 12345678h, 9ABCDEF0h, 0F1E2D3Ch, 00C0FFEEh, 7654ABCDh
+length field set to 36 with 4 bytes appended: result = MTPE_PROTOCOL (k = 6)
+length field set to 30: result = MTPE_PROTOCOL (not 12 + 4k)
+end

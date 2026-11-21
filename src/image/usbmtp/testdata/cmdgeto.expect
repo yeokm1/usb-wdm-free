@@ -1,0 +1,12 @@
+# Expected decoding of cmdgeto.hex, written by hand from MTP 1.1, D.2 (not produced
+# by the library or by simdev.c). Format: README.md.
+
+encoder = command container
+the library's encoding of GetObject (0002C3D4h) with tid 00012345h equals the fixture byte for byte
+decoder = container
+length = 16
+type = 0001h
+code = 1009h
+tid = 00012345h
+parameters[] = 0002C3D4h
+end

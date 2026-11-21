@@ -1,0 +1,112 @@
+# Expected decoding of pltypes2.hex, written by hand from MTP 1.1, 5.4 and 3.2 (the array datatypes, a UINT32 count
+# then the elements, and STR); 7.4 here (unknown properties skipped by their datatype's size) (not produced by the
+# library or by simdev.c). Format: README.md. Each unknown element is skipped by exactly its value's size, count
+# included: the "at" of each skipped line is where the next element's ObjectHandle must be read.
+
+parser = ObjectPropList for folder 0001A2B3h (depth 1)
+result = MTPE_OK
+NumberOfElements = 21
+element 1 ObjectHandle = 000C3D4Eh
+element 1 PropertyCode = D841h (unknown)
+element 1 Datatype = 4001h (AINT8)
+element 1 Value = skipped: AINT8, 7 bytes; element 2 at 19
+element 2 ObjectHandle = 000C3D4Eh
+element 2 PropertyCode = DC01h (StorageID)
+element 2 Datatype = 0006h (UINT32)
+element 2 Value = 00020001h
+element 3 ObjectHandle = 000C3D4Eh
+element 3 PropertyCode = D842h (unknown)
+element 3 Datatype = 4002h (AUINT8)
+element 3 Value = skipped: AUINT8, 7 bytes; element 4 at 46
+element 4 ObjectHandle = 000C3D4Eh
+element 4 PropertyCode = DC02h (ObjectFormat)
+element 4 Datatype = 0004h (UINT16)
+element 4 Value = 3004h
+element 5 ObjectHandle = 000C3D4Eh
+element 5 PropertyCode = D843h (unknown)
+element 5 Datatype = 4003h (AINT16)
+element 5 Value = skipped: AINT16, 8 bytes; element 6 at 72
+element 6 ObjectHandle = 000C3D4Eh
+element 6 PropertyCode = DC07h (ObjectFileName)
+element 6 Datatype = FFFFh (STR)
+element 6 Value = "notes.txt"
+element 7 ObjectHandle = 000C3D4Eh
+element 7 PropertyCode = D844h (unknown)
+element 7 Datatype = 4004h (AUINT16)
+element 7 Value = skipped: AUINT16, 10 bytes; element 8 at 119
+element 8 ObjectHandle = 000C3D4Eh
+element 8 PropertyCode = DC0Bh (ParentObject)
+element 8 Datatype = 0006h (UINT32)
+element 8 Value = 0001A2B3h
+element 9 ObjectHandle = 000C3D4Eh
+element 9 PropertyCode = D845h (unknown)
+element 9 Datatype = 4005h (AINT32)
+element 9 Value = skipped: AINT32, 12 bytes; element 10 at 151
+element 10 ObjectHandle = 000C3D4Eh
+element 10 PropertyCode = DC04h (ObjectSize)
+element 10 Datatype = 0008h (UINT64)
+element 10 Value = 21644389437 (000000050A1B2C3Dh)
+element 11 ObjectHandle = 000D4E5Fh
+element 11 PropertyCode = D846h (unknown)
+element 11 Datatype = 4006h (AUINT32)
+element 11 Value = skipped: AUINT32, 16 bytes; element 12 at 191
+element 12 ObjectHandle = 000D4E5Fh
+element 12 PropertyCode = DC01h (StorageID)
+element 12 Datatype = 0006h (UINT32)
+element 12 Value = 00020001h
+element 13 ObjectHandle = 000D4E5Fh
+element 13 PropertyCode = D847h (unknown)
+element 13 Datatype = 4007h (AINT64)
+element 13 Value = skipped: AINT64, 20 bytes; element 14 at 231
+element 14 ObjectHandle = 000D4E5Fh
+element 14 PropertyCode = DC02h (ObjectFormat)
+element 14 Datatype = 0004h (UINT16)
+element 14 Value = 3001h
+element 15 ObjectHandle = 000D4E5Fh
+element 15 PropertyCode = D848h (unknown)
+element 15 Datatype = 4008h (AUINT64)
+element 15 Value = skipped: AUINT64, 20 bytes; element 16 at 269
+element 16 ObjectHandle = 000D4E5Fh
+element 16 PropertyCode = DC07h (ObjectFileName)
+element 16 Datatype = FFFFh (STR)
+element 16 Value = "Sub"
+element 17 ObjectHandle = 000D4E5Fh
+element 17 PropertyCode = D849h (unknown)
+element 17 Datatype = 4009h (AINT128)
+element 17 Value = skipped: AINT128, 36 bytes; element 18 at 330
+element 18 ObjectHandle = 000D4E5Fh
+element 18 PropertyCode = DC0Bh (ParentObject)
+element 18 Datatype = 0006h (UINT32)
+element 18 Value = 0001A2B3h
+element 19 ObjectHandle = 000D4E5Fh
+element 19 PropertyCode = D84Ah (unknown)
+element 19 Datatype = 400Ah (AUINT128)
+element 19 Value = skipped: AUINT128, 36 bytes; element 20 at 386
+element 20 ObjectHandle = 000D4E5Fh
+element 20 PropertyCode = DC09h (DateModified)
+element 20 Datatype = FFFFh (STR)
+element 20 Value = "20240229T120000"
+element 21 ObjectHandle = 000D4E5Fh
+element 21 PropertyCode = D8FFh (unknown)
+element 21 Datatype = FFFFh (STR)
+element 21 Value = skipped: STR, 11 bytes; the list ends at 446
+object 000C3D4Eh: StorageID = 00020001h, ObjectFormat = 3004h, ObjectSize = 21644389437, ObjectFileName = "notes.txt", DateModified = none (no element), ParentObject = 0001A2B3h
+object 000D4E5Fh: StorageID = 00020001h, ObjectFormat = 3001h (association), ObjectSize = none (no element), ObjectFileName = "Sub", DateModified = "20240229T120000", ParentObject = 0001A2B3h
+children[] = 000C3D4Eh, 000D4E5Fh
+counts
+  at 0 4 elem 9 cap 4194304
+  at 12 4 elem 1 cap fit
+  at 39 4 elem 1 cap fit
+  at 64 4 elem 2 cap fit
+  at 80 1 elem 2 cap 255
+  at 109 4 elem 2 cap fit
+  at 139 4 elem 4 cap fit
+  at 175 4 elem 4 cap fit
+  at 211 4 elem 8 cap fit
+  at 249 4 elem 8 cap fit
+  at 277 1 elem 2 cap 255
+  at 294 4 elem 16 cap fit
+  at 350 4 elem 16 cap fit
+  at 394 1 elem 2 cap 255
+  at 435 1 elem 2 cap 255
+end

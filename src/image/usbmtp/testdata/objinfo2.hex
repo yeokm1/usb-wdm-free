@@ -1,0 +1,41 @@
+# ObjectInfo dataset: a folder at the storage root (ParentObject 0).
+# Written by hand from MTP 1.1, 5.3.1.
+# @0 StorageID UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# @4 ObjectFormat UINT16 = 3001h (2 bytes)
+01 30
+# @6 ProtectionStatus UINT16 = 8002h (2 bytes)
+02 80
+# @8 ObjectCompressedSize UINT32 = 00011000h (4 bytes)
+00 10 01 00
+# @12 ThumbFormat UINT16 = 3801h (2 bytes)
+01 38
+# @14 ThumbCompressedSize UINT32 = 0012A3B4h (4 bytes)
+b4 a3 12 00
+# @18 ThumbPixWidth UINT32 = 00130100h (4 bytes)
+00 01 13 00
+# @22 ThumbPixHeight UINT32 = 001400C0h (4 bytes)
+c0 00 14 00
+# @26 ImagePixWidth UINT32 = 00150A00h (4 bytes)
+00 0a 15 00
+# @30 ImagePixHeight UINT32 = 00160780h (4 bytes)
+80 07 16 00
+# @34 ImageBitDepth UINT32 = 00170020h (4 bytes)
+20 00 17 00
+# @38 ParentObject UINT32 = 00000000h (4 bytes)
+00 00 00 00
+# @42 AssociationType UINT16 = 0001h (2 bytes)
+01 00
+# @44 AssociationDesc UINT32 = 0018B5C6h (4 bytes)
+c6 b5 18 00
+# @48 SequenceNumber UINT32 = 0019D7E8h (4 bytes)
+e8 d7 19 00
+# @52 Filename String = "DCIM" (11 bytes)
+05 44 00 43 00 49 00 4d 00 00 00
+# @63 DateCreated String = "" (1 bytes)
+00
+# @64 DateModified String = "" (1 bytes)
+00
+# @65 Keywords String = "" (1 bytes)
+00
+# total 66 bytes

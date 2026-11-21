@@ -1,0 +1,10 @@
+# Expected decoding of storids.hex, written by hand from MTP 1.1, 3.2.2; 7.4 here (not produced
+# by the library or by simdev.c). Format: README.md.
+
+parser = StorageIds
+result = MTPE_OK
+StorageIDs[] = 00020001h, 00030000h, 00050003h
+ids[] = 00020001h, 00050003h (00030000h absent: its low 16 bits are 0)
+counts
+  at 0 4 elem 4 cap 1048576
+end

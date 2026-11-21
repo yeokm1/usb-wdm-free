@@ -1,0 +1,95 @@
+# ObjectPropList for folder 0001A2B3h: unknown properties of several datatypes, skipped by their sizes.
+# Written by hand from MTP 1.1, 5.4 and 3.2 (datatypes and their sizes).
+# @0 NumberOfElements UINT32 = 10 (4 bytes)
+0a 00 00 00
+# element 1: an unknown property, skipped by its datatype's size
+# @4 element 1 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @8 element 1 PropertyCode UINT16 = DD00h (2 bytes)
+00 dd
+# @10 element 1 Datatype UINT16 = 0001h INT8 (2 bytes)
+01 00
+# @12 element 1 Value INT8 = -1 (1 bytes)
+ff
+# element 2: an unknown property, skipped by its datatype's size
+# @13 element 2 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @17 element 2 PropertyCode UINT16 = DD01h (2 bytes)
+01 dd
+# @19 element 2 Datatype UINT16 = 000Ah UINT128 (2 bytes)
+0a 00
+# @21 element 2 Value UINT128 = 0F0E0D0C0B0A09080706050403020100h (16 bytes)
+00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
+# element 3: an unknown property, skipped by its datatype's size
+# @37 element 3 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @41 element 3 PropertyCode UINT16 = DD02h (2 bytes)
+02 dd
+# @43 element 3 Datatype UINT16 = 4004h AUINT16 (2 bytes)
+04 40
+# @45 element 3 Value AUINT16 = A1B2h, C3D4h (8 bytes)
+02 00 00 00 b2 a1 d4 c3
+# element 4: an unknown property, skipped by its datatype's size (an empty array: its count only)
+# @53 element 4 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @57 element 4 PropertyCode UINT16 = DD03h (2 bytes)
+03 dd
+# @59 element 4 Datatype UINT16 = 4007h AINT64 (2 bytes)
+07 40
+# @61 element 4 Value AINT64 = none (4 bytes)
+00 00 00 00
+# element 5: a.jpg
+# @65 element 5 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @69 element 5 PropertyCode UINT16 = DC01h StorageID (2 bytes)
+01 dc
+# @71 element 5 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @73 element 5 Value UINT32 = 00020001h (4 bytes)
+01 00 02 00
+# element 6: a.jpg
+# @77 element 6 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @81 element 6 PropertyCode UINT16 = DC02h ObjectFormat (2 bytes)
+02 dc
+# @83 element 6 Datatype UINT16 = 0004h UINT16 (2 bytes)
+04 00
+# @85 element 6 Value UINT16 = 3801h (2 bytes)
+01 38
+# element 7: a.jpg
+# @87 element 7 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @91 element 7 PropertyCode UINT16 = DC04h ObjectSize (2 bytes)
+04 dc
+# @93 element 7 Datatype UINT16 = 0008h UINT64 (2 bytes)
+08 00
+# @95 element 7 Value UINT64 = 000000023456789Ah (8 bytes)
+9a 78 56 34 02 00 00 00
+# element 8: a.jpg
+# @103 element 8 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @107 element 8 PropertyCode UINT16 = DC07h ObjectFileName (2 bytes)
+07 dc
+# @109 element 8 Datatype UINT16 = FFFFh STR (2 bytes)
+ff ff
+# @111 element 8 Value STR = "a.jpg" (13 bytes)
+06 61 00 2e 00 6a 00 70 00 67 00 00 00
+# element 9: a.jpg
+# @124 element 9 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @128 element 9 PropertyCode UINT16 = DC0Bh ParentObject (2 bytes)
+0b dc
+# @130 element 9 Datatype UINT16 = 0006h UINT32 (2 bytes)
+06 00
+# @132 element 9 Value UINT32 = 0001A2B3h (4 bytes)
+b3 a2 01 00
+# element 10: an unknown property, skipped by its datatype's size
+# @136 element 10 ObjectHandle UINT32 = 0002C3D4h (4 bytes)
+d4 c3 02 00
+# @140 element 10 PropertyCode UINT16 = DD04h (2 bytes)
+04 dd
+# @142 element 10 Datatype UINT16 = FFFFh STR (2 bytes)
+ff ff
+# @144 element 10 Value STR = "x" (5 bytes)
+02 78 00 00 00
+# total 149 bytes

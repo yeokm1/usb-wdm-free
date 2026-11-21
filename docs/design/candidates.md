@@ -171,7 +171,8 @@ TWAIN source more. Estimate.
 
 **Value.** Medium-low. Real but narrow; a card reader does the same job
 on 98 SE once mass storage works. All user mode, which is in scope;
-but Owner, 2026-10-20: not now.
+but Owner, 2026-10-20: not now. Owner, 2026-11-16: MTP (and PTP) on
+98 SE and ME is taken up (Decisions, 7).
 
 ### 3. INF-only quick wins over in-box drivers
 
@@ -324,7 +325,7 @@ USB serial and game controllers are planned ([serial.md](serial.md),
 | 1 | USB printer class with a 98 port monitor | 98 SE | medium | medium | designed ([printing.md](printing.md)) |
 | 2 | INF-only: UFI floppies by class | ME, 2000, XP to 8; 98 SE with USB storage drivers installed | tiny | medium | designed ([floppy.md](floppy.md)) |
 | 3 | libusb-win32-compatible generic driver | 98 SE, ME | a rebuild with fixes | medium for developers | designed ([libusb.md](libusb.md)) |
-| 4 | PTP photo import over `usbscan.sys` | 98 SE (and 2000) | small to medium, user mode | medium-low | not now |
+| 4 | Phones and cameras over MTP and PTP: a transport driver and a file explorer program | 98 SE, ME | medium to large | medium | taken up (Decisions, 7; [mtp.md](mtp.md)) |
 | 5 | CCID smart card | 2000, XP (98 needs non-free middleware) | medium | low | no |
 | 6 | IrDA dongles | 98 SE | medium | low | no |
 | 7 | TV and radio tuners | - | large, per chip | low | no |
@@ -363,6 +364,19 @@ Owner, 2026-10-31:
    bytes on bulk IN. This changes decision 5 ("real devices only, no gadget
    rig") for this class only; the real-printer bench leg (a USB-to-parallel
    cable and a printer, or a USB PCL or PostScript laser) stays owed.
+
+Owner, 2026-11-16:
+
+7. **MTP on Windows 98 SE and ME is taken up**, replacing decision 3's
+   "not now": phones (Android's MTP and PTP modes) and cameras (PTP), on
+   98 SE and ME. What the user sees is a GUI file explorer program, a
+   windowed Win32 program that runs on 98 SE and ME and browses the
+   device's storages and folders and copies files to and from it, on top
+   of whatever binding or kernel driver the reading shows is needed. A
+   shell view, a drive letter and a WIA driver are not asked for. The
+   reading and design come first and are reviewed before any code; the
+   earlier sizing is [mtp-estimate.md](mtp-estimate.md), the design
+   [mtp.md](mtp.md).
 
 ## Open questions
 

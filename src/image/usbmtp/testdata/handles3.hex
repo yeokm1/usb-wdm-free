@@ -1,0 +1,5 @@
+# Object handle array (AUINT32).
+# Written by hand from MTP 1.1, 3.2.2 (arrays).
+# @0 handles AUINT32 = 0002C3D4h, 0003E4F5h, 0004A5B6h (16 bytes)
+03 00 00 00 d4 c3 02 00 f5 e4 03 00 b6 a5 04 00
+# total 16 bytes
